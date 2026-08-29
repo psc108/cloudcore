@@ -30,6 +30,8 @@ type InstanceResourceModel struct {
 	UserData         types.String `tfsdk:"user_data"`
 	PrivateIP        types.String `tfsdk:"private_ip"`
 	PublicIP         types.String `tfsdk:"public_ip"`
+	Status           types.String `tfsdk:"status"`
+	CreatedAt        types.String `tfsdk:"created_at"`
 	Tags             types.Map    `tfsdk:"tags"`
 }
 
@@ -44,6 +46,8 @@ type instanceAPIModel struct {
 	UserData         string            `json:"user_data,omitempty"`
 	PrivateIP        string            `json:"private_ip"`
 	PublicIP         string            `json:"public_ip"`
+	Status           string            `json:"status"`
+	CreatedAt        string            `json:"created_at"`
 	Tags             map[string]string `json:"tags"`
 }
 
@@ -85,6 +89,13 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			},
 			"private_ip": schema.StringAttribute{Computed: true},
 			"public_ip":  schema.StringAttribute{Computed: true},
+			"status":     schema.StringAttribute{Computed: true},
+			"created_at": schema.StringAttribute{
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"tags": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
@@ -137,6 +148,8 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	plan.ID = types.StringValue(result.ID)
 	plan.PrivateIP = types.StringValue(result.PrivateIP)
 	plan.PublicIP = types.StringValue(result.PublicIP)
+	plan.Status = types.StringValue(result.Status)
+	plan.CreatedAt = types.StringValue(result.CreatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -160,6 +173,8 @@ func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 	state.SubnetID = types.StringValue(result.SubnetID)
 	state.PrivateIP = types.StringValue(result.PrivateIP)
 	state.PublicIP = types.StringValue(result.PublicIP)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
 
 	sgIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SecurityGroupIDs)
 	resp.Diagnostics.Append(diags...)
@@ -230,6 +245,8 @@ func (r *InstanceResource) ImportState(ctx context.Context, req resource.ImportS
 	state.SubnetID = types.StringValue(result.SubnetID)
 	state.PrivateIP = types.StringValue(result.PrivateIP)
 	state.PublicIP = types.StringValue(result.PublicIP)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
 
 	sgIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SecurityGroupIDs)
 	resp.Diagnostics.Append(diags...)

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
+	"github.com/cloudcore/terraform-provider-cloudcore/internal/datasources"
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/resources"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -86,9 +87,16 @@ func (p *CloudCoreProvider) Resources(_ context.Context) []func() resource.Resou
 		resources.NewVPCResource,
 		resources.NewInstanceResource,
 		resources.NewLoadBalancerResource,
+		resources.NewDNSZoneResource,
+		resources.NewDNSRecordResource,
+		resources.NewNFSServerResource,
 	}
 }
 
 func (p *CloudCoreProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		datasources.NewVPCDataSource,
+		datasources.NewInstanceDataSource,
+		datasources.NewLoadBalancerDataSource,
+	}
 }

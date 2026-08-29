@@ -19,17 +19,17 @@ type LoadBalancerResource struct {
 	client *client.Client
 }
 
-// LoadBalancerResourceModel covers both L4 (network) and L7 (application) load balancers.
-// type = "network" | "application"
 type LoadBalancerResourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	Name       types.String `tfsdk:"name"`
-	Type       types.String `tfsdk:"type"`
-	VPCID      types.String `tfsdk:"vpc_id"`
-	SubnetIDs  types.List   `tfsdk:"subnet_ids"`
-	Internal   types.Bool   `tfsdk:"internal"`
-	DNSName    types.String `tfsdk:"dns_name"`
-	Tags       types.Map    `tfsdk:"tags"`
+	ID        types.String `tfsdk:"id"`
+	Name      types.String `tfsdk:"name"`
+	Type      types.String `tfsdk:"type"`
+	VPCID     types.String `tfsdk:"vpc_id"`
+	SubnetIDs types.List   `tfsdk:"subnet_ids"`
+	Internal  types.Bool   `tfsdk:"internal"`
+	DNSName   types.String `tfsdk:"dns_name"`
+	Status    types.String `tfsdk:"status"`
+	CreatedAt types.String `tfsdk:"created_at"`
+	Tags      types.Map    `tfsdk:"tags"`
 }
 
 type lbAPIModel struct {
@@ -40,6 +40,8 @@ type lbAPIModel struct {
 	SubnetIDs []string          `json:"subnet_ids"`
 	Internal  bool              `json:"internal"`
 	DNSName   string            `json:"dns_name"`
+	Status    string            `json:"status"`
+	CreatedAt string            `json:"created_at"`
 	Tags      map[string]string `json:"tags"`
 }
 
@@ -75,7 +77,14 @@ func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 				Optional: true,
 				Computed: true,
 			},
-			"dns_name": schema.StringAttribute{Computed: true},
+			"dns_name":   schema.StringAttribute{Computed: true},
+			"status":     schema.StringAttribute{Computed: true},
+			"created_at": schema.StringAttribute{
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"tags": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
@@ -126,6 +135,8 @@ func (r *LoadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 	plan.ID = types.StringValue(result.ID)
 	plan.DNSName = types.StringValue(result.DNSName)
 	plan.Internal = types.BoolValue(result.Internal)
+	plan.Status = types.StringValue(result.Status)
+	plan.CreatedAt = types.StringValue(result.CreatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -147,6 +158,8 @@ func (r *LoadBalancerResource) Read(ctx context.Context, req resource.ReadReques
 	state.VPCID = types.StringValue(result.VPCID)
 	state.Internal = types.BoolValue(result.Internal)
 	state.DNSName = types.StringValue(result.DNSName)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
 
 	subnetIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SubnetIDs)
 	resp.Diagnostics.Append(diags...)
@@ -214,6 +227,8 @@ func (r *LoadBalancerResource) ImportState(ctx context.Context, req resource.Imp
 	state.VPCID = types.StringValue(result.VPCID)
 	state.Internal = types.BoolValue(result.Internal)
 	state.DNSName = types.StringValue(result.DNSName)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
 
 	subnetIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SubnetIDs)
 	resp.Diagnostics.Append(diags...)

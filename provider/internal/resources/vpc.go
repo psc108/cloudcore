@@ -24,6 +24,8 @@ type VPCResourceModel struct {
 	Name        types.String `tfsdk:"name"`
 	CIDRBlock   types.String `tfsdk:"cidr_block"`
 	DNSSupport  types.Bool   `tfsdk:"dns_support"`
+	Status      types.String `tfsdk:"status"`
+	CreatedAt   types.String `tfsdk:"created_at"`
 	Tags        types.Map    `tfsdk:"tags"`
 }
 
@@ -32,6 +34,8 @@ type vpcAPIModel struct {
 	Name       string            `json:"name"`
 	CIDRBlock  string            `json:"cidr_block"`
 	DNSSupport bool              `json:"dns_support"`
+	Status     string            `json:"status"`
+	CreatedAt  string            `json:"created_at"`
 	Tags       map[string]string `json:"tags"`
 }
 
@@ -55,6 +59,15 @@ func (r *VPCResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"dns_support": schema.BoolAttribute{
 				Optional: true,
 				Computed: true,
+			},
+			"status": schema.StringAttribute{
+				Computed: true,
+			},
+			"created_at": schema.StringAttribute{
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"tags": schema.MapAttribute{
 				Optional:    true,
@@ -101,6 +114,8 @@ func (r *VPCResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	plan.ID = types.StringValue(result.ID)
 	plan.DNSSupport = types.BoolValue(result.DNSSupport)
+	plan.Status = types.StringValue(result.Status)
+	plan.CreatedAt = types.StringValue(result.CreatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -120,6 +135,8 @@ func (r *VPCResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	state.Name = types.StringValue(result.Name)
 	state.CIDRBlock = types.StringValue(result.CIDRBlock)
 	state.DNSSupport = types.BoolValue(result.DNSSupport)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
 	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
 	resp.Diagnostics.Append(diags...)
 	state.Tags = tags
