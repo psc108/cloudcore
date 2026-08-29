@@ -125,10 +125,11 @@ def list_templates() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def extract_template_vars(dir_name: str) -> dict:
-    path = EXAMPLES_DIR / dir_name / "main.tf"
+    # Prefer variables.tf (best-practice layout); fall back to main.tf for legacy examples
+    example_dir = EXAMPLES_DIR / dir_name
+    path = example_dir / "variables.tf"
     if not path.exists():
-        # Fall back to variables.tf
-        path = EXAMPLES_DIR / dir_name / "variables.tf"
+        path = example_dir / "main.tf"
     if not path.exists():
         return _connection_vars()
 
