@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import json
+from typing import Optional
+
+import db
+from models import VPC, Instance, LoadBalancer, InstanceStatus, VPCStatus, LBStatus
+
+
+def _vpc_from_row(row) -> VPC:
+    v = VPC(
+        id=row["id"], name=row["name"], cidr_block=row["cidr_block"],
+        dns_support=bool(row["dns_support"]), created_at=row["created_at"],
+        tags=json.loads(row["tags"]),
+    )
+    v.status = VPCStatus(row["status"])
+    return v
+
+
+def _inst_from_row(row) -> Instance:
+    i = Instance(
+        id=row["id"], name=row["name"], image_id=row["image_id"],
+        flavor=row["flavor"], vpc_id=row["vpc_id"], subnet_id=row["subnet_id"],
+        security_group_ids=json.loads(row["security_group_ids"]),
+        user_data=row["user_data"], private_ip=row["private_ip"],
+        public_ip=row["public_ip"], created_at=row["created_at"],
+        tags=json.loads(row["tags"]), domain_name=row["domain_name"],
+        ssh_host_port=row["ssh_host_port"], ssh_user=row["ssh_user"],
+        users=json.loads(row["users"]),
+    )
+    i.status = InstanceStatus(row["status"])
+    return i
+
+
+def _lb_from_row(row) -> LoadBalancer:
+    lb = LoadBalancer(
+        id=row["id"], name=row["name"], type=row["type"], vpc_id=row["vpc_id"],
+        subnet_ids=json.loads(row["subnet_ids"]), internal=bool(row["internal"]),
+        dns_name=row["dns_name"], listen_port=row["listen_port"],
+        backends=json.loads(row["backends"]), created_at=row["created_at"],
+        tags=json.loads(row["tags"]),
+    )
+    lb.status = LBStatus(row["status"])
+    return lb
+
+
+# Keep load() as a no-op — db.init() is called from server.py instead
+def load() -> None:
+    pass
+
+
+# --- VPC ---
+
+def list_vpcs() -> list[VPC]:
+    rows = db.get_db().execute(
+        "SELECT * FROM vpcs WHERE status != 'deleted'").fetchall()
+    return [_vpc_from_row(r) for r in rows]
+
+
+def get_vpc(vpc_id: str) -> Optional[VPC]:
+    row = db.get_db().execute(
+        "SELECT * FROM vpcs WHERE id=? AND status != 'deleted'", (vpc_id,)).fetchone()
+    return _vpc_from_row(row) if row else None
+
+
+def find_vpc_by_name(name: str) -> Optional[VPC]:
+    row = db.get_db().execute(
+        "SELECT * FROM vpcs WHERE name=? AND status != 'deleted'", (name,)).fetchone()
+    return _vpc_from_row(row) if row else None
+
+
+def put_vpc(vpc: VPC) -> None:
+    db.get_db().execute("""INSERT INTO vpcs (id,name,cidr_block,dns_support,status,created_at,tags)
+        VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, cidr_block=excluded.cidr_block,
+            dns_support=excluded.dns_support, status=excluded.status,
+            tags=excluded.tags""",
+        (vpc.id, vpc.name, vpc.cidr_block, int(vpc.dns_support),
+         vpc.status.value, vpc.created_at, json.dumps(vpc.tags)))
+    db.get_db().commit()
+
+
+def delete_vpc(vpc_id: str) -> bool:
+    c = db.get_db().execute(
+        "UPDATE vpcs SET status='deleted' WHERE id=? AND status != 'deleted'", (vpc_id,))
+    db.get_db().commit()
+    return c.rowcount > 0
+
+
+# --- Instance ---
+
+def list_instances() -> list[Instance]:
+    rows = db.get_db().execute(
+        "SELECT * FROM instances WHERE status != 'deleted'").fetchall()
+    return [_inst_from_row(r) for r in rows]
+
+
+def get_instance(instance_id: str) -> Optional[Instance]:
+    row = db.get_db().execute(
+        "SELECT * FROM instances WHERE id=? AND status != 'deleted'", (instance_id,)).fetchone()
+    return _inst_from_row(row) if row else None
+
+
+def find_instance_by_name(name: str) -> Optional[Instance]:
+    row = db.get_db().execute(
+        "SELECT * FROM instances WHERE name=? AND status != 'deleted'", (name,)).fetchone()
+    return _inst_from_row(row) if row else None
+
+
+def put_instance(instance: Instance) -> None:
+    db.get_db().execute("""INSERT INTO instances
+        (id,name,image_id,flavor,vpc_id,subnet_id,security_group_ids,user_data,
+         private_ip,public_ip,status,created_at,tags,domain_name,ssh_host_port,ssh_user,users)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, image_id=excluded.image_id, flavor=excluded.flavor,
+            vpc_id=excluded.vpc_id, subnet_id=excluded.subnet_id,
+            security_group_ids=excluded.security_group_ids, user_data=excluded.user_data,
+            private_ip=excluded.private_ip, public_ip=excluded.public_ip,
+            status=excluded.status, tags=excluded.tags, domain_name=excluded.domain_name,
+            ssh_host_port=excluded.ssh_host_port, ssh_user=excluded.ssh_user,
+            users=excluded.users""",
+        (instance.id, instance.name, instance.image_id, instance.flavor,
+         instance.vpc_id, instance.subnet_id,
+         json.dumps(instance.security_group_ids), instance.user_data,
+         instance.private_ip, instance.public_ip, instance.status.value,
+         instance.created_at, json.dumps(instance.tags), instance.domain_name,
+         instance.ssh_host_port, instance.ssh_user, json.dumps(instance.users)))
+    db.get_db().commit()
+
+
+def delete_instance_record(instance_id: str) -> bool:
+    c = db.get_db().execute(
+        "UPDATE instances SET status='deleted' WHERE id=? AND status != 'deleted'", (instance_id,))
+    db.get_db().commit()
+    return c.rowcount > 0
+
+
+# --- Load Balancer ---
+
+def list_lbs() -> list[LoadBalancer]:
+    rows = db.get_db().execute(
+        "SELECT * FROM load_balancers WHERE status != 'deleted'").fetchall()
+    return [_lb_from_row(r) for r in rows]
+
+
+def get_lb(lb_id: str) -> Optional[LoadBalancer]:
+    row = db.get_db().execute(
+        "SELECT * FROM load_balancers WHERE id=? AND status != 'deleted'", (lb_id,)).fetchone()
+    return _lb_from_row(row) if row else None
+
+
+def find_lb_by_name(name: str) -> Optional[LoadBalancer]:
+    row = db.get_db().execute(
+        "SELECT * FROM load_balancers WHERE name=? AND status != 'deleted'", (name,)).fetchone()
+    return _lb_from_row(row) if row else None
+
+
+def put_lb(lb: LoadBalancer) -> None:
+    db.get_db().execute("""INSERT INTO load_balancers
+        (id,name,type,vpc_id,subnet_ids,internal,dns_name,listen_port,backends,status,created_at,tags)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, type=excluded.type, vpc_id=excluded.vpc_id,
+            subnet_ids=excluded.subnet_ids, internal=excluded.internal,
+            dns_name=excluded.dns_name, listen_port=excluded.listen_port,
+            backends=excluded.backends, status=excluded.status, tags=excluded.tags""",
+        (lb.id, lb.name, lb.type, lb.vpc_id, json.dumps(lb.subnet_ids),
+         int(lb.internal), lb.dns_name, lb.listen_port, json.dumps(lb.backends),
+         lb.status.value, lb.created_at, json.dumps(lb.tags)))
+    db.get_db().commit()
+
+
+def delete_lb(lb_id: str) -> bool:
+    c = db.get_db().execute(
+        "UPDATE load_balancers SET status='deleted' WHERE id=? AND status != 'deleted'", (lb_id,))
+    db.get_db().commit()
+    return c.rowcount > 0

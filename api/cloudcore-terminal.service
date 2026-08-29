@@ -1,0 +1,13 @@
+[Unit]
+Description=CloudCore Terminal WebSocket Server
+After=cloudcore-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/scottp/IdeaProjects/CloudProject/api
+ExecStart=/usr/bin/python3 /home/scottp/IdeaProjects/CloudProject/api/terminal.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

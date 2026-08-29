@@ -1,0 +1,16 @@
+namespace: cloudcore
+name: cloudcore
+version: 0.3.0
+readme: README.md
+authors:
+  - CloudCore Platform Team
+description: Ansible collection for the CloudCore cloud platform
+license:
+  - Apache-2.0
+tags:
+  - cloud
+  - infrastructure
+dependencies: {}
+repository: https://github.com/cloudcore/ansible-collection-cloudcore
+documentation: https://github.com/cloudcore/ansible-collection-cloudcore
+homepage: https://cloudcore.io

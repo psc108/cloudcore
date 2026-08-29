@@ -1,0 +1,87 @@
+---
+# 07-teardown.yml
+# Idempotent teardown — deletes all resources created by the examples above.
+# Safe to run multiple times; missing resources are silently skipped.
+# Run: ansible-playbook -i ../inventory.ini 07-teardown.yml
+- name: "Example 07 — Teardown all example resources"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    name_prefix: "{{ project }}-{{ env }}-"
+    dns_zones_to_delete:
+      - "{{ project }}.internal"
+
+  tasks:
+    - name: Set name match pattern
+      ansible.builtin.set_fact:
+        name_pattern: "{{ name_prefix }}.*"
+
+    # ── Load balancers ────────────────────────────────────────────────────────
+    - name: List load balancers
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: lb_list
+
+    - name: Delete example load balancers
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ lb_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── Instances ─────────────────────────────────────────────────────────────
+    - name: List instances
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: instance_list
+
+    - name: Delete example instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ instance_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── DNS zones ─────────────────────────────────────────────────────────────
+    - name: Delete example DNS zones
+      cloudcore.cloudcore.dns_zone:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ dns_zones_to_delete }}"
+
+    # ── VPCs ──────────────────────────────────────────────────────────────────
+    - name: List VPCs
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/vpcs"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: vpc_list
+
+    - name: Delete example VPCs
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ vpc_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Teardown complete
+      ansible.builtin.debug:
+        msg: "All {{ project }}-{{ env }}-* resources removed."

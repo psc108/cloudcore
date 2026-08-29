@@ -1,0 +1,137 @@
+---
+# 06-full-stack.yml
+# Full stack: VPC + web instances + ALB + custom DNS zone + CNAME → LB dns_name.
+# This is the reference "everything" example.
+# Run: ansible-playbook -i ../inventory.ini 06-full-stack.yml
+- name: "Example 06 — Full stack (VPC + compute + ALB + DNS)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-alb"
+    dns_zone: "{{ project }}-{{ build_suffix }}.internal"
+    web_instances:
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-01"
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-02"
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-03"
+
+  tasks:
+    # ── VPC ──────────────────────────────────────────────────────────────────
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    # ── Compute ───────────────────────────────────────────────────────────────
+    - name: Create web instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        image_id: ubuntu-22.04
+        flavor: standard.small
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages: [nginx]
+          runcmd:
+            - systemctl enable --now nginx
+            - echo "{{ item.name }}" > /var/www/html/index.html
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: web
+      loop: "{{ web_instances }}"
+      register: created_instances
+
+    - name: Wait for all instances to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: running_instances
+      until: running_instances.json.status == "running"
+      retries: 30
+      delay: 5
+      loop: "{{ created_instances.results }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    # ── Load balancer ─────────────────────────────────────────────────────────
+    - name: Create application load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: application
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: false
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: ingress
+      register: lb
+
+    - name: Register web instances as backends
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "{{ item.json.name }}"
+          address: "{{ item.json.private_ip }}"
+          port: 80
+        status_code: 201
+      loop: "{{ running_instances.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+
+    # ── DNS ───────────────────────────────────────────────────────────────────
+    - name: Create DNS zone
+      cloudcore.cloudcore.dns_zone:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ dns_zone }}"
+        state: present
+
+    - name: Create CNAME — www → LB dns_name
+      cloudcore.cloudcore.dns_record:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        zone: "{{ dns_zone }}"
+        name: www
+        type: CNAME
+        value: "{{ lb.load_balancer.dns_name }}"
+        ttl: 60
+      register: cname
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    - name: Show stack summary
+      ansible.builtin.debug:
+        msg:
+          - "VPC:  {{ vpc.vpc.name }} ({{ vpc.vpc.cidr_block }})"
+          - "Instances: {{ web_instances | map(attribute='name') | list | join(', ') }}"
+          - "ALB:  {{ lb.load_balancer.name }} port={{ lb.load_balancer.listen_port }}"
+          - "DNS:  {{ cname.record.fqdn }} → {{ cname.record.value }}"

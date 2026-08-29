@@ -1,0 +1,105 @@
+---
+# 05-network-lb.yml
+# VPC + two instances + a network (L4) load balancer for TCP traffic.
+# Use this pattern for non-HTTP workloads (databases, game servers, etc.).
+# Run: ansible-playbook -i ../inventory.ini 05-network-lb.yml
+- name: "Example 05 — Network load balancer (L4 NLB)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-nlb"
+    backend_port: 5432   # example: PostgreSQL
+    instances:
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-db-01"
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-db-02"
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.20.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create backend instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        image_id: ubuntu-22.04
+        flavor: standard.medium
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: database
+      loop: "{{ instances }}"
+      register: created_instances
+
+    - name: Wait for all instances to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+      loop: "{{ created_instances.results }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    - name: Create network load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: network
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: database-lb
+      register: lb
+
+    - name: Register instances as backends
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "{{ item.json.name }}"
+          address: "{{ item.json.private_ip }}"
+          port: "{{ backend_port }}"
+        status_code: 201
+      loop: "{{ poll.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+
+    - name: Show NLB
+      ansible.builtin.debug:
+        msg: >
+          NLB {{ lb.load_balancer.name }} listen_port={{ lb.load_balancer.listen_port }}
+          (internal, backends on port {{ backend_port }})

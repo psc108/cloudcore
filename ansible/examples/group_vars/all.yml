@@ -1,0 +1,9 @@
+---
+# CloudCore connection — override via environment variables or extra-vars
+cloudcore_api_url: "{{ lookup('env', 'CLOUDCORE_API_URL') | default('http://127.0.0.1:8080', true) }}"
+cloudcore_api_token: "{{ lookup('env', 'CLOUDCORE_API_TOKEN') | default('dev-token', true) }}"
+
+# Common tagging defaults — override per playbook as needed
+default_environment: dev
+default_project: cloudcore-examples
+default_owner: ansible

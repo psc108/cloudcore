@@ -1,0 +1,12 @@
+[Unit]
+Description=CloudCore ccbr0 bridge
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /home/scottp/IdeaProjects/CloudProject/api/setup-network.sh
+ExecStop=/bin/bash /home/scottp/IdeaProjects/CloudProject/api/teardown-network.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,124 @@
+---
+# 07-nfs-shared-storage.yml
+# VPC + NFS server (LVM data disk) + 2 instances that mount the shared export.
+# All resources are scoped to the VPC CIDR — no cross-VPC access.
+# Run: ansible-playbook -i ../inventory.ini 07-nfs-shared-storage.yml
+- name: "Example 07 — NFS shared storage"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    nfs_name: "{{ project }}-{{ env }}-{{ build_suffix }}-nfs"
+    nfs_disk_gb: 20
+    nfs_share_name: shared-data
+    nfs_flavor: standard.medium
+    instances:
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-app-01"
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-app-02"
+
+  tasks:
+    # ── VPC ──────────────────────────────────────────────────────────────────
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    # ── NFS server ────────────────────────────────────────────────────────────
+    - name: Create NFS server
+      cloudcore.cloudcore.nfs_server:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ nfs_name }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        flavor: "{{ nfs_flavor }}"
+        disk_gb: "{{ nfs_disk_gb }}"
+        shares:
+          - name: "{{ nfs_share_name }}"
+            clients: vpc
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: nfs
+
+    - name: Wait for NFS server to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/nfs-servers/{{ nfs.nfs_server.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: nfs_poll
+      until: nfs_poll.json.status == "running" and nfs_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    # ── Mount config ──────────────────────────────────────────────────────────
+    - name: Get NFS mount config
+      cloudcore.cloudcore.nfs_mount:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        nfs_server_id: "{{ nfs.nfs_server.id }}"
+        share_name: "{{ nfs_share_name }}"
+        mount_point: "/mnt/shared"
+      register: mount_cfg
+
+    # ── Instances ─────────────────────────────────────────────────────────────
+    - name: Create instances with NFS share mounted
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        image_id: ubuntu-22.04
+        flavor: standard.small
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages:
+            - nfs-common
+          mounts:
+            - ["{{ mount_cfg.nfs_server_ip }}:/exports/{{ nfs_share_name }}", "{{ mount_cfg.mount_point }}", "nfs", "defaults,_netdev,nofail", "0", "0"]
+          runcmd:
+            - mkdir -p {{ mount_cfg.mount_point }}
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: app
+      loop: "{{ instances }}"
+      register: created_instances
+
+    - name: Wait for all instances to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+      loop: "{{ created_instances.results }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    - name: Show stack summary
+      ansible.builtin.debug:
+        msg:
+          - "VPC:        {{ vpc.vpc.name }} ({{ vpc.vpc.cidr_block }})"
+          - "NFS server: {{ nfs_poll.json.name }} @ {{ nfs_poll.json.private_ip }}"
+          - "Share:      {{ nfs_poll.json.private_ip }}:/exports/{{ nfs_share_name }} → {{ mount_cfg.mount_point }}"
+          - "Instances:  {{ instances | map(attribute='name') | list | join(', ') }}"

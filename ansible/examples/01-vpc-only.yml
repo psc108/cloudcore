@@ -1,0 +1,29 @@
+---
+# 01-vpc-only.yml
+# Simplest possible example — create a single VPC.
+# Run: ansible-playbook -i ../inventory.ini 01-vpc-only.yml
+- name: "Example 01 — VPC only"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    vpc_name: "{{ default_project }}-{{ default_environment }}-{{ build_suffix }}-main"
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ default_environment }}"
+          Project: "{{ default_project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Show VPC
+      ansible.builtin.debug:
+        msg: "VPC {{ vpc.vpc.name }} id={{ vpc.vpc.id }} cidr={{ vpc.vpc.cidr_block }}"

@@ -1,0 +1,82 @@
+---
+# 03-compute-with-dns.yml
+# VPC + instance + custom DNS zone with an A record for the instance.
+# Run: ansible-playbook -i ../inventory.ini 03-compute-with-dns.yml
+- name: "Example 03 — Compute with DNS"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    instance_name: "{{ project }}-{{ env }}-{{ build_suffix }}-app-01"
+    dns_zone: "{{ project }}-{{ build_suffix }}.internal"
+    dns_record_name: app
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ instance_name }}"
+        image_id: ubuntu-22.04
+        flavor: standard.small
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: app
+      register: instance
+
+    - name: Wait for running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ instance.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: Create DNS zone
+      cloudcore.cloudcore.dns_zone:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ dns_zone }}"
+        state: present
+      register: zone
+
+    - name: Create A record for instance
+      cloudcore.cloudcore.dns_record:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        zone: "{{ dns_zone }}"
+        name: "{{ dns_record_name }}"
+        type: A
+        value: "{{ poll.json.private_ip }}"
+        ttl: 300
+      register: record
+
+    - name: Show results
+      ansible.builtin.debug:
+        msg:
+          - "Instance: {{ poll.json.name }} @ {{ poll.json.private_ip }}"
+          - "DNS: {{ record.record.fqdn }} → {{ record.record.value }}"

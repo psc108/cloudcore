@@ -1,0 +1,3232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CloudCore Console</title>
+<!-- CodeMirror 5 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/keymap/sublime.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3250;
+    --accent: #4f8ef7;
+    --accent-hover: #6ba3ff;
+    --danger: #e05c5c;
+    --success: #4caf7d;
+    --warn: #e0a84f;
+    --text: #e2e6f0;
+    --text-muted: #7a82a0;
+    --radius: 8px;
+    --font: 'Inter', system-ui, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  header .logo {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+
+  header .logo span { color: var(--text); }
+
+  header .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    margin-left: auto;
+    transition: background 0.3s;
+  }
+  header .status-dot.ok { background: var(--success); }
+  header .status-dot.err { background: var(--danger); }
+  header .status-label { font-size: 12px; color: var(--text-muted); }
+
+  nav {
+    display: flex;
+    gap: 4px;
+    margin-left: 32px;
+  }
+
+  nav button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 14px;
+    font-family: var(--font);
+    transition: background 0.15s, color 0.15s;
+  }
+  nav button:hover { background: var(--surface2); color: var(--text); }
+  nav button.active { background: var(--surface2); color: var(--accent); font-weight: 600; }
+
+  /* ── Dropdown groups ── */
+  .nav-group {
+    position: relative;
+  }
+  .nav-group-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .nav-group-btn .caret {
+    font-size: 9px;
+    opacity: 0.6;
+    transition: transform 0.15s;
+  }
+  .nav-group.open .caret { transform: rotate(180deg); }
+  .nav-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px;
+    min-width: 170px;
+    z-index: 200;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .nav-group.open .nav-dropdown { display: block; }
+  .nav-dropdown button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 7px 12px;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  .nav-dropdown button.active {
+    background: var(--surface2);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px;
+  }
+
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .card-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: var(--font);
+    font-weight: 500;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: #e87070; }
+  .btn-ghost {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+
+  .empty-row td {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 32px;
+  }
+  .empty-row:hover td { background: none; }
+
+  /* ── Status badges ── */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .badge-running, .badge-active   { background: #1a3d2b; color: var(--success); }
+  .badge-pending                  { background: #3a2e10; color: var(--warn); }
+  .badge-stopped                  { background: #2a2a2a; color: var(--text-muted); }
+  .badge-error                    { background: #3d1a1a; color: var(--danger); }
+  .badge-deleted                  { background: #2a2a2a; color: var(--text-muted); }
+
+  /* ── Forms ── */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .form-grid .full { grid-column: 1 / -1; }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+
+  .field input, .field select, .field textarea {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    border-color: var(--accent);
+  }
+  .field textarea { resize: vertical; min-height: 80px; }
+  .field select option { background: var(--surface2); }
+
+  .form-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── Toast ── */
+  #toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 999;
+  }
+
+  .toast {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 13px;
+    min-width: 260px;
+    max-width: 380px;
+    animation: slide-in 0.2s ease;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .toast.success { border-left: 3px solid var(--success); }
+  .toast.error   { border-left: 3px solid var(--danger); }
+  .toast.info    { border-left: 3px solid var(--accent); }
+  .toast-msg { flex: 1; }
+  .toast-close { cursor: pointer; color: var(--text-muted); background: none; border: none; font-size: 16px; line-height: 1; padding: 0; }
+
+  @keyframes slide-in {
+    from { transform: translateX(20px); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
+
+  /* ── Misc ── */
+  .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; }
+  .text-muted { color: var(--text-muted); }
+  .refresh-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 4px; border-radius: 4px; }
+  .refresh-btn:hover { color: var(--text); background: var(--surface2); }
+  .spinning { animation: spin 0.8s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Backends panel ── */
+  .backends-row td {
+    padding: 0;
+    background: var(--bg);
+  }
+  .backends-panel {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+  }
+  .backends-panel table { font-size: 12px; }
+  .backends-panel th { color: var(--text-muted); padding: 4px 8px; }
+  .backends-panel td { padding: 6px 8px; }
+  .backends-add {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    align-items: flex-end;
+  }
+  .backends-add .field { flex: 1; }
+  .backends-add .field.narrow { flex: 0 0 90px; }
+  .expand-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s;
+  }
+  .expand-btn:hover { color: var(--accent); }
+
+  /* ── SSH panel ── */
+  .ssh-panel {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .ssh-block { margin-bottom: 14px; }
+  .ssh-block label { font-size: 11px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 6px; }
+  .ssh-cmd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+  }
+  .ssh-cmd code {
+    flex: 1;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: var(--accent);
+    word-break: break-all;
+  }
+  .copy-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .copy-btn:hover { color: var(--text); background: var(--border); }
+  .ssh-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+  .ssh-note code { font-family: monospace; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; }
+
+  /* ── Dashboard ── */
+  .dash-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .stat-tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stat-tile:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .stat-tile .stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-tile .stat-value { font-size: 32px; font-weight: 700; color: var(--accent); line-height: 1; }
+  .stat-tile .stat-sub   { font-size: 12px; color: var(--text-muted); }
+  .dash-panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .dash-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .dash-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .dash-panel-header h3 { font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .dash-panel-header .dash-count { font-size: 12px; color: var(--text-muted); }
+  .dash-resource-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+    gap: 12px;
+  }
+  .dash-resource-row:last-child { border-bottom: none; }
+  .dash-resource-row:hover { background: var(--surface2); }
+  .dash-resource-row .drr-name { font-weight: 600; font-size: 13px; flex: 1; }
+  .dash-resource-row .drr-meta { font-size: 12px; color: var(--text-muted); }
+  .dash-empty { padding: 24px 18px; font-size: 13px; color: var(--text-muted); }
+  .dash-last-refresh { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  /* ── Detail modal ── */
+  .detail-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 600;
+    align-items: center;
+    justify-content: center;
+  }
+  .detail-modal-overlay.open { display: flex; }
+  .detail-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 560px;
+    max-width: 95vw;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 28px 32px;
+    position: relative;
+  }
+  .detail-modal h2 { font-size: 18px; margin-bottom: 20px; padding-right: 32px; }
+  .detail-modal .close-btn { position: absolute; top: 16px; right: 16px; background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; line-height: 1; }
+  .detail-kv { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 13px; margin-bottom: 20px; }
+  .detail-kv .dk { color: var(--text-muted); font-weight: 500; }
+  .detail-kv .dv { word-break: break-all; }
+  .detail-goto { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+  /* ── Terminal tab ── */
+  .instance-cards { display: flex; flex-direction: column; gap: 16px; }
+  .instance-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .instance-card .inst-info { flex: 1; }
+  .instance-card .inst-name { font-weight: 600; font-size: 15px; }
+  .instance-card .inst-meta { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .instance-card .inst-meta code { font-family: monospace; color: var(--text); }
+  .no-sudo-msg {
+    background: #3a2e10;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--warn);
+    margin-top: 8px;
+  }
+
+  /* ── Floating terminal window ── */
+  .term-window {
+    position: fixed;
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+    z-index: 500;
+    min-width: 400px;
+    min-height: 260px;
+    overflow: hidden;
+  }
+  .term-titlebar {
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: move;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .term-title { flex: 1; font-size: 13px; font-weight: 500; }
+  .term-close {
+    background: var(--danger);
+    border: none;
+    color: #fff;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .term-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 6px;
+    position: relative;
+  }
+  .term-error {
+    color: var(--warn);
+    font-family: monospace;
+    font-size: 13px;
+    padding: 16px;
+    white-space: pre-wrap;
+  }
+  .term-resize-handle {
+    position: absolute;
+    bottom: 0; right: 0;
+    width: 16px; height: 16px;
+    cursor: se-resize;
+    background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
+  }
+
+  /* ── Build Manager ── */
+  .cb-col { width: 36px; text-align: center; }
+.cb-col input[type=checkbox] { cursor: pointer; width: 15px; height: 15px; }
+
+.bm-res-badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); white-space: nowrap; }
+.bm-res-gone  { background: transparent; color: var(--text-muted); border-color: transparent; font-style: italic; }
+
+.bm-template-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+  }
+  .bm-template-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+  }
+  .bm-template-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .bm-template-card.selected { border-color: var(--accent); background: #1a2540; }
+  .bm-tpl-title { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .bm-tpl-desc  { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
+  .bm-tpl-tags  { display: flex; flex-wrap: wrap; gap: 5px; }
+  .bm-tag {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: capitalize;
+  }
+  .bm-log-pre {
+    background: #0a0c12;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #c8d0e8;
+    max-height: 520px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .bm-empty { font-size: 13px; color: var(--text-muted); }
+
+  /* ── File Editor ── */
+  .ed-root-tabs { display: flex; gap: 4px; }
+  .ed-tab {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text-muted);
+    padding: 3px 12px; font-size: 12px; cursor: pointer;
+    font-family: var(--font); text-transform: capitalize;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .ed-tab:hover  { border-color: var(--accent); color: var(--text); }
+  .ed-tab.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+  .ed-filename {
+    font-family: 'JetBrains Mono','Fira Code',monospace;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .ed-dirty { color: var(--warn); font-size: 14px; }
+
+  .ed-layout {
+    display: flex;
+    height: 640px;
+    overflow: hidden;
+  }
+
+  .ed-tree {
+    width: 220px;
+    min-width: 180px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 8px 0;
+    background: var(--bg);
+    font-size: 13px;
+  }
+
+  .ed-dir { user-select: none; }
+  .ed-dir-label {
+    padding: 4px 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    cursor: default;
+  }
+
+  .ed-file {
+    padding: 5px 12px;
+    cursor: pointer;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: 4px;
+    margin: 1px 4px;
+    transition: background 0.1s, color 0.1s;
+  }
+  .ed-file:hover  { background: var(--surface2); color: var(--text); }
+  .ed-file.active { background: var(--surface2); color: var(--accent); font-weight: 600; }
+
+  .ed-cm-host {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .ed-cm-host .CodeMirror {
+    flex: 1;
+    height: 100%;
+    font-size: 13px;
+    font-family: 'JetBrains Mono','Fira Code',monospace;
+  }
+  .ed-cm-host .CodeMirror-scroll { height: 100%; }
+
+  /* ── About ── */
+  .about-heading {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin: 20px 0 8px;
+  }
+  .about-heading:first-of-type { margin-top: 0; }
+  .about-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+  .about-table .about-key {
+    width: 180px;
+    padding: 7px 12px;
+    color: var(--text-muted);
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+  }
+  .about-table .about-val {
+    padding: 7px 12px;
+    font-family: 'JetBrains Mono','Fira Code',monospace;
+    font-size: 12px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    word-break: break-all;
+  }
+  .about-table tr:last-child td { border-bottom: none; }
+</style>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+</head>
+
+<body>
+
+<header>
+  <div class="logo">Cloud<span>Core</span></div>
+  <nav>
+    <button id="nav-dashboard" class="active" onclick="showSection('dashboard', this)">Dashboard</button>
+    <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-infrastructure">Infrastructure <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-vpcs" onclick="showSection('vpcs', this)">VPCs</button>
+        <button id="nav-instances" onclick="showSection('instances', this)">Instances</button>
+        <button id="nav-lbs" onclick="showSection('lbs', this)">Load Balancers</button>
+        <button id="nav-terminal" onclick="showSection('terminal', this)">Terminal</button>
+      </div>
+    </div>
+    <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-networking">Networking <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-dns" onclick="showSection('dns', this)">DNS</button>
+      </div>
+    </div>
+    <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-builds">Builds <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-builds" onclick="showSection('builds', this)">Ansible</button>
+        <button id="nav-tofu" onclick="showSection('tofu', this)">OpenTofu</button>
+      </div>
+    </div>
+    <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
+    <button id="nav-about" onclick="showSection('about', this)">About</button>
+    <button onclick="openHelp()">Help</button>
+  </nav>
+  <div class="status-dot" id="api-dot"></div>
+  <span class="status-label" id="api-label">Connecting…</span>
+</header>
+
+<main>
+
+  <!-- ═══════════════════════════ Dashboard ═══════════════════════════ -->
+  <div id="section-dashboard" class="section active">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700">Dashboard</h2>
+        <div class="dash-last-refresh" id="dash-refresh-label">Never refreshed</div>
+      </div>
+      <button class="btn btn-ghost" onclick="loadDashboard()">&#8635; Refresh</button>
+    </div>
+    <div class="dash-stats">
+      <div class="stat-tile" onclick="showSectionByName('vpcs')">
+        <div class="stat-label">VPCs</div>
+        <div class="stat-value" id="ds-vpc-count">&mdash;</div>
+        <div class="stat-sub">active networks</div>
+      </div>
+      <div class="stat-tile" onclick="showSectionByName('instances')">
+        <div class="stat-label">Instances</div>
+        <div class="stat-value" id="ds-inst-count">&mdash;</div>
+        <div class="stat-sub" id="ds-inst-sub">deployed</div>
+      </div>
+      <div class="stat-tile" onclick="showSectionByName('lbs')">
+        <div class="stat-label">Load Balancers</div>
+        <div class="stat-value" id="ds-lb-count">&mdash;</div>
+        <div class="stat-sub">active</div>
+      </div>
+      <div class="stat-tile" onclick="showSectionByName('dns')">
+        <div class="stat-label">DNS</div>
+        <div class="stat-value" id="ds-dns-count">&mdash;</div>
+        <div class="stat-sub" id="ds-dns-sub">zones</div>
+      </div>
+    </div>
+    <div class="dash-panels">
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>VPCs</h3><span class="dash-count" id="dp-vpc-count"></span></div>
+        <div id="dp-vpcs"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>Instances</h3><span class="dash-count" id="dp-inst-count"></span></div>
+        <div id="dp-instances"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>Load Balancers</h3><span class="dash-count" id="dp-lb-count"></span></div>
+        <div id="dp-lbs"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>DNS Zones</h3><span class="dash-count" id="dp-dns-count"></span></div>
+        <div id="dp-dns"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ VPCs ═══════════════════════════ -->
+  <div id="section-vpcs" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>VPCs</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="vpc-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('vpc')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadVPCs()">↻</button>
+          <button class="btn btn-primary" onclick="toggleForm('vpc-form')">+ Create VPC</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="vpc-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="vpc-name" type="text" placeholder="my-vpc">
+          </div>
+          <div class="field">
+            <label>CIDR Block</label>
+            <input id="vpc-cidr" type="text" placeholder="10.0.0.0/16" value="10.0.0.0/16">
+          </div>
+          <div class="field">
+            <label>DNS Support</label>
+            <select id="vpc-dns">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="vpc-tags" type="text" placeholder="env=dev, team=platform">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleForm('vpc-form')">Cancel</button>
+          <button class="btn btn-primary" onclick="createVPC()">Create VPC</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="vpc-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="vpc-sel-all" onchange="toggleSelectAll('vpc',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>CIDR</th>
+              <th>DNS</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="vpc-tbody">
+            <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ Instances ═══════════════════════════ -->
+  <div id="section-instances" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Instances</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="inst-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('instance')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadInstances()">↻</button>
+          <button class="btn btn-primary" onclick="toggleInstanceForm()">+ Launch Instance</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="instance-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="inst-name" type="text" placeholder="my-instance">
+          </div>
+          <div class="field">
+            <label>Image *</label>
+            <select id="inst-image"></select>
+          </div>
+          <div class="field">
+            <label>Flavor *</label>
+            <select id="inst-flavor">
+              <option value="standard.nano">nano (1 vCPU, 512 MB)</option>
+              <option value="standard.small">small (1 vCPU, 1 GB)</option>
+              <option value="standard.medium" selected>medium (2 vCPU, 2 GB)</option>
+              <option value="standard.large">large (4 vCPU, 4 GB)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="inst-vpc"></select>
+          </div>
+          <div class="field">
+            <label>Subnet *</label>
+            <select id="inst-subnet"></select>
+          </div>
+          <div class="field">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="inst-tags" type="text" placeholder="env=dev">
+          </div>
+          <div class="field full">
+            <label>User Data <span class="text-muted">(cloud-init, optional)</span></label>
+            <textarea id="inst-userdata" placeholder="#cloud-config&#10;ssh_authorized_keys:&#10;  - ssh-ed25519 AAAA..."></textarea>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleInstanceForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="createInstance()">Launch Instance</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="instance-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="inst-sel-all" onchange="toggleSelectAll('instance',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>Image</th>
+              <th>Flavor</th>
+              <th>Private IP</th>
+              <th>SSH Port</th>
+              <th>SSH</th>
+              <th>Users</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="instance-tbody">
+            <tr class="empty-row"><td colspan="12">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ Load Balancers ═══════════════════════════ -->
+  <div id="section-lbs" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Load Balancers</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="lb-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('lb')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadLBs()">↻</button>
+          <button class="btn btn-primary" onclick="toggleLBForm()">+ Create Load Balancer</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="lb-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="lb-name" type="text" placeholder="my-lb">
+          </div>
+          <div class="field">
+            <label>Type</label>
+            <select id="lb-type">
+              <option value="application">Application (L7)</option>
+              <option value="network">Network (L4)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="lb-vpc"></select>
+          </div>
+          <div class="field">
+            <label>Scheme</label>
+            <select id="lb-internal">
+              <option value="false">Internet-facing</option>
+              <option value="true">Internal</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="lb-tags" type="text" placeholder="env=dev">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleLBForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="createLB()">Create Load Balancer</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="lb-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="lb-sel-all" onchange="toggleSelectAll('lb',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>Type</th>
+              <th>VPC</th>
+              <th>Listen Port</th>
+              <th>Backends</th>
+              <th>Scheme</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="lb-tbody">
+            <tr class="empty-row"><td colspan="11">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+
+  <!-- ═══════════════════════════ Terminal ═══════════════════════════ -->
+  <div id="section-terminal" class="section">
+    <div class="card">
+      <div class="card-header">
+        <h2>Terminal</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadTerminalInstances()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+        Click <strong>Open Terminal</strong> to launch an SSH session into a running instance.
+        Sessions open as the first non-sudo user. The terminal window is draggable and resizable.
+      </p>
+      <div id="terminal-instance-list" class="instance-cards">
+        <div style="color:var(--text-muted);font-size:13px">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ DNS ═══════════════════════════ -->
+  <div id="section-dns" class="section">
+    <div class="card">
+      <div class="card-header">
+        <h2>DNS Zones</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="refresh-btn" title="Refresh" onclick="loadDNS()">↻</button>
+          <button class="btn btn-primary" onclick="toggleForm('dns-zone-form')">+ Add Zone</button>
+        </div>
+      </div>
+      <div id="dns-zone-form" style="display:none;margin-bottom:24px;padding:20px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
+        <div class="form-grid">
+          <div class="field full">
+            <label>Zone Name *</label>
+            <input id="dns-zone-name" type="text" placeholder="myapp.cloudcore.local">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleForm('dns-zone-form')">Cancel</button>
+          <button class="btn btn-primary" onclick="createDNSZone()">Create Zone</button>
+        </div>
+      </div>
+      <div id="dns-zones-list"><div style="color:var(--text-muted);font-size:13px">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ═════════════════════════════ Build Manager ═════════════════════════════ -->
+  <div id="section-builds" class="section">
+
+    <!-- Template picker -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Build Manager</h2>
+        <button class="refresh-btn" title="Refresh templates" onclick="_bmLoadTemplates()">&#8635;</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Select a template to provision infrastructure and run the playbook end-to-end.
+      </p>
+      <div id="bm-template-grid" class="bm-template-grid">Loading&hellip;</div>
+    </div>
+
+    <!-- Var configuration + submit -->
+    <div id="bm-var-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="bm-form-title">Configure</h2>
+      </div>
+      <input type="hidden" id="bm-submit-filename">
+      <div id="bm-var-fields" class="form-grid"></div>
+      <div class="form-actions">
+        <button class="btn btn-ghost" onclick="document.getElementById('bm-var-panel').style.display='none'">Cancel</button>
+        <button class="btn btn-primary" id="bm-submit-btn" onclick="bmSubmitBuild()">Run Build</button>
+      </div>
+    </div>
+
+    <!-- Live log -->
+    <div id="bm-log-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="bm-log-title">Build log</h2>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('bm-log-panel').style.display='none'">Close</button>
+      </div>
+      <pre id="bm-log-pre" class="bm-log-pre"></pre>
+    </div>
+
+    <!-- Build history -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Build History</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="bm-destroy-btn" class="btn btn-danger" style="display:none" onclick="bmDestroySelected()">🗑 Destroy Resources</button>
+          <button class="refresh-btn" title="Refresh" onclick="_bmLoadHistory()">&#8635;</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="bm-sel-all" onchange="_bmToggleSelAll(this)"></th>
+              <th>ID</th>
+              <th>Template</th>
+              <th>Status</th>
+              <th>Resources</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="bm-history-tbody">
+            <tr class="empty-row"><td colspan="8">No builds yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ File Editor ═══════════════════════════ -->
+  <div id="section-editor" class="section">
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="card-header" style="padding:16px 20px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:12px;flex:1">
+          <h2>Editor</h2>
+          <div id="ed-root-tabs" class="ed-root-tabs"></div>
+          <span id="ed-filename" class="ed-filename">No file open</span>
+          <span id="ed-dirty-ind" class="ed-dirty" title="Unsaved changes"></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="edNewFile()">+ New File</button>
+          <button id="ed-delete-btn" class="btn btn-ghost btn-sm" onclick="edDeleteFile()" disabled>Delete</button>
+          <button id="ed-save-btn" class="btn btn-primary btn-sm" onclick="edSaveFile()" disabled>Save</button>
+        </div>
+      </div>
+      <!-- New file panel -->
+      <div id="ed-new-panel" style="display:none;align-items:center;gap:8px;padding:10px 20px;background:var(--surface2);border-bottom:1px solid var(--border)">
+        <label style="font-size:12px;color:var(--text-muted);white-space:nowrap">Filename:</label>
+        <input id="ed-new-name" type="text" placeholder="08-my-playbook.yml"
+               style="flex:1;max-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:6px 10px;font-size:13px"
+               onkeydown="if(event.key==='Enter')edCreateFile();if(event.key==='Escape')edNewFile()">
+        <button class="btn btn-primary btn-sm" onclick="edCreateFile()">Create</button>
+        <button class="btn btn-ghost btn-sm" onclick="edNewFile()">Cancel</button>
+      </div>
+      <!-- Two-panel layout -->
+      <div class="ed-layout">
+        <div id="ed-tree" class="ed-tree">Loading&hellip;</div>
+        <div id="ed-cm-host" class="ed-cm-host"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ About ═══════════════════════════ -->
+  <div id="section-about" class="section">
+    <div class="card" style="max-width:680px">
+      <div class="card-header">
+        <h2>About CloudCore</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadAbout()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:24px">
+        A cloud provider platform delivering VPCs, compute instances and L4/L7 load balancers.
+      </p>
+
+      <h3 class="about-heading">CloudCore</h3>
+      <table class="about-table"><tbody id="about-cloudcore"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+
+      <h3 class="about-heading">Python Runtime</h3>
+      <table class="about-table"><tbody id="about-runtime"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+
+      <h3 class="about-heading">System Tools</h3>
+      <table class="about-table"><tbody id="about-system"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ OpenTofu Build Manager ═══════════════════════════ -->
+  <div id="section-tofu" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>OpenTofu Build Manager</h2>
+        <button class="refresh-btn" title="Refresh templates" onclick="_tfLoadTemplates()">&#8635;</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Select an example configuration to run <code style="font-family:monospace;color:var(--accent)">tofu init</code>
+        and <code style="font-family:monospace;color:var(--accent)">tofu apply</code> end-to-end.
+      </p>
+      <div id="tf-template-grid" class="bm-template-grid">Loading&hellip;</div>
+    </div>
+
+    <div id="tf-var-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="tf-form-title">Configure</h2>
+      </div>
+      <input type="hidden" id="tf-submit-dirname">
+      <div id="tf-var-fields" class="form-grid"></div>
+      <div class="form-actions">
+        <button class="btn btn-ghost" onclick="document.getElementById('tf-var-panel').style.display='none'">Cancel</button>
+        <button class="btn btn-primary" id="tf-submit-btn" onclick="tfSubmitBuild()">Run Apply</button>
+      </div>
+    </div>
+
+    <div id="tf-log-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="tf-log-title">Apply log</h2>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('tf-log-panel').style.display='none'">Close</button>
+      </div>
+      <pre id="tf-log-pre" class="bm-log-pre"></pre>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Apply History</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="tf-destroy-btn" class="btn btn-danger" style="display:none" onclick="tfDestroySelected()">&#128465; Destroy Resources</button>
+          <button class="refresh-btn" title="Refresh" onclick="_tfLoadHistory()">&#8635;</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="tf-sel-all" onchange="_tfToggleSelAll(this)"></th>
+              <th>ID</th>
+              <th>Template</th>
+              <th>Status</th>
+              <th>Resources</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tf-history-tbody">
+            <tr class="empty-row"><td colspan="8">No builds yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<div id="toast-container"></div>
+
+<!-- ── Detail modal ── -->
+<div class="detail-modal-overlay" id="detail-modal-overlay" onclick="closeDetailOverlay(event)">
+  <div class="detail-modal">
+    <button class="close-btn" onclick="closeDetailModal()">&#x2715;</button>
+    <h2 id="detail-title"></h2>
+    <div class="detail-kv" id="detail-kv"></div>
+    <div class="detail-goto">
+      <button class="btn btn-primary" id="detail-goto-btn">Open in full view &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Help modal ── -->
+<div id="help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:800;overflow-y:auto;padding:40px 20px">
+  <div style="max-width:820px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;position:relative">
+    <button onclick="closeHelp()" style="position:absolute;top:16px;right:16px;background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1">✕</button>
+    <div id="help-content" style="line-height:1.7;font-size:14px">Loading…</div>
+  </div>
+</div>
+
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const API_BASE  = 'http://127.0.0.1:8080';
+const API_TOKEN = 'dev-token';
+
+// ── API client ───────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Authorization': `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(API_BASE + path, opts);
+  if (res.status === 204) return null;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || data.title || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function parseTags(str) {
+  const tags = {};
+  if (!str.trim()) return tags;
+  str.split(',').forEach(pair => {
+    const [k, ...v] = pair.split('=');
+    if (k.trim()) tags[k.trim()] = v.join('=').trim();
+  });
+  return tags;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function badge(status) {
+  return `<span class="badge badge-${status}">${status}</span>`;
+}
+
+function shortId(id) {
+  return `<span class="mono text-muted" title="${id}">${id.slice(0, 8)}…</span>`;
+}
+
+function toggleForm(id) {
+  const el = document.getElementById(id);
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span class="toast-msg">${msg}</span><button class="toast-close" onclick="this.parentElement.remove()">×</button>`;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+const _sectionGroup = {
+  vpcs: 'infrastructure', instances: 'infrastructure',
+  lbs: 'infrastructure',  terminal: 'infrastructure',
+  dns: 'networking',
+  builds: 'builds', tofu: 'builds',
+};
+
+// Click-toggle dropdowns; close when clicking outside
+document.addEventListener('click', e => {
+  const grp = e.target.closest('.nav-group');
+  document.querySelectorAll('.nav-group').forEach(g => {
+    if (g !== grp) g.classList.remove('open');
+  });
+  if (grp && e.target.classList.contains('nav-group-btn')) {
+    grp.classList.toggle('open');
+  }
+});
+
+function showSection(name, btn) {
+  document.querySelectorAll('.nav-group').forEach(g => g.classList.remove('open'));
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-dropdown button, nav > button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-group-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('section-' + name).classList.add('active');
+  if (btn) btn.classList.add('active');
+  const grp = _sectionGroup[name];
+  if (grp) document.getElementById('nav-grp-' + grp).classList.add('active');
+  if (name !== 'instances') stopInstancePoll();
+  if (name !== 'dashboard') stopDashPoll();
+  if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
+  if (name === 'vpcs')          loadVPCs();
+  if (name === 'instances')     { loadInstances(); startInstancePoll(); }
+  if (name === 'lbs')           loadLBs();
+  if (name === 'terminal')      loadTerminalInstances();
+  if (name === 'dns')           loadDNS();
+  if (name === 'builds')        loadBuildManager();
+  if (name === 'tofu')           loadTofuManager();
+  if (name === 'editor')         loadEditor();
+  if (name === 'about')          loadAbout();
+}
+
+function showSectionByName(name) {
+  showSection(name, document.getElementById('nav-' + name));
+}
+
+// ── API health ────────────────────────────────────────────────────────────────
+async function checkHealth() {
+  const dot   = document.getElementById('api-dot');
+  const label = document.getElementById('api-label');
+  try {
+    await api('GET', '/v1/vpcs');
+    dot.className     = 'status-dot ok';
+    label.textContent = 'API connected';
+  } catch {
+    dot.className     = 'status-dot err';
+    label.textContent = 'API unreachable';
+  }
+}
+
+// ── Dashboard ────────────────────────────────────────────────────────────────
+let _dashTimer = null;
+const _dashResources = {};   // id -> { type, resource } — avoids inline JSON in onclick
+
+function _dashRow(type, r, meta) {
+  _dashResources[r.id] = { type, resource: r };
+  const statusStr = typeof r.status === 'object' ? r.status.value : r.status;
+  return `<div class="dash-resource-row" onclick="openDetailById('${r.id}')">
+    <div class="drr-name">${r.name}</div>
+    <div class="drr-meta">${meta}</div>
+    ${badge(statusStr)}
+  </div>`;
+}
+
+async function loadDashboard() {
+  try {
+    const d = await api('GET', '/v1/dashboard');
+    const s = d.summary;
+
+    document.getElementById('ds-vpc-count').textContent  = s.vpcs;
+    document.getElementById('ds-inst-count').textContent = s.instances;
+    document.getElementById('ds-inst-sub').textContent   =
+      s.instances_running + ' running' +
+      (s.instances - s.instances_running > 0 ? ', ' + (s.instances - s.instances_running) + ' other' : '');
+    document.getElementById('ds-lb-count').textContent  = s.load_balancers;
+    document.getElementById('ds-dns-count').textContent = s.dns_zones;
+    document.getElementById('ds-dns-sub').textContent   =
+      s.dns_zones + ' zone' + (s.dns_zones !== 1 ? 's' : '') +
+      ', ' + s.dns_records + ' record' + (s.dns_records !== 1 ? 's' : '');
+
+    const vpcs = d.vpcs;
+    document.getElementById('dp-vpc-count').textContent = vpcs.length + ' total';
+    document.getElementById('dp-vpcs').innerHTML = vpcs.length
+      ? vpcs.map(v => _dashRow('vpc', v, `<span class="mono">${v.cidr_block}</span>`)).join('')
+      : '<div class="dash-empty">No VPCs</div>';
+
+    const insts = d.instances;
+    document.getElementById('dp-inst-count').textContent = insts.length + ' total';
+    document.getElementById('dp-instances').innerHTML = insts.length
+      ? insts.map(i => _dashRow('instance', i, `<span class="mono">${i.private_ip || '—'}</span>`)).join('')
+      : '<div class="dash-empty">No instances</div>';
+
+    const lbs = d.load_balancers;
+    document.getElementById('dp-lb-count').textContent = lbs.length + ' total';
+    document.getElementById('dp-lbs').innerHTML = lbs.length
+      ? lbs.map(lb => _dashRow('lb', lb, `${lb.type} · ${lb.backends.length} backend${lb.backends.length !== 1 ? 's' : ''}`)).join('')
+      : '<div class="dash-empty">No load balancers</div>';
+
+    const zones = d.dns_zones;
+    document.getElementById('dp-dns-count').textContent = zones.length + ' total';
+    document.getElementById('dp-dns').innerHTML = zones.length
+      ? zones.map(z => `<div class="dash-resource-row" onclick="showSectionByName('dns')">
+          <div class="drr-name">${z.name}</div>
+          <div class="drr-meta">${z.record_count} record${z.record_count !== 1 ? 's' : ''}</div>
+          ${z.builtin ? '<span class="badge badge-active">built-in</span>' : ''}
+        </div>`).join('')
+      : '<div class="dash-empty">No DNS zones</div>';
+
+    document.getElementById('dash-refresh-label').textContent =
+      'Last refreshed ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    toast('Dashboard refresh failed: ' + e.message, 'error');
+  }
+}
+
+function startDashPoll() {
+  if (_dashTimer) return;
+  _dashTimer = setInterval(loadDashboard, 60000);
+}
+
+function stopDashPoll() {
+  clearInterval(_dashTimer);
+  _dashTimer = null;
+}
+
+// ── Detail modal ─────────────────────────────────────────────────────────────
+const _detailSectionMap = { vpc: 'vpcs', instance: 'instances', lb: 'lbs' };
+
+
+function openDetailById(id) {
+  const entry = _dashResources[id];
+  if (!entry) return;
+  openDetail(entry.type, entry.resource);
+}
+
+function openDetail(type, resource) {
+  const titles = { vpc: 'VPC', instance: 'Instance', lb: 'Load Balancer' };
+  document.getElementById('detail-title').textContent = titles[type] + ': ' + resource.name;
+  const fieldMap = {
+    vpc:      () => [['ID', resource.id], ['CIDR', resource.cidr_block], ['DNS Support', resource.dns_support ? 'Yes' : 'No'], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
+    instance: () => [['ID', resource.id], ['Image', resource.image_id], ['Flavor', resource.flavor], ['Private IP', resource.private_ip || '\u2014'], ['SSH Port', resource.ssh_port ? '127.0.0.1:' + resource.ssh_port : '\u2014'], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
+    lb:       () => [['ID', resource.id], ['Type', resource.type], ['Scheme', resource.internal ? 'Internal' : 'Internet-facing'], ['Listen Port', resource.listen_port ? '127.0.0.1:' + resource.listen_port : '\u2014'], ['Backends', (resource.backends || []).length], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
+  };
+  document.getElementById('detail-kv').innerHTML = ((fieldMap[type] || (() => []))()).map(
+    ([k, v]) => `<div class="dk">${k}</div><div class="dv">${v}</div>`
+  ).join('');
+  document.getElementById('detail-goto-btn').onclick = () => {
+    closeDetailModal();
+    showSectionByName(_detailSectionMap[type]);
+  };
+  document.getElementById('detail-modal-overlay').classList.add('open');
+}
+
+function closeDetailOverlay(e) {
+  if (e.target === document.getElementById('detail-modal-overlay')) closeDetailModal();
+}
+
+function closeDetailModal() {
+  document.getElementById('detail-modal-overlay').classList.remove('open');
+}
+
+// ── VPCs ─────────────────────────────────────────────────────────────────────
+async function loadVPCs() {
+  const tbody = document.getElementById('vpc-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Loading…</td></tr>';
+  try {
+    const data  = await api('GET', '/v1/vpcs');
+    const items = data.items.filter(v => v.status !== 'deleted');
+    if (!items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No VPCs found. Create one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(v => `
+      <tr>
+        <td class="cb-col"><input type="checkbox" class="row-cb" data-type="vpc" data-id="${v.id}" data-name="${v.name}" onchange="_onRowCbChange('vpc')"></td>
+        <td><strong>${v.name}</strong></td>
+        <td>${shortId(v.id)}</td>
+        <td class="mono">${v.cidr_block}</td>
+        <td>${v.dns_support ? '✓' : '—'}</td>
+        <td>${badge(v.status)}</td>
+        <td>${fmtDate(v.created_at)}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteVPC('${v.id}','${v.name}')">Delete</button></td>
+      </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function createVPC() {
+  const name = document.getElementById('vpc-name').value.trim();
+  if (!name) { toast('Name is required', 'error'); return; }
+  try {
+    await api('POST', '/v1/vpcs', {
+      name,
+      cidr_block:  document.getElementById('vpc-cidr').value.trim() || '10.0.0.0/16',
+      dns_support: document.getElementById('vpc-dns').value === 'true',
+      tags:        parseTags(document.getElementById('vpc-tags').value),
+    });
+    toast(`VPC "${name}" created`, 'success');
+    toggleForm('vpc-form');
+    document.getElementById('vpc-name').value = '';
+    document.getElementById('vpc-tags').value = '';
+    loadVPCs();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function deleteVPC(id, name) {
+  if (!confirm(`Delete VPC "${name}"?`)) return;
+  try {
+    await api('DELETE', `/v1/vpcs/${id}`);
+    toast(`VPC "${name}" deleted`, 'success');
+    loadVPCs();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// ── Instances — polling ───────────────────────────────────────────────────────
+let _pollTimer = null;
+
+function startInstancePoll() {
+  if (_pollTimer) return;
+  _pollTimer = setInterval(async () => {
+    const data = await api('GET', '/v1/instances').catch(() => null);
+    if (!data) return;
+    const items = data.items.filter(i => i.status !== 'deleted');
+    if (items.some(i => i.status === 'pending')) renderInstances(items);
+    else stopInstancePoll();
+  }, 5000);
+}
+
+function stopInstancePoll() {
+  clearInterval(_pollTimer);
+  _pollTimer = null;
+}
+
+// ── Instances — load ──────────────────────────────────────────────────────────
+async function loadInstances() {
+  const tbody = document.getElementById('instance-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Loading…</td></tr>';
+  try {
+    const data  = await api('GET', '/v1/instances');
+    const items = data.items.filter(i => i.status !== 'deleted');
+    renderInstances(items);
+    if (items.some(i => i.status === 'pending')) startInstancePoll();
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">Error: ${e.message}</td></tr>`;
+  }
+}
+
+// ── Instances — SSH panel ─────────────────────────────────────────────────────
+function sshPanel(i) {
+  if (i.status !== 'running' || !i.ssh_port) {
+    return `<div class="ssh-panel"><span class="text-muted" style="font-size:13px">SSH available once instance is running.</span></div>`;
+  }
+  const user    = i.ssh_user || 'ubuntu';
+  const host    = '127.0.0.1';
+  const port    = i.ssh_port;
+  const keyPath = '~/.local/share/cloudcore/cloudcore_ed25519';
+  const sshCmd  = `ssh -i ${keyPath} -p ${port} ${user}@${host}`;
+  const scpTo   = `scp -i ${keyPath} -P ${port} <local-file> ${user}@${host}:<remote-path>`;
+  const scpFrom = `scp -i ${keyPath} -P ${port} ${user}@${host}:<remote-path> <local-dest>`;
+  const p2p     = `ssh -i ~/.ssh/cloudcore_ed25519 ${user}@<other-instance-ip>`;
+  return `
+    <div class="ssh-panel">
+      <div class="ssh-block">
+        <label>SSH into instance</label>
+        <div class="ssh-cmd"><code>${sshCmd}</code><button class="copy-btn" onclick="copyText('${sshCmd}',this)" title="Copy">⎘</button></div>
+      </div>
+      <div class="ssh-block">
+        <label>SCP — upload file</label>
+        <div class="ssh-cmd"><code>${scpTo}</code><button class="copy-btn" onclick="copyText('${scpTo}',this)" title="Copy">⎘</button></div>
+      </div>
+      <div class="ssh-block">
+        <label>SCP — download file</label>
+        <div class="ssh-cmd"><code>${scpFrom}</code><button class="copy-btn" onclick="copyText('${scpFrom}',this)" title="Copy">⎘</button></div>
+      </div>
+      <div class="ssh-block">
+        <label>SSH between instances (passwordless)</label>
+        <div class="ssh-cmd"><code>${p2p}</code><button class="copy-btn" onclick="copyText('${p2p}',this)" title="Copy">⎘</button></div>
+      </div>
+      <p class="ssh-note">The CloudCore keypair is pre-installed on every instance at <code>~/.ssh/cloudcore_ed25519</code>. Instances can SSH to each other without a password.</p>
+    </div>`;
+}
+
+function toggleSSH(instId) {
+  const row = document.getElementById(`ssh-row-${instId}`);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+// ── Instances — Users panel ───────────────────────────────────────────────────
+function usersPanel(i) {
+  const users = i.users || [];
+  const rows = users.length
+    ? users.map(u => `
+        <tr>
+          <td>${u.username}</td>
+          <td>${u.sudo ? '<span class="badge badge-running">yes</span>' : '—'}</td>
+          <td class="mono text-muted">${u.ssh_keys && u.ssh_keys.length ? u.ssh_keys.length + ' key(s)' : '—'}</td>
+          <td><button class="btn btn-danger btn-sm" onclick="removeUser('${i.id}','${u.username}')">Remove</button></td>
+        </tr>`).join('')
+    : `<tr><td colspan="4" style="color:var(--text-muted);padding:8px">No additional users.</td></tr>`;
+  const note = i.status !== 'running'
+    ? `<p class="ssh-note">Users added before launch are baked into cloud-init. Users added to a running instance are applied immediately via SSH.</p>`
+    : '';
+  return `
+    <div class="backends-panel">
+      <table>
+        <thead><tr><th>Username</th><th>Sudo</th><th>SSH Keys</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="backends-add">
+        <div class="field"><label>Username</label><input id="u-name-${i.id}" placeholder="alice"></div>
+        <div class="field" style="flex:0 0 130px">
+          <label>Sudo</label>
+          <select id="u-sudo-${i.id}">
+            <option value="false">No</option>
+            <option value="true">Yes (NOPASSWD)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>SSH Public Key <span class="text-muted">(optional)</span></label>
+          <input id="u-key-${i.id}" placeholder="ssh-ed25519 AAAA...">
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="addUser('${i.id}')">Add User</button>
+      </div>
+      ${note}
+    </div>`;
+}
+
+function toggleUsers(instId) {
+  const row = document.getElementById(`users-row-${instId}`);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function addUser(instId) {
+  const username = document.getElementById(`u-name-${instId}`).value.trim();
+  const sudo     = document.getElementById(`u-sudo-${instId}`).value === 'true';
+  const key      = document.getElementById(`u-key-${instId}`).value.trim();
+  if (!username) { toast('Username is required', 'error'); return; }
+  try {
+    await api('POST', `/v1/instances/${instId}/users`, {
+      username, sudo, ssh_keys: key ? [key] : [],
+    });
+    toast(`User "${username}" added`, 'success');
+    loadInstances();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function removeUser(instId, username) {
+  if (!confirm(`Remove user "${username}" from instance?`)) return;
+  try {
+    await api('DELETE', `/v1/instances/${instId}/users/${username}`);
+    toast(`User "${username}" removed`, 'success');
+    loadInstances();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// ── Instances — render ────────────────────────────────────────────────────────
+function renderInstances(items) {
+  const tbody = document.getElementById('instance-tbody');
+  if (!items.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">No instances found. Launch one above.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(i => `
+    <tr>
+      <td class="cb-col"><input type="checkbox" class="row-cb" data-type="instance" data-id="${i.id}" data-name="${i.name}" onchange="_onRowCbChange('instance')"></td>
+      <td><strong>${i.name}</strong></td>
+      <td>${shortId(i.id)}</td>
+      <td class="mono">${i.image_id}</td>
+      <td>${i.flavor}</td>
+      <td class="mono">${i.private_ip || '—'}</td>
+      <td class="mono">${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</td>
+      <td><button class="expand-btn" onclick="toggleSSH('${i.id}')">SSH ▾</button></td>
+      <td>
+        <button class="expand-btn" onclick="toggleUsers('${i.id}')">
+          ${(i.users||[]).length} user${(i.users||[]).length !== 1 ? 's' : ''} ▾
+        </button>
+      </td>
+      <td>${badge(i.status)}</td>
+      <td>${fmtDate(i.created_at)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteInstance('${i.id}','${i.name}')">Terminate</button></td>
+    </tr>
+    <tr id="ssh-row-${i.id}" class="backends-row" style="display:none">
+      <td colspan="12">${sshPanel(i)}</td>
+    </tr>
+    <tr id="users-row-${i.id}" class="backends-row" style="display:none">
+      <td colspan="12">${usersPanel(i)}</td>
+    </tr>`).join('');
+}
+
+// ── Instances — form ──────────────────────────────────────────────────────────
+let _vpcList = [];
+
+function _subnetsForVpc(vpcId) {
+  const vpc = _vpcList.find(v => v.id === vpcId);
+  if (!vpc || !vpc.cidr_block) return [];
+  // Parse x.x.x.x/prefix — derive 4 /24 subnets from the /16 (or similar)
+  const [base] = vpc.cidr_block.split('/');
+  const parts  = base.split('.').map(Number);
+  // Use first two octets, vary third octet 1–4
+  return [1, 2, 3, 4].map(n => ({
+    id:   `subnet-${parts[0]}-${parts[1]}-${n}-0`,
+    label: `${parts[0]}.${parts[1]}.${n}.0/24 (${vpc.name})`,
+  }));
+}
+
+function _populateSubnets(vpcId) {
+  const sel     = document.getElementById('inst-subnet');
+  const subnets = _subnetsForVpc(vpcId);
+  sel.innerHTML = subnets.length
+    ? subnets.map(s => `<option value="${s.id}">${s.label}</option>`).join('')
+    : '<option value="">Select a VPC first</option>';
+}
+
+async function populateInstanceForm() {
+  const imgSel = document.getElementById('inst-image');
+  imgSel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const data = await api('GET', '/v1/images');
+    const available = data.items.filter(img => img.available);
+    imgSel.innerHTML = available.length
+      ? available.map(img => `<option value="${img.id}">${img.name}</option>`).join('')
+      : '<option value="">No images available — run fetch-image.sh</option>';
+  } catch {
+    imgSel.innerHTML = '<option value="ubuntu-22.04">ubuntu-22.04</option>';
+  }
+  const vpcSel = document.getElementById('inst-vpc');
+  vpcSel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const data = await api('GET', '/v1/vpcs');
+    _vpcList   = data.items.filter(v => v.status !== 'deleted');
+    vpcSel.innerHTML = _vpcList.length
+      ? _vpcList.map(v => `<option value="${v.id}">${v.name} (${v.cidr_block})</option>`).join('')
+      : '<option value="">No VPCs — create one first</option>';
+    vpcSel.onchange = () => _populateSubnets(vpcSel.value);
+    _populateSubnets(vpcSel.value);
+  } catch {
+    vpcSel.innerHTML = '<option value="">Error loading VPCs</option>';
+  }
+}
+
+function toggleInstanceForm() {
+  const form    = document.getElementById('instance-form');
+  const visible = form.style.display !== 'none';
+  form.style.display = visible ? 'none' : 'block';
+  if (!visible) populateInstanceForm();
+}
+
+async function createInstance() {
+  const name    = document.getElementById('inst-name').value.trim();
+  const imageId = document.getElementById('inst-image').value;
+  const flavor  = document.getElementById('inst-flavor').value;
+  const vpcId   = document.getElementById('inst-vpc').value;
+  const subnet  = document.getElementById('inst-subnet').value;
+  if (!name)    { toast('Name is required', 'error'); return; }
+  if (!imageId) { toast('Image is required', 'error'); return; }
+  if (!vpcId)   { toast('VPC is required', 'error'); return; }
+  const userData = document.getElementById('inst-userdata').value.trim();
+  try {
+    await api('POST', '/v1/instances', {
+      name, image_id: imageId, flavor, vpc_id: vpcId, subnet_id: subnet,
+      user_data: userData || undefined,
+      tags: parseTags(document.getElementById('inst-tags').value),
+    });
+    toast(`Instance "${name}" launching…`, 'success');
+    document.getElementById('instance-form').style.display = 'none';
+    ['inst-name','inst-tags','inst-userdata'].forEach(id =>
+      document.getElementById(id).value = '');
+    loadInstances();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function deleteInstance(id, name) {
+  if (!confirm(`Terminate instance "${name}"? This cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/v1/instances/${id}`);
+    toast(`Instance "${name}" terminating…`, 'success');
+    loadInstances();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// ── Load Balancers ────────────────────────────────────────────────────────────
+function renderBackendRows(lb) {
+  if (!lb.backends.length) return `<tr><td colspan="4" style="color:var(--text-muted);padding:8px">No backends yet.</td></tr>`;
+  return lb.backends.map(b => `
+    <tr>
+      <td>${b.name}</td>
+      <td class="mono">${b.address}</td>
+      <td class="mono">${b.port}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="removeBackend('${lb.id}','${b.name}')">Remove</button></td>
+    </tr>`).join('');
+}
+
+function toggleBackends(lbId) {
+  const row = document.getElementById(`lb-backends-${lbId}`);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function addBackend(lbId) {
+  const name = document.getElementById(`bn-name-${lbId}`).value.trim();
+  const addr = document.getElementById(`bn-addr-${lbId}`).value.trim();
+  const port = document.getElementById(`bn-port-${lbId}`).value.trim();
+  if (!name || !addr || !port) { toast('Name, address and port are required', 'error'); return; }
+  try {
+    await api('POST', `/v1/load-balancers/${lbId}/backends`, { name, address: addr, port: parseInt(port) });
+    toast(`Backend "${name}" added`, 'success');
+    loadLBs();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function removeBackend(lbId, name) {
+  if (!confirm(`Remove backend "${name}"?`)) return;
+  try {
+    await api('DELETE', `/v1/load-balancers/${lbId}/backends/${name}`);
+    toast(`Backend "${name}" removed`, 'success');
+    loadLBs();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function loadLBs() {
+  const tbody = document.getElementById('lb-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Loading…</td></tr>';
+  try {
+    const data  = await api('GET', '/v1/load-balancers');
+    const items = data.items.filter(lb => lb.status !== 'deleted');
+    if (!items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No load balancers found. Create one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(lb => `
+      <tr id="lb-row-${lb.id}">
+        <td class="cb-col"><input type="checkbox" class="row-cb" data-type="lb" data-id="${lb.id}" data-name="${lb.name}" onchange="_onRowCbChange('lb')"></td>
+        <td><strong>${lb.name}</strong></td>
+        <td>${shortId(lb.id)}</td>
+        <td>${lb.type}</td>
+        <td class="mono text-muted">${lb.vpc_id ? lb.vpc_id.slice(0,8) + '…' : '—'}</td>
+        <td class="mono">${lb.listen_port ? '127.0.0.1:' + lb.listen_port : '—'}</td>
+        <td>
+          <button class="expand-btn" onclick="toggleBackends('${lb.id}')">
+            ${lb.backends.length} backend${lb.backends.length !== 1 ? 's' : ''} ▾
+          </button>
+        </td>
+        <td>${lb.internal ? 'Internal' : 'Internet-facing'}</td>
+        <td>${badge(lb.status)}</td>
+        <td>${fmtDate(lb.created_at)}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteLB('${lb.id}','${lb.name}')">Delete</button></td>
+      </tr>
+      <tr id="lb-backends-${lb.id}" class="backends-row" style="display:none">
+        <td colspan="11">
+          <div class="backends-panel">
+            <table>
+              <thead><tr><th>Name</th><th>Address</th><th>Port</th><th></th></tr></thead>
+              <tbody>${renderBackendRows(lb)}</tbody>
+            </table>
+            <div class="backends-add">
+              <div class="field"><label>Name</label><input id="bn-name-${lb.id}" placeholder="server-01"></div>
+              <div class="field"><label>Address</label><input id="bn-addr-${lb.id}" placeholder="192.168.100.10"></div>
+              <div class="field narrow"><label>Port</label><input id="bn-port-${lb.id}" placeholder="80" type="number"></div>
+              <button class="btn btn-primary btn-sm" onclick="addBackend('${lb.id}')">Add</button>
+            </div>
+          </div>
+        </td>
+      </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="11">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function populateLBForm() {
+  const vpcSel = document.getElementById('lb-vpc');
+  vpcSel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const data   = await api('GET', '/v1/vpcs');
+    const active = data.items.filter(v => v.status !== 'deleted');
+    vpcSel.innerHTML = active.length
+      ? active.map(v => `<option value="${v.id}">${v.name}</option>`).join('')
+      : '<option value="">No VPCs — create one first</option>';
+  } catch {
+    vpcSel.innerHTML = '<option value="">Error loading VPCs</option>';
+  }
+}
+
+function toggleLBForm() {
+  const form    = document.getElementById('lb-form');
+  const visible = form.style.display !== 'none';
+  form.style.display = visible ? 'none' : 'block';
+  if (!visible) populateLBForm();
+}
+
+async function createLB() {
+  const name  = document.getElementById('lb-name').value.trim();
+  const vpcId = document.getElementById('lb-vpc').value;
+  if (!name)  { toast('Name is required', 'error'); return; }
+  if (!vpcId) { toast('VPC is required', 'error'); return; }
+  try {
+    await api('POST', '/v1/load-balancers', {
+      name,
+      type:     document.getElementById('lb-type').value,
+      vpc_id:   vpcId,
+      internal: document.getElementById('lb-internal').value === 'true',
+      tags:     parseTags(document.getElementById('lb-tags').value),
+    });
+    toast(`Load balancer "${name}" created`, 'success');
+    document.getElementById('lb-form').style.display = 'none';
+    document.getElementById('lb-name').value = '';
+    document.getElementById('lb-tags').value = '';
+    loadLBs();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function deleteLB(id, name) {
+  if (!confirm(`Delete load balancer "${name}"?`)) return;
+  try {
+    await api('DELETE', `/v1/load-balancers/${id}`);
+    toast(`Load balancer "${name}" deleted`, 'success');
+    loadLBs();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// ── Terminal tab ──────────────────────────────────────────────────────────────
+const WS_BASE = 'ws://127.0.0.1:8081';
+const _openTerminals = {};   // instance_id -> { ws, term, fitAddon, el }
+
+function _pickNonSudoUser(instance) {
+  const users = instance.users || [];
+  const nonSudo = users.find(u => !u.sudo);
+  if (nonSudo) return nonSudo.username;
+  return instance.ssh_user || null;
+}
+
+async function loadTerminalInstances() {
+  const list = document.getElementById('terminal-instance-list');
+  list.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Loading…</div>';
+  try {
+    const data  = await api('GET', '/v1/instances');
+    const items = data.items.filter(i => i.status !== 'deleted');
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No instances found.</div>';
+      return;
+    }
+    list.innerHTML = items.map(i => {
+      const running   = i.status === 'running';
+      const nonSudo   = _pickNonSudoUser(i);
+      const allSudo   = (i.users||[]).length > 0 && (i.users||[]).every(u => u.sudo);
+      const noSshPort = !i.ssh_port;
+      const canOpen   = running && !noSshPort;
+
+      let actionHtml;
+      if (!running) {
+        actionHtml = `<span class="text-muted" style="font-size:12px">Instance not running</span>`;
+      } else if (noSshPort) {
+        actionHtml = `<span class="text-muted" style="font-size:12px">No SSH port</span>`;
+      } else if (allSudo) {
+        actionHtml = `
+          <div class="no-sudo-msg">
+            ⚠ All users on this instance have sudo privileges.<br>
+            Add a non-sudo user via the <strong>Users</strong> panel before opening a terminal.
+          </div>`;
+      } else {
+        const user = nonSudo || i.ssh_user || 'ubuntu';
+        actionHtml = `
+          <button class="btn btn-primary" onclick="openTerminal('${i.id}','${i.name}','${user}')">
+            Open Terminal
+          </button>`;
+      }
+
+      return `
+        <div class="instance-card">
+          <div class="inst-info">
+            <div class="inst-name">${i.name} ${badge(i.status)}</div>
+            <div class="inst-meta">
+              ${i.image_id} &nbsp;·&nbsp; ${i.flavor}
+              &nbsp;·&nbsp; SSH: <code>${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</code>
+              &nbsp;·&nbsp; User: <code>${_pickNonSudoUser(i) || '—'}</code>
+            </div>
+          </div>
+          <div>${actionHtml}</div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--danger);font-size:13px">Error: ${e.message}</div>`;
+  }
+}
+
+function openTerminal(instanceId, instanceName, username) {
+  // Only one terminal per instance
+  if (_openTerminals[instanceId]) {
+    _openTerminals[instanceId].el.style.display = 'flex';
+    return;
+  }
+
+  // Build floating window
+  const win = document.createElement('div');
+  win.className = 'term-window';
+  win.style.cssText = 'width:760px;height:420px;top:80px;left:120px;';
+  win.innerHTML = `
+    <div class="term-titlebar" id="tb-${instanceId}">
+      <span style="font-size:14px">⬛</span>
+      <span class="term-title">${instanceName} — ${username}</span>
+      <button class="term-close" onclick="closeTerminal('${instanceId}')" title="Close">✕</button>
+    </div>
+    <div class="term-body" id="term-body-${instanceId}">
+      <div class="term-resize-handle" id="rh-${instanceId}"></div>
+    </div>`;
+  document.body.appendChild(win);
+  _openTerminals[instanceId] = { el: win, ws: null, term: null, fitAddon: null };
+
+  _makeDraggable(win, document.getElementById(`tb-${instanceId}`));
+  _makeResizable(win, document.getElementById(`rh-${instanceId}`), instanceId);
+
+  // Init xterm
+  const term = new Terminal({
+    theme: { background: '#0d0d0d', foreground: '#e2e6f0', cursor: '#4f8ef7' },
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    fontSize: 13,
+    cursorBlink: true,
+    scrollback: 2000,
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  const body = document.getElementById(`term-body-${instanceId}`);
+  term.open(body);
+  fitAddon.fit();
+  _openTerminals[instanceId].term = term;
+  _openTerminals[instanceId].fitAddon = fitAddon;
+
+  // Connect WebSocket
+  const ws = new WebSocket(`${WS_BASE}/terminal?instance_id=${instanceId}`);
+  _openTerminals[instanceId].ws = ws;
+
+  ws.onopen = () => {
+    const { cols, rows } = term;
+    ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'output' || msg.type === 'connected') {
+        term.write(msg.data);
+      } else if (msg.type === 'error') {
+        // Replace terminal with error message
+        term.dispose();
+        body.innerHTML = `<div class="term-error">${msg.data}</div><div class="term-resize-handle" id="rh-${instanceId}"></div>`;
+        _makeResizable(win, document.getElementById(`rh-${instanceId}`), instanceId);
+      }
+    } catch {}
+  };
+
+  ws.onclose = () => {
+    if (_openTerminals[instanceId] && _openTerminals[instanceId].term) {
+      _openTerminals[instanceId].term.write('\r\n\x1b[33m[Connection closed]\x1b[0m\r\n');
+    }
+  };
+
+  ws.onerror = () => {
+    term.write('\r\n\x1b[31m[WebSocket error - is the terminal server running?]\x1b[0m\r\n');
+  };
+
+  // Keyboard input
+  term.onData(data => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'input', data }));
+    }
+  });
+
+  // Resize → send PTY resize
+  const ro = new ResizeObserver(() => {
+    fitAddon.fit();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  });
+  ro.observe(body);
+  _openTerminals[instanceId].ro = ro;
+}
+
+function closeTerminal(instanceId) {
+  const t = _openTerminals[instanceId];
+  if (!t) return;
+  if (t.ws)       t.ws.close();
+  if (t.term)     t.term.dispose();
+  if (t.ro)       t.ro.disconnect();
+  if (t.el)       t.el.remove();
+  delete _openTerminals[instanceId];
+}
+
+// ── Drag ─────────────────────────────────────────────────────────────────────
+function _makeDraggable(win, handle) {
+  let ox = 0, oy = 0;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    ox = e.clientX - win.offsetLeft;
+    oy = e.clientY - win.offsetTop;
+    const onMove = e => {
+      win.style.left = (e.clientX - ox) + 'px';
+      win.style.top  = (e.clientY - oy) + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+function _makeResizable(win, handle, instanceId) {
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const startW = win.offsetWidth;
+    const startH = win.offsetHeight;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const onMove = e => {
+      win.style.width  = Math.max(400, startW + e.clientX - startX) + 'px';
+      win.style.height = Math.max(260, startH + e.clientY - startY) + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      const t = _openTerminals[instanceId];
+      if (t && t.fitAddon) t.fitAddon.fit();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// ── Form buttons wired directly in HTML ──
+
+async function loadDNS() {
+  const container = document.getElementById('dns-zones-list');
+  container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Loading…</div>';
+  try {
+    const data = await api('GET', '/v1/dns/zones');
+    if (!data.items.length) {
+      container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No zones found.</div>';
+      return;
+    }
+    container.innerHTML = data.items.map(z => `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header" style="margin-bottom:0">
+          <div>
+            <strong>${z.name}</strong>
+            ${z.builtin ? '<span class="badge badge-active" style="margin-left:8px">built-in</span>' : ''}
+            <span class="text-muted" style="font-size:12px;margin-left:10px">${z.record_count} record${z.record_count !== 1 ? 's' : ''}</span>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="toggleDNSZone('${z.name}')">Records ▾</button>
+            ${z.builtin ? '' : `<button class="btn btn-danger btn-sm" onclick="deleteDNSZone('${z.name}')">Delete</button>`}
+          </div>
+        </div>
+        <div id="dns-zone-${btoa(z.name).replace(/=/g,'_')}" style="display:none;margin-top:16px">
+          <div id="dns-records-${btoa(z.name).replace(/=/g,'_')}"><span style="color:var(--text-muted);font-size:13px">Loading…</span></div>
+          <div class="backends-add" style="margin-top:16px">
+            <div class="field"><label>Name</label><input id="dr-name-${btoa(z.name).replace(/=/g,'_')}" placeholder="my-host"></div>
+            <div class="field" style="flex:0 0 90px">
+              <label>Type</label>
+              <select id="dr-type-${btoa(z.name).replace(/=/g,'_')}">
+                <option>A</option><option>CNAME</option><option>TXT</option>
+              </select>
+            </div>
+            <div class="field"><label>Value</label><input id="dr-value-${btoa(z.name).replace(/=/g,'_')}" placeholder="192.168.100.10"></div>
+            <div class="field" style="flex:0 0 80px"><label>TTL</label><input id="dr-ttl-${btoa(z.name).replace(/=/g,'_')}" type="number" value="300"></div>
+            <button class="btn btn-primary btn-sm" onclick="createDNSRecord('${z.name}')">Add</button>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    container.innerHTML = `<div style="color:var(--danger);font-size:13px">Error: ${e.message}</div>`;
+  }
+}
+
+async function toggleDNSZone(zoneName) {
+  const key = btoa(zoneName).replace(/=/g,'_');
+  const panel = document.getElementById(`dns-zone-${key}`);
+  if (panel.style.display === 'none') {
+    panel.style.display = 'block';
+    await loadDNSRecords(zoneName);
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+async function loadDNSRecords(zoneName) {
+  const key = btoa(zoneName).replace(/=/g,'_');
+  const el  = document.getElementById(`dns-records-${key}`);
+  try {
+    const data = await api('GET', `/v1/dns/zones/${encodeURIComponent(zoneName)}/records`);
+    if (!data.items.length) {
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No records.</div>';
+      return;
+    }
+    el.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 10px;color:var(--text-muted);font-weight:500">Name</th>
+          <th style="text-align:left;padding:6px 10px;color:var(--text-muted);font-weight:500">FQDN</th>
+          <th style="text-align:left;padding:6px 10px;color:var(--text-muted);font-weight:500">Type</th>
+          <th style="text-align:left;padding:6px 10px;color:var(--text-muted);font-weight:500">Value</th>
+          <th style="text-align:left;padding:6px 10px;color:var(--text-muted);font-weight:500">TTL</th>
+          <th style="text-align:left;padding:6px 10px;color:var(--text-muted);font-weight:500">Source</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${data.items.map(r => `
+          <tr>
+            <td style="padding:7px 10px">${r.name}</td>
+            <td style="padding:7px 10px" class="mono text-muted">${r.fqdn}</td>
+            <td style="padding:7px 10px"><span class="badge badge-active">${r.type}</span></td>
+            <td style="padding:7px 10px" class="mono">${r.value}</td>
+            <td style="padding:7px 10px" class="text-muted">${r.ttl}s</td>
+            <td style="padding:7px 10px">${r.resource_type !== 'manual'
+              ? `<span class="badge badge-pending">${r.resource_type}</span>`
+              : '<span class="text-muted">manual</span>'}</td>
+            <td style="padding:7px 10px">
+              ${r.resource_type === 'manual'
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteDNSRecord('${zoneName}','${r.name}','${r.type}')">Delete</button>`
+                : '<span class="text-muted" style="font-size:11px">🔒 auto</span>'}
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--danger);font-size:12px">Error: ${e.message}</div>`;
+  }
+}
+
+async function createDNSZone() {
+  const name = document.getElementById('dns-zone-name').value.trim();
+  if (!name) { toast('Zone name is required', 'error'); return; }
+  try {
+    await api('POST', '/v1/dns/zones', { name });
+    toast(`Zone "${name}" created`, 'success');
+    toggleForm('dns-zone-form');
+    document.getElementById('dns-zone-name').value = '';
+    loadDNS();
+  } catch(e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function deleteDNSZone(name) {
+  if (!confirm(`Delete zone "${name}" and all its records?`)) return;
+  try {
+    await api('DELETE', `/v1/dns/zones/${encodeURIComponent(name)}`);
+    toast(`Zone "${name}" deleted`, 'success');
+    loadDNS();
+  } catch(e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function createDNSRecord(zoneName) {
+  const key   = btoa(zoneName).replace(/=/g,'_');
+  const name  = document.getElementById(`dr-name-${key}`).value.trim();
+  const rtype = document.getElementById(`dr-type-${key}`).value;
+  const value = document.getElementById(`dr-value-${key}`).value.trim();
+  const ttl   = parseInt(document.getElementById(`dr-ttl-${key}`).value) || 300;
+  if (!name || !value) { toast('Name and value are required', 'error'); return; }
+  try {
+    await api('POST', `/v1/dns/zones/${encodeURIComponent(zoneName)}/records`,
+              { name, type: rtype, value, ttl });
+    toast(`Record "${name}" added`, 'success');
+    document.getElementById(`dr-name-${key}`).value = '';
+    document.getElementById(`dr-value-${key}`).value = '';
+    loadDNSRecords(zoneName);
+    loadDNS();
+  } catch(e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function deleteDNSRecord(zoneName, name, rtype) {
+  if (!confirm(`Delete record "${name}" (${rtype}) from "${zoneName}"?`)) return;
+  try {
+    await api('DELETE', `/v1/dns/zones/${encodeURIComponent(zoneName)}/records/${name}/${rtype}`);
+    toast('Record deleted', 'success');
+    loadDNSRecords(zoneName);
+    loadDNS();
+  } catch(e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// ── Help ─────────────────────────────────────────────────────────────────────
+let _helpLoaded = false;
+
+async function openHelp() {
+  document.getElementById('help-modal').style.display = 'block';
+  if (_helpLoaded) return;
+  try {
+    const res = await fetch(API_BASE + '/help', { headers: { 'Authorization': `Bearer ${API_TOKEN}` } });
+    const md  = await res.text();
+    document.getElementById('help-content').innerHTML = mdToHtml(md);
+    _helpLoaded = true;
+  } catch (e) {
+    document.getElementById('help-content').textContent = 'Failed to load help: ' + e.message;
+  }
+}
+
+function closeHelp() {
+  document.getElementById('help-modal').style.display = 'none';
+}
+
+function mdToHtml(md) {
+  return md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^#### (.+)$/gm, '<h4 style="margin:16px 0 6px;font-size:14px;color:var(--text)">$1</h4>')
+    .replace(/^### (.+)$/gm, '<h3 style="margin:20px 0 8px;font-size:15px;color:var(--accent)">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 style="margin:28px 0 10px;font-size:17px;color:var(--text);border-bottom:1px solid var(--border);padding-bottom:6px">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 style="margin:0 0 20px;font-size:22px;color:var(--accent)">$1</h1>')
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:20px 0">')
+    .replace(/```([\s\S]*?)```/g, '<pre style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px 16px;overflow-x:auto;font-family:monospace;font-size:12px;margin:10px 0"><code>$1</code></pre>')
+    .replace(/`([^`]+)`/g, '<code style="background:var(--surface2);padding:1px 5px;border-radius:3px;font-family:monospace;font-size:12px;color:var(--text)">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/^\| (.+) \|$/gm, (_, row) => {
+      const cells = row.split(' | ');
+      const tag = cells.every(c => /^[-:]+$/.test(c.trim())) ? null : 'td';
+      if (!tag) return '';
+      return '<tr>' + cells.map(c => `<td style="padding:6px 12px;border-bottom:1px solid var(--border)">${c}</td>`).join('') + '</tr>';
+    })
+    .replace(/(<tr>.*<\/tr>\n?)+/gs, m => `<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:13px">${m}</table>`)
+    .replace(/^- (.+)$/gm, '<li style="margin:3px 0">$1</li>')
+    .replace(/(<li[^>]*>.*<\/li>\n?)+/gs, m => `<ul style="padding-left:20px;margin:8px 0">${m}</ul>`)
+    .replace(/^(?!<[huplt]|$)(.+)$/gm, '<p style="margin:6px 0">$1</p>')
+    .replace(/\n{2,}/g, '');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkHealth();
+showSection('dashboard', document.getElementById('nav-dashboard'));
+setInterval(checkHealth, 30000);
+
+// ── Build Manager ────────────────────────────────────────────────────────────
+
+let _bmTemplates = [];
+let _bmActiveBuildId = null;
+let _bmLogEs = null;
+
+async function loadBuildManager() {
+  try {
+    await _bmLoadTemplates();
+    await _bmLoadHistory();
+  } catch (e) {
+    document.getElementById('bm-template-grid').innerHTML = `<div class="bm-empty">Error: ${e.message}</div>`;
+  }
+}
+
+// ── Templates ────────────────────────────────────────────────────────────────
+
+async function _bmLoadTemplates() {
+  const data = await api('GET', '/v1/builds/templates');
+  _bmTemplates = data.items || [];
+  const grid = document.getElementById('bm-template-grid');
+  if (!_bmTemplates.length) {
+    grid.innerHTML = '<div class="bm-empty">No templates found.</div>';
+    return;
+  }
+  grid.innerHTML = _bmTemplates.map(t => `
+    <div class="bm-template-card" onclick="bmSelectTemplate('${t.filename}')">
+      <div class="bm-tpl-title">${t.title}</div>
+      <div class="bm-tpl-desc">${t.description}</div>
+      <div class="bm-tpl-tags">${(t.resources || []).map(r =>
+        `<span class="bm-tag">${r.replace('_', ' ')}</span>`).join('')}</div>
+    </div>
+  `).join('');
+}
+
+async function bmSelectTemplate(filename) {
+  // Highlight selected card
+  document.querySelectorAll('.bm-template-card').forEach(c => c.classList.remove('selected'));
+  const cards = document.querySelectorAll('.bm-template-card');
+  const tpl = _bmTemplates.find(t => t.filename === filename);
+  if (tpl) {
+    const idx = _bmTemplates.indexOf(tpl);
+    if (cards[idx]) cards[idx].classList.add('selected');
+  }
+
+  // Load vars schema
+  const data = await api('GET', `/v1/builds/templates/${filename}/vars`);
+  _bmRenderVarForm(filename, tpl, data.vars || {});
+  document.getElementById('bm-var-panel').style.display = 'block';
+  document.getElementById('bm-var-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function _bmRenderVarForm(filename, tpl, schema) {
+  document.getElementById('bm-form-title').textContent = tpl ? tpl.title : filename;
+  document.getElementById('bm-submit-filename').value = filename;
+
+  const container = document.getElementById('bm-var-fields');
+  const editable = Object.entries(schema).filter(([, v]) => !v.derived);
+
+  if (!editable.length) {
+    container.innerHTML = '<div class="bm-empty" style="padding:12px 0">No variables to configure — uses defaults.</div>';
+    return;
+  }
+
+  container.innerHTML = editable.map(([key, meta]) => `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')}</label>
+      <input type="${key.includes('token') ? 'password' : 'text'}"
+             id="bm-var-${key}"
+             data-key="${key}"
+             value="${_esc(String(meta.default ?? ''))}">
+    </div>
+  `).join('');
+}
+
+async function bmSubmitBuild() {
+  const filename = document.getElementById('bm-submit-filename').value;
+  if (!filename) { toast('Select a template first', 'error'); return; }
+
+  const vars = {};
+  document.querySelectorAll('#bm-var-fields input[data-key]').forEach(el => {
+    if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
+  });
+
+  const btn = document.getElementById('bm-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  let data;
+  try {
+    data = await api('POST', '/v1/builds', { template: filename, vars });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Run Build';
+    toast(e.message || 'Submit failed', 'error');
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Run Build';
+  toast(`Build started: ${data.id.slice(0, 8)}…`, 'success');
+  document.getElementById('bm-var-panel').style.display = 'none';
+  document.querySelectorAll('.bm-template-card').forEach(c => c.classList.remove('selected'));
+  _bmOpenLog(data.id);
+  await _bmLoadHistory();
+}
+
+// ── Log viewer ───────────────────────────────────────────────────────────────
+
+function _bmOpenLog(buildId) {
+  _bmActiveBuildId = buildId;
+  if (_bmLogEs) { _bmLogEs.close(); _bmLogEs = null; }
+
+  const panel = document.getElementById('bm-log-panel');
+  const pre = document.getElementById('bm-log-pre');
+  const title = document.getElementById('bm-log-title');
+  panel.style.display = 'block';
+  pre.textContent = '';
+  title.textContent = `Build log — ${buildId.slice(0, 8)}…`;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  _bmLogEs = new EventSource(`/v1/builds/${buildId}/log?token=${API_TOKEN}`);
+  _bmLogEs.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.__done__) {
+      _bmLogEs.close();
+      _bmLogEs = null;
+      _bmUpdateLogStatus(buildId, msg.status);
+      _bmLoadHistory();
+      // Refresh dashboard data so it reflects newly provisioned resources
+      loadDashboard();
+      return;
+    }
+    pre.textContent += msg + '\n';
+    pre.scrollTop = pre.scrollHeight;
+  };
+  _bmLogEs.onerror = () => {
+    if (_bmLogEs) { _bmLogEs.close(); _bmLogEs = null; }
+  };
+}
+
+function _bmUpdateLogStatus(buildId, status) {
+  const badge = document.getElementById(`bm-hist-status-${buildId}`);
+  if (badge) {
+    badge.textContent = status;
+    badge.className = `badge badge-${status === 'success' ? 'running' : status === 'failed' ? 'error' : 'pending'}`;
+  }
+}
+
+async function bmViewLog(buildId) {
+  _bmActiveBuildId = buildId;
+  if (_bmLogEs) { _bmLogEs.close(); _bmLogEs = null; }
+
+  const data = await api('GET', `/v1/builds/${buildId}`);
+  const panel = document.getElementById('bm-log-panel');
+  const pre = document.getElementById('bm-log-pre');
+  document.getElementById('bm-log-title').textContent = `Build log — ${buildId.slice(0, 8)}… (${data.template})`;
+  pre.textContent = (data.log || []).join('\n');
+  panel.style.display = 'block';
+  pre.scrollTop = pre.scrollHeight;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  // If still running, attach SSE
+  if (data.status === 'running' || data.status === 'pending') {
+    const offset = (data.log || []).length;
+    _bmAttachSseFromOffset(buildId, offset, pre);
+  }
+}
+
+function _bmAttachSseFromOffset(buildId, offset, pre) {
+  let sent = offset;
+  _bmLogEs = new EventSource(`/v1/builds/${buildId}/log?token=${API_TOKEN}`);
+  _bmLogEs.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.__done__) {
+      _bmLogEs.close(); _bmLogEs = null;
+      _bmUpdateLogStatus(buildId, msg.status);
+      _bmLoadHistory();
+      loadDashboard();
+      return;
+    }
+    if (sent > 0) { sent--; return; } // skip already-shown lines
+    pre.textContent += msg + '\n';
+    pre.scrollTop = pre.scrollHeight;
+  };
+}
+
+// ── History ──────────────────────────────────────────────────────────────────
+
+async function _bmLoadHistory() {
+  const data = await api('GET', '/v1/builds');
+  const tbody = document.getElementById('bm-history-tbody');
+  const builds = data.items || [];
+  document.getElementById('bm-sel-all').checked = false;
+  document.getElementById('bm-destroy-btn').style.display = 'none';
+  if (!builds.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No builds yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = builds.map(b => {
+    const canDestroy = b.status === 'success' && b.provisioned_count > 0;
+    const destroyed  = b.status === 'destroyed';
+    const cbDisabled = !canDestroy ? 'disabled' : '';
+    const resCell    = canDestroy
+      ? `<span class="bm-res-badge">${b.provisioned_count} resource${b.provisioned_count !== 1 ? 's' : ''}</span>`
+      : destroyed
+        ? `<span class="bm-res-badge bm-res-gone">destroyed</span>`
+        : '—';
+    return `
+    <tr>
+      <td class="cb-col"><input type="checkbox" class="bm-row-cb" data-id="${b.id}" data-can-destroy="${canDestroy}" ${cbDisabled} onchange="_bmOnCbChange()"></td>
+      <td class="mono">${b.id.slice(0, 8)}</td>
+      <td>${b.template}</td>
+      <td><span id="bm-hist-status-${b.id}" class="badge badge-${_bmStatusClass(b.status)}">${b.status}</span></td>
+      <td>${resCell}</td>
+      <td>${b.created_at ? fmtDate(b.created_at) : '—'}</td>
+      <td>${_bmDuration(b)}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="bmViewLog('${b.id}')">Log</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function _bmOnCbChange() {
+  const checked = document.querySelectorAll('.bm-row-cb:checked:not(:disabled)');
+  document.getElementById('bm-destroy-btn').style.display = checked.length ? 'inline-flex' : 'none';
+  const all = document.querySelectorAll('.bm-row-cb:not(:disabled)');
+  document.getElementById('bm-sel-all').checked = all.length > 0 && checked.length === all.length;
+}
+
+function _bmToggleSelAll(cb) {
+  document.querySelectorAll('.bm-row-cb:not(:disabled)').forEach(el => el.checked = cb.checked);
+  _bmOnCbChange();
+}
+
+async function bmDestroySelected() {
+  const checked = Array.from(document.querySelectorAll('.bm-row-cb:checked:not(:disabled)'));
+  if (!checked.length) return;
+  const ids = checked.map(el => el.dataset.id);
+  if (!confirm(`Destroy all resources from ${ids.length} build${ids.length > 1 ? 's' : ''}?\nThis cannot be undone.`)) return;
+
+  const btn = document.getElementById('bm-destroy-btn');
+  btn.disabled = true;
+  btn.textContent = 'Destroying…';
+
+  await Promise.allSettled(ids.map(id => api('DELETE', `/v1/builds/${id}`)));
+
+  btn.disabled = false;
+  btn.textContent = '🗑 Destroy Resources';
+  await _bmLoadHistory();
+  loadDashboard();
+}
+
+function _bmStatusClass(s) {
+  return s === 'success' ? 'running' : s === 'failed' ? 'error' : s === 'destroyed' ? 'stopped' : 'pending';
+}
+
+function _bmDuration(b) {
+  if (!b.started_at) return '—';
+  const end = b.finished_at ? new Date(b.finished_at) : new Date();
+  const secs = Math.round((end - new Date(b.started_at)) / 1000);
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+function _esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+// ── Bulk delete ───────────────────────────────────────────────────────────────
+
+const _bulkMeta = {
+  vpc:      { btn: 'vpc-delete-sel',  selAll: 'vpc-sel-all',  path: id => `/v1/vpcs/${id}`,           reload: loadVPCs },
+  instance: { btn: 'inst-delete-sel', selAll: 'inst-sel-all', path: id => `/v1/instances/${id}`,      reload: loadInstances },
+  lb:       { btn: 'lb-delete-sel',   selAll: 'lb-sel-all',   path: id => `/v1/load-balancers/${id}`, reload: loadLBs },
+};
+
+function _checkedRows(type) {
+  return Array.from(document.querySelectorAll(`.row-cb[data-type="${type}"]:checked`));
+}
+
+function _onRowCbChange(type) {
+  const m = _bulkMeta[type];
+  const count = _checkedRows(type).length;
+  document.getElementById(m.btn).style.display = count ? 'inline-flex' : 'none';
+  // Sync select-all state
+  const all = document.querySelectorAll(`.row-cb[data-type="${type}"]`);
+  const selAll = document.getElementById(m.selAll);
+  if (selAll) selAll.checked = all.length > 0 && count === all.length;
+}
+
+function toggleSelectAll(type, cb) {
+  document.querySelectorAll(`.row-cb[data-type="${type}"]`).forEach(el => el.checked = cb.checked);
+  _onRowCbChange(type);
+}
+
+async function deleteSelected(type) {
+  const rows = _checkedRows(type);
+  if (!rows.length) return;
+  const names = rows.map(r => r.dataset.name).join(', ');
+  const label = type === 'instance' ? 'instance' : type === 'lb' ? 'load balancer' : 'VPC';
+  if (!confirm(`Delete ${rows.length} ${label}${rows.length > 1 ? 's' : ''}?\n\n${names}`)) return;
+
+  const m = _bulkMeta[type];
+  await Promise.allSettled(rows.map(r => api('DELETE', m.path(r.dataset.id))));
+  document.getElementById(m.btn).style.display = 'none';
+  const selAll = document.getElementById(m.selAll);
+  if (selAll) selAll.checked = false;
+  m.reload();
+}
+
+// ── File Editor ──────────────────────────────────────────────────────────────
+
+let _edRoot  = 'ansible';
+let _edPath  = null;
+let _edDirty = false;
+let _edCm    = null;   // CodeMirror instance
+let _edRoots = [];
+
+async function loadEditor() {
+  const data = await api('GET', '/v1/editor/roots');
+  _edRoots = data.roots || [];
+  _edBuildRootTabs();
+  _edInitCm();
+  await _edLoadTree();
+}
+
+// ── Root tabs ────────────────────────────────────────────────────────────────
+
+const _edRootLabels = { ansible: 'Ansible', opentofu: 'OpenTofu' };
+
+function _edBuildRootTabs() {
+  const bar = document.getElementById('ed-root-tabs');
+  bar.innerHTML = _edRoots.map(r =>
+    `<button class="ed-tab${r === _edRoot ? ' active' : ''}"
+             onclick="_edSwitchRoot('${r}')">${_edRootLabels[r] || r}</button>`
+  ).join('');
+}
+
+async function _edSwitchRoot(root) {
+  _edRoot = root;
+  _edPath = null;
+  _edDirty = false;
+  _edBuildRootTabs();
+  _edClearEditor();
+  await _edLoadTree();
+}
+
+// ── Tree ─────────────────────────────────────────────────────────────────────
+
+async function _edLoadTree() {
+  const data = await api('GET', `/v1/editor/tree?root=${_edRoot}`);
+  document.getElementById('ed-tree').innerHTML =
+    _edRenderTree(data.tree || [], 0);
+}
+
+function _edRenderTree(nodes, depth) {
+  return nodes.map(n => {
+    const pad = depth * 14;
+    if (n.type === 'dir') {
+      return `<div class="ed-dir" style="padding-left:${pad}px">
+                <div class="ed-dir-label">▸ ${_edEsc(n.name)}</div>
+                <div>${_edRenderTree(n.children || [], depth + 1)}</div>
+              </div>`;
+    }
+    const active = n.path === _edPath ? ' active' : '';
+    return `<div class="ed-file${active}" style="padding-left:${pad + 14}px"
+                 onclick="_edOpenFile('${_edEsc(n.path)}')"
+                 data-path="${_edEsc(n.path)}">${_edFileIcon(n.name)} ${_edEsc(n.name)}</div>`;
+  }).join('');
+}
+
+function _edFileIcon(name) {
+  if (name.endsWith('.yml') || name.endsWith('.yaml')) return '📄';
+  if (name.endsWith('.tf') || name.endsWith('.hcl'))   return '🟦';
+  return '📝';
+}
+
+// ── CodeMirror init ───────────────────────────────────────────────────────────
+
+function _edInitCm() {
+  if (_edCm) return;
+  const host = document.getElementById('ed-cm-host');
+  _edCm = CodeMirror(host, {
+    value: '',
+    mode: 'yaml',
+    theme: 'dracula',
+    lineNumbers: true,
+    matchBrackets: true,
+    indentWithTabs: false,
+    tabSize: 2,
+    indentUnit: 2,
+    keyMap: 'sublime',
+    extraKeys: {
+      'Ctrl-S': () => edSaveFile(),
+      'Cmd-S':  () => edSaveFile(),
+    },
+    lineWrapping: false,
+    autofocus: false,
+  });
+  _edCm.on('change', () => {
+    if (_edPath) _edSetDirty(true);
+  });
+}
+
+function _edModeForPath(path) {
+  if (!path) return 'yaml';
+  if (path.endsWith('.tf') || path.endsWith('.hcl')) return 'javascript'; // closest available; swap for HCL mode when added
+  if (path.endsWith('.json')) return { name: 'javascript', json: true };
+  return 'yaml';
+}
+
+// ── Open / clear ─────────────────────────────────────────────────────────────
+
+async function _edOpenFile(path) {
+  _edDirty = false;
+  _edPath  = path;
+
+  document.querySelectorAll('.ed-file').forEach(el =>
+    el.classList.toggle('active', el.dataset.path === path));
+
+  const data = await api('GET',
+    `/v1/editor/file?root=${_edRoot}&path=${encodeURIComponent(path)}`);
+
+  _edCm.setOption('mode', _edModeForPath(path));
+  _edCm.setValue(data.content || '');
+  _edCm.clearHistory();
+  _edSetDirty(false);
+
+  document.getElementById('ed-filename').textContent = path;
+  document.getElementById('ed-save-btn').disabled   = false;
+  document.getElementById('ed-delete-btn').disabled = false;
+  document.getElementById('ed-delete-btn').textContent = 'Delete';
+  document.getElementById('ed-delete-btn').dataset.confirm = '';
+  document.getElementById('ed-delete-btn').classList.remove('btn-danger');
+  setTimeout(() => _edCm.refresh(), 10);
+}
+
+function _edClearEditor() {
+  if (_edCm) { _edCm.setValue(''); _edCm.clearHistory(); }
+  document.getElementById('ed-filename').textContent    = 'No file open';
+  document.getElementById('ed-save-btn').disabled       = true;
+  document.getElementById('ed-delete-btn').disabled     = true;
+  _edSetDirty(false);
+}
+
+function _edSetDirty(dirty) {
+  _edDirty = dirty;
+  const ind = document.getElementById('ed-dirty-ind');
+  ind.textContent = dirty ? ' ●' : '';
+}
+
+// ── Save ─────────────────────────────────────────────────────────────────────
+
+async function edSaveFile() {
+  if (!_edPath || !_edCm) return;
+  const btn = document.getElementById('ed-save-btn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('PUT',
+      `/v1/editor/file?root=${_edRoot}&path=${encodeURIComponent(_edPath)}`,
+      { content: _edCm.getValue() });
+    _edSetDirty(false);
+    toast('Saved', 'success');
+  } catch (e) {
+    toast(e.message || 'Save failed', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+// ── New file ─────────────────────────────────────────────────────────────────
+
+async function edNewFile() {
+  const panel = document.getElementById('ed-new-panel');
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : 'flex';
+  if (!visible) {
+    const input = document.getElementById('ed-new-name');
+    input.value = '';
+    input.placeholder = _edRoot === 'opentofu' ? 'main.tf' : '08-my-playbook.yml';
+    input.focus();
+  }
+}
+
+async function edCreateFile() {
+  const name = document.getElementById('ed-new-name').value.trim();
+  if (!name) { toast('Enter a filename', 'error'); return; }
+  try {
+    await api('POST', `/v1/editor/file?root=${_edRoot}`, { filename: name, content: '' });
+    document.getElementById('ed-new-panel').style.display = 'none';
+    toast(`Created ${name}`, 'success');
+    await _edLoadTree();
+    await _edOpenFile(name);
+  } catch (e) {
+    toast(e.message || 'Create failed', 'error');
+  }
+}
+
+// ── Delete (2-stage) ─────────────────────────────────────────────────────────
+
+function edDeleteFile() {
+  if (!_edPath) return;
+  const btn = document.getElementById('ed-delete-btn');
+  if (btn.dataset.confirm !== '1') {
+    btn.dataset.confirm = '1';
+    btn.textContent = 'Confirm delete?';
+    btn.classList.add('btn-danger');
+    setTimeout(() => {
+      if (btn.dataset.confirm === '1') {
+        btn.dataset.confirm = '';
+        btn.textContent = 'Delete';
+        btn.classList.remove('btn-danger');
+      }
+    }, 4000);
+    return;
+  }
+  btn.dataset.confirm = '';
+  btn.textContent = 'Delete';
+  btn.classList.remove('btn-danger');
+  _edDoDelete();
+}
+
+async function _edDoDelete() {
+  const path = _edPath;
+  try {
+    await api('DELETE',
+      `/v1/editor/file?root=${_edRoot}&path=${encodeURIComponent(path)}`);
+    toast(`Deleted ${path}`, 'success');
+    _edPath = null;
+    _edDirty = false;
+    _edClearEditor();
+    await _edLoadTree();
+  } catch (e) {
+    toast(e.message || 'Delete failed', 'error');
+  }
+}
+
+function _edEsc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+    .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── About ─────────────────────────────────────────────────────────────────────
+function loadAbout() {
+  api('GET', '/v1/about').then(data => {
+    _aboutSection('about-cloudcore', data.cloudcore);
+    _aboutSection('about-runtime',   data.runtime);
+    _aboutSection('about-system',    data.system);
+  }).catch(() => {
+    ['about-cloudcore','about-runtime','about-system'].forEach(id => {
+      document.getElementById(id).innerHTML = '<tr><td colspan="2" class="empty-row">Failed to load</td></tr>';
+    });
+  });
+}
+
+function _aboutSection(tbodyId, obj) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  tbody.innerHTML = Object.entries(obj).map(([k, v]) =>
+    `<tr><td class="about-key">${_aboutLabel(k)}</td><td class="about-val">${v}</td></tr>`
+  ).join('');
+}
+
+function _aboutLabel(key) {
+  const labels = {
+    api: 'API', collection: 'Ansible Collection',
+    python: 'Python', flask: 'Flask', libvirt: 'libvirt-python',
+    paramiko: 'Paramiko', websockets: 'websockets', pyyaml: 'PyYAML',
+    ansible: 'Ansible', qemu_img: 'QEMU / qemu-img',
+    haproxy: 'HAProxy', dnsmasq: 'dnsmasq',
+  };
+  return labels[key] || key;
+}
+
+// ── OpenTofu Build Manager ────────────────────────────────────────────────────
+
+let _tfTemplates = [];
+let _tfActiveBuildId = null;
+let _tfLogEs = null;
+
+async function loadTofuManager() {
+  try {
+    await _tfLoadTemplates();
+    await _tfLoadHistory();
+  } catch (e) {
+    document.getElementById('tf-template-grid').innerHTML = `<div class="bm-empty">Error: ${e.message}</div>`;
+  }
+}
+
+// ── Templates ────────────────────────────────────────────────────────────────
+
+async function _tfLoadTemplates() {
+  const data = await api('GET', '/v1/tofu/templates');
+  _tfTemplates = data.items || [];
+  const grid = document.getElementById('tf-template-grid');
+  if (!_tfTemplates.length) {
+    grid.innerHTML = '<div class="bm-empty">No OpenTofu examples found.</div>';
+    return;
+  }
+  grid.innerHTML = _tfTemplates.map(t => `
+    <div class="bm-template-card" onclick="tfSelectTemplate('${t.filename}')">
+      <div class="bm-tpl-title">${t.title}</div>
+      <div class="bm-tpl-desc">${t.description}</div>
+      <div class="bm-tpl-tags">${(t.resources || []).map(r =>
+        `<span class="bm-tag">${r.replace('_', ' ')}</span>`).join('')}</div>
+    </div>
+  `).join('');
+}
+
+async function tfSelectTemplate(dirName) {
+  document.querySelectorAll('#tf-template-grid .bm-template-card').forEach(c => c.classList.remove('selected'));
+  const tpl = _tfTemplates.find(t => t.filename === dirName);
+  if (tpl) {
+    const idx = _tfTemplates.indexOf(tpl);
+    const cards = document.querySelectorAll('#tf-template-grid .bm-template-card');
+    if (cards[idx]) cards[idx].classList.add('selected');
+  }
+
+  const data = await api('GET', `/v1/tofu/templates/${dirName}/vars`);
+  _tfRenderVarForm(dirName, tpl, data.vars || {});
+  const panel = document.getElementById('tf-var-panel');
+  panel.style.display = 'block';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function _tfRenderVarForm(dirName, tpl, schema) {
+  document.getElementById('tf-form-title').textContent = tpl ? tpl.title : dirName;
+  document.getElementById('tf-submit-dirname').value = dirName;
+
+  const container = document.getElementById('tf-var-fields');
+  const editable = Object.entries(schema).filter(([, v]) => !v.derived);
+
+  if (!editable.length) {
+    container.innerHTML = '<div class="bm-empty" style="padding:12px 0">No variables to configure.</div>';
+    return;
+  }
+
+  container.innerHTML = editable.map(([key, meta]) => `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')}</label>
+      <input type="${key.includes('token') ? 'password' : 'text'}"
+             id="tf-var-${key}"
+             data-key="${key}"
+             value="${_esc(String(meta.default ?? ''))}">
+    </div>
+  `).join('');
+}
+
+async function tfSubmitBuild() {
+  const dirName = document.getElementById('tf-submit-dirname').value;
+  if (!dirName) { toast('Select a template first', 'error'); return; }
+
+  const vars = {};
+  document.querySelectorAll('#tf-var-fields input[data-key]').forEach(el => {
+    if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
+  });
+
+  const btn = document.getElementById('tf-submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+
+  let data;
+  try {
+    data = await api('POST', '/v1/tofu/builds', { template: dirName, vars });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Run Apply';
+    toast(e.message || 'Submit failed', 'error');
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Run Apply';
+  toast(`Build started: ${data.id.slice(0, 8)}…`, 'success');
+  document.getElementById('tf-var-panel').style.display = 'none';
+  document.querySelectorAll('#tf-template-grid .bm-template-card').forEach(c => c.classList.remove('selected'));
+  _tfOpenLog(data.id);
+  await _tfLoadHistory();
+}
+
+// ── Log viewer ───────────────────────────────────────────────────────────────
+
+function _tfOpenLog(buildId) {
+  _tfActiveBuildId = buildId;
+  if (_tfLogEs) { _tfLogEs.close(); _tfLogEs = null; }
+
+  const panel = document.getElementById('tf-log-panel');
+  const pre   = document.getElementById('tf-log-pre');
+  panel.style.display = 'block';
+  pre.textContent = '';
+  document.getElementById('tf-log-title').textContent = `Apply log — ${buildId.slice(0, 8)}…`;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  _tfLogEs = new EventSource(`/v1/tofu/builds/${buildId}/log?token=${API_TOKEN}`);
+  _tfLogEs.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.__done__) {
+      _tfLogEs.close(); _tfLogEs = null;
+      _tfUpdateLogStatus(buildId, msg.status);
+      _tfLoadHistory();
+      loadDashboard();
+      return;
+    }
+    pre.textContent += msg + '\n';
+    pre.scrollTop = pre.scrollHeight;
+  };
+  _tfLogEs.onerror = () => { if (_tfLogEs) { _tfLogEs.close(); _tfLogEs = null; } };
+}
+
+function _tfUpdateLogStatus(buildId, status) {
+  const badge = document.getElementById(`tf-hist-status-${buildId}`);
+  if (badge) {
+    badge.textContent = status;
+    badge.className = `badge badge-${_tfStatusClass(status)}`;
+  }
+}
+
+async function tfViewLog(buildId) {
+  _tfActiveBuildId = buildId;
+  if (_tfLogEs) { _tfLogEs.close(); _tfLogEs = null; }
+
+  const data = await api('GET', `/v1/tofu/builds/${buildId}`);
+  const panel = document.getElementById('tf-log-panel');
+  const pre   = document.getElementById('tf-log-pre');
+  document.getElementById('tf-log-title').textContent = `Apply log — ${buildId.slice(0, 8)}… (${data.template})`;
+  pre.textContent = (data.log || []).join('\n');
+  panel.style.display = 'block';
+  pre.scrollTop = pre.scrollHeight;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  if (data.status === 'running' || data.status === 'pending') {
+    const offset = (data.log || []).length;
+    let sent = offset;
+    _tfLogEs = new EventSource(`/v1/tofu/builds/${buildId}/log?token=${API_TOKEN}`);
+    _tfLogEs.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if (msg.__done__) {
+        _tfLogEs.close(); _tfLogEs = null;
+        _tfUpdateLogStatus(buildId, msg.status);
+        _tfLoadHistory();
+        loadDashboard();
+        return;
+      }
+      if (sent > 0) { sent--; return; }
+      pre.textContent += msg + '\n';
+      pre.scrollTop = pre.scrollHeight;
+    };
+  }
+}
+
+// ── History ──────────────────────────────────────────────────────────────────
+
+async function _tfLoadHistory() {
+  const data = await api('GET', '/v1/tofu/builds');
+  const tbody = document.getElementById('tf-history-tbody');
+  const builds = data.items || [];
+  document.getElementById('tf-sel-all').checked = false;
+  document.getElementById('tf-destroy-btn').style.display = 'none';
+  if (!builds.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No builds yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = builds.map(b => {
+    const canDestroy = b.status === 'success' && b.provisioned_count > 0;
+    const destroyed  = b.status === 'destroyed';
+    const cbDisabled = !canDestroy ? 'disabled' : '';
+    const resCell    = canDestroy
+      ? `<span class="bm-res-badge">${b.provisioned_count} resource${b.provisioned_count !== 1 ? 's' : ''}</span>`
+      : destroyed
+        ? `<span class="bm-res-badge bm-res-gone">destroyed</span>`
+        : '—';
+    return `
+    <tr>
+      <td class="cb-col"><input type="checkbox" class="tf-row-cb" data-id="${b.id}" ${cbDisabled} onchange="_tfOnCbChange()"></td>
+      <td class="mono">${b.id.slice(0, 8)}</td>
+      <td>${b.template}</td>
+      <td><span id="tf-hist-status-${b.id}" class="badge badge-${_tfStatusClass(b.status)}">${b.status}</span></td>
+      <td>${resCell}</td>
+      <td>${b.created_at ? fmtDate(b.created_at) : '—'}</td>
+      <td>${_tfDuration(b)}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="tfViewLog('${b.id}')">Log</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function _tfOnCbChange() {
+  const checked = document.querySelectorAll('.tf-row-cb:checked:not(:disabled)');
+  document.getElementById('tf-destroy-btn').style.display = checked.length ? 'inline-flex' : 'none';
+  const all = document.querySelectorAll('.tf-row-cb:not(:disabled)');
+  document.getElementById('tf-sel-all').checked = all.length > 0 && checked.length === all.length;
+}
+
+function _tfToggleSelAll(cb) {
+  document.querySelectorAll('.tf-row-cb:not(:disabled)').forEach(el => el.checked = cb.checked);
+  _tfOnCbChange();
+}
+
+async function tfDestroySelected() {
+  const checked = Array.from(document.querySelectorAll('.tf-row-cb:checked:not(:disabled)'));
+  if (!checked.length) return;
+  const ids = checked.map(el => el.dataset.id);
+  if (!confirm(`Destroy all resources from ${ids.length} build${ids.length > 1 ? 's' : ''}?\nThis cannot be undone.`)) return;
+
+  const btn = document.getElementById('tf-destroy-btn');
+  btn.disabled = true;
+  btn.textContent = 'Destroying…';
+
+  await Promise.allSettled(ids.map(id => api('DELETE', `/v1/tofu/builds/${id}`)));
+
+  btn.disabled = false;
+  btn.textContent = '🗑 Destroy Resources';
+  await _tfLoadHistory();
+  loadDashboard();
+}
+
+function _tfStatusClass(s) {
+  return s === 'success' ? 'running' : s === 'failed' ? 'error' : s === 'destroyed' ? 'stopped' : 'pending';
+}
+
+function _tfDuration(b) {
+  if (!b.started_at) return '—';
+  const end = b.finished_at ? new Date(b.finished_at) : new Date();
+  const secs = Math.round((end - new Date(b.started_at)) / 1000);
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+</script>
+
+
+</body>
+</html>

@@ -1,0 +1,92 @@
+---
+- name: CloudCore — provision a VPC and compute instance
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    api_url: "{{ cloudcore_api_url }}"
+    api_token: "{{ cloudcore_api_token }}"
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ api_url }}"
+        api_token: "{{ api_token }}"
+        name: test-vpc
+        cidr_block: "10.0.0.0/16"
+        dns_support: true
+        tags:
+          Environment: dev
+          Project: cloudcore-test
+      register: vpc_result
+
+    - name: Show VPC
+      ansible.builtin.debug:
+        msg: "VPC id={{ vpc_result.vpc.id }} cidr={{ vpc_result.vpc.cidr_block }}"
+
+    - name: Read host SSH public key
+      ansible.builtin.slurp:
+        src: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519.pub"
+      register: host_pubkey
+
+    - name: Create compute instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ api_url }}"
+        api_token: "{{ api_token }}"
+        name: test-instance-01
+        image_id: ubuntu-22.04
+        flavor: standard.small
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          ssh_authorized_keys:
+            - {{ host_pubkey.content | b64decode | trim }}
+        tags:
+          Environment: dev
+          Role: test
+      register: instance_result
+
+    - name: Show instance (initial — will be pending)
+      ansible.builtin.debug:
+        msg: "Instance id={{ instance_result.instance.id }} status={{ instance_result.instance.status }}"
+
+    - name: Wait for instance to reach running state
+      ansible.builtin.uri:
+        url: "{{ api_url }}/v1/instances/{{ instance_result.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ api_token }}"
+        return_content: true
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: Show running instance
+      ansible.builtin.debug:
+        msg: >
+          Instance {{ poll.json.name }} is {{ poll.json.status }},
+          private_ip={{ poll.json.private_ip }},
+          ssh_port={{ poll.json.ssh_port }}
+
+    - name: Wait for SSH to accept connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ poll.json.ssh_port }}"
+        timeout: 120
+        state: started
+
+    - name: Run command inside VM via SSH
+      ansible.builtin.command: >
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+        -p {{ poll.json.ssh_port }} ubuntu@127.0.0.1
+        "uname -a && hostname && ip addr show"
+      register: vm_output
+      until: vm_output.rc == 0
+      retries: 12
+      delay: 10
+      changed_when: false
+
+    - name: Show VM output
+      ansible.builtin.debug:
+        msg: "{{ vm_output.stdout_lines }}"

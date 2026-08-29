@@ -1,0 +1,34 @@
+.amazonq/
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Go
+provider/terraform-provider-cloudcore
+
+# Ansible build artefacts
+ansible/collections/cloudcore/*.tar.gz
+
+# DB and runtime
+api/cloudcore.db
+api/cloudcore.db-wal
+api/cloudcore.db-shm
+api/images/
+api/instances/
+api/volumes/
+api/keys/cloudcore_ed25519
+api/keys/cloudcore_ed25519.pub
+*.migrated
+
+# Test results
+tests/results/
+
+# Editor
+*.swp
+*.swo

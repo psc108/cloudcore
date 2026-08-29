@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Optional
+from dataclasses import dataclass, field
+
+
+def new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class InstanceStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPED = "stopped"
+    DELETED = "deleted"
+    ERROR = "error"
+
+
+class VPCStatus(str, Enum):
+    ACTIVE = "active"
+    DELETED = "deleted"
+
+
+class LBStatus(str, Enum):
+    ACTIVE = "active"
+    DELETED = "deleted"
+
+
+class NfsServerStatus(str, Enum):
+    PENDING  = "pending"
+    RUNNING  = "running"
+    STOPPED  = "stopped"
+    DELETED  = "deleted"
+    ERROR    = "error"
+
+
+@dataclass
+class VPC:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    cidr_block: str = ""
+    dns_support: bool = True
+    status: VPCStatus = VPCStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "cidr_block": self.cidr_block,
+            "dns_support": self.dns_support,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
+
+
+@dataclass
+class Instance:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    image_id: str = ""
+    flavor: str = ""
+    vpc_id: str = ""
+    subnet_id: str = ""
+    security_group_ids: list = field(default_factory=list)
+    user_data: Optional[str] = None
+    private_ip: str = ""
+    public_ip: str = ""
+    status: InstanceStatus = InstanceStatus.PENDING
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+    # internal: libvirt domain name and SSH port forward
+    domain_name: str = ""
+    ssh_host_port: int = 0
+    ssh_user: str = "ubuntu"
+    # [{username, sudo, ssh_keys: [], password_hash: ""}]
+    users: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "image_id": self.image_id,
+            "flavor": self.flavor,
+            "vpc_id": self.vpc_id,
+            "subnet_id": self.subnet_id,
+            "security_group_ids": self.security_group_ids,
+            "private_ip": self.private_ip,
+            "public_ip": self.public_ip,
+            "ssh_port": self.ssh_host_port,
+            "ssh_user": self.ssh_user,
+            "users": self.users,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
+
+
+@dataclass
+class NfsServer:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    vpc_id: str = ""
+    flavor: str = "standard.medium"
+    disk_gb: int = 20
+    status: NfsServerStatus = NfsServerStatus.PENDING
+    private_ip: str = ""
+    ssh_host_port: int = 0
+    domain_name: str = ""
+    shares: list = field(default_factory=list)  # [{name, clients, path}]
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "vpc_id": self.vpc_id,
+            "flavor": self.flavor,
+            "disk_gb": self.disk_gb,
+            "status": self.status.value,
+            "private_ip": self.private_ip,
+            "ssh_port": self.ssh_host_port,
+            "shares": self.shares,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
+
+
+@dataclass
+class LoadBalancer:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    type: str = "application"
+    vpc_id: str = ""
+    subnet_ids: list = field(default_factory=list)
+    internal: bool = False
+    dns_name: str = ""
+    listen_port: int = 0
+    backends: list = field(default_factory=list)  # [{name, address, port}]
+    status: LBStatus = LBStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "vpc_id": self.vpc_id,
+            "subnet_ids": self.subnet_ids,
+            "internal": self.internal,
+            "dns_name": self.dns_name,
+            "listen_port": self.listen_port,
+            "backends": self.backends,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }

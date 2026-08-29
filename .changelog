@@ -1,0 +1,237 @@
+[2026-08-25 13:19] CREATE .amazonq/rules/conventions.md | Project conventions and Amazon Q rules
+[2026-08-25 13:19] CREATE provider/go.mod | Go module definition
+[2026-08-25 13:19] CREATE provider/main.go | Provider entry point
+[2026-08-25 13:19] CREATE provider/internal/client/client.go | HTTP API client
+[2026-08-25 13:19] CREATE provider/internal/provider/provider.go | Provider implementation
+[2026-08-25 13:19] CREATE provider/internal/resources/vpc.go | VPC resource
+[2026-08-25 13:19] CREATE provider/internal/resources/instance.go | Instance resource
+[2026-08-25 13:19] CREATE provider/internal/resources/load_balancer.go | Load balancer resource
+[2026-08-25 13:19] CREATE modules/vpc/main.tf | VPC module resources
+[2026-08-25 13:19] CREATE modules/vpc/variables.tf | VPC module variables
+[2026-08-25 13:19] CREATE modules/vpc/outputs.tf | VPC module outputs
+[2026-08-25 13:19] CREATE modules/vpc/locals.tf | VPC module locals
+[2026-08-25 13:19] CREATE modules/vpc/versions.tf | VPC module versions
+[2026-08-25 13:19] CREATE modules/compute/main.tf | Compute module resources
+[2026-08-25 13:19] CREATE modules/compute/variables.tf | Compute module variables
+[2026-08-25 13:19] CREATE modules/compute/outputs.tf | Compute module outputs
+[2026-08-25 13:19] CREATE modules/compute/locals.tf | Compute module locals
+[2026-08-25 13:19] CREATE modules/compute/versions.tf | Compute module versions
+[2026-08-25 13:19] CREATE modules/load-balancer/main.tf | Load balancer module resources
+[2026-08-25 13:19] CREATE modules/load-balancer/variables.tf | Load balancer module variables
+[2026-08-25 13:19] CREATE modules/load-balancer/outputs.tf | Load balancer module outputs
+[2026-08-25 13:19] CREATE modules/load-balancer/locals.tf | Load balancer module locals
+[2026-08-25 13:19] CREATE modules/load-balancer/versions.tf | Load balancer module versions
+[2026-08-25 13:19] CREATE ansible/collections/cloudcore/galaxy.yml | Ansible collection manifest
+[2026-08-25 13:19] CREATE ansible/collections/cloudcore/plugins/module_utils/cloudcore_client.py | Shared API client
+[2026-08-25 13:19] CREATE ansible/collections/cloudcore/plugins/modules/vpc.py | VPC Ansible module
+[2026-08-25 13:19] CREATE ansible/collections/cloudcore/plugins/modules/instance.py | Instance Ansible module
+[2026-08-25 13:19] CREATE ansible/collections/cloudcore/plugins/modules/load_balancer.py | Load balancer Ansible module
+[2026-08-25 13:19] CREATE examples/load-balanced-compute/main.tf | Worked example
+[2026-08-25 13:19] CREATE README.md | Project README
+[2026-08-25 13:24] CREATE api/models.py | Core data models
+[2026-08-25 13:24] CREATE api/compute.py | Libvirt KVM compute backend
+[2026-08-25 13:24] CREATE api/store.py | In-memory state store with JSON persistence
+[2026-08-25 13:24] CREATE api/server.py | Flask REST API server
+[2026-08-25 13:24] CREATE api/fetch-image.sh | Ubuntu 22.04 cloud image download script
+[2026-08-25 13:24] CREATE api/cloudcore-api.service | Systemd user service
+[2026-08-25 13:24] CREATE ansible/inventory.ini | Ansible inventory
+[2026-08-25 13:24] CREATE ansible/test-compute.yml | End-to-end test playbook
+[2026-08-25 13:24] MODIFY api/compute.py | Switch to SLIRP userspace networking, fix ISO builder
+[2026-08-25 13:24] MODIFY api/server.py | Fix GET /instances to not auto-delete during async launch
+[2026-08-25 13:51] MODIFY api/compute.py | Fix PCI slot conflicts; use qemu:commandline with slot 0x5 for virtio-net hostfwd
+[2026-08-25 13:51] MODIFY api/models.py | Add ssh_host_port field to Instance, expose as ssh_port in API response
+[2026-08-25 13:51] MODIFY ansible/test-compute.yml | Inject host SSH pubkey via cloud-init; add SSH wait and remote command verification
+[2025-08-25 14:10] CREATE ui/index.html | Single-page console UI — VPCs, Instances, Load Balancers with create/delete forms and live status
+[2025-08-25 14:10] MODIFY api/server.py | Added send_from_directory import and GET / route to serve the UI
+[2025-08-25 14:10] MODIFY api/store.py | Fixed instance load to remap ssh_port → ssh_host_port when deserialising state.json
+[2025-08-25 14:35] MODIFY ui/index.html | Instance auto-polling every 5s (stops when all running), fixed flavour options to match FLAVORS dict, image dropdown filters to available-only
+[2025-08-25 14:35] MODIFY api/compute.py | Image catalogue (ubuntu-22.04/24.04, debian-12, rocky-9) with available flag; bridge-aware networking (prefers ccbr0 when present, falls back to SLIRP)
+[2025-08-25 14:35] MODIFY api/models.py | Added listen_port and backends fields to LoadBalancer
+[2025-08-25 14:35] MODIFY api/server.py | HAProxy wired into LB create/update/delete; added POST/DELETE /v1/load-balancers/{id}/backends endpoints
+[2025-08-25 14:35] MODIFY api/store.py | Backfill listen_port/backends defaults when loading old state.json
+[2025-08-25 14:35] CREATE api/lb.py | HAProxy backend manager (start, reload, stop, is_running)
+[2025-08-25 14:35] CREATE api/setup-network.sh | One-time sudo script to create ccbr0 bridge + dnsmasq DHCP
+[2025-08-25 14:35] CREATE api/teardown-network.sh | Removes ccbr0 bridge and stops dnsmasq
+[2025-08-25 14:35] MODIFY provider/ | go mod tidy + go build; binary installed to ~/.local/share/opentofu/plugins/
+[2025-08-25 14:45] MODIFY ui/index.html | LB table: added Listen Port and Backends columns; expandable backends panel per LB with add/remove backend forms; CSS for backends panel
+[2025-08-25 15:10] CREATE api/keys/cloudcore_ed25519 | CloudCore inter-instance ed25519 keypair (private)
+[2025-08-25 15:10] CREATE api/keys/cloudcore_ed25519.pub | CloudCore inter-instance ed25519 keypair (public)
+[2025-08-25 15:10] MODIFY api/compute.py | Added KEYS_DIR, get_cc_pubkey/privkey_path, ssh_user_for_image; _cloud_init_iso now injects CloudCore keypair + SSH config into every instance via cloud-init
+[2025-08-25 15:10] MODIFY api/models.py | Added ssh_user field to Instance
+[2025-08-25 15:10] MODIFY api/server.py | Set ssh_user on instance create; added GET /v1/ssh-key endpoint
+[2025-08-25 15:10] MODIFY api/store.py | Backfill ssh_user default when loading old state.json
+[2025-08-25 15:10] MODIFY ui/index.html | SSH panel per instance: SSH/SCP commands with copy buttons, inter-instance SSH note; SSH column in table
+[2025-08-25 16:00] MODIFY api/models.py | Added users field to Instance [{username, sudo, ssh_keys, password_hash}]
+[2025-08-25 16:00] MODIFY api/compute.py | Added _build_users_block and _build_write_files_block; _cloud_init_iso now emits cloud-config users: block and injects CloudCore keypair for all users
+[2025-08-25 16:00] MODIFY api/server.py | Added GET/POST /v1/instances/{id}/users and DELETE /v1/instances/{id}/users/{username}; live instances get users applied immediately via SSH
+[2025-08-25 16:00] MODIFY api/store.py | Backfill users default when loading old state.json
+[2025-08-25 16:00] MODIFY ui/index.html | Users column + expandable Users panel per instance: add form (username, sudo toggle, optional SSH key), remove button, status-aware note
+[2025-08-25 16:30] MODIFY ui/index.html | Consolidated two script blocks into one; fixed unicode escape sequences; all functions now in correct order
+[2025-08-25 15:45] CREATE api/terminal.py | WebSocket SSH proxy server (ws://127.0.0.1:8081) — paramiko shell, PTY resize, non-sudo user selection, error messages
+[2025-08-25 15:45] CREATE api/cloudcore-terminal.service | Systemd user service for terminal WebSocket server
+[2025-08-25 15:45] MODIFY ui/index.html | Terminal tab: instance cards with Open Terminal button, floating xterm.js window, draggable/resizable, sudo-only warning, WS reconnect handling
+[2025-08-25 16:50] MODIFY ui/index.html | Fixed JS syntax error: raw newlines + ESC bytes inside single-quoted strings in terminal ws.onclose/onerror handlers were breaking all JS on page load
+[2026-08-25 16:00] CREATE HELP.md | Full help documentation for all console features
+[2026-08-25 16:00] MODIFY api/server.py | Added HELP_FILE constant and GET /help endpoint serving HELP.md as text/markdown
+[2026-08-25 16:00] MODIFY ui/index.html | Added Help nav button, modal overlay, openHelp/closeHelp/mdToHtml JS functions
+[2026-08-25 16:30] CREATE SESSION.md | Session continuity document — bridge networking, staged plan, post-relogin checklist
+[2026-08-25 16:41] CREATE api/cloudcore-bridge.service | Systemd system service for persistent ccbr0 bridge
+[2026-08-25 16:41] MODIFY api/setup-network.sh | Kill existing dnsmasq before start to make script idempotent
+[2026-08-25 17:02] MODIFY api/compute.py | Enhanced get_instance_ip() to read real DHCP lease IP for bridge instances
+[2026-08-25 17:02] MODIFY api/server.py | Added reconcile() — walks instances/LBs on startup, reconnects libvirt status, restarts HAProxy
+[2026-08-25 17:20] CREATE api/dns.py | DNS zone and record store with JSON persistence, auto-registration helpers
+[2026-08-25 17:20] MODIFY api/server.py | DNS endpoints, auto-register instances/LBs on create/delete, dns_store.load() at startup
+[2026-08-25 17:20] MODIFY ui/index.html | DNS tab — zones list, expandable records per zone, add/delete zone and record forms
+[2026-08-25 17:45] CREATE tests/lib/framework.py | Test framework — HTTP client, assertions, runner, results writer
+[2026-08-25 17:45] CREATE tests/lib/helpers.py | Shared resource helpers — make/delete vpc, lb, instance, dns zone
+[2026-08-25 17:45] CREATE tests/suites/test_auth.py | Auth test suite
+[2026-08-25 17:45] CREATE tests/suites/test_vpcs.py | VPC test suite — full option coverage
+[2026-08-25 17:45] CREATE tests/suites/test_instances.py | Instance test suite — full option coverage
+[2026-08-25 17:45] CREATE tests/suites/test_load_balancers.py | LB test suite — full option coverage
+[2026-08-25 17:45] CREATE tests/suites/test_dns.py | DNS test suite — full option coverage
+[2026-08-25 17:45] CREATE tests/suites/test_images.py | Images test suite
+[2026-08-25 17:45] CREATE tests/suites/test_ssh_key.py | SSH key test suite
+[2026-08-25 17:45] CREATE tests/suites/test_help.py | Help test suite
+[2026-08-25 17:45] CREATE tests/suites/test_vm.py | VM integration test suite (slow, @vm_test)
+[2026-08-25 17:45] CREATE tests/scenarios/scenario_lb_with_instances.py | Scenario: LB with 2 live instances
+[2026-08-25 17:45] CREATE tests/scenarios/scenario_inter_instance_ssh.py | Scenario: inter-instance SSH via shared keypair
+[2026-08-25 17:45] CREATE tests/scenarios/scenario_dns_lifecycle.py | Scenario: DNS record lifecycle tracking
+[2026-08-25 17:45] CREATE tests/run_tests.py | Test harness runner — suites + scenarios, --skip-vm, --skip-scenarios flags
+[2026-08-25 17:45] MODIFY api/server.py | Mark instance deleted synchronously before async libvirt teardown
+[2026-08-25 18:23] MODIFY ui/index.html | Replaced flat nav with dropdown groups (Infrastructure, Networking) + standalone Help button
+[2026-08-25 18:33] MODIFY .amazonq/rules/conventions.md | Added Testing Conventions section covering directory layout, run commands, suite/scenario/vm_test patterns, isolation rules, coverage rule, and framework primitives
+[2026-08-25 18:49] MODIFY api/server.py | Added GET /v1/dashboard endpoint returning aggregated live resource summary
+[2026-08-25 18:49] MODIFY ui/index.html | Added Dashboard section: stat tiles, resource panels, detail modal, auto-refresh every 60s, standalone nav button
+[2026-08-25 18:55] CREATE ui/build.sh | Build script assembling src/ into index.html with JS validation
+[2026-08-25 18:55] CREATE ui/src/css/main.css | Extracted CSS from index.html
+[2026-08-25 18:55] CREATE ui/src/html/head.html ui/src/html/body.html ui/src/html/tail.html | Extracted HTML shell
+[2026-08-25 18:55] CREATE ui/src/js/00-config.js..14-init.js | Extracted JS into 15 feature files
+[2026-08-25 18:55] MODIFY .amazonq/rules/conventions.md | Added UI Development Conventions section
+[2026-08-25 19:00] MODIFY ui/src/js/06-dashboard.js | Replace inline JSON onclick with _dashResources id-keyed store to fix broken click handlers
+[2026-08-25 19:00] MODIFY ui/src/js/07-detail-modal.js | Add openDetailById() lookup function
+[2026-08-25 19:06] MODIFY ui/src/css/main.css | Switch nav dropdown from CSS :hover to JS .open class toggle
+[2026-08-25 19:06] MODIFY ui/src/js/04-nav.js | Add click-toggle for dropdowns with outside-click close; close open dropdown on showSection
+[2026-08-25 19:06] MODIFY ui/src/js/06-dashboard.js | Normalise status to string in _dashRow
+[2026-08-25 19:13] MODIFY ui/src/js/07-detail-modal.js | Fix openDetail crash: use lazy field functions so lb backends.length only evaluated for lb type
+[2026-08-25 19:25] CREATE ui/src/js/13-dns.js | Extracted DNS functions from 07-detail-modal.js into correct file
+[2026-08-25 19:25] MODIFY ui/src/js/07-detail-modal.js | Removed DNS functions that were incorrectly included
+[2026-08-25 19:25] MODIFY ui/src/js/13-help.js->14-help.js ui/src/js/14-init.js->15-init.js | Renumbered to make room for 13-dns.js
+[2026-08-25 19:25] MODIFY .amazonq/rules/conventions.md | Updated JS file map with corrected numbering
+[2026-08-25 19:28] MODIFY HELP.md | Updated navigation (dropdowns, Dashboard), added Dashboard and DNS sections, updated API table, corrected networking section
+[2026-08-25 20:24] CREATE ansible/collections/cloudcore/plugins/modules/dns_zone.py | new Ansible module for DNS zone management
+[2026-08-25 20:24] CREATE ansible/collections/cloudcore/plugins/modules/dns_record.py | new Ansible module for DNS record management
+[2026-08-25 20:24] MODIFY ansible/collections/cloudcore/galaxy.yml | bumped version to 0.2.0
+[2026-08-25 20:24] CREATE ansible/examples/group_vars/all.yml | shared connection vars for all example playbooks
+[2026-08-25 20:24] CREATE ansible/examples/01-vpc-only.yml | example: minimal VPC
+[2026-08-25 20:24] CREATE ansible/examples/02-compute-basic.yml | example: VPC + single instance
+[2026-08-25 20:24] CREATE ansible/examples/03-compute-with-dns.yml | example: VPC + instance + DNS zone + A record
+[2026-08-25 20:24] CREATE ansible/examples/04-load-balanced-web.yml | example: VPC + 2 instances + L7 ALB with backends
+[2026-08-25 20:24] CREATE ansible/examples/05-network-lb.yml | example: VPC + instances + L4 NLB (internal)
+[2026-08-25 20:24] CREATE ansible/examples/06-full-stack.yml | example: full stack — VPC + 3 instances + ALB + DNS CNAME
+[2026-08-25 20:24] CREATE ansible/examples/07-teardown.yml | idempotent teardown of all example resources by name prefix
+[2026-08-25 20:24] MODIFY api/compute.py | _bridge_exists replaced with _bridge_usable — checks bridge.conf before using bridge path, falls back to SLIRP
+[2026-08-25 20:42] CREATE api/build_engine.py | build engine — template catalogue, var extraction, playbook execution via subprocess
+[2026-08-25 20:42] CREATE api/build_manager_routes.py | build manager Flask blueprint — /v1/builds/* routes with SSE log streaming
+[2026-08-25 20:42] MODIFY api/server.py | register build_manager_blueprint
+[2026-08-25 20:42] CREATE ui/src/js/16-build-manager.js | build manager UI — template grid, var form, live log via SSE, build history
+[2026-08-25 20:42] MODIFY ui/src/html/body.html | add Build Manager nav button and section HTML
+[2026-08-25 20:42] MODIFY ui/src/css/main.css | add build manager styles (template grid, log pre, tags)
+[2026-08-25 20:42] MODIFY ui/src/js/04-nav.js | wire builds section into showSection()
+[2026-08-25 20:42] MODIFY ui/index.html | rebuilt via build.sh (2334 lines)
+[2026-08-25 21:33] MODIFY api/build_manager_routes.py | Fix NameError: assign build before SSE stream branch
+[2026-08-25 21:33] MODIFY api/build_engine.py | Add 07-teardown.yml to template catalogue; remove skip filter
+[2026-08-25 21:53] MODIFY ui/src/html/body.html | Add select-all checkbox column and Delete Selected button to VPCs, Instances, LBs tables
+[2026-08-25 21:53] MODIFY ui/src/js/08-vpcs.js | Add checkbox td to VPC rows, fix colspans
+[2026-08-25 21:53] MODIFY ui/src/js/09-instances.js | Add checkbox td to instance rows, fix colspans
+[2026-08-25 21:53] MODIFY ui/src/js/10-load-balancers.js | Add checkbox td to LB rows, fix colspans
+[2026-08-25 21:53] CREATE ui/src/js/17-bulk-delete.js | Bulk delete module: toggleSelectAll, _onRowCbChange, deleteSelected
+[2026-08-25 21:53] MODIFY ui/src/css/main.css | Add .cb-col style for checkbox column
+[2026-08-25 21:56] MODIFY api/build_engine.py | Add _has_jinja() helper; fix extract_template_vars to mark list/dict vars containing Jinja2 refs as derived
+[2026-08-25 22:00] MODIFY api/build_engine.py | Surface default_project and default_environment as editable fields in all template var forms
+[2026-08-25 22:05] MODIFY api/build_engine.py | Persist builds to builds.json; load_builds() on startup; save on completion and failure
+[2026-08-25 22:05] MODIFY api/server.py | Import build_engine; call load_builds() at startup
+[2026-08-25 22:18] CREATE api/db.py | SQLite backend: schema init, WAL mode, JSON migration from state.json/dns.json/builds.json
+[2026-08-25 22:18] MODIFY api/store.py | Rewrite to use SQLite via db.py; identical public API
+[2026-08-25 22:18] MODIFY api/dns.py | Rewrite to use SQLite via db.py; identical public API
+[2026-08-25 22:18] MODIFY api/build_engine.py | Replace builds.json persistence with SQLite; _running cache for live builds
+[2026-08-25 22:18] MODIFY api/server.py | Replace store.load()/dns.load()/build_engine.load_builds() with db.init()
+[2026-08-25 22:26] MODIFY api/build_engine.py | Fix NameError in _run_build: _builds renamed to _running was missed; clean ghost pending builds from DB
+[2026-08-25 22:28] MODIFY api/build_engine.py | Remove 07-teardown.yml from template catalogue; list_templates now skips files not in _TEMPLATE_META; remove duplicate function definitions
+[2026-08-25 22:56] MODIFY api/build_engine.py | Add _snapshot/_diff_snapshots; populate provisioned list after successful build; add mark_build_destroyed
+[2026-08-25 22:56] MODIFY api/build_manager_routes.py | Add DELETE /v1/builds/<id> destroy route; add provisioned_count to summary; provisioned list in detail
+[2026-08-25 22:56] MODIFY api/db.py | Remove UNIQUE constraint on name columns (allow deleted name reuse)
+[2026-08-25 22:56] MODIFY ui/src/js/16-build-manager.js | Add checkboxes to history rows; Destroy Resources button; _bmOnCbChange/_bmToggleSelAll/bmDestroySelected; destroyed status class
+[2026-08-25 22:56] MODIFY ui/src/html/body.html | Add checkbox column and Destroy Resources button to build history table
+[2026-08-25 22:56] MODIFY ui/src/css/main.css | Add .bm-res-badge and .bm-res-gone styles
+[2026-08-25 23:04] MODIFY api/build_engine.py | Add _new_suffix(), inject build_suffix into every build's extra vars, expose in template vars schema
+[2026-08-25 23:04] MODIFY ansible/examples/01-vpc-only.yml | Use build_suffix in vpc_name
+[2026-08-25 23:04] MODIFY ansible/examples/02-compute-basic.yml | Use build_suffix in vpc_name and instance_name
+[2026-08-25 23:04] MODIFY ansible/examples/03-compute-with-dns.yml | Use build_suffix in vpc_name, instance_name, dns_zone
+[2026-08-25 23:04] MODIFY ansible/examples/04-load-balanced-web.yml | Use build_suffix in vpc_name, lb_name, instance names
+[2026-08-25 23:04] MODIFY ansible/examples/05-network-lb.yml | Use build_suffix in vpc_name, lb_name, instance names
+[2026-08-25 23:04] MODIFY ansible/examples/06-full-stack.yml | Use build_suffix in vpc_name, lb_name, dns_zone, instance names
+[2026-08-25 23:11] MODIFY ui/src/js/16-build-manager.js | Fix: disabled checkboxes on destroyed rows; only success+provisioned_count>0 rows are selectable
+[2026-08-25 23:17] MODIFY api/build_engine.py | Fix: remove premature _save_build from _execute_playbook finally block; add provisioned to UPSERT update columns so snapshot diff is persisted correctly
+[2026-08-25 23:21] MODIFY api/terminal.py | Fix: call db.init() on startup so get_db() works in terminal process; remove stale store.load() calls
+[2026-08-25 23:24] MODIFY HELP.md | Add Build Manager section (templates, vars, build_suffix, history, destroy), Bulk Delete section, build API endpoints
+[2026-08-26 07:43] MODIFY api/models.py | Add NfsServer dataclass and NfsServerStatus enum
+[2026-08-26 07:43] MODIFY api/db.py | Add nfs_servers table to SQLite schema
+[2026-08-26 07:43] CREATE api/nfs_store.py | SQLite CRUD for NFS servers
+[2026-08-26 07:43] CREATE api/nfs.py | NFS server VM provisioning — cloud-init, LVM data disk, libvirt XML, reload_exports
+[2026-08-26 07:43] CREATE api/nfs_routes.py | Flask blueprint — NFS server CRUD, share management, mount-config endpoint
+[2026-08-26 07:43] MODIFY api/server.py | Register nfs_bp, add nfs_servers to dashboard
+[2026-08-26 07:43] MODIFY api/build_engine.py | Add nfs_server to snapshot loop and template catalogue
+[2026-08-26 07:43] MODIFY api/build_manager_routes.py | Add nfs_server to destroy path map
+[2026-08-26 07:43] CREATE ansible/collections/cloudcore/plugins/modules/nfs_server.py | Ansible module — create/delete NFS server
+[2026-08-26 07:43] CREATE ansible/collections/cloudcore/plugins/modules/nfs_mount.py | Ansible module — fetch mount config for cloud-init injection
+[2026-08-26 07:43] CREATE ansible/examples/07-nfs-shared-storage.yml | Example template — VPC + NFS server + 2 instances with shared mount
+[2026-08-26 07:43] MODIFY ansible/collections/cloudcore/galaxy.yml | Bump collection to v0.3.0
+[2026-08-26 10:53] CREATE api/editor_routes.py | File editor API — named roots, tree, read, write, create, delete with path traversal protection
+[2026-08-26 10:53] MODIFY api/server.py | Register editor_bp blueprint
+[2026-08-26 10:53] CREATE ui/src/js/18-editor.js | File editor UI — CodeMirror 5, file tree, dirty tracking, Ctrl+S save, 2-stage delete, new file at root
+[2026-08-26 10:53] MODIFY ui/src/html/head.html | Add CodeMirror 5 CDN scripts and dracula theme
+[2026-08-26 10:53] MODIFY ui/src/html/body.html | Add editor section HTML and nav button
+[2026-08-26 10:53] MODIFY ui/src/js/04-nav.js | Wire editor section to showSection
+[2026-08-26 10:53] MODIFY ui/src/css/main.css | Add editor layout, tree, file, tab and CodeMirror host styles
+[2026-08-26 10:53] MODIFY ui/index.html | Rebuilt (2793 lines)
+[2026-08-26 10:57] CREATE .gitignore | initial gitignore excluding .amazonq, build artefacts, DB, test results
+[2026-08-26 11:09] CREATE requirements.txt | Python deps for API and terminal
+[2026-08-26 11:09] CREATE scripts/install.sh | idempotent install script for new users
+[2026-08-26 11:09] MODIFY README.md | added Getting Started section with install instructions
+[2026-08-26 11:26] CREATE api/about_routes.py | /v1/about endpoint returning component versions
+[2026-08-26 11:26] MODIFY api/server.py | register about_bp
+[2026-08-26 11:26] CREATE ui/src/js/19-about.js | About page JS
+[2026-08-26 11:26] MODIFY ui/src/html/body.html | About nav button and section
+[2026-08-26 11:26] MODIFY ui/src/js/04-nav.js | wire loadAbout() into showSection
+[2026-08-26 11:26] MODIFY ui/src/css/main.css | about page styles
+[2026-08-26 11:26] MODIFY ui/index.html | rebuilt (2877 lines)
+[2026-08-26 11:34] MODIFY .amazonq/rules/conventions.md | added About Page maintenance rule
+[2026-08-25 00:00] CREATE api/tofu_engine.py | OpenTofu build engine — template discovery, var extraction, tofu init+apply
+[2026-08-25 00:00] CREATE api/tofu_routes.py | OpenTofu build manager API routes at /v1/tofu/...
+[2026-08-25 00:00] MODIFY api/db.py | added tofu_builds table to schema
+[2026-08-25 00:00] MODIFY api/server.py | register tofu_bp
+[2026-08-25 00:00] CREATE ui/src/js/20-tofu-manager.js | OpenTofu build manager UI
+[2026-08-25 00:00] MODIFY ui/src/html/body.html | Builds dropdown nav, OpenTofu section, removed stray </main>
+[2026-08-25 00:00] MODIFY ui/src/js/04-nav.js | tofu in builds nav group, loadTofuManager wired
+[2026-08-25 00:00] CREATE examples/basic-vpc/main.tf | basic VPC OpenTofu example
+[2026-08-25 00:00] CREATE examples/basic-compute/main.tf | basic compute OpenTofu example
+[2026-08-25 00:00] MODIFY ui/index.html | rebuilt (3197 lines)
+[2026-08-26 12:24] MODIFY api/editor_routes.py | added opentofu root pointing to examples/
+[2026-08-26 12:24] MODIFY ui/src/js/18-editor.js | root label map, opentofu-aware new-file placeholder
+[2026-08-26 12:24] MODIFY ui/index.html | rebuilt (3201 lines)
+[2026-08-25 00:00] CREATE examples/vpc-only/main.tf | OpenTofu example 01 — VPC only
+[2026-08-25 00:00] CREATE examples/compute-basic/main.tf | OpenTofu example 02 — basic compute
+[2026-08-25 00:00] CREATE examples/load-balanced-web/main.tf | OpenTofu example 03 — L7 ALB
+[2026-08-25 00:00] CREATE examples/network-lb/main.tf | OpenTofu example 04 — L4 NLB
+[2026-08-25 00:00] CREATE examples/full-stack/main.tf | OpenTofu example 05 — full stack
+[2026-08-25 00:00] MODIFY api/tofu_engine.py | updated _TEMPLATE_META for all examples; fixed variable extraction to read main.tf inline declarations
+[2026-08-26 16:08] MODIFY HELP.md | full rewrite covering NFS, Editor, OpenTofu builds, About, updated nav, full API reference
+[2026-08-29 22:44] MODIFY README.md | expanded OpenTofu section with modules, examples, provider resources; updated Ansible section; added Resource Coverage table
+[2026-08-29 23:06] MODIFY api/server.py | added CORS after_request hook for all routes including blueprints
+[2026-08-29 23:06] MODIFY ui/src/js/16-build-manager.js | error handling in loadBuildManager
+[2026-08-29 23:06] MODIFY ui/src/js/20-tofu-manager.js | error handling in loadTofuManager
+[2026-08-29 23:06] MODIFY ui/src/html/body.html | removed stale OpenTofu note from Ansible build manager
+[2026-08-29 23:06] MODIFY ui/index.html | rebuilt (3208 lines)
+[2026-08-29 23:18] MODIFY ui/src/html/body.html | subnet field: text input → select
+[2026-08-29 23:18] MODIFY ui/src/js/09-instances.js | derive subnet options from VPC CIDR, wire VPC change listener
+[2026-08-29 23:18] MODIFY ui/index.html | rebuilt

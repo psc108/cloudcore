@@ -1,0 +1,577 @@
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+</head>
+
+<body>
+
+<header>
+  <div class="logo">Cloud<span>Core</span></div>
+  <nav>
+    <button id="nav-dashboard" class="active" onclick="showSection('dashboard', this)">Dashboard</button>
+    <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-infrastructure">Infrastructure <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-vpcs" onclick="showSection('vpcs', this)">VPCs</button>
+        <button id="nav-instances" onclick="showSection('instances', this)">Instances</button>
+        <button id="nav-lbs" onclick="showSection('lbs', this)">Load Balancers</button>
+        <button id="nav-terminal" onclick="showSection('terminal', this)">Terminal</button>
+      </div>
+    </div>
+    <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-networking">Networking <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-dns" onclick="showSection('dns', this)">DNS</button>
+      </div>
+    </div>
+    <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-builds">Builds <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-builds" onclick="showSection('builds', this)">Ansible</button>
+        <button id="nav-tofu" onclick="showSection('tofu', this)">OpenTofu</button>
+      </div>
+    </div>
+    <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
+    <button id="nav-about" onclick="showSection('about', this)">About</button>
+    <button onclick="openHelp()">Help</button>
+  </nav>
+  <div class="status-dot" id="api-dot"></div>
+  <span class="status-label" id="api-label">Connecting…</span>
+</header>
+
+<main>
+
+  <!-- ═══════════════════════════ Dashboard ═══════════════════════════ -->
+  <div id="section-dashboard" class="section active">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700">Dashboard</h2>
+        <div class="dash-last-refresh" id="dash-refresh-label">Never refreshed</div>
+      </div>
+      <button class="btn btn-ghost" onclick="loadDashboard()">&#8635; Refresh</button>
+    </div>
+    <div class="dash-stats">
+      <div class="stat-tile" onclick="showSectionByName('vpcs')">
+        <div class="stat-label">VPCs</div>
+        <div class="stat-value" id="ds-vpc-count">&mdash;</div>
+        <div class="stat-sub">active networks</div>
+      </div>
+      <div class="stat-tile" onclick="showSectionByName('instances')">
+        <div class="stat-label">Instances</div>
+        <div class="stat-value" id="ds-inst-count">&mdash;</div>
+        <div class="stat-sub" id="ds-inst-sub">deployed</div>
+      </div>
+      <div class="stat-tile" onclick="showSectionByName('lbs')">
+        <div class="stat-label">Load Balancers</div>
+        <div class="stat-value" id="ds-lb-count">&mdash;</div>
+        <div class="stat-sub">active</div>
+      </div>
+      <div class="stat-tile" onclick="showSectionByName('dns')">
+        <div class="stat-label">DNS</div>
+        <div class="stat-value" id="ds-dns-count">&mdash;</div>
+        <div class="stat-sub" id="ds-dns-sub">zones</div>
+      </div>
+    </div>
+    <div class="dash-panels">
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>VPCs</h3><span class="dash-count" id="dp-vpc-count"></span></div>
+        <div id="dp-vpcs"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>Instances</h3><span class="dash-count" id="dp-inst-count"></span></div>
+        <div id="dp-instances"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>Load Balancers</h3><span class="dash-count" id="dp-lb-count"></span></div>
+        <div id="dp-lbs"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>DNS Zones</h3><span class="dash-count" id="dp-dns-count"></span></div>
+        <div id="dp-dns"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ VPCs ═══════════════════════════ -->
+  <div id="section-vpcs" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>VPCs</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="vpc-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('vpc')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadVPCs()">↻</button>
+          <button class="btn btn-primary" onclick="toggleForm('vpc-form')">+ Create VPC</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="vpc-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="vpc-name" type="text" placeholder="my-vpc">
+          </div>
+          <div class="field">
+            <label>CIDR Block</label>
+            <input id="vpc-cidr" type="text" placeholder="10.0.0.0/16" value="10.0.0.0/16">
+          </div>
+          <div class="field">
+            <label>DNS Support</label>
+            <select id="vpc-dns">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="vpc-tags" type="text" placeholder="env=dev, team=platform">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleForm('vpc-form')">Cancel</button>
+          <button class="btn btn-primary" onclick="createVPC()">Create VPC</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="vpc-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="vpc-sel-all" onchange="toggleSelectAll('vpc',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>CIDR</th>
+              <th>DNS</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="vpc-tbody">
+            <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ Instances ═══════════════════════════ -->
+  <div id="section-instances" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Instances</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="inst-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('instance')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadInstances()">↻</button>
+          <button class="btn btn-primary" onclick="toggleInstanceForm()">+ Launch Instance</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="instance-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="inst-name" type="text" placeholder="my-instance">
+          </div>
+          <div class="field">
+            <label>Image *</label>
+            <select id="inst-image"></select>
+          </div>
+          <div class="field">
+            <label>Flavor *</label>
+            <select id="inst-flavor">
+              <option value="standard.nano">nano (1 vCPU, 512 MB)</option>
+              <option value="standard.small">small (1 vCPU, 1 GB)</option>
+              <option value="standard.medium" selected>medium (2 vCPU, 2 GB)</option>
+              <option value="standard.large">large (4 vCPU, 4 GB)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="inst-vpc"></select>
+          </div>
+          <div class="field">
+            <label>Subnet *</label>
+            <select id="inst-subnet"></select>
+          </div>
+          <div class="field">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="inst-tags" type="text" placeholder="env=dev">
+          </div>
+          <div class="field full">
+            <label>User Data <span class="text-muted">(cloud-init, optional)</span></label>
+            <textarea id="inst-userdata" placeholder="#cloud-config&#10;ssh_authorized_keys:&#10;  - ssh-ed25519 AAAA..."></textarea>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleInstanceForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="createInstance()">Launch Instance</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="instance-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="inst-sel-all" onchange="toggleSelectAll('instance',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>Image</th>
+              <th>Flavor</th>
+              <th>Private IP</th>
+              <th>SSH Port</th>
+              <th>SSH</th>
+              <th>Users</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="instance-tbody">
+            <tr class="empty-row"><td colspan="12">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ Load Balancers ═══════════════════════════ -->
+  <div id="section-lbs" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Load Balancers</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="lb-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('lb')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadLBs()">↻</button>
+          <button class="btn btn-primary" onclick="toggleLBForm()">+ Create Load Balancer</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="lb-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="lb-name" type="text" placeholder="my-lb">
+          </div>
+          <div class="field">
+            <label>Type</label>
+            <select id="lb-type">
+              <option value="application">Application (L7)</option>
+              <option value="network">Network (L4)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="lb-vpc"></select>
+          </div>
+          <div class="field">
+            <label>Scheme</label>
+            <select id="lb-internal">
+              <option value="false">Internet-facing</option>
+              <option value="true">Internal</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="lb-tags" type="text" placeholder="env=dev">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleLBForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="createLB()">Create Load Balancer</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="lb-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="lb-sel-all" onchange="toggleSelectAll('lb',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>Type</th>
+              <th>VPC</th>
+              <th>Listen Port</th>
+              <th>Backends</th>
+              <th>Scheme</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="lb-tbody">
+            <tr class="empty-row"><td colspan="11">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+
+  <!-- ═══════════════════════════ Terminal ═══════════════════════════ -->
+  <div id="section-terminal" class="section">
+    <div class="card">
+      <div class="card-header">
+        <h2>Terminal</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadTerminalInstances()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+        Click <strong>Open Terminal</strong> to launch an SSH session into a running instance.
+        Sessions open as the first non-sudo user. The terminal window is draggable and resizable.
+      </p>
+      <div id="terminal-instance-list" class="instance-cards">
+        <div style="color:var(--text-muted);font-size:13px">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ DNS ═══════════════════════════ -->
+  <div id="section-dns" class="section">
+    <div class="card">
+      <div class="card-header">
+        <h2>DNS Zones</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="refresh-btn" title="Refresh" onclick="loadDNS()">↻</button>
+          <button class="btn btn-primary" onclick="toggleForm('dns-zone-form')">+ Add Zone</button>
+        </div>
+      </div>
+      <div id="dns-zone-form" style="display:none;margin-bottom:24px;padding:20px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
+        <div class="form-grid">
+          <div class="field full">
+            <label>Zone Name *</label>
+            <input id="dns-zone-name" type="text" placeholder="myapp.cloudcore.local">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleForm('dns-zone-form')">Cancel</button>
+          <button class="btn btn-primary" onclick="createDNSZone()">Create Zone</button>
+        </div>
+      </div>
+      <div id="dns-zones-list"><div style="color:var(--text-muted);font-size:13px">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- ═════════════════════════════ Build Manager ═════════════════════════════ -->
+  <div id="section-builds" class="section">
+
+    <!-- Template picker -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Build Manager</h2>
+        <button class="refresh-btn" title="Refresh templates" onclick="_bmLoadTemplates()">&#8635;</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Select a template to provision infrastructure and run the playbook end-to-end.
+      </p>
+      <div id="bm-template-grid" class="bm-template-grid">Loading&hellip;</div>
+    </div>
+
+    <!-- Var configuration + submit -->
+    <div id="bm-var-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="bm-form-title">Configure</h2>
+      </div>
+      <input type="hidden" id="bm-submit-filename">
+      <div id="bm-var-fields" class="form-grid"></div>
+      <div class="form-actions">
+        <button class="btn btn-ghost" onclick="document.getElementById('bm-var-panel').style.display='none'">Cancel</button>
+        <button class="btn btn-primary" id="bm-submit-btn" onclick="bmSubmitBuild()">Run Build</button>
+      </div>
+    </div>
+
+    <!-- Live log -->
+    <div id="bm-log-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="bm-log-title">Build log</h2>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('bm-log-panel').style.display='none'">Close</button>
+      </div>
+      <pre id="bm-log-pre" class="bm-log-pre"></pre>
+    </div>
+
+    <!-- Build history -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Build History</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="bm-destroy-btn" class="btn btn-danger" style="display:none" onclick="bmDestroySelected()">🗑 Destroy Resources</button>
+          <button class="refresh-btn" title="Refresh" onclick="_bmLoadHistory()">&#8635;</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="bm-sel-all" onchange="_bmToggleSelAll(this)"></th>
+              <th>ID</th>
+              <th>Template</th>
+              <th>Status</th>
+              <th>Resources</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="bm-history-tbody">
+            <tr class="empty-row"><td colspan="8">No builds yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ File Editor ═══════════════════════════ -->
+  <div id="section-editor" class="section">
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="card-header" style="padding:16px 20px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:12px;flex:1">
+          <h2>Editor</h2>
+          <div id="ed-root-tabs" class="ed-root-tabs"></div>
+          <span id="ed-filename" class="ed-filename">No file open</span>
+          <span id="ed-dirty-ind" class="ed-dirty" title="Unsaved changes"></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="edNewFile()">+ New File</button>
+          <button id="ed-delete-btn" class="btn btn-ghost btn-sm" onclick="edDeleteFile()" disabled>Delete</button>
+          <button id="ed-save-btn" class="btn btn-primary btn-sm" onclick="edSaveFile()" disabled>Save</button>
+        </div>
+      </div>
+      <!-- New file panel -->
+      <div id="ed-new-panel" style="display:none;align-items:center;gap:8px;padding:10px 20px;background:var(--surface2);border-bottom:1px solid var(--border)">
+        <label style="font-size:12px;color:var(--text-muted);white-space:nowrap">Filename:</label>
+        <input id="ed-new-name" type="text" placeholder="08-my-playbook.yml"
+               style="flex:1;max-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:6px 10px;font-size:13px"
+               onkeydown="if(event.key==='Enter')edCreateFile();if(event.key==='Escape')edNewFile()">
+        <button class="btn btn-primary btn-sm" onclick="edCreateFile()">Create</button>
+        <button class="btn btn-ghost btn-sm" onclick="edNewFile()">Cancel</button>
+      </div>
+      <!-- Two-panel layout -->
+      <div class="ed-layout">
+        <div id="ed-tree" class="ed-tree">Loading&hellip;</div>
+        <div id="ed-cm-host" class="ed-cm-host"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ About ═══════════════════════════ -->
+  <div id="section-about" class="section">
+    <div class="card" style="max-width:680px">
+      <div class="card-header">
+        <h2>About CloudCore</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadAbout()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:24px">
+        A cloud provider platform delivering VPCs, compute instances and L4/L7 load balancers.
+      </p>
+
+      <h3 class="about-heading">CloudCore</h3>
+      <table class="about-table"><tbody id="about-cloudcore"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+
+      <h3 class="about-heading">Python Runtime</h3>
+      <table class="about-table"><tbody id="about-runtime"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+
+      <h3 class="about-heading">System Tools</h3>
+      <table class="about-table"><tbody id="about-system"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ OpenTofu Build Manager ═══════════════════════════ -->
+  <div id="section-tofu" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>OpenTofu Build Manager</h2>
+        <button class="refresh-btn" title="Refresh templates" onclick="_tfLoadTemplates()">&#8635;</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Select an example configuration to run <code style="font-family:monospace;color:var(--accent)">tofu init</code>
+        and <code style="font-family:monospace;color:var(--accent)">tofu apply</code> end-to-end.
+      </p>
+      <div id="tf-template-grid" class="bm-template-grid">Loading&hellip;</div>
+    </div>
+
+    <div id="tf-var-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="tf-form-title">Configure</h2>
+      </div>
+      <input type="hidden" id="tf-submit-dirname">
+      <div id="tf-var-fields" class="form-grid"></div>
+      <div class="form-actions">
+        <button class="btn btn-ghost" onclick="document.getElementById('tf-var-panel').style.display='none'">Cancel</button>
+        <button class="btn btn-primary" id="tf-submit-btn" onclick="tfSubmitBuild()">Run Apply</button>
+      </div>
+    </div>
+
+    <div id="tf-log-panel" class="card" style="display:none">
+      <div class="card-header">
+        <h2 id="tf-log-title">Apply log</h2>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('tf-log-panel').style.display='none'">Close</button>
+      </div>
+      <pre id="tf-log-pre" class="bm-log-pre"></pre>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Apply History</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="tf-destroy-btn" class="btn btn-danger" style="display:none" onclick="tfDestroySelected()">&#128465; Destroy Resources</button>
+          <button class="refresh-btn" title="Refresh" onclick="_tfLoadHistory()">&#8635;</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="tf-sel-all" onchange="_tfToggleSelAll(this)"></th>
+              <th>ID</th>
+              <th>Template</th>
+              <th>Status</th>
+              <th>Resources</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tf-history-tbody">
+            <tr class="empty-row"><td colspan="8">No builds yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<div id="toast-container"></div>
+
+<!-- ── Detail modal ── -->
+<div class="detail-modal-overlay" id="detail-modal-overlay" onclick="closeDetailOverlay(event)">
+  <div class="detail-modal">
+    <button class="close-btn" onclick="closeDetailModal()">&#x2715;</button>
+    <h2 id="detail-title"></h2>
+    <div class="detail-kv" id="detail-kv"></div>
+    <div class="detail-goto">
+      <button class="btn btn-primary" id="detail-goto-btn">Open in full view &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Help modal ── -->
+<div id="help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:800;overflow-y:auto;padding:40px 20px">
+  <div style="max-width:820px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;position:relative">
+    <button onclick="closeHelp()" style="position:absolute;top:16px;right:16px;background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1">✕</button>
+    <div id="help-content" style="line-height:1.7;font-size:14px">Loading…</div>
+  </div>
+</div>
+
+

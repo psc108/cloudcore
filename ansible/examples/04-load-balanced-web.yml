@@ -1,0 +1,110 @@
+---
+# 04-load-balanced-web.yml
+# VPC + two web instances + an application (L7) load balancer with both as backends.
+# Run: ansible-playbook -i ../inventory.ini 04-load-balanced-web.yml
+- name: "Example 04 — Load-balanced web tier (L7 ALB)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-alb"
+    instances:
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-01"
+        subnet_id: subnet-local-01
+      - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-02"
+        subnet_id: subnet-local-01
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create web instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        image_id: ubuntu-22.04
+        flavor: standard.small
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ item.subnet_id }}"
+        user_data: |
+          #cloud-config
+          packages: [nginx]
+          runcmd:
+            - systemctl enable --now nginx
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: web
+      loop: "{{ instances }}"
+      register: created_instances
+
+    - name: Wait for all instances to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+      loop: "{{ created_instances.results }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    - name: Create application load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: application
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: false
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: ingress
+      register: lb
+
+    - name: Register instances as backends
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "{{ item.json.name }}"
+          address: "{{ item.json.private_ip }}"
+          port: 80
+        status_code: 201
+      loop: "{{ poll.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+
+    - name: Show load balancer
+      ansible.builtin.debug:
+        msg: >
+          ALB {{ lb.load_balancer.name }} listen_port={{ lb.load_balancer.listen_port }}
+          dns={{ lb.load_balancer.dns_name }}

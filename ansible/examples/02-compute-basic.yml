@@ -1,0 +1,59 @@
+---
+# 02-compute-basic.yml
+# VPC + single compute instance. Waits for the instance to reach running state.
+# Run: ansible-playbook -i ../inventory.ini 02-compute-basic.yml
+- name: "Example 02 — Basic compute"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    instance_name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-01"
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags: &common_tags
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ instance_name }}"
+        image_id: ubuntu-22.04
+        flavor: standard.small
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        tags:
+          <<: *common_tags
+          Role: web
+      register: instance
+
+    - name: Wait for running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ instance.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: Show instance
+      ansible.builtin.debug:
+        msg: >
+          {{ poll.json.name }} is {{ poll.json.status }},
+          private_ip={{ poll.json.private_ip }},
+          ssh_port={{ poll.json.ssh_port }}
