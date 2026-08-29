@@ -46,21 +46,6 @@ _TEMPLATE_META = {
         "description": "VPC + 3 web instances + ALB. Reference example for all provider resources.",
         "resources": ["vpc", "instance", "load_balancer"],
     },
-    "basic-vpc": {
-        "title": "Basic VPC (legacy)",
-        "description": "Create a single VPC.",
-        "resources": ["vpc"],
-    },
-    "basic-compute": {
-        "title": "Basic Compute (legacy)",
-        "description": "VPC + compute instance.",
-        "resources": ["vpc", "instance"],
-    },
-    "load-balanced-compute": {
-        "title": "Load-Balanced Compute (legacy)",
-        "description": "VPC + instances + application load balancer.",
-        "resources": ["vpc", "instance", "load_balancer"],
-    },
 }
 
 
