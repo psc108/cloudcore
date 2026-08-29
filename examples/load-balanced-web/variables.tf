@@ -33,3 +33,9 @@ variable "instance_flavor" {
   type        = string
   default     = "standard.small"
 }
+
+variable "instance_count" {
+  description = "Number of web instances in the group."
+  type        = number
+  default     = 2
+}

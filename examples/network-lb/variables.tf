@@ -33,3 +33,9 @@ variable "instance_flavor" {
   type        = string
   default     = "standard.medium"
 }
+
+variable "instance_count" {
+  description = "Number of backend instances in the group."
+  type        = number
+  default     = 2
+}

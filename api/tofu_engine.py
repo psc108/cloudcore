@@ -23,28 +23,28 @@ PROVIDER_DIR = Path(__file__).parent.parent / "provider"
 _TEMPLATE_META = {
     "vpc-only": {
         "title": "VPC Only",
-        "description": "Create a single VPC.",
-        "resources": ["vpc"],
+        "description": "VPC + two logical subnets (web/db).",
+        "resources": ["vpc", "subnet"],
     },
     "compute-basic": {
         "title": "Basic Compute",
-        "description": "VPC + single compute instance.",
-        "resources": ["vpc", "instance"],
+        "description": "VPC + subnets + security groups + single instance.",
+        "resources": ["vpc", "subnet", "security_group", "instance"],
     },
     "load-balanced-web": {
         "title": "Load-Balanced Web (L7 ALB)",
-        "description": "VPC + 2 instances + application load balancer with backends.",
-        "resources": ["vpc", "instance", "load_balancer"],
+        "description": "VPC + subnets + security groups + instance group + ALB.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
     },
     "network-lb": {
         "title": "Network Load Balancer (L4)",
-        "description": "VPC + instances + internal L4 NLB.",
-        "resources": ["vpc", "instance", "load_balancer"],
+        "description": "VPC + subnets + security groups + instance group + internal NLB.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
     },
     "full-stack": {
         "title": "Full Stack",
-        "description": "VPC + 3 web instances + ALB. Reference example for all provider resources.",
-        "resources": ["vpc", "instance", "load_balancer"],
+        "description": "VPC + subnets + security groups + web instance group + ALB. Uses all modules.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
     },
 }
 

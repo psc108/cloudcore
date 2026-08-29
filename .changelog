@@ -235,3 +235,33 @@
 [2026-08-29 23:18] MODIFY ui/src/html/body.html | subnet field: text input → select
 [2026-08-29 23:18] MODIFY ui/src/js/09-instances.js | derive subnet options from VPC CIDR, wire VPC change listener
 [2026-08-29 23:18] MODIFY ui/index.html | rebuilt
+[2026-08-29 23:50] MODIFY examples/vpc-only/main.tf | split to 5-file layout
+[2026-08-29 23:50] CREATE examples/vpc-only/variables.tf | input variables with descriptions
+[2026-08-29 23:50] CREATE examples/vpc-only/outputs.tf | vpc_ids, vpc_cidr_blocks
+[2026-08-29 23:50] CREATE examples/vpc-only/locals.tf | sfx, vpc_key
+[2026-08-29 23:50] CREATE examples/vpc-only/versions.tf | required_providers + provider
+[2026-08-29 23:50] MODIFY examples/compute-basic/main.tf | resources only
+[2026-08-29 23:50] CREATE examples/compute-basic/variables.tf | added instance_flavor var
+[2026-08-29 23:50] CREATE examples/compute-basic/outputs.tf | vpc_ids, private_ips
+[2026-08-29 23:50] CREATE examples/compute-basic/locals.tf | sfx, vpc_key, subnet_id
+[2026-08-29 23:50] CREATE examples/compute-basic/versions.tf | required_providers + provider
+[2026-08-29 23:50] MODIFY examples/load-balanced-web/main.tf | resources only
+[2026-08-29 23:50] CREATE examples/load-balanced-web/variables.tf | added instance_flavor var
+[2026-08-29 23:50] CREATE examples/load-balanced-web/outputs.tf | vpc_ids, private_ips, lb_dns
+[2026-08-29 23:50] CREATE examples/load-balanced-web/locals.tf | sfx, vpc_key, subnet_id, nginx_user_data
+[2026-08-29 23:50] CREATE examples/load-balanced-web/versions.tf | required_providers + provider
+[2026-08-29 23:50] MODIFY examples/network-lb/main.tf | resources only
+[2026-08-29 23:50] CREATE examples/network-lb/variables.tf | added instance_flavor var
+[2026-08-29 23:50] CREATE examples/network-lb/outputs.tf | vpc_ids, private_ips, lb_ids
+[2026-08-29 23:50] CREATE examples/network-lb/locals.tf | sfx, vpc_key, subnet_id
+[2026-08-29 23:50] CREATE examples/network-lb/versions.tf | required_providers + provider
+[2026-08-29 23:50] MODIFY examples/full-stack/main.tf | resources only, nginx_user_data map lookup
+[2026-08-29 23:50] CREATE examples/full-stack/variables.tf | added instance_flavor var
+[2026-08-29 23:50] CREATE examples/full-stack/outputs.tf | vpc_ids, private_ips, lb_dns
+[2026-08-29 23:50] CREATE examples/full-stack/locals.tf | sfx, vpc_key, subnet_id, nginx_user_data map
+[2026-08-29 23:50] CREATE examples/full-stack/versions.tf | required_providers + provider
+[2026-08-29 23:50] MODIFY api/tofu_engine.py | extract_template_vars reads variables.tf first
+[2026-08-29 23:54] DELETE examples/basic-vpc/main.tf | legacy example removed
+[2026-08-29 23:54] DELETE examples/basic-compute/main.tf | legacy example removed
+[2026-08-29 23:54] DELETE examples/load-balanced-compute/main.tf | legacy example removed
+[2026-08-29 23:54] MODIFY api/tofu_engine.py | removed legacy entries from _TEMPLATE_META
