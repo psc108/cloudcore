@@ -34,55 +34,53 @@ def _cloud_init_iso(nfs: NfsServer, vpc_cidr: str) -> Path:
     shares_exports = "\n".join(
         _export_line(s, vpc_cidr) for s in nfs.shares
     )
+    exports_cmds = "\n  ".join(
+        f"- echo '{_export_line_raw(s, vpc_cidr)}' >> /etc/exports"
+        for s in nfs.shares
+    ) or "- true"
 
-    priv_indented = "\n".join("          " + l for l in cc_privkey.splitlines())
+    priv_indented = "\n".join("      " + l for l in cc_privkey.splitlines())
 
-    user_data = textwrap.dedent(f"""\
-        #cloud-config
-        hostname: {nfs.name}
-        ssh_authorized_keys:
-          - {cc_pubkey}
+    user_data = f"""#cloud-config
+hostname: {nfs.name}
+ssh_authorized_keys:
+  - {cc_pubkey}
 
-        packages:
-          - nfs-kernel-server
-          - lvm2
+packages:
+  - nfs-kernel-server
+  - lvm2
 
-        write_files:
-          - path: /home/ubuntu/.ssh/cloudcore_ed25519
-            permissions: '0600'
-            owner: 'ubuntu:ubuntu'
-            content: |
+write_files:
+  - path: /home/ubuntu/.ssh/cloudcore_ed25519
+    permissions: '0600'
+    owner: 'ubuntu:ubuntu'
+    content: |
 {priv_indented}
-          - path: /home/ubuntu/.ssh/cloudcore_ed25519.pub
-            permissions: '0644'
-            owner: 'ubuntu:ubuntu'
-            content: |
-              {cc_pubkey}
-          - path: /etc/exports
-            content: |
-{shares_exports}
+  - path: /home/ubuntu/.ssh/cloudcore_ed25519.pub
+    permissions: '0644'
+    owner: 'ubuntu:ubuntu'
+    content: |
+      {cc_pubkey}
 
-        runcmd:
-          # Set up LVM on the data disk
-          - pvcreate /dev/vdb
-          - vgcreate nfsvg /dev/vdb
-          - lvcreate -l 100%FREE -n nfslv nfsvg
-          - mkfs.ext4 /dev/nfsvg/nfslv
-          - mkdir -p /exports
-          - echo '/dev/nfsvg/nfslv /exports ext4 defaults 0 2' >> /etc/fstab
-          - mount -a
-          # Create share directories
-          {_mkdir_cmds(nfs.shares)}
-          # Start NFS
-          - exportfs -ra
-          - systemctl enable --now nfs-kernel-server
-          # SSH keypair config
-          - |
-            mkdir -p /home/ubuntu/.ssh
-            grep -qF 'cloudcore_ed25519' /home/ubuntu/.ssh/config 2>/dev/null || printf '\\nHost *\\n  IdentityFile ~/.ssh/cloudcore_ed25519\\n  StrictHostKeyChecking no\\n' >> /home/ubuntu/.ssh/config
-            chown ubuntu:ubuntu /home/ubuntu/.ssh/config /home/ubuntu/.ssh/cloudcore_ed25519 /home/ubuntu/.ssh/cloudcore_ed25519.pub
-            chmod 600 /home/ubuntu/.ssh/config /home/ubuntu/.ssh/cloudcore_ed25519
-    """)
+runcmd:
+  - pvcreate /dev/vdb
+  - vgcreate nfsvg /dev/vdb
+  - lvcreate -l 100%FREE -n nfslv nfsvg
+  - mkfs.ext4 /dev/nfsvg/nfslv
+  - mkdir -p /exports
+  - echo '/dev/nfsvg/nfslv /exports ext4 defaults 0 2' >> /etc/fstab
+  - mount -a
+  {_mkdir_cmds(nfs.shares)}
+  - truncate -s0 /etc/exports
+  {exports_cmds}
+  - exportfs -ra
+  - systemctl enable --now nfs-kernel-server
+  - |
+    mkdir -p /home/ubuntu/.ssh
+    grep -qF 'cloudcore_ed25519' /home/ubuntu/.ssh/config 2>/dev/null || printf '\\nHost *\\n  IdentityFile ~/.ssh/cloudcore_ed25519\\n  StrictHostKeyChecking no\\n' >> /home/ubuntu/.ssh/config
+    chown ubuntu:ubuntu /home/ubuntu/.ssh/config /home/ubuntu/.ssh/cloudcore_ed25519 /home/ubuntu/.ssh/cloudcore_ed25519.pub
+    chmod 600 /home/ubuntu/.ssh/config /home/ubuntu/.ssh/cloudcore_ed25519
+"""
 
     meta_data = f"instance-id: {nfs.name}\nlocal-hostname: {nfs.name}\n"
     (instance_dir / "user-data").write_text(user_data)
@@ -102,7 +100,8 @@ def _cloud_init_iso(nfs: NfsServer, vpc_cidr: str) -> Path:
     raise RuntimeError("No ISO builder found. Install genisoimage: sudo apt install genisoimage")
 
 
-def _export_line(share: dict, vpc_cidr: str) -> str:
+def _export_line_raw(share: dict, vpc_cidr: str) -> str:
+    """Single /etc/exports line with no indentation, safe for shell echo."""
     clients = share.get("clients", "vpc")
     if clients == "vpc":
         host_spec = vpc_cidr
@@ -111,14 +110,16 @@ def _export_line(share: dict, vpc_cidr: str) -> str:
     else:
         host_spec = str(clients)
     path = f"/exports/{share['name']}"
-    # Each client spec needs its own options — split multi-host into separate lines
-    lines = [f"  {path} {h}(rw,sync,no_subtree_check,no_root_squash)"
-             for h in host_spec.split()]
-    return "\n".join(lines)
+    return f"{path} {host_spec}(rw,sync,no_subtree_check,no_root_squash)"
+
+
+def _export_line(share: dict, vpc_cidr: str) -> str:
+    """Used by reload_exports — returns a plain exports line."""
+    return _export_line_raw(share, vpc_cidr)
 
 
 def _mkdir_cmds(shares: list) -> str:
-    return "\n          ".join(
+    return "\n  ".join(
         f"- mkdir -p /exports/{s['name']} && chmod 777 /exports/{s['name']}"
         for s in shares
     ) or "- true"
