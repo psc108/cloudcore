@@ -28,6 +28,10 @@ async function loadDashboard() {
       s.dns_zones + ' zone' + (s.dns_zones !== 1 ? 's' : '') +
       ', ' + s.dns_records + ' record' + (s.dns_records !== 1 ? 's' : '');
 
+    const nfsData = await api('GET', '/v1/nfs-servers');
+    const nfsItems = nfsData.items || [];
+    document.getElementById('ds-nfs-count').textContent = nfsItems.length;
+
     const vpcs = d.vpcs;
     document.getElementById('dp-vpc-count').textContent = vpcs.length + ' total';
     document.getElementById('dp-vpcs').innerHTML = vpcs.length
@@ -55,6 +59,12 @@ async function loadDashboard() {
           ${z.builtin ? '<span class="badge badge-active">built-in</span>' : ''}
         </div>`).join('')
       : '<div class="dash-empty">No DNS zones</div>';
+
+    document.getElementById('dp-nfs-count').textContent = nfsItems.length + ' total';
+    document.getElementById('dp-nfs').innerHTML = nfsItems.length
+      ? nfsItems.map(s => _dashRow('nfs', s,
+          `${(s.shares || []).length} share${(s.shares || []).length !== 1 ? 's' : ''}`)).join('')
+      : '<div class="dash-empty">No NFS servers</div>';
 
     document.getElementById('dash-refresh-label').textContent =
       'Last refreshed ' + new Date().toLocaleTimeString();

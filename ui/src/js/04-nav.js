@@ -3,6 +3,7 @@ const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
   dns: 'networking',
+  nfs: 'storage',
   builds: 'builds', tofu: 'builds',
 };
 
@@ -34,6 +35,7 @@ function showSection(name, btn) {
   if (name === 'lbs')           loadLBs();
   if (name === 'terminal')      loadTerminalInstances();
   if (name === 'dns')           loadDNS();
+  if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
   if (name === 'editor')         loadEditor();

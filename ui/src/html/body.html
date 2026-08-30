@@ -26,6 +26,12 @@
       </div>
     </div>
     <div class="nav-group">
+      <button class="nav-group-btn" id="nav-grp-storage">Storage <span class="caret">▼</span></button>
+      <div class="nav-dropdown">
+        <button id="nav-nfs" onclick="showSection('nfs', this)">NFS Servers</button>
+      </div>
+    </div>
+    <div class="nav-group">
       <button class="nav-group-btn" id="nav-grp-builds">Builds <span class="caret">▼</span></button>
       <div class="nav-dropdown">
         <button id="nav-builds" onclick="showSection('builds', this)">Ansible</button>
@@ -72,6 +78,11 @@
         <div class="stat-value" id="ds-dns-count">&mdash;</div>
         <div class="stat-sub" id="ds-dns-sub">zones</div>
       </div>
+      <div class="stat-tile" onclick="showSectionByName('nfs')">
+        <div class="stat-label">NFS Servers</div>
+        <div class="stat-value" id="ds-nfs-count">&mdash;</div>
+        <div class="stat-sub">servers</div>
+      </div>
     </div>
     <div class="dash-panels">
       <div class="dash-panel">
@@ -89,6 +100,10 @@
       <div class="dash-panel">
         <div class="dash-panel-header"><h3>DNS Zones</h3><span class="dash-count" id="dp-dns-count"></span></div>
         <div id="dp-dns"><div class="dash-empty">Loading&hellip;</div></div>
+      </div>
+      <div class="dash-panel">
+        <div class="dash-panel-header"><h3>NFS Servers</h3><span class="dash-count" id="dp-nfs-count"></span></div>
+        <div id="dp-nfs"><div class="dash-empty">Loading&hellip;</div></div>
       </div>
     </div>
   </div>
@@ -330,6 +345,74 @@
       </p>
       <div id="terminal-instance-list" class="instance-cards">
         <div style="color:var(--text-muted);font-size:13px">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ NFS Servers ═══════════════════════════ -->
+  <div id="section-nfs" class="section">
+    <div class="card">
+      <div class="card-header">
+        <h2>NFS Servers</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="nfs-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('nfs')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadNFS()">↻</button>
+          <button class="btn btn-primary" onclick="toggleNFSForm()">+ Create NFS Server</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="nfs-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="nfs-name" type="text" placeholder="my-nfs-server">
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="nfs-vpc"></select>
+          </div>
+          <div class="field">
+            <label>Flavor</label>
+            <select id="nfs-flavor">
+              <option value="standard.small">small (1 vCPU, 1 GB)</option>
+              <option value="standard.medium" selected>medium (2 vCPU, 2 GB)</option>
+              <option value="standard.large">large (4 vCPU, 4 GB)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Disk (GB)</label>
+            <input id="nfs-disk" type="number" value="20" min="10" max="1000">
+          </div>
+          <div class="field full">
+            <label>Initial Shares <span class="text-muted">(comma-separated names, optional)</span></label>
+            <input id="nfs-shares-input" type="text" placeholder="data, backups, media">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleNFSForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="createNFSServer()">Create NFS Server</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="nfs-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="nfs-sel-all" onchange="toggleSelectAll('nfs',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>VPC</th>
+              <th>Private IP</th>
+              <th>Shares</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="nfs-tbody">
+            <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
