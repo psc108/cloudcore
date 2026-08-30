@@ -3534,6 +3534,7 @@ async function loadNFS() {
       <tr id="nfs-shares-${s.id}" class="backends-row" style="display:none">
         <td colspan="8">
           <div class="backends-panel">
+            ${_nfsSSHPanel(s)}
             <table>
               <thead><tr><th>Name</th><th>Path</th><th>Clients</th><th></th></tr></thead>
               <tbody id="nfs-share-rows-${s.id}">${_renderShareRows(s)}</tbody>
@@ -3560,6 +3561,20 @@ function _renderShareRows(s) {
       <td class="text-muted">${sh.clients || 'vpc'}</td>
       <td><button class="btn btn-danger btn-sm" onclick="removeNFSShare('${s.id}','${sh.name}')">Remove</button></td>
     </tr>`).join('');
+}
+
+function _nfsSSHPanel(s) {
+  if (s.status !== 'running' || !s.ssh_port) {
+    return `<div class="ssh-panel"><span class="text-muted" style="font-size:13px">SSH available once NFS server is running.</span></div>`;
+  }
+  const keyPath = '~/.ssh/cloudcore_ed25519';
+  const cmd = `ssh -i ${keyPath} -p ${s.ssh_port} ubuntu@127.0.0.1`;
+  return `<div class="ssh-panel">
+    <div class="ssh-block">
+      <label>SSH into NFS server</label>
+      <div class="ssh-cmd"><code>${cmd}</code><button class="copy-btn" onclick="copyText('${cmd}',this)" title="Copy">⎘</button></div>
+    </div>
+  </div>`;
 }
 
 function toggleNFSShares(nfsId) {
