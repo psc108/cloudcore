@@ -340,6 +340,16 @@ def _execute_playbook(build: dict, var_overrides: dict) -> None:
         "--extra-vars", f"@{vars_file}",
     ]
 
+    # In SLIRP/no-bridge environments VMs never reach 'running' — skip wait tasks
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        import compute
+        if not compute._bridge_usable():
+            cmd += ["--skip-tags", "wait"]
+    except Exception:
+        pass
+
     _log(build, f"Command: {' '.join(cmd)}")
     _log(build, "─" * 60)
 
