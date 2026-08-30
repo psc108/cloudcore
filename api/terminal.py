@@ -28,6 +28,7 @@ import websockets.legacy.server
 sys.path.insert(0, str(Path(__file__).parent))
 import db
 import store
+import nfs_store
 import compute
 
 WS_HOST = "127.0.0.1"
@@ -96,6 +97,21 @@ async def _terminal_handler(websocket):
                 instance_id = part.split("=", 1)[1]
 
     instance = store.get_instance(instance_id)
+
+    # Fall back to NFS server — wrap it in a compatible object
+    if not instance:
+        nfs = nfs_store.get(instance_id)
+        if nfs:
+            class _NfsAsInstance:
+                pass
+            obj = _NfsAsInstance()
+            obj.name         = nfs.name
+            obj.ssh_host_port = nfs.ssh_host_port
+            obj.ssh_user     = "ubuntu"
+            obj.users        = []
+            from models import NfsServerStatus
+            obj.status       = type('S', (), {'value': nfs.status.value})()
+            instance = obj
 
     async def send(msg: dict):
         try:

@@ -2285,46 +2285,59 @@ async function loadTerminalInstances() {
   const list = document.getElementById('terminal-instance-list');
   list.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Loading…</div>';
   try {
-    const data  = await api('GET', '/v1/instances');
-    const items = data.items.filter(i => i.status !== 'deleted');
-    if (!items.length) {
-      list.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No instances found.</div>';
+    const [instData, nfsData] = await Promise.all([
+      api('GET', '/v1/instances'),
+      api('GET', '/v1/nfs-servers'),
+    ]);
+    const instances = (instData.items || []).filter(i => i.status !== 'deleted');
+    const nfsItems  = (nfsData.items  || []).filter(s => s.status !== 'deleted');
+
+    const allItems = [
+      ...instances.map(i => ({ ...i, _kind: 'instance' })),
+      ...nfsItems.map(s => ({ ...s, _kind: 'nfs', ssh_user: 'ubuntu', users: [] })),
+    ];
+
+    if (!allItems.length) {
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No instances or NFS servers found.</div>';
       return;
     }
-    list.innerHTML = items.map(i => {
+    list.innerHTML = allItems.map(i => {
       const running   = i.status === 'running';
       const nonSudo   = _pickNonSudoUser(i);
       const allSudo   = (i.users||[]).length > 0 && (i.users||[]).every(u => u.sudo);
       const noSshPort = !i.ssh_port;
-      const canOpen   = running && !noSshPort;
+      const isNfs     = i._kind === 'nfs';
 
       let actionHtml;
       if (!running) {
-        actionHtml = `<span class="text-muted" style="font-size:12px">Instance not running</span>`;
+        actionHtml = `<span class="text-muted" style="font-size:12px">${isNfs ? 'NFS server' : 'Instance'} not running</span>`;
       } else if (noSshPort) {
         actionHtml = `<span class="text-muted" style="font-size:12px">No SSH port</span>`;
-      } else if (allSudo) {
+      } else if (!isNfs && allSudo) {
         actionHtml = `
           <div class="no-sudo-msg">
             ⚠ All users on this instance have sudo privileges.<br>
             Add a non-sudo user via the <strong>Users</strong> panel before opening a terminal.
           </div>`;
       } else {
-        const user = nonSudo || i.ssh_user || 'ubuntu';
+        const user = isNfs ? 'ubuntu' : (nonSudo || i.ssh_user || 'ubuntu');
         actionHtml = `
           <button class="btn btn-primary" onclick="openTerminal('${i.id}','${i.name}','${user}')">
             Open Terminal
           </button>`;
       }
 
+      const metaKind = isNfs ? `NFS &nbsp;·&nbsp; ${i.flavor}` : `${i.image_id} &nbsp;·&nbsp; ${i.flavor}`;
+      const metaUser = isNfs ? 'ubuntu' : (_pickNonSudoUser(i) || '—');
+
       return `
         <div class="instance-card">
           <div class="inst-info">
             <div class="inst-name">${i.name} ${badge(i.status)}</div>
             <div class="inst-meta">
-              ${i.image_id} &nbsp;·&nbsp; ${i.flavor}
+              ${metaKind}
               &nbsp;·&nbsp; SSH: <code>${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</code>
-              &nbsp;·&nbsp; User: <code>${_pickNonSudoUser(i) || '—'}</code>
+              &nbsp;·&nbsp; User: <code>${metaUser}</code>
             </div>
           </div>
           <div>${actionHtml}</div>
