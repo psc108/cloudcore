@@ -17,7 +17,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/cloudcore/cloudcore",
+		Address: "registry.opentofu.org/cloudcore/cloudcore",
 		Debug:   debug,
 	}
 

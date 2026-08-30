@@ -288,3 +288,6 @@
 [2025-07-14 13:00] CREATE ansible/examples/08-openstack-services.yml | Ansible equivalent — VPC, NFS, 5 compute instances, 2 LBs with backends registered
 [2025-07-14 13:00] MODIFY api/tofu_engine.py | Registered openstack-services in _TEMPLATE_META
 [2025-07-14 13:00] MODIFY README.md | Updated example and playbook tables to include openstack-services / 08
+[2025-07-14 14:15] MODIFY modules/security-groups/main.tf | Fixed dynamic blocks → list attribute syntax for ingress_rules/egress_rules
+[2025-07-14 14:15] MODIFY modules/nfs-server/main.tf | Fixed dynamic blocks → list attribute syntax for shares; removed read-only path field
+[2025-07-14 14:15] MODIFY ansible/examples/08-openstack-services.yml | Added wait tags to all polling/VM-dependent tasks; removed mount var refs from instance user_data; fixed summary task
