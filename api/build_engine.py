@@ -80,6 +80,7 @@ _TEMPLATE_META = {
     "05-network-lb.yml":         {"title": "Network Load Balancer (L4)",  "description": "VPC + instances + internal L4 NLB.",                            "resources": ["vpc", "instance", "load_balancer"]},
     "06-full-stack.yml":         {"title": "Full Stack",                  "description": "VPC + 3 instances + ALB + DNS zone + CNAME.",                   "resources": ["vpc", "instance", "load_balancer", "dns_zone", "dns_record"]},
     "07-nfs-shared-storage.yml": {"title": "NFS Shared Storage",           "description": "VPC + NFS server (LVM data disk) + 2 instances with shared mount.", "resources": ["vpc", "nfs_server", "instance"]},
+    "08-openstack-services.yml": {"title": "OpenStack Services Stack",       "description": "VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB.",  "resources": ["vpc", "instance", "nfs_server", "load_balancer"]},
 }
 
 
