@@ -1,9 +1,11 @@
-# openstack-services
-# 6 named instances (frontend, backend, mysql, keystone, rabbitmq, admin).
-# admin also acts as an NFS server (shared config/data volume).
+# 08 — OpenStack Services Stack
+# VPC + public/private subnets + 4 security groups.
+# 6 named instances: frontend, backend, mysql, keystone, rabbitmq, admin.
+# admin is also an NFS server with two exports (config, data).
 # Two load balancers:
-#   frontend-lb  → frontend instance (HTTP/L7)
-#   backend-lb   → backend, mysql, keystone, admin, rabbitmq (internal L4)
+#   frontend-lb  → frontend instance (public-facing L7 ALB, port 80)
+#   backend-lb   → backend, mysql, keystone, rabbitmq, admin/NFS (internal L4 NLB)
+# Mirrors Ansible example 08 (openstack-services).
 
 module "vpc" {
   source = "../../modules/vpc"
