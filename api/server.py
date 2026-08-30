@@ -364,6 +364,105 @@ def remove_backend(lb_id, backend_name):
     return "", 204
 
 
+@app.post("/v1/load-balancers/<lb_id>/listeners")
+@require_auth
+def add_listener(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    body = request.get_json(force=True) or {}
+    port = body.get("port")
+    if not port:
+        return problem(400, "Bad Request", "port is required")
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return problem(400, "Bad Request", "port must be an integer")
+    if port < 1 or port > 65535:
+        return problem(400, "Bad Request", "port must be between 1 and 65535")
+    protocol = body.get("protocol", "HTTP").upper()
+    if protocol not in ("HTTP", "HTTPS", "TCP"):
+        return problem(400, "Bad Request", "protocol must be HTTP, HTTPS or TCP")
+    if any(l["port"] == port for l in lb.listeners):
+        return problem(409, "Conflict", f"Listener on port {port} already exists")
+    from models import new_id
+    listener = {
+        "id": new_id(),
+        "port": port,
+        "protocol": protocol,
+        "default_action": body.get("default_action", "forward"),
+    }
+    lb.listeners.append(listener)
+    try:
+        lb_backend.reload(lb)
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return jsonify(listener), 201
+
+
+@app.delete("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
+@require_auth
+def remove_listener(lb_id, listener_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    if not any(l["id"] == listener_id for l in lb.listeners):
+        return problem(404, "Not Found", f"Listener '{listener_id}' not found")
+    lb.listeners = [l for l in lb.listeners if l["id"] != listener_id]
+    try:
+        lb_backend.reload(lb)
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return "", 204
+
+
+@app.put("/v1/load-balancers/<lb_id>/health-check")
+@require_auth
+def set_health_check(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    body = request.get_json(force=True) or {}
+    protocol = body.get("protocol", "HTTP").upper()
+    if protocol not in ("HTTP", "TCP"):
+        return problem(400, "Bad Request", "protocol must be HTTP or TCP")
+    interval = body.get("interval", 30)
+    try:
+        interval = int(interval)
+    except (ValueError, TypeError):
+        return problem(400, "Bad Request", "interval must be an integer")
+    lb.health_check = {
+        "protocol": protocol,
+        "path": body.get("path", "/") if protocol == "HTTP" else "",
+        "interval": interval,
+        "healthy_threshold": int(body.get("healthy_threshold", 2)),
+        "unhealthy_threshold": int(body.get("unhealthy_threshold", 3)),
+    }
+    try:
+        lb_backend.reload(lb)
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return jsonify(lb.health_check), 200
+
+
+@app.delete("/v1/load-balancers/<lb_id>/health-check")
+@require_auth
+def delete_health_check(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    lb.health_check = {}
+    try:
+        lb_backend.reload(lb)
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return "", 204
+
+
 
 # ---------------------------------------------------------------------------
 # Instance users

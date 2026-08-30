@@ -178,6 +178,10 @@ class LoadBalancer:
     dns_name: str = ""
     listen_port: int = 0
     backends: list = field(default_factory=list)  # [{name, address, port}]
+    # [{id, port, protocol, default_action}]  protocol: HTTP|HTTPS|TCP
+    listeners: list = field(default_factory=list)
+    # {protocol, path, interval, healthy_threshold, unhealthy_threshold}
+    health_check: dict = field(default_factory=dict)
     status: LBStatus = LBStatus.ACTIVE
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
@@ -193,6 +197,8 @@ class LoadBalancer:
             "dns_name": self.dns_name,
             "listen_port": self.listen_port,
             "backends": self.backends,
+            "listeners": self.listeners,
+            "health_check": self.health_check,
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,

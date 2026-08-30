@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS load_balancers (
     dns_name    TEXT NOT NULL DEFAULT '',
     listen_port INTEGER NOT NULL DEFAULT 0,
     backends    TEXT NOT NULL DEFAULT '[]',
+    listeners   TEXT NOT NULL DEFAULT '[]',
+    health_check TEXT NOT NULL DEFAULT '{}',
     status      TEXT NOT NULL DEFAULT 'active',
     created_at  TEXT NOT NULL,
     tags        TEXT NOT NULL DEFAULT '{}'

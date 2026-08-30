@@ -40,10 +40,38 @@ def _free_port(start: int, end: int) -> int:
 
 def _write_config(lb: LoadBalancer, listen_port: int) -> Path:
     mode = "http" if lb.type == "application" else "tcp"
-    backends = "\n".join(
+    backends_cfg = "\n".join(
         f"    server {b['name']} {b['address']}:{b['port']} check"
         for b in lb.backends
     ) if lb.backends else "    # no backends configured yet"
+
+    # Health check options for backend
+    hc = lb.health_check or {}
+    hc_opts = ""
+    if hc and mode == "http":
+        path     = hc.get("path", "/")
+        interval = hc.get("interval", 30)
+        rise     = hc.get("healthy_threshold", 2)
+        fall     = hc.get("unhealthy_threshold", 3)
+        hc_opts  = f"    option httpchk GET {path}\n    default-server inter {interval}s rise {rise} fall {fall}\n"
+
+    # Build frontend blocks — one per listener, plus the legacy listen_port if no listeners
+    frontends = ""
+    if lb.listeners:
+        for lst in lb.listeners:
+            lst_port = lst["port"]
+            lst_id   = lst["id"].replace("-", "")[:8]
+            frontends += f"""
+frontend {lb.name}-{lst_id}
+    bind 127.0.0.1:{lst_port}
+    default_backend {lb.name}-back
+"""
+    else:
+        frontends = f"""
+frontend {lb.name}-front
+    bind 127.0.0.1:{listen_port}
+    default_backend {lb.name}-back
+"""
 
     cfg = textwrap.dedent(f"""\
         global
@@ -58,15 +86,11 @@ def _write_config(lb: LoadBalancer, listen_port: int) -> Path:
             timeout server  30s
             option  forwardfor
             option  http-server-close
-
-        frontend {lb.name}-front
-            bind 127.0.0.1:{listen_port}
-            default_backend {lb.name}-back
-
-        backend {lb.name}-back
-            balance roundrobin
-        {backends}
-    """)
+    """) + frontends + f"""
+backend {lb.name}-back
+    balance roundrobin
+{hc_opts}{backends_cfg}
+"""
     path = _cfg_path(lb.id)
     path.write_text(cfg)
     return path

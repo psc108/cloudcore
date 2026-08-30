@@ -238,3 +238,193 @@ class TestLoadBalancers:
         assert_not_in("remove", names, "removed backend gone")
         assert_in("keep", names, "kept backend remains")
         delete_lb(lb["id"])
+
+    # ── Listeners ─────────────────────────────────────────────────────────────
+    def test_listeners_empty_on_create(self):
+        lb = make_lb("t-lb-lstempty", self.vpc["id"])
+        assert_eq(lb["listeners"], [], "listeners empty on create")
+        delete_lb(lb["id"])
+
+    def test_add_listener_returns_201(self):
+        lb = make_lb("t-lb-lstadd", self.vpc["id"])
+        status, lst = req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+                          {"port": 80, "protocol": "HTTP"}, expected=201)
+        assert_eq(status, 201, "201 returned")
+        assert_in("id", lst, "id in listener")
+        delete_lb(lb["id"])
+
+    def test_add_listener_port_stored(self):
+        lb = make_lb("t-lb-lstport", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 8080, "protocol": "HTTP"}, expected=201)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_in(8080, [l["port"] for l in got["listeners"]], "port stored")
+        delete_lb(lb["id"])
+
+    def test_add_listener_protocol_stored(self):
+        lb = make_lb("t-lb-lstproto", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 443, "protocol": "HTTPS"}, expected=201)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        lst = next(l for l in got["listeners"] if l["port"] == 443)
+        assert_eq(lst["protocol"], "HTTPS", "protocol stored")
+        delete_lb(lb["id"])
+
+    def test_add_listener_tcp_protocol(self):
+        lb = make_lb("t-lb-lsttcp", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 3306, "protocol": "TCP"}, expected=201)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        lst = next(l for l in got["listeners"] if l["port"] == 3306)
+        assert_eq(lst["protocol"], "TCP", "TCP protocol stored")
+        delete_lb(lb["id"])
+
+    def test_add_listener_default_action_stored(self):
+        lb = make_lb("t-lb-lstaction", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 80, "protocol": "HTTP", "default_action": "forward"}, expected=201)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        lst = next(l for l in got["listeners"] if l["port"] == 80)
+        assert_eq(lst["default_action"], "forward", "default_action stored")
+        delete_lb(lb["id"])
+
+    def test_add_listener_missing_port_returns_400(self):
+        lb = make_lb("t-lb-lstnoport", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"protocol": "HTTP"}, expected=400)
+        delete_lb(lb["id"])
+
+    def test_add_listener_invalid_protocol_returns_400(self):
+        lb = make_lb("t-lb-lstbadproto", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 80, "protocol": "FTP"}, expected=400)
+        delete_lb(lb["id"])
+
+    def test_add_listener_duplicate_port_returns_409(self):
+        lb = make_lb("t-lb-lstdup", self.vpc["id"])
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 80, "protocol": "HTTP"}, expected=201)
+        req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+            {"port": 80, "protocol": "HTTP"}, expected=409)
+        delete_lb(lb["id"])
+
+    def test_add_multiple_listeners(self):
+        lb = make_lb("t-lb-lstmulti", self.vpc["id"])
+        for port in (80, 443, 8080):
+            req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+                {"port": port, "protocol": "HTTP"}, expected=201)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(len(got["listeners"]), 3, "three listeners stored")
+        delete_lb(lb["id"])
+
+    def test_remove_listener(self):
+        lb = make_lb("t-lb-lstrm", self.vpc["id"])
+        _, lst = req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+                     {"port": 80, "protocol": "HTTP"}, expected=201)
+        req("DELETE", f"/v1/load-balancers/{lb['id']}/listeners/{lst['id']}", expected=204)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["listeners"], [], "listener removed")
+        delete_lb(lb["id"])
+
+    def test_remove_listener_missing_returns_404(self):
+        lb = make_lb("t-lb-lstrmno", self.vpc["id"])
+        req("DELETE", f"/v1/load-balancers/{lb['id']}/listeners/does-not-exist", expected=404)
+        delete_lb(lb["id"])
+
+    def test_remove_one_of_multiple_listeners(self):
+        lb = make_lb("t-lb-lstrmone", self.vpc["id"])
+        _, l1 = req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+                    {"port": 80, "protocol": "HTTP"}, expected=201)
+        _, l2 = req("POST", f"/v1/load-balancers/{lb['id']}/listeners",
+                    {"port": 443, "protocol": "HTTPS"}, expected=201)
+        req("DELETE", f"/v1/load-balancers/{lb['id']}/listeners/{l1['id']}", expected=204)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        ports = [l["port"] for l in got["listeners"]]
+        assert_not_in(80, ports, "port 80 removed")
+        assert_in(443, ports, "port 443 remains")
+        delete_lb(lb["id"])
+
+    # ── Health Check ──────────────────────────────────────────────────────────
+    def test_health_check_empty_on_create(self):
+        lb = make_lb("t-lb-hcempty", self.vpc["id"])
+        assert_eq(lb["health_check"], {}, "health_check empty on create")
+        delete_lb(lb["id"])
+
+    def test_set_health_check_returns_200(self):
+        lb = make_lb("t-lb-hcset", self.vpc["id"])
+        status, hc = req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+                         {"protocol": "HTTP", "path": "/health", "interval": 10,
+                          "healthy_threshold": 2, "unhealthy_threshold": 3}, expected=200)
+        assert_eq(status, 200, "200 returned")
+        assert_eq(hc["protocol"], "HTTP", "protocol stored")
+        delete_lb(lb["id"])
+
+    def test_health_check_path_stored(self):
+        lb = make_lb("t-lb-hcpath", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP", "path": "/ping"}, expected=200)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"]["path"], "/ping", "path stored")
+        delete_lb(lb["id"])
+
+    def test_health_check_interval_stored(self):
+        lb = make_lb("t-lb-hcinterval", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP", "interval": 15}, expected=200)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"]["interval"], 15, "interval stored")
+        delete_lb(lb["id"])
+
+    def test_health_check_thresholds_stored(self):
+        lb = make_lb("t-lb-hcthresh", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP", "healthy_threshold": 3, "unhealthy_threshold": 5}, expected=200)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"]["healthy_threshold"], 3, "healthy_threshold")
+        assert_eq(got["health_check"]["unhealthy_threshold"], 5, "unhealthy_threshold")
+        delete_lb(lb["id"])
+
+    def test_health_check_tcp_protocol(self):
+        lb = make_lb("t-lb-hctcp", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "TCP"}, expected=200)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"]["protocol"], "TCP", "TCP protocol stored")
+        delete_lb(lb["id"])
+
+    def test_health_check_invalid_protocol_returns_400(self):
+        lb = make_lb("t-lb-hcbadproto", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "FTP"}, expected=400)
+        delete_lb(lb["id"])
+
+    def test_health_check_persists(self):
+        lb = make_lb("t-lb-hcpersist", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP", "path": "/ready", "interval": 20}, expected=200)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"]["path"], "/ready", "persisted")
+        delete_lb(lb["id"])
+
+    def test_health_check_update_overwrites(self):
+        lb = make_lb("t-lb-hcupdate", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP", "path": "/old"}, expected=200)
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP", "path": "/new"}, expected=200)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"]["path"], "/new", "overwritten")
+        delete_lb(lb["id"])
+
+    def test_delete_health_check(self):
+        lb = make_lb("t-lb-hcdel", self.vpc["id"])
+        req("PUT", f"/v1/load-balancers/{lb['id']}/health-check",
+            {"protocol": "HTTP"}, expected=200)
+        req("DELETE", f"/v1/load-balancers/{lb['id']}/health-check", expected=204)
+        _, got = req("GET", f"/v1/load-balancers/{lb['id']}")
+        assert_eq(got["health_check"], {}, "health_check cleared")
+        delete_lb(lb["id"])
+
+    def test_health_check_missing_lb_returns_404(self):
+        req("PUT", "/v1/load-balancers/does-not-exist/health-check",
+            {"protocol": "HTTP"}, expected=404)

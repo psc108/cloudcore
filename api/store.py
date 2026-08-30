@@ -37,7 +37,10 @@ def _lb_from_row(row) -> LoadBalancer:
         id=row["id"], name=row["name"], type=row["type"], vpc_id=row["vpc_id"],
         subnet_ids=json.loads(row["subnet_ids"]), internal=bool(row["internal"]),
         dns_name=row["dns_name"], listen_port=row["listen_port"],
-        backends=json.loads(row["backends"]), created_at=row["created_at"],
+        backends=json.loads(row["backends"]),
+        listeners=json.loads(row["listeners"]) if row["listeners"] else [],
+        health_check=json.loads(row["health_check"]) if row["health_check"] else {},
+        created_at=row["created_at"],
         tags=json.loads(row["tags"]),
     )
     lb.status = LBStatus(row["status"])
@@ -159,15 +162,17 @@ def find_lb_by_name(name: str) -> Optional[LoadBalancer]:
 
 def put_lb(lb: LoadBalancer) -> None:
     db.get_db().execute("""INSERT INTO load_balancers
-        (id,name,type,vpc_id,subnet_ids,internal,dns_name,listen_port,backends,status,created_at,tags)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        (id,name,type,vpc_id,subnet_ids,internal,dns_name,listen_port,backends,listeners,health_check,status,created_at,tags)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, type=excluded.type, vpc_id=excluded.vpc_id,
             subnet_ids=excluded.subnet_ids, internal=excluded.internal,
             dns_name=excluded.dns_name, listen_port=excluded.listen_port,
-            backends=excluded.backends, status=excluded.status, tags=excluded.tags""",
+            backends=excluded.backends, listeners=excluded.listeners,
+            health_check=excluded.health_check, status=excluded.status, tags=excluded.tags""",
         (lb.id, lb.name, lb.type, lb.vpc_id, json.dumps(lb.subnet_ids),
          int(lb.internal), lb.dns_name, lb.listen_port, json.dumps(lb.backends),
+         json.dumps(lb.listeners), json.dumps(lb.health_check),
          lb.status.value, lb.created_at, json.dumps(lb.tags)))
     db.get_db().commit()
 
