@@ -280,3 +280,11 @@
 [2025-07-14 12:30] MODIFY api/server.py | Added POST/DELETE /v1/load-balancers/<id>/listeners and PUT/DELETE /v1/load-balancers/<id>/health-check routes
 [2025-07-14 12:30] MODIFY ui/src/js/10-load-balancers.js | Added listeners panel (add/remove) and health check panel with save/remove to LB expand rows
 [2025-07-14 12:30] MODIFY tests/suites/test_load_balancers.py | Added 22 tests for listeners and health checks
+[2025-07-14 13:00] CREATE examples/openstack-services/main.tf | 6-instance stack with admin/NFS, frontend ALB, backend NLB
+[2025-07-14 13:00] CREATE examples/openstack-services/variables.tf | Variables for openstack-services example
+[2025-07-14 13:00] CREATE examples/openstack-services/locals.tf | sfx/vpc_key locals
+[2025-07-14 13:00] CREATE examples/openstack-services/outputs.tf | Per-instance IPs, NFS ID/IP, LB DNS names
+[2025-07-14 13:00] CREATE examples/openstack-services/versions.tf | Provider version constraints
+[2025-07-14 13:00] CREATE ansible/examples/08-openstack-services.yml | Ansible equivalent — VPC, NFS, 5 compute instances, 2 LBs with backends registered
+[2025-07-14 13:00] MODIFY api/tofu_engine.py | Registered openstack-services in _TEMPLATE_META
+[2025-07-14 13:00] MODIFY README.md | Updated example and playbook tables to include openstack-services / 08

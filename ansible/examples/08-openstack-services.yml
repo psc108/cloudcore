@@ -83,6 +83,7 @@
       until: admin_nfs_poll.json.status == "running" and admin_nfs_poll.json.private_ip != ""
       retries: 60
       delay: 5
+      tags: [wait]
 
     # ── NFS mount configs ─────────────────────────────────────────────────────
     - name: Get config share mount config
@@ -93,6 +94,7 @@
         share_name:    config
         mount_point:   /mnt/config
       register: config_mount
+      tags: [wait]
 
     - name: Get data share mount config
       cloudcore.cloudcore.nfs_mount:
@@ -102,6 +104,7 @@
         share_name:    data
         mount_point:   /mnt/data
       register: data_mount
+      tags: [wait]
 
     # ── Frontend instance ─────────────────────────────────────────────────────
     - name: Create frontend instance
@@ -139,8 +142,6 @@
         user_data: |
           #cloud-config
           packages: [nfs-common]
-          mounts:
-            - ["{{ config_mount.nfs_server_ip }}:/exports/config", "/mnt/config", "nfs", "defaults,_netdev,nofail", "0", "0"]
           runcmd:
             - mkdir -p /mnt/config
         tags:
@@ -164,8 +165,6 @@
         user_data: |
           #cloud-config
           packages: [mysql-server, nfs-common]
-          mounts:
-            - ["{{ data_mount.nfs_server_ip }}:/exports/data", "/mnt/data", "nfs", "defaults,_netdev,nofail", "0", "0"]
           runcmd:
             - mkdir -p /mnt/data
             - systemctl enable --now mysql
@@ -190,8 +189,6 @@
         user_data: |
           #cloud-config
           packages: [nfs-common]
-          mounts:
-            - ["{{ config_mount.nfs_server_ip }}:/exports/config", "/mnt/config", "nfs", "defaults,_netdev,nofail", "0", "0"]
           runcmd:
             - mkdir -p /mnt/config
         tags:
@@ -243,6 +240,7 @@
         - "{{ rabbitmq }}"
       loop_control:
         label: "{{ item.instance.name }}"
+      tags: [wait]
 
     - name: Index running instances by name
       ansible.builtin.set_fact:
@@ -250,6 +248,7 @@
       loop: "{{ instance_poll.results }}"
       loop_control:
         label: "{{ item.json.name }}"
+      tags: [wait]
 
     # ── Frontend load balancer ────────────────────────────────────────────────
     - name: Create frontend load balancer (public L7 ALB)
@@ -283,6 +282,7 @@
           address: "{{ running[frontend_name].private_ip }}"
           port:    80
         status_code: 201
+      tags: [wait]
 
     # ── Backend load balancer ─────────────────────────────────────────────────
     - name: Create backend load balancer (internal L4 NLB)
@@ -324,17 +324,18 @@
         - { name: "{{ admin_name }}",    ip: "{{ admin_nfs_poll.json.private_ip }}",    port: 2049 }
       loop_control:
         label: "{{ item.name }}"
+      tags: [wait]
 
     # ── Summary ───────────────────────────────────────────────────────────────
     - name: Show stack summary
       ansible.builtin.debug:
         msg:
           - "VPC:          {{ vpc.vpc.name }} ({{ vpc.vpc.cidr_block }})"
-          - "frontend:     {{ running[frontend_name].private_ip }}"
-          - "backend:      {{ running[backend_name].private_ip }}"
-          - "mysql:        {{ running[mysql_name].private_ip }}"
-          - "keystone:     {{ running[keystone_name].private_ip }}"
-          - "rabbitmq:     {{ running[rabbitmq_name].private_ip }}"
-          - "admin (NFS):  {{ admin_nfs_poll.json.private_ip }} — /exports/config, /exports/data"
+          - "frontend:     {{ frontend.instance.name }}"
+          - "backend:      {{ backend.instance.name }}"
+          - "mysql:        {{ mysql.instance.name }}"
+          - "keystone:     {{ keystone.instance.name }}"
+          - "rabbitmq:     {{ rabbitmq.instance.name }}"
+          - "admin (NFS):  {{ admin_nfs.nfs_server.name }} — shares: config, data"
           - "frontend-lb:  {{ frontend_lb.load_balancer.dns_name }} (port {{ frontend_lb.load_balancer.listen_port }})"
           - "backend-lb:   {{ backend_lb.load_balancer.dns_name }} (port {{ backend_lb.load_balancer.listen_port }})"
