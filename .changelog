@@ -273,3 +273,10 @@
 [2026-08-30 00:23] MODIFY provider/internal/resources/instance.go | added status, created_at
 [2026-08-30 00:23] MODIFY provider/internal/resources/load_balancer.go | added status, created_at
 [2026-08-30 00:23] MODIFY provider/internal/provider/provider.go | registered all 6 resources and 3 data sources
+[2025-07-14 12:30] MODIFY api/models.py | Added listeners and health_check fields to LoadBalancer dataclass
+[2025-07-14 12:30] MODIFY api/db.py | Added listeners and health_check columns to load_balancers table
+[2025-07-14 12:30] MODIFY api/store.py | Updated _lb_from_row and put_lb to handle listeners/health_check
+[2025-07-14 12:30] MODIFY api/lb.py | Updated _write_config to generate multi-frontend HAProxy config from listeners and health check options
+[2025-07-14 12:30] MODIFY api/server.py | Added POST/DELETE /v1/load-balancers/<id>/listeners and PUT/DELETE /v1/load-balancers/<id>/health-check routes
+[2025-07-14 12:30] MODIFY ui/src/js/10-load-balancers.js | Added listeners panel (add/remove) and health check panel with save/remove to LB expand rows
+[2025-07-14 12:30] MODIFY tests/suites/test_load_balancers.py | Added 22 tests for listeners and health checks

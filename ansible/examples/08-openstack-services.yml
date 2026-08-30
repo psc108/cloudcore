@@ -1,0 +1,340 @@
+---
+# 08-openstack-services.yml
+# 6 named instances: frontend, backend, mysql, keystone, rabbitmq, admin.
+# admin is also an NFS server (exports: config, data).
+# Two load balancers:
+#   frontend-lb  → frontend instance (public-facing L7 ALB, port 80)
+#   backend-lb   → backend, mysql, keystone, admin, rabbitmq (internal L4 NLB)
+# Run: ansible-playbook -i ../inventory.ini 08-openstack-services.yml
+- name: "Example 08 — OpenStack-style services stack"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env:     "{{ default_environment }}"
+    project: "{{ default_project }}"
+    pfx:     "{{ project }}-{{ env }}-{{ build_suffix }}"
+    vpc_name: "{{ pfx }}-main"
+    # Instance names
+    frontend_name: "{{ pfx }}-frontend"
+    backend_name:  "{{ pfx }}-backend"
+    mysql_name:    "{{ pfx }}-mysql"
+    keystone_name: "{{ pfx }}-keystone"
+    rabbitmq_name: "{{ pfx }}-rabbitmq"
+    admin_name:    "{{ pfx }}-admin"
+    # LB names
+    frontend_lb_name: "{{ pfx }}-frontend-lb"
+    backend_lb_name:  "{{ pfx }}-backend-lb"
+    # NFS
+    nfs_disk_gb: 50
+    nfs_flavor:  standard.medium
+    nfs_shares:
+      - config
+      - data
+    # Flavors
+    frontend_flavor: standard.small
+    backend_flavor:  standard.medium
+    data_flavor:     standard.medium
+
+  tasks:
+    # ── VPC ──────────────────────────────────────────────────────────────────
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:       "{{ vpc_name }}"
+        cidr_block: "10.10.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+      register: vpc
+
+    # ── Admin / NFS server ────────────────────────────────────────────────────
+    - name: Create admin NFS server
+      cloudcore.cloudcore.nfs_server:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ admin_name }}"
+        vpc_id:    "{{ vpc.vpc.id }}"
+        flavor:    "{{ nfs_flavor }}"
+        disk_gb:   "{{ nfs_disk_gb }}"
+        shares:
+          - name: config
+            clients: vpc
+          - name: data
+            clients: vpc
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        admin-nfs
+      register: admin_nfs
+
+    - name: Wait for admin NFS server to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/nfs-servers/{{ admin_nfs.nfs_server.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: admin_nfs_poll
+      until: admin_nfs_poll.json.status == "running" and admin_nfs_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    # ── NFS mount configs ─────────────────────────────────────────────────────
+    - name: Get config share mount config
+      cloudcore.cloudcore.nfs_mount:
+        api_url:       "{{ cloudcore_api_url }}"
+        api_token:     "{{ cloudcore_api_token }}"
+        nfs_server_id: "{{ admin_nfs.nfs_server.id }}"
+        share_name:    config
+        mount_point:   /mnt/config
+      register: config_mount
+
+    - name: Get data share mount config
+      cloudcore.cloudcore.nfs_mount:
+        api_url:       "{{ cloudcore_api_url }}"
+        api_token:     "{{ cloudcore_api_token }}"
+        nfs_server_id: "{{ admin_nfs.nfs_server.id }}"
+        share_name:    data
+        mount_point:   /mnt/data
+      register: data_mount
+
+    # ── Frontend instance ─────────────────────────────────────────────────────
+    - name: Create frontend instance
+      cloudcore.cloudcore.instance:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ frontend_name }}"
+        image_id:  ubuntu-22.04
+        flavor:    "{{ frontend_flavor }}"
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages: [nginx]
+          runcmd:
+            - systemctl enable --now nginx
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        frontend
+      register: frontend
+
+    # ── Backend instance ──────────────────────────────────────────────────────
+    - name: Create backend instance
+      cloudcore.cloudcore.instance:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ backend_name }}"
+        image_id:  ubuntu-22.04
+        flavor:    "{{ backend_flavor }}"
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages: [nfs-common]
+          mounts:
+            - ["{{ config_mount.nfs_server_ip }}:/exports/config", "/mnt/config", "nfs", "defaults,_netdev,nofail", "0", "0"]
+          runcmd:
+            - mkdir -p /mnt/config
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        backend
+      register: backend
+
+    # ── MySQL instance ────────────────────────────────────────────────────────
+    - name: Create mysql instance
+      cloudcore.cloudcore.instance:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ mysql_name }}"
+        image_id:  ubuntu-22.04
+        flavor:    "{{ data_flavor }}"
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages: [mysql-server, nfs-common]
+          mounts:
+            - ["{{ data_mount.nfs_server_ip }}:/exports/data", "/mnt/data", "nfs", "defaults,_netdev,nofail", "0", "0"]
+          runcmd:
+            - mkdir -p /mnt/data
+            - systemctl enable --now mysql
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        mysql
+      register: mysql
+
+    # ── Keystone instance ─────────────────────────────────────────────────────
+    - name: Create keystone instance
+      cloudcore.cloudcore.instance:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ keystone_name }}"
+        image_id:  ubuntu-22.04
+        flavor:    "{{ backend_flavor }}"
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages: [nfs-common]
+          mounts:
+            - ["{{ config_mount.nfs_server_ip }}:/exports/config", "/mnt/config", "nfs", "defaults,_netdev,nofail", "0", "0"]
+          runcmd:
+            - mkdir -p /mnt/config
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        keystone
+      register: keystone
+
+    # ── RabbitMQ instance ─────────────────────────────────────────────────────
+    - name: Create rabbitmq instance
+      cloudcore.cloudcore.instance:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ rabbitmq_name }}"
+        image_id:  ubuntu-22.04
+        flavor:    "{{ data_flavor }}"
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        user_data: |
+          #cloud-config
+          packages: [rabbitmq-server]
+          runcmd:
+            - systemctl enable --now rabbitmq-server
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        rabbitmq
+      register: rabbitmq
+
+    # ── Wait for all compute instances ────────────────────────────────────────
+    - name: Wait for all instances to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: instance_poll
+      until: instance_poll.json.status == "running"
+      retries: 30
+      delay: 5
+      loop:
+        - "{{ frontend }}"
+        - "{{ backend }}"
+        - "{{ mysql }}"
+        - "{{ keystone }}"
+        - "{{ rabbitmq }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    - name: Index running instances by name
+      ansible.builtin.set_fact:
+        running: "{{ running | default({}) | combine({item.json.name: item.json}) }}"
+      loop: "{{ instance_poll.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+
+    # ── Frontend load balancer ────────────────────────────────────────────────
+    - name: Create frontend load balancer (public L7 ALB)
+      cloudcore.cloudcore.load_balancer:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ frontend_lb_name }}"
+        type:      application
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: false
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        ingress
+      register: frontend_lb
+
+    - name: Register frontend instance as backend on frontend-lb
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ frontend_lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name:    "{{ frontend_name }}"
+          address: "{{ running[frontend_name].private_ip }}"
+          port:    80
+        status_code: 201
+
+    # ── Backend load balancer ─────────────────────────────────────────────────
+    - name: Create backend load balancer (internal L4 NLB)
+      cloudcore.cloudcore.load_balancer:
+        api_url:   "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name:      "{{ backend_lb_name }}"
+        type:      network
+        vpc_id:    "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: true
+        tags:
+          Environment: "{{ env }}"
+          Project:     "{{ project }}"
+          Owner:       "{{ default_owner }}"
+          ManagedBy:   ansible
+          Role:        internal
+      register: backend_lb
+
+    - name: Register backend services on backend-lb
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ backend_lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name:    "{{ item.name }}"
+          address: "{{ item.ip }}"
+          port:    "{{ item.port }}"
+        status_code: 201
+      loop:
+        - { name: "{{ backend_name }}",  ip: "{{ running[backend_name].private_ip }}",  port: 8080 }
+        - { name: "{{ mysql_name }}",    ip: "{{ running[mysql_name].private_ip }}",    port: 3306 }
+        - { name: "{{ keystone_name }}", ip: "{{ running[keystone_name].private_ip }}", port: 5000 }
+        - { name: "{{ rabbitmq_name }}", ip: "{{ running[rabbitmq_name].private_ip }}", port: 5672 }
+        - { name: "{{ admin_name }}",    ip: "{{ admin_nfs_poll.json.private_ip }}",    port: 2049 }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    - name: Show stack summary
+      ansible.builtin.debug:
+        msg:
+          - "VPC:          {{ vpc.vpc.name }} ({{ vpc.vpc.cidr_block }})"
+          - "frontend:     {{ running[frontend_name].private_ip }}"
+          - "backend:      {{ running[backend_name].private_ip }}"
+          - "mysql:        {{ running[mysql_name].private_ip }}"
+          - "keystone:     {{ running[keystone_name].private_ip }}"
+          - "rabbitmq:     {{ running[rabbitmq_name].private_ip }}"
+          - "admin (NFS):  {{ admin_nfs_poll.json.private_ip }} — /exports/config, /exports/data"
+          - "frontend-lb:  {{ frontend_lb.load_balancer.dns_name }} (port {{ frontend_lb.load_balancer.listen_port }})"
+          - "backend-lb:   {{ backend_lb.load_balancer.dns_name }} (port {{ backend_lb.load_balancer.listen_port }})"

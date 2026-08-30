@@ -56,6 +56,11 @@ _TEMPLATE_META = {
         "description": "VPC + NFS server with two exports + two app instances.",
         "resources": ["vpc", "subnet", "security_group", "nfs_server", "instance"],
     },
+    "openstack-services": {
+        "title": "OpenStack Services Stack",
+        "description": "VPC + 6 named instances (frontend, backend, mysql, keystone, rabbitmq, admin/NFS) + public frontend ALB + internal backend NLB.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "nfs_server", "load_balancer"],
+    },
 }
 
 

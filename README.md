@@ -77,7 +77,7 @@ systemctl --user restart cloudcore-api
 | OpenTofu modules | `modules/` | HCL — composable module library |
 | OpenTofu examples | `examples/` | Ready-to-run configurations |
 | Ansible collection | `ansible/collections/cloudcore/` | Python — FQCN `cloudcore.cloudcore` |
-| Ansible examples | `ansible/examples/` | Ready-to-run playbooks (01–07) |
+| Ansible examples | `ansible/examples/` | Ready-to-run playbooks (01–08) |
 
 ## Requirements
 
@@ -136,7 +136,7 @@ All modules follow the standard argument contract:
 
 ### Examples
 
-Five ready-to-run configurations in `examples/`:
+Six ready-to-run configurations in `examples/`:
 
 | Directory | Creates |
 |---|---|
@@ -145,6 +145,7 @@ Five ready-to-run configurations in `examples/`:
 | `examples/load-balanced-web/` | VPC + 2 instances + L7 ALB |
 | `examples/network-lb/` | VPC + 2 instances + internal L4 NLB |
 | `examples/full-stack/` | VPC + 3 instances + ALB |
+| `examples/openstack-services/` | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
 
 All examples accept a `suffix` variable to keep resource names unique across runs:
 
@@ -190,7 +191,7 @@ ansible-galaxy collection install cloudcore-cloudcore-*.tar.gz --force
 
 ### Examples
 
-Seven ready-to-run playbooks in `ansible/examples/`:
+Eight ready-to-run playbooks in `ansible/examples/`:
 
 | Playbook | Creates |
 |---|---|
@@ -201,6 +202,7 @@ Seven ready-to-run playbooks in `ansible/examples/`:
 | `05-network-lb.yml` | VPC + 2 instances + internal L4 NLB |
 | `06-full-stack.yml` | VPC + 3 instances + ALB + DNS zone + CNAME |
 | `07-nfs-shared-storage.yml` | VPC + NFS server + 2 instances with shared mount |
+| `08-openstack-services.yml` | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
 
 Run directly:
 
