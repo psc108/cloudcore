@@ -145,7 +145,7 @@ def _domain_xml(nfs: NfsServer, disk_path: Path, data_disk_path: Path,
             <qemu:arg value='-netdev'/>
             <qemu:arg value='user,id=ccnet0,hostfwd=tcp:127.0.0.1:{ssh_host_port}-:22'/>
             <qemu:arg value='-device'/>
-            <qemu:arg value='virtio-net-pci,netdev=ccnet0,bus=pci.0,addr=0x5'/>
+            <qemu:arg value='virtio-net-pci,netdev=ccnet0,bus=pci.0,addr=0x7'/>
           </qemu:commandline>""") if not use_bridge else ""
 
     return textwrap.dedent(f"""\
@@ -177,6 +177,7 @@ def _domain_xml(nfs: NfsServer, disk_path: Path, data_disk_path: Path,
               <readonly/>
             </disk>
             {net_xml}
+            <memballoon model='none'/>
             <serial type='pty'><target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
           </devices>{qemu_cmd}
