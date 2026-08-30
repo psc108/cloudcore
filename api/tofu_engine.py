@@ -46,6 +46,16 @@ _TEMPLATE_META = {
         "description": "VPC + subnets + security groups + web instance group + ALB. Uses all modules.",
         "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
     },
+    "dns-with-compute": {
+        "title": "DNS with Compute",
+        "description": "VPC + subnets + instance + DNS zone + A record pointing to the instance.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "dns_zone", "dns_record"],
+    },
+    "nfs-shared-storage": {
+        "title": "NFS Shared Storage",
+        "description": "VPC + NFS server with two exports + two app instances.",
+        "resources": ["vpc", "subnet", "security_group", "nfs_server", "instance"],
+    },
 }
 
 

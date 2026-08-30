@@ -77,3 +77,29 @@ def cleanup_dns_zones_by_prefix(prefix: str) -> None:
             req("DELETE",
                 f"/v1/dns/zones/{urllib.parse.quote(z['name'], safe='')}",
                 expected=(204, 404))
+
+
+def make_nfs_server(name: str, vpc_id: str, flavor: str = "standard.medium",
+                    disk_gb: int = 20, shares: list | None = None) -> dict:
+    _, body = req("POST", "/v1/nfs-servers", {
+        "name": name,
+        "vpc_id": vpc_id,
+        "flavor": flavor,
+        "disk_gb": disk_gb,
+        "shares": shares or [],
+    }, expected=202)
+    return body
+
+
+def delete_nfs_server(nfs_id: str) -> None:
+    req("DELETE", f"/v1/nfs-servers/{nfs_id}", expected=204)
+
+
+def cleanup_nfs_by_prefix(prefix: str) -> None:
+    import time
+    _, data = req("GET", "/v1/nfs-servers")
+    found = [item for item in data["items"] if item["name"].startswith(prefix)]
+    for item in found:
+        req("DELETE", f"/v1/nfs-servers/{item['id']}", expected=(204, 404))
+    if found:
+        time.sleep(1)

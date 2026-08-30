@@ -41,6 +41,7 @@ from tests.suites.test_vpcs           import TestVPCs
 from tests.suites.test_instances      import TestInstances
 from tests.suites.test_load_balancers import TestLoadBalancers
 from tests.suites.test_dns            import TestDNS
+from tests.suites.test_nfs            import TestNFS
 from tests.suites.test_images         import TestImages
 from tests.suites.test_ssh_key        import TestSSHKey
 from tests.suites.test_help           import TestHelp
@@ -52,6 +53,7 @@ SUITES = [
     TestInstances,
     TestLoadBalancers,
     TestDNS,
+    TestNFS,
     TestImages,
     TestSSHKey,
     TestHelp,
@@ -64,9 +66,11 @@ SUITES = [
 from tests.scenarios.scenario_lb_with_instances  import ScenarioLBWithInstances
 from tests.scenarios.scenario_inter_instance_ssh import ScenarioInterInstanceSSH
 from tests.scenarios.scenario_dns_lifecycle      import ScenarioDNSLifecycle
+from tests.scenarios.scenario_nfs_with_compute   import ScenarioNFSWithCompute
 
 SCENARIOS = [
-    ScenarioDNSLifecycle,        # non-VM tests run first, VM tests last
+    ScenarioDNSLifecycle,
+    ScenarioNFSWithCompute,
     ScenarioLBWithInstances,
     ScenarioInterInstanceSSH,
 ]
