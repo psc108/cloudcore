@@ -103,3 +103,30 @@ def cleanup_nfs_by_prefix(prefix: str) -> None:
         req("DELETE", f"/v1/nfs-servers/{item['id']}", expected=(204, 404))
     if found:
         time.sleep(1)
+
+
+def make_sg(name: str, vpc_id: str, description: str = "",
+            ingress_rules: list | None = None,
+            egress_rules: list | None = None) -> dict:
+    _, body = req("POST", "/v1/security-groups", {
+        "name": name,
+        "vpc_id": vpc_id,
+        "description": description,
+        "ingress_rules": ingress_rules or [],
+        "egress_rules":  egress_rules  or [],
+    }, expected=201)
+    return body
+
+
+def delete_sg(sg_id: str) -> None:
+    req("DELETE", f"/v1/security-groups/{sg_id}", expected=204)
+
+
+def cleanup_sgs_by_prefix(prefix: str) -> None:
+    import time
+    _, data = req("GET", "/v1/security-groups")
+    found = [item for item in data["items"] if item["name"].startswith(prefix)]
+    for item in found:
+        req("DELETE", f"/v1/security-groups/{item['id']}", expected=(204, 404))
+    if found:
+        time.sleep(1)

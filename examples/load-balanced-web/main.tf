@@ -34,6 +34,7 @@ module "security_groups" {
   project     = var.project
   environment = var.environment
   owner       = var.owner
+  vpc_id      = module.vpc.vpc_ids_by_key[local.vpc_key]
 
   security_groups = {
     "web${local.sfx}" = {

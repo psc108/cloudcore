@@ -87,6 +87,7 @@ func (p *CloudCoreProvider) Resources(_ context.Context) []func() resource.Resou
 		resources.NewVPCResource,
 		resources.NewInstanceResource,
 		resources.NewLoadBalancerResource,
+		resources.NewSecurityGroupResource,
 		resources.NewDNSZoneResource,
 		resources.NewDNSRecordResource,
 		resources.NewNFSServerResource,

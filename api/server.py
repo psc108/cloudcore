@@ -12,9 +12,12 @@ import dns as dns_store
 import build_engine
 import db
 import nfs_store
+import sg_store
+import sg as sg_enforce
 from models import VPC, Instance, LoadBalancer, InstanceStatus
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
+from sg_routes import sg_bp
 from editor_routes import editor_bp
 from about_routes import about_bp
 from tofu_routes import tofu_bp
@@ -24,6 +27,7 @@ HELP_FILE = os.path.join(os.path.dirname(__file__), "..", "HELP.md")
 app = Flask(__name__)
 app.register_blueprint(build_manager_blueprint)
 app.register_blueprint(nfs_bp)
+app.register_blueprint(sg_bp)
 app.register_blueprint(editor_bp)
 app.register_blueprint(about_bp)
 app.register_blueprint(tofu_bp)
@@ -173,6 +177,11 @@ def create_instance():
                 "instances.cloudcore.local", instance.name, "A",
                 ip or "127.0.0.1", resource_type="instance", resource_id=instance.id,
             )
+            # Apply security group rules once the VM is up
+            if instance.security_group_ids:
+                from sg_routes import _merged_rules
+                ingress, egress = _merged_rules(instance.security_group_ids)
+                sg_enforce.apply(instance, ingress, egress)
         except Exception as e:
             from models import InstanceStatus
             instance.status = InstanceStatus.ERROR
@@ -225,6 +234,7 @@ def delete_instance(instance_id):
     # Mark deleted immediately so list excludes it before async teardown completes
     store.delete_instance_record(instance_id)
     dns_store.delete_records_for_resource(instance_id)
+    sg_enforce.remove(instance)
 
     def _destroy():
         try:

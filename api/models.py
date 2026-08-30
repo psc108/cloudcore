@@ -33,12 +33,43 @@ class LBStatus(str, Enum):
     DELETED = "deleted"
 
 
+class SecurityGroupStatus(str, Enum):
+    ACTIVE  = "active"
+    DELETED = "deleted"
+
+
 class NfsServerStatus(str, Enum):
     PENDING  = "pending"
     RUNNING  = "running"
     STOPPED  = "stopped"
     DELETED  = "deleted"
     ERROR    = "error"
+
+
+@dataclass
+class SecurityGroup:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    description: str = ""
+    vpc_id: str = ""
+    ingress_rules: list = field(default_factory=list)
+    egress_rules: list = field(default_factory=list)
+    status: SecurityGroupStatus = SecurityGroupStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "vpc_id": self.vpc_id,
+            "ingress_rules": self.ingress_rules,
+            "egress_rules": self.egress_rules,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
 
 
 @dataclass

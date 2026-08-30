@@ -18,6 +18,18 @@ _SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
+CREATE TABLE IF NOT EXISTS security_groups (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    vpc_id          TEXT NOT NULL DEFAULT '',
+    ingress_rules   TEXT NOT NULL DEFAULT '[]',
+    egress_rules    TEXT NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'active',
+    created_at      TEXT NOT NULL,
+    tags            TEXT NOT NULL DEFAULT '{}'
+);
+
 CREATE TABLE IF NOT EXISTS vpcs (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,

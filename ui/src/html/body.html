@@ -16,6 +16,7 @@
         <button id="nav-vpcs" onclick="showSection('vpcs', this)">VPCs</button>
         <button id="nav-instances" onclick="showSection('instances', this)">Instances</button>
         <button id="nav-lbs" onclick="showSection('lbs', this)">Load Balancers</button>
+        <button id="nav-sgs" onclick="showSection('sgs', this)">Security Groups</button>
         <button id="nav-terminal" onclick="showSection('terminal', this)">Terminal</button>
       </div>
     </div>
@@ -254,6 +255,65 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- ═══════════════════════════ Security Groups ═══════════════════════════ -->
+  <div id="section-sgs" class="section">
+    <div class="card">
+      <div class="card-header">
+        <h2>Security Groups</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="refresh-btn" title="Refresh" onclick="loadSecurityGroups()">↻</button>
+          <button class="btn btn-primary" onclick="toggleSGForm()">+ Create Security Group</button>
+        </div>
+      </div>
+
+      <!-- Create form -->
+      <div id="sg-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="sg-name" type="text" placeholder="my-security-group">
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="sg-vpc"></select>
+          </div>
+          <div class="field full">
+            <label>Description</label>
+            <input id="sg-desc" type="text" placeholder="Web tier — HTTP and SSH">
+          </div>
+          <div class="field full">
+            <label>Tags <span class="text-muted">(key=value, comma-separated)</span></label>
+            <input id="sg-tags" type="text" placeholder="env=dev">
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0">Rules can be added after creation by expanding the group row.</p>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleSGForm()">Cancel</button>
+          <button class="btn btn-primary" onclick="createSG()">Create Security Group</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="sg-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="sg-sel-all" onchange="toggleSelectAll('sg',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>Description</th>
+              <th>VPC</th>
+              <th>Rules</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="sg-tbody">
+            <tr class="empty-row"><td colspan="7">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════ Load Balancers ═══════════════════════════ -->

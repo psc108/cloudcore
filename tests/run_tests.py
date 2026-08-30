@@ -42,6 +42,7 @@ from tests.suites.test_instances      import TestInstances
 from tests.suites.test_load_balancers import TestLoadBalancers
 from tests.suites.test_dns            import TestDNS
 from tests.suites.test_nfs            import TestNFS
+from tests.suites.test_security_groups import TestSecurityGroups
 from tests.suites.test_images         import TestImages
 from tests.suites.test_ssh_key        import TestSSHKey
 from tests.suites.test_help           import TestHelp
@@ -54,6 +55,7 @@ SUITES = [
     TestLoadBalancers,
     TestDNS,
     TestNFS,
+    TestSecurityGroups,
     TestImages,
     TestSSHKey,
     TestHelp,
