@@ -298,6 +298,7 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
     api_url   = var_overrides.get("cloudcore_api_url",   "http://127.0.0.1:8080")
     api_token = var_overrides.get("cloudcore_api_token", "dev-token")
 
+    tofurc = Path.home() / ".tofurc"
     env = {
         **os.environ,
         "CLOUDCORE_API_URL":   api_url,
@@ -305,6 +306,8 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
         "TF_INPUT":            "0",
         "TF_IN_AUTOMATION":    "1",
     }
+    if tofurc.exists():
+        env["TF_CLI_CONFIG_FILE"] = str(tofurc)
     # Pass any extra user vars as TF_VAR_*
     for k, v in var_overrides.items():
         if k not in ("cloudcore_api_url", "cloudcore_api_token"):
@@ -323,13 +326,17 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
         _log(build, "─" * 60)
         return proc.returncode
 
-    # tofu init
-    rc = _run_cmd([tofu, "init", "-no-color"])
-    if rc != 0:
-        build["exit_code"] = rc
-        build["status"] = "failed"
-        _log(build, f"tofu init failed (exit {rc})")
-        return
+    # Skip tofu init when dev_overrides are active — it errors against the real registry
+    using_dev_overrides = tofurc.exists() and "dev_overrides" in tofurc.read_text()
+    if not using_dev_overrides:
+        rc = _run_cmd([tofu, "init", "-no-color"])
+        if rc != 0:
+            build["exit_code"] = rc
+            build["status"] = "failed"
+            _log(build, f"tofu init failed (exit {rc})")
+            return
+    else:
+        _log(build, "Skipping tofu init (dev_overrides active)")
 
     # tofu apply
     rc = _run_cmd([tofu, "apply", "-auto-approve", "-no-color"])
