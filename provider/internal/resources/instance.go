@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -21,19 +26,22 @@ type InstanceResource struct {
 }
 
 type InstanceResourceModel struct {
-	ID               types.String `tfsdk:"id"`
-	Name             types.String `tfsdk:"name"`
-	ImageID          types.String `tfsdk:"image_id"`
-	Flavor           types.String `tfsdk:"flavor"`
-	VPCID            types.String `tfsdk:"vpc_id"`
-	SubnetID         types.String `tfsdk:"subnet_id"`
-	SecurityGroupIDs types.List   `tfsdk:"security_group_ids"`
-	UserData         types.String `tfsdk:"user_data"`
-	PrivateIP        types.String `tfsdk:"private_ip"`
-	PublicIP         types.String `tfsdk:"public_ip"`
-	Status           types.String `tfsdk:"status"`
-	CreatedAt        types.String `tfsdk:"created_at"`
-	Tags             types.Map    `tfsdk:"tags"`
+	ID               types.String   `tfsdk:"id"`
+	Name             types.String   `tfsdk:"name"`
+	ImageID          types.String   `tfsdk:"image_id"`
+	Flavor           types.String   `tfsdk:"flavor"`
+	VPCID            types.String   `tfsdk:"vpc_id"`
+	SubnetID         types.String   `tfsdk:"subnet_id"`
+	SecurityGroupIDs types.List     `tfsdk:"security_group_ids"`
+	UserData         types.String   `tfsdk:"user_data"`
+	PrivateIP        types.String   `tfsdk:"private_ip"`
+	PublicIP         types.String   `tfsdk:"public_ip"`
+	SSHPort          types.Int64    `tfsdk:"ssh_port"`
+	SSHUser          types.String   `tfsdk:"ssh_user"`
+	Status           types.String   `tfsdk:"status"`
+	CreatedAt        types.String   `tfsdk:"created_at"`
+	Tags             types.Map      `tfsdk:"tags"`
+	Timeouts         timeouts.Value `tfsdk:"timeouts"`
 }
 
 type instanceAPIModel struct {
@@ -47,6 +55,8 @@ type instanceAPIModel struct {
 	UserData         string            `json:"user_data,omitempty"`
 	PrivateIP        string            `json:"private_ip"`
 	PublicIP         string            `json:"public_ip"`
+	SSHPort          int64             `json:"ssh_port"`
+	SSHUser          string            `json:"ssh_user"`
 	Status           string            `json:"status"`
 	CreatedAt        string            `json:"created_at"`
 	Tags             map[string]string `json:"tags"`
@@ -58,7 +68,7 @@ func (r *InstanceResource) Metadata(_ context.Context, req resource.MetadataRequ
 	resp.TypeName = req.ProviderTypeName + "_instance"
 }
 
-func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -69,7 +79,12 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			},
 			"name":     schema.StringAttribute{Required: true},
 			"image_id": schema.StringAttribute{Required: true},
-			"flavor":   schema.StringAttribute{Required: true},
+			"flavor": schema.StringAttribute{
+				Required: true,
+				Validators: []validator.String{
+					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large"),
+				},
+			},
 			"vpc_id": schema.StringAttribute{
 				Required: true,
 				PlanModifiers: []planmodifier.String{
@@ -95,6 +110,18 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			},
 			"private_ip": schema.StringAttribute{Computed: true},
 			"public_ip":  schema.StringAttribute{Computed: true},
+			"ssh_port": schema.Int64Attribute{
+				Computed: true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			"ssh_user": schema.StringAttribute{
+				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"status":     schema.StringAttribute{Computed: true},
 			"created_at": schema.StringAttribute{
 				Computed: true,
@@ -106,6 +133,10 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional:    true,
 				ElementType: types.StringType,
 			},
+			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
+				Create: true,
+				Delete: true,
+			}),
 		},
 	}
 }
@@ -128,6 +159,14 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	createTimeout, diags := plan.Timeouts.Create(ctx, 10*time.Minute)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, createTimeout)
+	defer cancel()
 
 	sgIDs := []string{}
 	resp.Diagnostics.Append(plan.SecurityGroupIDs.ElementsAs(ctx, &sgIDs, false)...)
@@ -154,9 +193,46 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	plan.ID = types.StringValue(result.ID)
 	plan.PrivateIP = types.StringValue(result.PrivateIP)
 	plan.PublicIP = types.StringValue(result.PublicIP)
+	plan.SSHPort = types.Int64Value(result.SSHPort)
+	plan.SSHUser = types.StringValue(result.SSHUser)
 	plan.Status = types.StringValue(result.Status)
 	plan.CreatedAt = types.StringValue(result.CreatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Poll until running or timeout.
+	for {
+		select {
+		case <-ctx.Done():
+			resp.Diagnostics.AddError(
+				"Timeout waiting for instance",
+				fmt.Sprintf("Instance %q did not reach 'running' within the create timeout. Last status: %s", result.ID, plan.Status.ValueString()),
+			)
+			return
+		case <-time.After(10 * time.Second):
+		}
+
+		var poll instanceAPIModel
+		if err := r.client.Get(ctx, "/v1/instances/"+result.ID, &poll); err != nil {
+			resp.Diagnostics.AddError("Poll instance failed", err.Error())
+			return
+		}
+		plan.Status = types.StringValue(poll.Status)
+		plan.PrivateIP = types.StringValue(poll.PrivateIP)
+		plan.PublicIP = types.StringValue(poll.PublicIP)
+		plan.SSHPort = types.Int64Value(poll.SSHPort)
+		plan.SSHUser = types.StringValue(poll.SSHUser)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		if poll.Status == "running" {
+			return
+		}
+		if poll.Status == "error" {
+			resp.Diagnostics.AddError("Instance entered error state", fmt.Sprintf("Instance %q status: error", result.ID))
+			return
+		}
+	}
 }
 
 func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -184,6 +260,8 @@ func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 	state.SubnetID = types.StringValue(result.SubnetID)
 	state.PrivateIP = types.StringValue(result.PrivateIP)
 	state.PublicIP = types.StringValue(result.PublicIP)
+	state.SSHPort = types.Int64Value(result.SSHPort)
+	state.SSHUser = types.StringValue(result.SSHUser)
 	state.Status = types.StringValue(result.Status)
 	state.CreatedAt = types.StringValue(result.CreatedAt)
 
@@ -228,6 +306,8 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 
 	plan.PrivateIP = types.StringValue(result.PrivateIP)
 	plan.PublicIP = types.StringValue(result.PublicIP)
+	plan.SSHPort = types.Int64Value(result.SSHPort)
+	plan.SSHUser = types.StringValue(result.SSHUser)
 	plan.Status = types.StringValue(result.Status)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -260,8 +340,11 @@ func (r *InstanceResource) ImportState(ctx context.Context, req resource.ImportS
 	state.SubnetID = types.StringValue(result.SubnetID)
 	state.PrivateIP = types.StringValue(result.PrivateIP)
 	state.PublicIP = types.StringValue(result.PublicIP)
+	state.SSHPort = types.Int64Value(result.SSHPort)
+	state.SSHUser = types.StringValue(result.SSHUser)
 	state.Status = types.StringValue(result.Status)
 	state.CreatedAt = types.StringValue(result.CreatedAt)
+	state.Timeouts = timeouts.Value{}
 
 	sgIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SecurityGroupIDs)
 	resp.Diagnostics.Append(diags...)

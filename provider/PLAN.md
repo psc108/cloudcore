@@ -20,7 +20,7 @@ re-listed as work items.
 
 ---
 
-## Phase 1 — Correctness and Safety (implement first)
+## Phase 1 — Correctness and Safety ✓ COMPLETE
 
 These are bugs or gaps that cause silent wrong behaviour or security risk
 under normal use. Low-to-trivial effort, high consequence if deferred.
@@ -61,7 +61,7 @@ error. AWS provider validates these at plan time.
 
 ---
 
-## Phase 2 — UX Parity with AWS Provider (highest practical value)
+## Phase 2 — UX Parity with AWS Provider ✓ COMPLETE
 
 These are the features that make the provider feel like a first-class
 infrastructure tool rather than a thin API wrapper.
@@ -110,7 +110,7 @@ default 30) to the provider schema. Pass it to `client.New` via
 
 ---
 
-## Phase 3 — Robustness (protects against real operational failures)
+## Phase 3 — Robustness ✓ COMPLETE
 
 ### 3.1 — Retry logic with exponential backoff in client
 

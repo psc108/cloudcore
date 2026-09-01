@@ -11,7 +11,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// ── VPC data source ──────────────────────────────────────────────────────────
+// ── VPC data source ──────────────────────────────────────────────────────
+// Note: all list endpoints return the full result set in a single response
+// (no pagination). If the API adds pagination in future, the Read methods
+// below must be updated to follow next-page links before filtering.────
 
 var _ datasource.DataSource = &VPCDataSource{}
 

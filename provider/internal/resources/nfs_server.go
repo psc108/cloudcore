@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -13,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -30,15 +34,16 @@ type nfsShareModel struct {
 }
 
 type NFSServerResourceModel struct {
-	ID        types.String `tfsdk:"id"`
-	Name      types.String `tfsdk:"name"`
-	VPCID     types.String `tfsdk:"vpc_id"`
-	Flavor    types.String `tfsdk:"flavor"`
-	DiskGB    types.Int64  `tfsdk:"disk_gb"`
-	Shares    types.List   `tfsdk:"shares"`
-	PrivateIP types.String `tfsdk:"private_ip"`
-	Status    types.String `tfsdk:"status"`
-	Tags      types.Map    `tfsdk:"tags"`
+	ID        types.String   `tfsdk:"id"`
+	Name      types.String   `tfsdk:"name"`
+	VPCID     types.String   `tfsdk:"vpc_id"`
+	Flavor    types.String   `tfsdk:"flavor"`
+	DiskGB    types.Int64    `tfsdk:"disk_gb"`
+	Shares    types.List     `tfsdk:"shares"`
+	PrivateIP types.String   `tfsdk:"private_ip"`
+	Status    types.String   `tfsdk:"status"`
+	Tags      types.Map      `tfsdk:"tags"`
+	Timeouts  timeouts.Value `tfsdk:"timeouts"`
 }
 
 type nfsShareAPIModel struct {
@@ -48,15 +53,15 @@ type nfsShareAPIModel struct {
 }
 
 type nfsServerAPIModel struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	VPCID     string            `json:"vpc_id"`
-	Flavor    string            `json:"flavor"`
-	DiskGB    int64             `json:"disk_gb"`
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	VPCID     string             `json:"vpc_id"`
+	Flavor    string             `json:"flavor"`
+	DiskGB    int64              `json:"disk_gb"`
 	Shares    []nfsShareAPIModel `json:"shares"`
-	PrivateIP string            `json:"private_ip"`
-	Status    string            `json:"status"`
-	Tags      map[string]string `json:"tags"`
+	PrivateIP string             `json:"private_ip"`
+	Status    string             `json:"status"`
+	Tags      map[string]string  `json:"tags"`
 }
 
 var nfsShareAttrTypes = map[string]attr.Type{
@@ -71,7 +76,7 @@ func (r *NFSServerResource) Metadata(_ context.Context, req resource.MetadataReq
 	resp.TypeName = req.ProviderTypeName + "_nfs_server"
 }
 
-func (r *NFSServerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *NFSServerResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "Manages a CloudCore NFS server with one or more exports.",
 		Attributes: map[string]schema.Attribute{
@@ -83,14 +88,14 @@ func (r *NFSServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "NFS server name.",
+				Description: "NFS server name. Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"vpc_id": schema.StringAttribute{
 				Required:    true,
-				Description: "VPC ID the NFS server is attached to.",
+				Description: "VPC ID the NFS server is attached to. Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -100,6 +105,9 @@ func (r *NFSServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Computed:    true,
 				Description: "Compute flavor for the NFS server VM. Defaults to standard.medium.",
 				Default:     stringdefault.StaticString("standard.medium"),
+				Validators: []validator.String{
+					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large"),
+				},
 			},
 			"disk_gb": schema.Int64Attribute{
 				Optional:    true,
@@ -147,6 +155,10 @@ func (r *NFSServerResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Optional:    true,
 				ElementType: types.StringType,
 			},
+			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
+				Create: true,
+				Delete: true,
+			}),
 		},
 	}
 }
@@ -190,6 +202,14 @@ func (r *NFSServerResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
+	createTimeout, diags := plan.Timeouts.Create(ctx, 10*time.Minute)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, createTimeout)
+	defer cancel()
+
 	var planShares []nfsShareModel
 	resp.Diagnostics.Append(plan.Shares.ElementsAs(ctx, &planShares, false)...)
 	tags := map[string]string{}
@@ -226,6 +246,43 @@ func (r *NFSServerResource) Create(ctx context.Context, req resource.CreateReque
 	}
 	plan.Shares = shares
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Poll until running or timeout.
+	for {
+		select {
+		case <-ctx.Done():
+			resp.Diagnostics.AddError(
+				"Timeout waiting for NFS server",
+				fmt.Sprintf("NFS server %q did not reach 'running' within the create timeout. Last status: %s", result.ID, plan.Status.ValueString()),
+			)
+			return
+		case <-time.After(10 * time.Second):
+		}
+		var poll nfsServerAPIModel
+		if err := r.client.Get(ctx, "/v1/nfs-servers/"+result.ID, &poll); err != nil {
+			resp.Diagnostics.AddError("Poll NFS server failed", err.Error())
+			return
+		}
+		plan.Status = types.StringValue(poll.Status)
+		plan.PrivateIP = types.StringValue(poll.PrivateIP)
+		pollShares, err := r.sharesFromAPI(ctx, poll.Shares)
+		if err != nil {
+			resp.Diagnostics.AddError("Parse NFS shares failed", err.Error())
+			return
+		}
+		plan.Shares = pollShares
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		if poll.Status == "running" {
+			return
+		}
+		if poll.Status == "error" {
+			resp.Diagnostics.AddError("NFS server entered error state", fmt.Sprintf("NFS server %q status: error", result.ID))
+			return
+		}
+	}
 }
 
 func (r *NFSServerResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -275,7 +332,6 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	// Reconcile shares: add new ones, remove deleted ones.
 	var planShares []nfsShareModel
 	resp.Diagnostics.Append(plan.Shares.ElementsAs(ctx, &planShares, false)...)
 	var stateShares []nfsShareModel
@@ -292,7 +348,6 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 
 	nfsID := state.ID.ValueString()
 
-	// Add new shares.
 	for _, s := range planShares {
 		if !stateNames[s.Name.ValueString()] {
 			body := map[string]string{"name": s.Name.ValueString(), "clients": s.Clients.ValueString()}
@@ -301,7 +356,6 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 			}
 		}
 	}
-	// Remove deleted shares.
 	for _, s := range stateShares {
 		if !planNames[s.Name.ValueString()] {
 			path := fmt.Sprintf("/v1/nfs-servers/%s/shares/%s", nfsID, s.Name.ValueString())
@@ -356,6 +410,7 @@ func (r *NFSServerResource) ImportState(ctx context.Context, req resource.Import
 	state.DiskGB = types.Int64Value(result.DiskGB)
 	state.PrivateIP = types.StringValue(result.PrivateIP)
 	state.Status = types.StringValue(result.Status)
+	state.Timeouts = timeouts.Value{}
 
 	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
 	resp.Diagnostics.Append(diags...)

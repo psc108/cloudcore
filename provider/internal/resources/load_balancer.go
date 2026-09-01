@@ -6,10 +6,12 @@ import (
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -67,6 +69,9 @@ func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 				Description: "Load balancer type: 'network' (L4) or 'application' (L7).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.OneOf("network", "application"),
 				},
 			},
 			"vpc_id": schema.StringAttribute{Required: true},
