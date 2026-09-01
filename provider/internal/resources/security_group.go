@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
@@ -249,6 +250,11 @@ func (r *SecurityGroupResource) Read(ctx context.Context, req resource.ReadReque
 	}
 	var result sgAPIModel
 	if err := r.client.Get(ctx, "/v1/security-groups/"+state.ID.ValueString(), &result); err != nil {
+		var nfe *client.NotFoundError
+		if errors.As(err, &nfe) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Read security group failed", err.Error())
 		return
 	}
@@ -306,7 +312,10 @@ func (r *SecurityGroupResource) Update(ctx context.Context, req resource.UpdateR
 		resp.Diagnostics.AddError("Update security group failed", err.Error())
 		return
 	}
+	plan.Name = types.StringValue(result.Name)
+	plan.Description = types.StringValue(result.Description)
 	plan.Status = types.StringValue(result.Status)
+	plan.CreatedAt = types.StringValue(result.CreatedAt)
 	ingressList, err := r.rulesFromAPI(ctx, result.IngressRules)
 	if err != nil {
 		resp.Diagnostics.AddError("Parse ingress rules failed", err.Error())

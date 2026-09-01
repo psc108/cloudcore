@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
@@ -128,6 +129,11 @@ func (r *VPCResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 	var result vpcAPIModel
 	if err := r.client.Get(ctx, "/v1/vpcs/"+state.ID.ValueString(), &result); err != nil {
+		var nfe *client.NotFoundError
+		if errors.As(err, &nfe) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Read VPC failed", err.Error())
 		return
 	}
@@ -165,6 +171,8 @@ func (r *VPCResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		resp.Diagnostics.AddError("Update VPC failed", err.Error())
 		return
 	}
+	plan.DNSSupport = types.BoolValue(result.DNSSupport)
+	plan.Status = types.StringValue(result.Status)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

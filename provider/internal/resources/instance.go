@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
@@ -69,7 +70,12 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"name":     schema.StringAttribute{Required: true},
 			"image_id": schema.StringAttribute{Required: true},
 			"flavor":   schema.StringAttribute{Required: true},
-			"vpc_id":   schema.StringAttribute{Required: true},
+			"vpc_id": schema.StringAttribute{
+				Required: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 			"subnet_id": schema.StringAttribute{
 				Required: true,
 				PlanModifiers: []planmodifier.String{
@@ -162,6 +168,11 @@ func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 
 	var result instanceAPIModel
 	if err := r.client.Get(ctx, "/v1/instances/"+state.ID.ValueString(), &result); err != nil {
+		var nfe *client.NotFoundError
+		if errors.As(err, &nfe) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Read instance failed", err.Error())
 		return
 	}
@@ -214,6 +225,10 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 		resp.Diagnostics.AddError("Update instance failed", err.Error())
 		return
 	}
+
+	plan.PrivateIP = types.StringValue(result.PrivateIP)
+	plan.PublicIP = types.StringValue(result.PublicIP)
+	plan.Status = types.StringValue(result.Status)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

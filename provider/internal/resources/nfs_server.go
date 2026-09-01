@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
@@ -236,6 +237,11 @@ func (r *NFSServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	var result nfsServerAPIModel
 	if err := r.client.Get(ctx, "/v1/nfs-servers/"+state.ID.ValueString(), &result); err != nil {
+		var nfe *client.NotFoundError
+		if errors.As(err, &nfe) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Read NFS server failed", err.Error())
 		return
 	}
