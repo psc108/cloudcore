@@ -12,7 +12,16 @@ from pathlib import Path
 
 _DB_FILE = Path(__file__).parent / "cloudcore.db"
 _conn: sqlite3.Connection | None = None
+_local = threading.local()
 _lock = threading.Lock()
+
+
+def _new_conn(path: Path) -> sqlite3.Connection:
+    c = sqlite3.connect(str(path), check_same_thread=True, timeout=30)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA foreign_keys=ON")
+    return c
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -146,7 +155,7 @@ def init(db_file: Path | None = None) -> None:
     """Open the database, apply schema, migrate from JSON if needed."""
     global _conn
     path = db_file or _DB_FILE
-    _conn = sqlite3.connect(str(path), check_same_thread=False)
+    _conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
     _conn.row_factory = sqlite3.Row
     _conn.executescript(_SCHEMA)
     _conn.commit()
@@ -156,7 +165,9 @@ def init(db_file: Path | None = None) -> None:
 def get_db() -> sqlite3.Connection:
     if _conn is None:
         raise RuntimeError("db.init() has not been called")
-    return _conn
+    if not hasattr(_local, "conn") or _local.conn is None:
+        _local.conn = _new_conn(_DB_FILE)
+    return _local.conn
 
 
 # ---------------------------------------------------------------------------

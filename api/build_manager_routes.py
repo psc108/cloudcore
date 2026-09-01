@@ -107,11 +107,12 @@ def destroy_build(build_id):
 
     provisioned = build.get("provisioned") or []
     _PATH = {
-        "vpc":        lambda i: f"/v1/vpcs/{i}",
-        "instance":   lambda i: f"/v1/instances/{i}",
-        "lb":         lambda i: f"/v1/load-balancers/{i}",
-        "dns_zone":   lambda i: f"/v1/dns/zones/{i}",
-        "nfs_server": lambda i: f"/v1/nfs-servers/{i}",
+        "vpc":            lambda i: f"/v1/vpcs/{i}",
+        "instance":       lambda i: f"/v1/instances/{i}",
+        "lb":             lambda i: f"/v1/load-balancers/{i}",
+        "dns_zone":       lambda i: f"/v1/dns/zones/{i}",
+        "nfs_server":     lambda i: f"/v1/nfs-servers/{i}",
+        "security_group": lambda i: f"/v1/security-groups/{i}",
     }
     results = []
     for r in provisioned:
