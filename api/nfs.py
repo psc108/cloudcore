@@ -222,6 +222,7 @@ def create_nfs_server(nfs: NfsServer, vpc_cidr: str) -> NfsServer:
             nfs.private_ip = ""
         else:
             nfs.ssh_host_port = compute._free_port(_SSH_PORT_START, _SSH_PORT_END)
+            compute._scrub_known_hosts(nfs.ssh_host_port)
             nfs.private_ip = "10.0.2.15"
 
         xml = _domain_xml(nfs, os_disk, data_disk, iso_path, vcpus, memory_mb, nfs.ssh_host_port)
@@ -295,7 +296,9 @@ def reload_exports(nfs: NfsServer) -> None:
     import subprocess
     cmd = [
         "ssh", "-i", key, "-p", str(port),
-        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
         f"ubuntu@{host}",
         f"echo '{exports_content}' | sudo tee /etc/exports > /dev/null && sudo exportfs -ra",
     ]

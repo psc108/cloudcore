@@ -540,7 +540,9 @@ def _ssh_run(instance, cmd: str) -> str:
     key = compute.get_cc_privkey_path()
     result = __import__("subprocess").run(
         ["ssh", "-i", key, "-p", str(instance.ssh_host_port),
-         "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         "-o", "ConnectTimeout=10",
          f"{instance.ssh_user}@127.0.0.1", cmd],
         capture_output=True, text=True, timeout=30,
     )
