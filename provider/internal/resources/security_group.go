@@ -80,13 +80,13 @@ func (r *SecurityGroupResource) Metadata(_ context.Context, req resource.Metadat
 func (r *SecurityGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	ruleSchema := schema.NestedAttributeObject{
 		Attributes: map[string]schema.Attribute{
-			"protocol":    schema.StringAttribute{
-					Required: true,
-					Description: "Protocol: tcp, udp, icmp, or -1 (all traffic).",
-					Validators: []validator.String{
-						stringvalidator.OneOf("tcp", "udp", "icmp", "-1"),
-					},
+			"protocol": schema.StringAttribute{
+				Required:    true,
+				Description: "Protocol: tcp, udp, icmp, or -1 (all traffic).",
+				Validators: []validator.String{
+					stringvalidator.OneOf("tcp", "udp", "icmp", "-1"),
 				},
+			},
 			"from_port":   schema.Int64Attribute{Optional: true, Description: "Start of port range (inclusive)."},
 			"to_port":     schema.Int64Attribute{Optional: true, Description: "End of port range (inclusive)."},
 			"cidr":        schema.StringAttribute{Required: true, Description: "Source (ingress) or destination (egress) CIDR block."},
@@ -145,7 +145,10 @@ func (r *SecurityGroupResource) Configure(_ context.Context, req resource.Config
 	r.client = c
 }
 
-func (r *SecurityGroupResource) rulesFromAPI(ctx context.Context, apiRules []sgRuleAPIModel) (types.List, error) {
+func (r *SecurityGroupResource) rulesFromAPI(_ context.Context, apiRules []sgRuleAPIModel) (types.List, error) {
+	if len(apiRules) == 0 {
+		return types.ListNull(types.ObjectType{AttrTypes: sgRuleAttrTypes}), nil
+	}
 	elems := make([]attr.Value, len(apiRules))
 	for i, rule := range apiRules {
 		var fp, tp types.Int64
@@ -164,7 +167,12 @@ func (r *SecurityGroupResource) rulesFromAPI(ctx context.Context, apiRules []sgR
 			"from_port":   fp,
 			"to_port":     tp,
 			"cidr":        types.StringValue(rule.CIDR),
-			"description": types.StringValue(rule.Description),
+			"description": func() types.String {
+				if rule.Description == "" {
+					return types.StringNull()
+				}
+				return types.StringValue(rule.Description)
+			}(),
 		})
 		if diags.HasError() {
 			return types.ListNull(types.ObjectType{AttrTypes: sgRuleAttrTypes}), fmt.Errorf("building rule object")
@@ -203,6 +211,31 @@ func (r *SecurityGroupResource) rulesToAPI(ctx context.Context, list types.List)
 	return out, nil
 }
 
+func (r *SecurityGroupResource) sgMapToState(ctx context.Context, result sgAPIModel, state *SecurityGroupResourceModel) error {
+	state.ID = types.StringValue(result.ID)
+	state.Name = types.StringValue(result.Name)
+	state.Description = types.StringValue(result.Description)
+	state.VPCID = types.StringValue(result.VPCID)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
+	tags, diags := tagsToMap(ctx, result.Tags)
+	if diags.HasError() {
+		return fmt.Errorf("converting tags")
+	}
+	state.Tags = tags
+	ingressList, err := r.rulesFromAPI(ctx, result.IngressRules)
+	if err != nil {
+		return fmt.Errorf("converting ingress rules: %w", err)
+	}
+	state.IngressRules = ingressList
+	egressList, err := r.rulesFromAPI(ctx, result.EgressRules)
+	if err != nil {
+		return fmt.Errorf("converting egress rules: %w", err)
+	}
+	state.EgressRules = egressList
+	return nil
+}
+
 func (r *SecurityGroupResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan SecurityGroupResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -236,23 +269,10 @@ func (r *SecurityGroupResource) Create(ctx context.Context, req resource.CreateR
 		resp.Diagnostics.AddError("Create security group failed", err.Error())
 		return
 	}
-	plan.ID = types.StringValue(result.ID)
-	plan.Description = types.StringValue(result.Description)
-	plan.Status = types.StringValue(result.Status)
-	plan.CreatedAt = types.StringValue(result.CreatedAt)
-
-	ingressList, err := r.rulesFromAPI(ctx, result.IngressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse ingress rules failed", err.Error())
+	if err := r.sgMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map security group state failed", err.Error())
 		return
 	}
-	egressList, err := r.rulesFromAPI(ctx, result.EgressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse egress rules failed", err.Error())
-		return
-	}
-	plan.IngressRules = ingressList
-	plan.EgressRules = egressList
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -272,27 +292,10 @@ func (r *SecurityGroupResource) Read(ctx context.Context, req resource.ReadReque
 		resp.Diagnostics.AddError("Read security group failed", err.Error())
 		return
 	}
-	state.Name = types.StringValue(result.Name)
-	state.Description = types.StringValue(result.Description)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
-	ingressList, err := r.rulesFromAPI(ctx, result.IngressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse ingress rules failed", err.Error())
+	if err := r.sgMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map security group state failed", err.Error())
 		return
 	}
-	egressList, err := r.rulesFromAPI(ctx, result.EgressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse egress rules failed", err.Error())
-		return
-	}
-	state.IngressRules = ingressList
-	state.EgressRules = egressList
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -326,22 +329,10 @@ func (r *SecurityGroupResource) Update(ctx context.Context, req resource.UpdateR
 		resp.Diagnostics.AddError("Update security group failed", err.Error())
 		return
 	}
-	plan.Name = types.StringValue(result.Name)
-	plan.Description = types.StringValue(result.Description)
-	plan.Status = types.StringValue(result.Status)
-	plan.CreatedAt = types.StringValue(result.CreatedAt)
-	ingressList, err := r.rulesFromAPI(ctx, result.IngressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse ingress rules failed", err.Error())
+	if err := r.sgMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map security group state failed", err.Error())
 		return
 	}
-	egressList, err := r.rulesFromAPI(ctx, result.EgressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse egress rules failed", err.Error())
-		return
-	}
-	plan.IngressRules = ingressList
-	plan.EgressRules = egressList
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -357,32 +348,15 @@ func (r *SecurityGroupResource) Delete(ctx context.Context, req resource.DeleteR
 }
 
 func (r *SecurityGroupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	var state SecurityGroupResourceModel
-	state.ID = types.StringValue(req.ID)
 	var result sgAPIModel
 	if err := r.client.Get(ctx, "/v1/security-groups/"+req.ID, &result); err != nil {
 		resp.Diagnostics.AddError("Import security group failed", err.Error())
 		return
 	}
-	state.Name = types.StringValue(result.Name)
-	state.Description = types.StringValue(result.Description)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-	ingressList, err := r.rulesFromAPI(ctx, result.IngressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse ingress rules failed", err.Error())
+	var state SecurityGroupResourceModel
+	if err := r.sgMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map security group state failed", err.Error())
 		return
 	}
-	egressList, err := r.rulesFromAPI(ctx, result.EgressRules)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse egress rules failed", err.Error())
-		return
-	}
-	state.IngressRules = ingressList
-	state.EgressRules = egressList
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

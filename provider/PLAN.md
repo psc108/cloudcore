@@ -163,7 +163,7 @@ path.
 
 ---
 
-## Phase 5 — Acceptance Tests (regression safety)
+## Phase 5 — Acceptance Tests (regression safety) ✓ COMPLETE
 
 ### 5.1 — Acceptance tests for core resources
 
@@ -186,7 +186,7 @@ Terraform provider test pattern.
 
 ---
 
-## Phase 6 — Code Quality (technical debt)
+## Phase 6 — Code Quality (technical debt) ✓ COMPLETE
 
 ### 6.1 — Reduce struct/mapping duplication
 
@@ -218,5 +218,5 @@ rationalised.
 | 3 | 3.2 Pagination | Low | Silent wrong results on large accounts |
 | 4 | 4.1 Attribute descriptions | Medium | No generated documentation | ✓ |
 | 4 | 4.2 Resource MarkdownDescription | Low | Poor IDE/registry experience | ✓ |
-| 5 | 5.1 Acceptance tests | Medium | No regression safety |
-| 6 | 6.1 Struct/mapping deduplication | Medium | Maintenance burden grows |
+| 5 | 5.1 Acceptance tests | Medium | No regression safety | ✓ |
+| 6 | 6.1 Struct/mapping deduplication | Medium | Maintenance burden grows | ✓ |

@@ -117,6 +117,28 @@ func (r *LoadBalancerResource) Configure(_ context.Context, req resource.Configu
 	r.client = c
 }
 
+func lbMapToState(ctx context.Context, result lbAPIModel, state *LoadBalancerResourceModel) error {
+	state.ID = types.StringValue(result.ID)
+	state.Name = types.StringValue(result.Name)
+	state.Type = types.StringValue(result.Type)
+	state.VPCID = types.StringValue(result.VPCID)
+	state.Internal = types.BoolValue(result.Internal)
+	state.DNSName = types.StringValue(result.DNSName)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
+	subnetIDs, diags := stringsToList(ctx, result.SubnetIDs)
+	if diags.HasError() {
+		return fmt.Errorf("converting subnet_ids")
+	}
+	state.SubnetIDs = subnetIDs
+	tags, diags := tagsToMap(ctx, result.Tags)
+	if diags.HasError() {
+		return fmt.Errorf("converting tags")
+	}
+	state.Tags = tags
+	return nil
+}
+
 func (r *LoadBalancerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan LoadBalancerResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -143,12 +165,10 @@ func (r *LoadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 		resp.Diagnostics.AddError("Create load balancer failed", err.Error())
 		return
 	}
-
-	plan.ID = types.StringValue(result.ID)
-	plan.DNSName = types.StringValue(result.DNSName)
-	plan.Internal = types.BoolValue(result.Internal)
-	plan.Status = types.StringValue(result.Status)
-	plan.CreatedAt = types.StringValue(result.CreatedAt)
+	if err := lbMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map load balancer state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -169,23 +189,10 @@ func (r *LoadBalancerResource) Read(ctx context.Context, req resource.ReadReques
 		resp.Diagnostics.AddError("Read load balancer failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.Type = types.StringValue(result.Type)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.Internal = types.BoolValue(result.Internal)
-	state.DNSName = types.StringValue(result.DNSName)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-
-	subnetIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SubnetIDs)
-	resp.Diagnostics.Append(diags...)
-	state.SubnetIDs = subnetIDs
-
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
+	if err := lbMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map load balancer state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -215,9 +222,10 @@ func (r *LoadBalancerResource) Update(ctx context.Context, req resource.UpdateRe
 		resp.Diagnostics.AddError("Update load balancer failed", err.Error())
 		return
 	}
-	plan.DNSName = types.StringValue(result.DNSName)
-	plan.Internal = types.BoolValue(result.Internal)
-	plan.Status = types.StringValue(result.Status)
+	if err := lbMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map load balancer state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -233,30 +241,15 @@ func (r *LoadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 }
 
 func (r *LoadBalancerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	var state LoadBalancerResourceModel
-	state.ID = types.StringValue(req.ID)
-
 	var result lbAPIModel
 	if err := r.client.Get(ctx, "/v1/load-balancers/"+req.ID, &result); err != nil {
 		resp.Diagnostics.AddError("Import load balancer failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.Type = types.StringValue(result.Type)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.Internal = types.BoolValue(result.Internal)
-	state.DNSName = types.StringValue(result.DNSName)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-
-	subnetIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SubnetIDs)
-	resp.Diagnostics.Append(diags...)
-	state.SubnetIDs = subnetIDs
-
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
+	var state LoadBalancerResourceModel
+	if err := lbMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map load balancer state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
