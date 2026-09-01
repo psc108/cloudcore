@@ -12,6 +12,11 @@ venv/
 # Go
 provider/terraform-provider-cloudcore
 
+# OpenTofu state
+**/.terraform/
+**/terraform.tfstate
+**/terraform.tfstate.backup
+
 # Ansible build artefacts
 ansible/collections/cloudcore/*.tar.gz
 

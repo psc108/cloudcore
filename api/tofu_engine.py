@@ -288,9 +288,17 @@ def _find_tofu() -> str:
 
 
 def _execute_tofu(build: dict, var_overrides: dict) -> None:
-    work_dir = EXAMPLES_DIR / build["template"]
-    if not work_dir.exists():
+    src_dir = EXAMPLES_DIR / build["template"]
+    if not src_dir.exists():
         raise FileNotFoundError(f"Example directory not found: {build['template']}")
+
+    # Use the example directory directly but wipe any stale state first
+    import shutil
+    work_dir = src_dir
+    for stale in ("terraform.tfstate", "terraform.tfstate.backup"):
+        p = work_dir / stale
+        if p.exists():
+            p.unlink()
 
     tofu = _find_tofu()
 
@@ -326,17 +334,20 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
         _log(build, "─" * 60)
         return proc.returncode
 
-    # Skip tofu init when dev_overrides are active — it errors against the real registry
+    # With dev_overrides, tofu init always fails trying to resolve the provider from
+    # the registry. Skip init if modules are already cached (.terraform exists);
+    # run it only on first use of this example directory.
     using_dev_overrides = tofurc.exists() and "dev_overrides" in tofurc.read_text()
-    if not using_dev_overrides:
+    dot_terraform = work_dir / ".terraform"
+    if using_dev_overrides and dot_terraform.exists():
+        _log(build, "Skipping tofu init (.terraform cache present, dev_overrides active)")
+    else:
         rc = _run_cmd([tofu, "init", "-no-color"])
         if rc != 0:
             build["exit_code"] = rc
             build["status"] = "failed"
             _log(build, f"tofu init failed (exit {rc})")
             return
-    else:
-        _log(build, "Skipping tofu init (dev_overrides active)")
 
     # tofu apply
     rc = _run_cmd([tofu, "apply", "-auto-approve", "-no-color"])
