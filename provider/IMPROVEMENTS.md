@@ -77,12 +77,14 @@ by name without hardcoding IDs.
 each resource. Should be a typed sentinel so resources can switch on it cleanly.  
 **Fix:** Export a `NotFoundError` type from `client.go`; use `errors.As` in resources.
 Add a `WithTimeout` functional option to `client.New`.  
+**Status: COMPLETE** — `NotFoundError` exported (phase 1), `WithTimeout` option added (phase 4).  
 **Files:** `client.go`, all resource `Read` methods (update 404 check).
 
 ### 4.2 — Dependency updates
 **Problem:** `terraform-plugin-framework v1.11.0` is ~2 versions behind; 
 `golang.org/x/net v0.23.0` has known CVEs fixed in v0.33+.  
 **Fix:** `go get github.com/hashicorp/terraform-plugin-framework@latest && go mod tidy`.  
+**Status: COMPLETE** — framework v1.11.0 → v1.19.0, x/net v0.23.0 → v0.58.0, Go toolchain 1.22 → 1.25.0.  
 **Files:** `go.mod`, `go.sum`.
 
 ---
