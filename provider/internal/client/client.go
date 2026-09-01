@@ -25,14 +25,22 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func New(apiURL, apiToken string) *Client {
-	return &Client{
+type Option func(*Client)
+
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) { c.httpClient.Timeout = d }
+}
+
+func New(apiURL, apiToken string, opts ...Option) *Client {
+	c := &Client{
 		apiURL:   apiURL,
 		apiToken: apiToken,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
