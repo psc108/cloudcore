@@ -99,5 +99,9 @@ func (p *CloudCoreProvider) DataSources(_ context.Context) []func() datasource.D
 		datasources.NewVPCDataSource,
 		datasources.NewInstanceDataSource,
 		datasources.NewLoadBalancerDataSource,
+		datasources.NewSecurityGroupDataSource,
+		datasources.NewNFSServerDataSource,
+		datasources.NewDNSZoneDataSource,
+		datasources.NewDNSRecordDataSource,
 	}
 }
