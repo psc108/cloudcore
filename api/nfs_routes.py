@@ -175,9 +175,10 @@ def mount_config(nfs_id, share_name):
     if not share:
         return _problem(404, "Not Found", f"Share '{share_name}' not found")
     mount_point = f"/mnt/{share_name}"
+    export_path = share.get("path") or f"/exports/{share_name}"
     return jsonify({
         "nfs_server_ip": nfs.private_ip,
-        "export_path": share["path"],
+        "export_path": export_path,
         "mount_point": mount_point,
         "mount_command": nfs_compute.mount_command(nfs, share_name, mount_point),
         "cloud_init_entry": nfs_compute.cloud_init_mount_entry(
