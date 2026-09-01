@@ -6,11 +6,13 @@ import (
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -78,7 +80,13 @@ func (r *SecurityGroupResource) Metadata(_ context.Context, req resource.Metadat
 func (r *SecurityGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	ruleSchema := schema.NestedAttributeObject{
 		Attributes: map[string]schema.Attribute{
-			"protocol":    schema.StringAttribute{Required: true, Description: "tcp, udp, icmp, or -1 (all)."},
+			"protocol":    schema.StringAttribute{
+					Required: true,
+					Description: "tcp, udp, icmp, or -1 (all).",
+					Validators: []validator.String{
+						stringvalidator.OneOf("tcp", "udp", "icmp", "-1"),
+					},
+				},
 			"from_port":   schema.Int64Attribute{Optional: true, Description: "Start of port range."},
 			"to_port":     schema.Int64Attribute{Optional: true, Description: "End of port range."},
 			"cidr":        schema.StringAttribute{Required: true, Description: "Source/destination CIDR."},

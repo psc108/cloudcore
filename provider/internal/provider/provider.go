@@ -2,7 +2,10 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/datasources"
@@ -21,8 +24,9 @@ type CloudCoreProvider struct {
 }
 
 type CloudCoreProviderModel struct {
-	APIURL   types.String `tfsdk:"api_url"`
-	APIToken types.String `tfsdk:"api_token"`
+	APIURL         types.String `tfsdk:"api_url"`
+	APIToken       types.String `tfsdk:"api_token"`
+	RequestTimeout types.Int64  `tfsdk:"request_timeout"`
 }
 
 func New(version string) func() provider.Provider {
@@ -47,6 +51,10 @@ func (p *CloudCoreProvider) Schema(_ context.Context, _ provider.SchemaRequest, 
 				Optional:    true,
 				Sensitive:   true,
 				Description: "CloudCore API token. Defaults to CLOUDCORE_API_TOKEN env var.",
+			},
+			"request_timeout": schema.Int64Attribute{
+				Optional:    true,
+				Description: "HTTP request timeout in seconds. Defaults to 30.",
 			},
 		},
 	}
@@ -77,7 +85,25 @@ func (p *CloudCoreProvider) Configure(ctx context.Context, req provider.Configur
 		return
 	}
 
-	c := client.New(apiURL, apiToken)
+	// Warn if token is being sent over plain HTTP to a non-local endpoint.
+	if !strings.HasPrefix(apiURL, "https://") {
+		host := strings.TrimPrefix(strings.TrimPrefix(apiURL, "http://"), "https://")
+		host = strings.SplitN(host, "/", 2)[0]
+		host = strings.SplitN(host, ":", 2)[0]
+		if host != "127.0.0.1" && host != "localhost" {
+			resp.Diagnostics.AddWarning(
+				"Insecure API URL",
+				fmt.Sprintf("api_url %q does not use HTTPS. The API token will be transmitted in plaintext.", apiURL),
+			)
+		}
+	}
+
+	opts := []client.Option{}
+	if !config.RequestTimeout.IsNull() && config.RequestTimeout.ValueInt64() > 0 {
+		opts = append(opts, client.WithTimeout(time.Duration(config.RequestTimeout.ValueInt64())*time.Second))
+	}
+
+	c := client.New(apiURL, apiToken, opts...)
 	resp.ResourceData = c
 	resp.DataSourceData = c
 }
