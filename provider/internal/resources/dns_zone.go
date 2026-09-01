@@ -20,6 +20,7 @@ type DNSZoneResource struct {
 }
 
 type DNSZoneResourceModel struct {
+	ID        types.String `tfsdk:"id"`
 	Name      types.String `tfsdk:"name"`
 	CreatedAt types.String `tfsdk:"created_at"`
 }
@@ -43,6 +44,13 @@ func (r *DNSZoneResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	resp.Schema = schema.Schema{
 		Description: "Manages a CloudCore DNS zone.",
 		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:    true,
+				Description: "Zone identifier (same as name).",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"name": schema.StringAttribute{
 				Required:    true,
 				Description: "Zone name (e.g. 'myapp.cloudcore.local'). Forces replacement on change.",
@@ -86,6 +94,7 @@ func (r *DNSZoneResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
+	plan.ID = plan.Name
 	plan.CreatedAt = types.StringValue(result.CreatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -97,7 +106,6 @@ func (r *DNSZoneResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	// The API has no GET /v1/dns/zones/:name — list and find.
 	var result dnsZoneListAPIModel
 	if err := r.client.Get(ctx, "/v1/dns/zones", &result); err != nil {
 		resp.Diagnostics.AddError("Read DNS zones failed", err.Error())
@@ -105,12 +113,12 @@ func (r *DNSZoneResource) Read(ctx context.Context, req resource.ReadRequest, re
 	}
 	for _, z := range result.Items {
 		if z.Name == state.Name.ValueString() {
+			state.ID = state.Name
 			state.CreatedAt = types.StringValue(z.CreatedAt)
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}
 	}
-	// Zone not found — remove from state.
 	resp.State.RemoveResource(ctx)
 }
 
@@ -130,9 +138,6 @@ func (r *DNSZoneResource) Delete(ctx context.Context, req resource.DeleteRequest
 }
 
 func (r *DNSZoneResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	var state DNSZoneResourceModel
-	state.Name = types.StringValue(req.ID)
-
 	var result dnsZoneListAPIModel
 	if err := r.client.Get(ctx, "/v1/dns/zones", &result); err != nil {
 		resp.Diagnostics.AddError("Import DNS zone failed", err.Error())
@@ -140,7 +145,11 @@ func (r *DNSZoneResource) ImportState(ctx context.Context, req resource.ImportSt
 	}
 	for _, z := range result.Items {
 		if z.Name == req.ID {
-			state.CreatedAt = types.StringValue(z.CreatedAt)
+			state := DNSZoneResourceModel{
+				ID:        types.StringValue(z.Name),
+				Name:      types.StringValue(z.Name),
+				CreatedAt: types.StringValue(z.CreatedAt),
+			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}

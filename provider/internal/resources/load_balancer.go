@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
@@ -149,6 +150,11 @@ func (r *LoadBalancerResource) Read(ctx context.Context, req resource.ReadReques
 
 	var result lbAPIModel
 	if err := r.client.Get(ctx, "/v1/load-balancers/"+state.ID.ValueString(), &result); err != nil {
+		var nfe *client.NotFoundError
+		if errors.As(err, &nfe) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Read load balancer failed", err.Error())
 		return
 	}
@@ -198,6 +204,9 @@ func (r *LoadBalancerResource) Update(ctx context.Context, req resource.UpdateRe
 		resp.Diagnostics.AddError("Update load balancer failed", err.Error())
 		return
 	}
+	plan.DNSName = types.StringValue(result.DNSName)
+	plan.Internal = types.BoolValue(result.Internal)
+	plan.Status = types.StringValue(result.Status)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

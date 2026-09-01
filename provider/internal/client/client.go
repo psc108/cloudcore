@@ -10,6 +10,15 @@ import (
 	"time"
 )
 
+// NotFoundError is returned when the API responds with 404.
+type NotFoundError struct {
+	Path string
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("resource not found: %s", e.Path)
+}
+
 type Client struct {
 	apiURL     string
 	apiToken   string
@@ -55,6 +64,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return fmt.Errorf("read response: %w", err)
 	}
 
+	if resp.StatusCode == 404 {
+		return &NotFoundError{Path: path}
+	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
 	}

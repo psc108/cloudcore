@@ -22,6 +22,7 @@ type DNSRecordResource struct {
 }
 
 type DNSRecordResourceModel struct {
+	ID    types.String `tfsdk:"id"`
 	Zone  types.String `tfsdk:"zone"`
 	Name  types.String `tfsdk:"name"`
 	Type  types.String `tfsdk:"type"`
@@ -50,6 +51,13 @@ func (r *DNSRecordResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 	resp.Schema = schema.Schema{
 		Description: "Manages a CloudCore DNS record within a zone.",
 		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:    true,
+				Description: "Record identifier in the form zone/name/type.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"zone": schema.StringAttribute{
 				Required:    true,
 				Description: "Name of the DNS zone this record belongs to.",
@@ -97,8 +105,8 @@ func (r *DNSRecordResource) Configure(_ context.Context, req resource.ConfigureR
 	r.client = c
 }
 
-func (r *DNSRecordResource) recordPath(zone, name, rtype string) string {
-	return fmt.Sprintf("/v1/dns/zones/%s/records/%s/%s", zone, name, rtype)
+func recordID(zone, name, rtype string) string {
+	return fmt.Sprintf("%s/%s/%s", zone, name, strings.ToUpper(rtype))
 }
 
 func (r *DNSRecordResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -121,6 +129,7 @@ func (r *DNSRecordResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
+	plan.ID = types.StringValue(recordID(plan.Zone.ValueString(), plan.Name.ValueString(), plan.Type.ValueString()))
 	plan.TTL = types.Int64Value(result.TTL)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -139,6 +148,7 @@ func (r *DNSRecordResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 	for _, rec := range result.Items {
 		if rec.Name == state.Name.ValueString() && strings.EqualFold(rec.Type, state.Type.ValueString()) {
+			state.ID = types.StringValue(recordID(state.Zone.ValueString(), rec.Name, rec.Type))
 			state.Value = types.StringValue(rec.Value)
 			state.TTL = types.Int64Value(rec.TTL)
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -155,7 +165,6 @@ func (r *DNSRecordResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	// The API uses upsert (POST) — re-post to update value/TTL.
 	body := map[string]any{
 		"name":  plan.Name.ValueString(),
 		"type":  plan.Type.ValueString(),
@@ -167,6 +176,7 @@ func (r *DNSRecordResource) Update(ctx context.Context, req resource.UpdateReque
 		resp.Diagnostics.AddError("Update DNS record failed", err.Error())
 		return
 	}
+	plan.ID = types.StringValue(recordID(plan.Zone.ValueString(), plan.Name.ValueString(), plan.Type.ValueString()))
 	plan.TTL = types.Int64Value(result.TTL)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -191,24 +201,26 @@ func (r *DNSRecordResource) ImportState(ctx context.Context, req resource.Import
 		resp.Diagnostics.AddError("Invalid import ID", "Expected format: zone/name/type (e.g. myapp.local/www/A)")
 		return
 	}
-	state := DNSRecordResourceModel{
-		Zone: types.StringValue(parts[0]),
-		Name: types.StringValue(parts[1]),
-		Type: types.StringValue(strings.ToUpper(parts[2])),
-	}
+	zone, name, rtype := parts[0], parts[1], strings.ToUpper(parts[2])
 
 	var result dnsRecordListAPIModel
-	if err := r.client.Get(ctx, "/v1/dns/zones/"+parts[0]+"/records", &result); err != nil {
+	if err := r.client.Get(ctx, "/v1/dns/zones/"+zone+"/records", &result); err != nil {
 		resp.Diagnostics.AddError("Import DNS record failed", err.Error())
 		return
 	}
 	for _, rec := range result.Items {
-		if rec.Name == parts[1] && strings.EqualFold(rec.Type, parts[2]) {
-			state.Value = types.StringValue(rec.Value)
-			state.TTL = types.Int64Value(rec.TTL)
+		if rec.Name == name && strings.EqualFold(rec.Type, rtype) {
+			state := DNSRecordResourceModel{
+				ID:    types.StringValue(recordID(zone, name, rtype)),
+				Zone:  types.StringValue(zone),
+				Name:  types.StringValue(rec.Name),
+				Type:  types.StringValue(strings.ToUpper(rec.Type)),
+				Value: types.StringValue(rec.Value),
+				TTL:   types.Int64Value(rec.TTL),
+			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}
 	}
-	resp.Diagnostics.AddError("Import DNS record failed", fmt.Sprintf("record '%s/%s' not found in zone '%s'", parts[1], parts[2], parts[0]))
+	resp.Diagnostics.AddError("Import DNS record failed", fmt.Sprintf("record '%s/%s' not found in zone '%s'", name, rtype, zone))
 }
