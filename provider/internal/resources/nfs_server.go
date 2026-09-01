@@ -298,7 +298,6 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 			body := map[string]string{"name": s.Name.ValueString(), "clients": s.Clients.ValueString()}
 			if err := r.client.Post(ctx, "/v1/nfs-servers/"+nfsID+"/shares", body, nil); err != nil {
 				resp.Diagnostics.AddError("Add NFS share failed", err.Error())
-				return
 			}
 		}
 	}
@@ -308,12 +307,11 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 			path := fmt.Sprintf("/v1/nfs-servers/%s/shares/%s", nfsID, s.Name.ValueString())
 			if err := r.client.Delete(ctx, path); err != nil {
 				resp.Diagnostics.AddError("Remove NFS share failed", err.Error())
-				return
 			}
 		}
 	}
 
-	// Re-read to get updated state.
+	// Re-read always — reflects actual server state even after partial failure.
 	var result nfsServerAPIModel
 	if err := r.client.Get(ctx, "/v1/nfs-servers/"+nfsID, &result); err != nil {
 		resp.Diagnostics.AddError("Read NFS server after update failed", err.Error())

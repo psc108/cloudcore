@@ -72,6 +72,10 @@ func (d *VPCDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if (config.ID.IsNull() || config.ID.ValueString() == "") && (config.Name.IsNull() || config.Name.ValueString() == "") {
+		resp.Diagnostics.AddError("Missing lookup key", "At least one of 'id' or 'name' must be set.")
+		return
+	}
 
 	set := func(v vpcItemAPI) {
 		tags, diags := types.MapValueFrom(ctx, types.StringType, v.Tags)
@@ -187,6 +191,10 @@ func (d *InstanceDataSource) Read(ctx context.Context, req datasource.ReadReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if (config.ID.IsNull() || config.ID.ValueString() == "") && (config.Name.IsNull() || config.Name.ValueString() == "") {
+		resp.Diagnostics.AddError("Missing lookup key", "At least one of 'id' or 'name' must be set.")
+		return
+	}
 
 	set := func(i instanceItemAPI) {
 		sgIDs, diags := types.ListValueFrom(ctx, types.StringType, i.SecurityGroupIDs)
@@ -298,6 +306,10 @@ func (d *LoadBalancerDataSource) Read(ctx context.Context, req datasource.ReadRe
 	var config LoadBalancerDataSourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if (config.ID.IsNull() || config.ID.ValueString() == "") && (config.Name.IsNull() || config.Name.ValueString() == "") {
+		resp.Diagnostics.AddError("Missing lookup key", "At least one of 'id' or 'name' must be set.")
 		return
 	}
 
