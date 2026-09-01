@@ -87,7 +87,7 @@ systemctl --user restart cloudcore-api
 | Python | `>= 3.10` | Yes |
 | Ansible | `>= 2.15` | Yes (installed by `scripts/install.sh`) |
 | OpenTofu | `>= 1.8.0` | Optional — needed to run OpenTofu builds |
-| Go | `>= 1.22` | Optional — only needed to rebuild the provider binary |
+| Go | `>= 1.25` | Optional — only needed to rebuild the provider binary |
 
 ## OpenTofu
 
@@ -116,13 +116,19 @@ export CLOUDCORE_API_TOKEN=dev-token
 
 ### Modules
 
-Three reusable modules live in `modules/`:
+Nine reusable modules live in `modules/`:
 
 | Module | Path | Resources |
 |---|---|---|
 | VPC | `modules/vpc/` | `cloudcore_vpc` |
+| Subnets | `modules/subnets/` | subnet metadata |
 | Compute | `modules/compute/` | `cloudcore_instance` |
+| Instance Group | `modules/instance-group/` | `cloudcore_instance` (count-based) |
 | Load Balancer | `modules/load-balancer/` | `cloudcore_load_balancer` |
+| Security Groups | `modules/security-groups/` | `cloudcore_security_group` |
+| NFS Server | `modules/nfs-server/` | `cloudcore_nfs_server` |
+| DNS Zone | `modules/dns-zone/` | `cloudcore_dns_zone` |
+| DNS Records | `modules/dns-records/` | `cloudcore_dns_record` |
 
 All modules follow the standard argument contract:
 
@@ -157,8 +163,6 @@ tofu apply -var="suffix=abc123"
 
 Or run them end-to-end from the UI via **Builds → OpenTofu**.
 
-> **Note:** DNS and NFS resources are not yet implemented in the provider. Use the Ansible collection for those resource types.
-
 ### Provider Resources
 
 | Resource | Data Source | API path |
@@ -166,6 +170,10 @@ Or run them end-to-end from the UI via **Builds → OpenTofu**.
 | `cloudcore_vpc` | `cloudcore_vpc` | `/v1/vpcs` |
 | `cloudcore_instance` | `cloudcore_instance` | `/v1/instances` |
 | `cloudcore_load_balancer` | `cloudcore_load_balancer` | `/v1/load-balancers` |
+| `cloudcore_security_group` | `cloudcore_security_group` | `/v1/security-groups` |
+| `cloudcore_nfs_server` | `cloudcore_nfs_server` | `/v1/nfs-servers` |
+| `cloudcore_dns_zone` | `cloudcore_dns_zone` | `/v1/dns/zones` |
+| `cloudcore_dns_record` | `cloudcore_dns_record` | `/v1/dns/zones/{zone}/records` |
 
 ## Ansible Collection
 
@@ -220,9 +228,10 @@ Or run end-to-end from the UI via **Builds → Ansible**.
 | VPC | `cloudcore_vpc` | `cloudcore.cloudcore.vpc` | `/v1/vpcs` |
 | Instance | `cloudcore_instance` | `cloudcore.cloudcore.instance` | `/v1/instances` |
 | Load Balancer | `cloudcore_load_balancer` | `cloudcore.cloudcore.load_balancer` | `/v1/load-balancers` |
-| DNS Zone | — | `cloudcore.cloudcore.dns_zone` | `/v1/dns/zones` |
-| DNS Record | — | `cloudcore.cloudcore.dns_record` | `/v1/dns/zones/{zone}/records` |
-| NFS Server | — | `cloudcore.cloudcore.nfs_server` | `/v1/nfs-servers` |
+| Security Group | `cloudcore_security_group` | — | `/v1/security-groups` |
+| DNS Zone | `cloudcore_dns_zone` | `cloudcore.cloudcore.dns_zone` | `/v1/dns/zones` |
+| DNS Record | `cloudcore_dns_record` | `cloudcore.cloudcore.dns_record` | `/v1/dns/zones/{zone}/records` |
+| NFS Server | `cloudcore_nfs_server` | `cloudcore.cloudcore.nfs_server` | `/v1/nfs-servers` |
 | NFS Mount | — | `cloudcore.cloudcore.nfs_mount` | `/v1/nfs-servers/{id}/shares/{name}/mount-config` |
 
 ## Tests
