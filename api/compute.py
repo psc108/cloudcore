@@ -97,6 +97,15 @@ IMAGE_CATALOGUE: list[dict] = [
 ]
 
 
+def _scrub_known_hosts(port: int) -> None:
+    """Remove any stale known_hosts entry for 127.0.0.1:<port>."""
+    subprocess.run(
+        ["ssh-keygen", "-f", str(Path.home() / ".ssh" / "known_hosts"),
+         "-R", f"[127.0.0.1]:{port}"],
+        capture_output=True,
+    )
+
+
 def _free_port(start: int, end: int) -> int:
     """Find a free TCP port in [start, end]."""
     for port in range(start, end + 1):
@@ -383,6 +392,7 @@ def create_instance(instance: Instance) -> Instance:
             instance.private_ip = ""  # will be set from DHCP lease after boot
         else:
             ssh_host_port = _free_port(_SSH_PORT_START, _SSH_PORT_END)
+            _scrub_known_hosts(ssh_host_port)
             instance.ssh_host_port = ssh_host_port
             instance.private_ip = "10.0.2.15"  # SLIRP convention
             xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path, ssh_host_port)
