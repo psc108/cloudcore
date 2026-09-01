@@ -9,6 +9,7 @@ import (
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -164,6 +165,32 @@ func (r *InstanceResource) Configure(_ context.Context, req resource.ConfigureRe
 	r.client = c
 }
 
+func instanceMapToState(ctx context.Context, result instanceAPIModel, state *InstanceResourceModel) error {
+	state.ID = types.StringValue(result.ID)
+	state.Name = types.StringValue(result.Name)
+	state.ImageID = types.StringValue(result.ImageID)
+	state.Flavor = types.StringValue(result.Flavor)
+	state.VPCID = types.StringValue(result.VPCID)
+	state.SubnetID = types.StringValue(result.SubnetID)
+	state.PrivateIP = types.StringValue(result.PrivateIP)
+	state.PublicIP = types.StringValue(result.PublicIP)
+	state.SSHPort = types.Int64Value(result.SSHPort)
+	state.SSHUser = types.StringValue(result.SSHUser)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
+	sgIDs, diags := stringsToList(ctx, result.SecurityGroupIDs)
+	if diags.HasError() {
+		return fmt.Errorf("converting security_group_ids")
+	}
+	state.SecurityGroupIDs = sgIDs
+	tags, diags := tagsToMap(ctx, result.Tags)
+	if diags.HasError() {
+		return fmt.Errorf("converting tags")
+	}
+	state.Tags = tags
+	return nil
+}
+
 func (r *InstanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan InstanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -200,14 +227,10 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 		resp.Diagnostics.AddError("Create instance failed", err.Error())
 		return
 	}
-
-	plan.ID = types.StringValue(result.ID)
-	plan.PrivateIP = types.StringValue(result.PrivateIP)
-	plan.PublicIP = types.StringValue(result.PublicIP)
-	plan.SSHPort = types.Int64Value(result.SSHPort)
-	plan.SSHUser = types.StringValue(result.SSHUser)
-	plan.Status = types.StringValue(result.Status)
-	plan.CreatedAt = types.StringValue(result.CreatedAt)
+	if err := instanceMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map instance state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -230,11 +253,10 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 			resp.Diagnostics.AddError("Poll instance failed", err.Error())
 			return
 		}
-		plan.Status = types.StringValue(poll.Status)
-		plan.PrivateIP = types.StringValue(poll.PrivateIP)
-		plan.PublicIP = types.StringValue(poll.PublicIP)
-		plan.SSHPort = types.Int64Value(poll.SSHPort)
-		plan.SSHUser = types.StringValue(poll.SSHUser)
+		if err := instanceMapToState(ctx, poll, &plan); err != nil {
+			resp.Diagnostics.AddError("Map instance state failed", err.Error())
+			return
+		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		if poll.Status == "running" {
 			return
@@ -263,27 +285,10 @@ func (r *InstanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 		resp.Diagnostics.AddError("Read instance failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.ImageID = types.StringValue(result.ImageID)
-	state.Flavor = types.StringValue(result.Flavor)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.SubnetID = types.StringValue(result.SubnetID)
-	state.PrivateIP = types.StringValue(result.PrivateIP)
-	state.PublicIP = types.StringValue(result.PublicIP)
-	state.SSHPort = types.Int64Value(result.SSHPort)
-	state.SSHUser = types.StringValue(result.SSHUser)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-
-	sgIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SecurityGroupIDs)
-	resp.Diagnostics.Append(diags...)
-	state.SecurityGroupIDs = sgIDs
-
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
+	if err := instanceMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map instance state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -314,12 +319,10 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 		resp.Diagnostics.AddError("Update instance failed", err.Error())
 		return
 	}
-
-	plan.PrivateIP = types.StringValue(result.PrivateIP)
-	plan.PublicIP = types.StringValue(result.PublicIP)
-	plan.SSHPort = types.Int64Value(result.SSHPort)
-	plan.SSHUser = types.StringValue(result.SSHUser)
-	plan.Status = types.StringValue(result.Status)
+	if err := instanceMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map instance state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -335,35 +338,21 @@ func (r *InstanceResource) Delete(ctx context.Context, req resource.DeleteReques
 }
 
 func (r *InstanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	var state InstanceResourceModel
-	state.ID = types.StringValue(req.ID)
-
 	var result instanceAPIModel
 	if err := r.client.Get(ctx, "/v1/instances/"+req.ID, &result); err != nil {
 		resp.Diagnostics.AddError("Import instance failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.ImageID = types.StringValue(result.ImageID)
-	state.Flavor = types.StringValue(result.Flavor)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.SubnetID = types.StringValue(result.SubnetID)
-	state.PrivateIP = types.StringValue(result.PrivateIP)
-	state.PublicIP = types.StringValue(result.PublicIP)
-	state.SSHPort = types.Int64Value(result.SSHPort)
-	state.SSHUser = types.StringValue(result.SSHUser)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-	state.Timeouts = timeouts.Value{}
-
-	sgIDs, diags := types.ListValueFrom(ctx, types.StringType, result.SecurityGroupIDs)
-	resp.Diagnostics.Append(diags...)
-	state.SecurityGroupIDs = sgIDs
-
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
+	var state InstanceResourceModel
+	state.Timeouts = timeouts.Value{
+		Object: types.ObjectNull(map[string]attr.Type{
+			"create": types.StringType,
+			"delete": types.StringType,
+		}),
+	}
+	if err := instanceMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map instance state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

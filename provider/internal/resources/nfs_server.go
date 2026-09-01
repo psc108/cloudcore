@@ -177,7 +177,7 @@ func (r *NFSServerResource) Configure(_ context.Context, req resource.ConfigureR
 	r.client = c
 }
 
-func (r *NFSServerResource) sharesFromAPI(ctx context.Context, apiShares []nfsShareAPIModel) (types.List, error) {
+func (r *NFSServerResource) sharesFromAPI(_ context.Context, apiShares []nfsShareAPIModel) (types.List, error) {
 	elems := make([]attr.Value, len(apiShares))
 	for i, s := range apiShares {
 		obj, diags := types.ObjectValue(nfsShareAttrTypes, map[string]attr.Value{
@@ -195,6 +195,27 @@ func (r *NFSServerResource) sharesFromAPI(ctx context.Context, apiShares []nfsSh
 		return types.ListNull(types.ObjectType{AttrTypes: nfsShareAttrTypes}), fmt.Errorf("building shares list")
 	}
 	return list, nil
+}
+
+func (r *NFSServerResource) nfsMapToState(ctx context.Context, result nfsServerAPIModel, state *NFSServerResourceModel) error {
+	state.ID = types.StringValue(result.ID)
+	state.Name = types.StringValue(result.Name)
+	state.VPCID = types.StringValue(result.VPCID)
+	state.Flavor = types.StringValue(result.Flavor)
+	state.DiskGB = types.Int64Value(result.DiskGB)
+	state.PrivateIP = types.StringValue(result.PrivateIP)
+	state.Status = types.StringValue(result.Status)
+	tags, diags := tagsToMap(ctx, result.Tags)
+	if diags.HasError() {
+		return fmt.Errorf("converting tags")
+	}
+	state.Tags = tags
+	shares, err := r.sharesFromAPI(ctx, result.Shares)
+	if err != nil {
+		return fmt.Errorf("converting shares: %w", err)
+	}
+	state.Shares = shares
+	return nil
 }
 
 func (r *NFSServerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -236,17 +257,10 @@ func (r *NFSServerResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("Create NFS server failed", err.Error())
 		return
 	}
-
-	plan.ID = types.StringValue(result.ID)
-	plan.PrivateIP = types.StringValue(result.PrivateIP)
-	plan.Status = types.StringValue(result.Status)
-
-	shares, err := r.sharesFromAPI(ctx, result.Shares)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse NFS shares failed", err.Error())
+	if err := r.nfsMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map NFS server state failed", err.Error())
 		return
 	}
-	plan.Shares = shares
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -268,14 +282,10 @@ func (r *NFSServerResource) Create(ctx context.Context, req resource.CreateReque
 			resp.Diagnostics.AddError("Poll NFS server failed", err.Error())
 			return
 		}
-		plan.Status = types.StringValue(poll.Status)
-		plan.PrivateIP = types.StringValue(poll.PrivateIP)
-		pollShares, err := r.sharesFromAPI(ctx, poll.Shares)
-		if err != nil {
-			resp.Diagnostics.AddError("Parse NFS shares failed", err.Error())
+		if err := r.nfsMapToState(ctx, poll, &plan); err != nil {
+			resp.Diagnostics.AddError("Map NFS server state failed", err.Error())
 			return
 		}
-		plan.Shares = pollShares
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		if poll.Status == "running" {
 			return
@@ -304,24 +314,10 @@ func (r *NFSServerResource) Read(ctx context.Context, req resource.ReadRequest, 
 		resp.Diagnostics.AddError("Read NFS server failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.Flavor = types.StringValue(result.Flavor)
-	state.DiskGB = types.Int64Value(result.DiskGB)
-	state.PrivateIP = types.StringValue(result.PrivateIP)
-	state.Status = types.StringValue(result.Status)
-
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
-	shares, err := r.sharesFromAPI(ctx, result.Shares)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse NFS shares failed", err.Error())
+	if err := r.nfsMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map NFS server state failed", err.Error())
 		return
 	}
-	state.Shares = shares
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -374,14 +370,10 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 	plan.ID = state.ID
-	plan.PrivateIP = types.StringValue(result.PrivateIP)
-	plan.Status = types.StringValue(result.Status)
-	shares, err := r.sharesFromAPI(ctx, result.Shares)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse NFS shares failed", err.Error())
+	if err := r.nfsMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map NFS server state failed", err.Error())
 		return
 	}
-	plan.Shares = shares
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -397,32 +389,21 @@ func (r *NFSServerResource) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *NFSServerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	var state NFSServerResourceModel
-	state.ID = types.StringValue(req.ID)
-
 	var result nfsServerAPIModel
 	if err := r.client.Get(ctx, "/v1/nfs-servers/"+req.ID, &result); err != nil {
 		resp.Diagnostics.AddError("Import NFS server failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.VPCID = types.StringValue(result.VPCID)
-	state.Flavor = types.StringValue(result.Flavor)
-	state.DiskGB = types.Int64Value(result.DiskGB)
-	state.PrivateIP = types.StringValue(result.PrivateIP)
-	state.Status = types.StringValue(result.Status)
-	state.Timeouts = timeouts.Value{}
-
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
-
-	shares, err := r.sharesFromAPI(ctx, result.Shares)
-	if err != nil {
-		resp.Diagnostics.AddError("Parse NFS shares failed", err.Error())
+	var state NFSServerResourceModel
+	state.Timeouts = timeouts.Value{
+		Object: types.ObjectNull(map[string]attr.Type{
+			"create": types.StringType,
+			"delete": types.StringType,
+		}),
+	}
+	if err := r.nfsMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map NFS server state failed", err.Error())
 		return
 	}
-	state.Shares = shares
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

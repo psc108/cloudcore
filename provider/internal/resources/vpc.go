@@ -21,13 +21,13 @@ type VPCResource struct {
 }
 
 type VPCResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	CIDRBlock   types.String `tfsdk:"cidr_block"`
-	DNSSupport  types.Bool   `tfsdk:"dns_support"`
-	Status      types.String `tfsdk:"status"`
-	CreatedAt   types.String `tfsdk:"created_at"`
-	Tags        types.Map    `tfsdk:"tags"`
+	ID         types.String `tfsdk:"id"`
+	Name       types.String `tfsdk:"name"`
+	CIDRBlock  types.String `tfsdk:"cidr_block"`
+	DNSSupport types.Bool   `tfsdk:"dns_support"`
+	Status     types.String `tfsdk:"status"`
+	CreatedAt  types.String `tfsdk:"created_at"`
+	Tags       types.Map    `tfsdk:"tags"`
 }
 
 type vpcAPIModel struct {
@@ -51,8 +51,8 @@ func (r *VPCResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 		MarkdownDescription: "Manages a CloudCore VPC (isolated virtual network). API path: `/v1/vpcs`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed:            true,
-				Description:         "API-assigned VPC identifier.",
+				Computed:    true,
+				Description: "API-assigned VPC identifier.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -96,6 +96,21 @@ func (r *VPCResource) Configure(_ context.Context, req resource.ConfigureRequest
 	r.client = c
 }
 
+func vpcMapToState(ctx context.Context, result vpcAPIModel, state *VPCResourceModel) error {
+	state.ID = types.StringValue(result.ID)
+	state.Name = types.StringValue(result.Name)
+	state.CIDRBlock = types.StringValue(result.CIDRBlock)
+	state.DNSSupport = types.BoolValue(result.DNSSupport)
+	state.Status = types.StringValue(result.Status)
+	state.CreatedAt = types.StringValue(result.CreatedAt)
+	tags, diags := tagsToMap(ctx, result.Tags)
+	if diags.HasError() {
+		return fmt.Errorf("converting tags")
+	}
+	state.Tags = tags
+	return nil
+}
+
 func (r *VPCResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan VPCResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -118,11 +133,10 @@ func (r *VPCResource) Create(ctx context.Context, req resource.CreateRequest, re
 		resp.Diagnostics.AddError("Create VPC failed", err.Error())
 		return
 	}
-
-	plan.ID = types.StringValue(result.ID)
-	plan.DNSSupport = types.BoolValue(result.DNSSupport)
-	plan.Status = types.StringValue(result.Status)
-	plan.CreatedAt = types.StringValue(result.CreatedAt)
+	if err := vpcMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map VPC state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -143,15 +157,10 @@ func (r *VPCResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		resp.Diagnostics.AddError("Read VPC failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.CIDRBlock = types.StringValue(result.CIDRBlock)
-	state.DNSSupport = types.BoolValue(result.DNSSupport)
-	state.Status = types.StringValue(result.Status)
-	state.CreatedAt = types.StringValue(result.CreatedAt)
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
+	if err := vpcMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map VPC state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -177,8 +186,10 @@ func (r *VPCResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		resp.Diagnostics.AddError("Update VPC failed", err.Error())
 		return
 	}
-	plan.DNSSupport = types.BoolValue(result.DNSSupport)
-	plan.Status = types.StringValue(result.Status)
+	if err := vpcMapToState(ctx, result, &plan); err != nil {
+		resp.Diagnostics.AddError("Map VPC state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -194,20 +205,15 @@ func (r *VPCResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 }
 
 func (r *VPCResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	var state VPCResourceModel
-	state.ID = types.StringValue(req.ID)
-
 	var result vpcAPIModel
 	if err := r.client.Get(ctx, "/v1/vpcs/"+req.ID, &result); err != nil {
 		resp.Diagnostics.AddError("Import VPC failed", err.Error())
 		return
 	}
-
-	state.Name = types.StringValue(result.Name)
-	state.CIDRBlock = types.StringValue(result.CIDRBlock)
-	state.DNSSupport = types.BoolValue(result.DNSSupport)
-	tags, diags := types.MapValueFrom(ctx, types.StringType, result.Tags)
-	resp.Diagnostics.Append(diags...)
-	state.Tags = tags
+	var state VPCResourceModel
+	if err := vpcMapToState(ctx, result, &state); err != nil {
+		resp.Diagnostics.AddError("Map VPC state failed", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
