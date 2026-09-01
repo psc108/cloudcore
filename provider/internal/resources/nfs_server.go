@@ -78,10 +78,11 @@ func (r *NFSServerResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *NFSServerResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a CloudCore NFS server with one or more exports.",
+		MarkdownDescription: "Manages a CloudCore NFS server with one or more exports. Polls until `status = running` within the create timeout. API path: `/v1/nfs-servers`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "API-assigned NFS server identifier.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -154,6 +155,7 @@ func (r *NFSServerResource) Schema(ctx context.Context, _ resource.SchemaRequest
 			"tags": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Description: "Key/value tags to attach to the NFS server.",
 			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
 				Create: true,

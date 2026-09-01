@@ -48,24 +48,29 @@ func (r *VPCResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 
 func (r *VPCResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages a CloudCore VPC (isolated virtual network). API path: `/v1/vpcs`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:            true,
+				Description:         "API-assigned VPC identifier.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"name":       schema.StringAttribute{Required: true},
-			"cidr_block": schema.StringAttribute{Required: true},
+			"name":       schema.StringAttribute{Required: true, Description: "Human-readable VPC name."},
+			"cidr_block": schema.StringAttribute{Required: true, Description: "IPv4 CIDR block for the VPC (e.g. '10.0.0.0/16')."},
 			"dns_support": schema.BoolAttribute{
-				Optional: true,
-				Computed: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "Whether DNS resolution is enabled in the VPC. Defaults to true.",
 			},
 			"status": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Current VPC status (API-assigned).",
 			},
 			"created_at": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ISO 8601 timestamp when the VPC was created (API-assigned).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -73,6 +78,7 @@ func (r *VPCResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			"tags": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Description: "Key/value tags to attach to the VPC.",
 			},
 		},
 	}

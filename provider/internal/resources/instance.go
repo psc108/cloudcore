@@ -70,29 +70,34 @@ func (r *InstanceResource) Metadata(_ context.Context, req resource.MetadataRequ
 
 func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages a CloudCore compute instance (VM). Polls until `status = running` within the create timeout. API path: `/v1/instances`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "API-assigned instance identifier.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"name":     schema.StringAttribute{Required: true},
-			"image_id": schema.StringAttribute{Required: true},
+			"name":     schema.StringAttribute{Required: true, Description: "Instance name."},
+			"image_id": schema.StringAttribute{Required: true, Description: "OS image identifier to boot from."},
 			"flavor": schema.StringAttribute{
-				Required: true,
+				Required:    true,
+				Description: "Compute flavor: standard.nano, standard.small, standard.medium, or standard.large.",
 				Validators: []validator.String{
 					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large"),
 				},
 			},
 			"vpc_id": schema.StringAttribute{
-				Required: true,
+				Required:    true,
+				Description: "VPC to attach the instance to. Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"subnet_id": schema.StringAttribute{
-				Required: true,
+				Required:    true,
+				Description: "Subnet to place the instance in. Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -100,31 +105,36 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			"security_group_ids": schema.ListAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Description: "List of security group IDs to attach to the instance.",
 			},
 			"user_data": schema.StringAttribute{
-				Optional:  true,
-				Sensitive: true,
+				Optional:    true,
+				Sensitive:   true,
+				Description: "Cloud-init user data script. Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"private_ip": schema.StringAttribute{Computed: true},
-			"public_ip":  schema.StringAttribute{Computed: true},
+			"private_ip": schema.StringAttribute{Computed: true, Description: "Private IP address assigned by the API."},
+			"public_ip":  schema.StringAttribute{Computed: true, Description: "Public IP address, if assigned."},
 			"ssh_port": schema.Int64Attribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Host port forwarded to the instance SSH service (SLIRP mode).",
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
 			"ssh_user": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "Default SSH username for the instance image.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"status":     schema.StringAttribute{Computed: true},
+			"status":     schema.StringAttribute{Computed: true, Description: "Current instance status (API-assigned)."},
 			"created_at": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ISO 8601 timestamp when the instance was created (API-assigned).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -132,6 +142,7 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			"tags": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Description: "Key/value tags to attach to the instance.",
 			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
 				Create: true,

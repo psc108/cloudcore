@@ -46,14 +46,14 @@ func (d *VPCDataSource) Metadata(_ context.Context, req datasource.MetadataReque
 
 func (d *VPCDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore VPC by ID or name.",
+		MarkdownDescription: "Fetches a CloudCore VPC by ID or name. API path: `/v1/vpcs`.",
 		Attributes: map[string]schema.Attribute{
-			"id":          schema.StringAttribute{Optional: true, Computed: true},
-			"name":        schema.StringAttribute{Optional: true, Computed: true},
-			"cidr_block":  schema.StringAttribute{Computed: true},
-			"dns_support": schema.BoolAttribute{Computed: true},
-			"status":      schema.StringAttribute{Computed: true},
-			"tags":        schema.MapAttribute{Computed: true, ElementType: types.StringType},
+			"id":          schema.StringAttribute{Optional: true, Computed: true, Description: "VPC ID. One of id or name must be set."},
+			"name":        schema.StringAttribute{Optional: true, Computed: true, Description: "VPC name. One of id or name must be set."},
+			"cidr_block":  schema.StringAttribute{Computed: true, Description: "IPv4 CIDR block of the VPC."},
+			"dns_support": schema.BoolAttribute{Computed: true, Description: "Whether DNS resolution is enabled."},
+			"status":      schema.StringAttribute{Computed: true, Description: "Current VPC status."},
+			"tags":        schema.MapAttribute{Computed: true, ElementType: types.StringType, Description: "Tags attached to the VPC."},
 		},
 	}
 }
@@ -160,19 +160,19 @@ func (d *InstanceDataSource) Metadata(_ context.Context, req datasource.Metadata
 
 func (d *InstanceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore instance by ID or name.",
+		MarkdownDescription: "Fetches a CloudCore compute instance by ID or name. API path: `/v1/instances`.",
 		Attributes: map[string]schema.Attribute{
-			"id":                 schema.StringAttribute{Optional: true, Computed: true},
-			"name":               schema.StringAttribute{Optional: true, Computed: true},
-			"image_id":           schema.StringAttribute{Computed: true},
-			"flavor":             schema.StringAttribute{Computed: true},
-			"vpc_id":             schema.StringAttribute{Computed: true},
-			"subnet_id":          schema.StringAttribute{Computed: true},
-			"security_group_ids": schema.ListAttribute{Computed: true, ElementType: types.StringType},
-			"private_ip":         schema.StringAttribute{Computed: true},
-			"public_ip":          schema.StringAttribute{Computed: true},
-			"status":             schema.StringAttribute{Computed: true},
-			"tags":               schema.MapAttribute{Computed: true, ElementType: types.StringType},
+			"id":                 schema.StringAttribute{Optional: true, Computed: true, Description: "Instance ID. One of id or name must be set."},
+			"name":               schema.StringAttribute{Optional: true, Computed: true, Description: "Instance name. One of id or name must be set."},
+			"image_id":           schema.StringAttribute{Computed: true, Description: "OS image identifier."},
+			"flavor":             schema.StringAttribute{Computed: true, Description: "Compute flavor."},
+			"vpc_id":             schema.StringAttribute{Computed: true, Description: "VPC the instance is attached to."},
+			"subnet_id":          schema.StringAttribute{Computed: true, Description: "Subnet the instance is placed in."},
+			"security_group_ids": schema.ListAttribute{Computed: true, ElementType: types.StringType, Description: "Security group IDs attached to the instance."},
+			"private_ip":         schema.StringAttribute{Computed: true, Description: "Private IP address."},
+			"public_ip":          schema.StringAttribute{Computed: true, Description: "Public IP address, if assigned."},
+			"status":             schema.StringAttribute{Computed: true, Description: "Current instance status."},
+			"tags":               schema.MapAttribute{Computed: true, ElementType: types.StringType, Description: "Tags attached to the instance."},
 		},
 	}
 }
@@ -279,17 +279,17 @@ func (d *LoadBalancerDataSource) Metadata(_ context.Context, req datasource.Meta
 
 func (d *LoadBalancerDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore load balancer by ID or name.",
+		MarkdownDescription: "Fetches a CloudCore load balancer by ID or name. API path: `/v1/load-balancers`.",
 		Attributes: map[string]schema.Attribute{
-			"id":         schema.StringAttribute{Optional: true, Computed: true},
-			"name":       schema.StringAttribute{Optional: true, Computed: true},
-			"type":       schema.StringAttribute{Computed: true},
-			"vpc_id":     schema.StringAttribute{Computed: true},
-			"subnet_ids": schema.ListAttribute{Computed: true, ElementType: types.StringType},
-			"internal":   schema.BoolAttribute{Computed: true},
-			"dns_name":   schema.StringAttribute{Computed: true},
-			"status":     schema.StringAttribute{Computed: true},
-			"tags":       schema.MapAttribute{Computed: true, ElementType: types.StringType},
+			"id":         schema.StringAttribute{Optional: true, Computed: true, Description: "Load balancer ID. One of id or name must be set."},
+			"name":       schema.StringAttribute{Optional: true, Computed: true, Description: "Load balancer name. One of id or name must be set."},
+			"type":       schema.StringAttribute{Computed: true, Description: "Load balancer type: network (L4) or application (L7)."},
+			"vpc_id":     schema.StringAttribute{Computed: true, Description: "VPC the load balancer is attached to."},
+			"subnet_ids": schema.ListAttribute{Computed: true, ElementType: types.StringType, Description: "Subnet IDs the load balancer listens on."},
+			"internal":   schema.BoolAttribute{Computed: true, Description: "Whether the load balancer is internal."},
+			"dns_name":   schema.StringAttribute{Computed: true, Description: "DNS name assigned to the load balancer."},
+			"status":     schema.StringAttribute{Computed: true, Description: "Current load balancer status."},
+			"tags":       schema.MapAttribute{Computed: true, ElementType: types.StringType, Description: "Tags attached to the load balancer."},
 		},
 	}
 }
@@ -391,15 +391,15 @@ func (d *SecurityGroupDataSource) Metadata(_ context.Context, req datasource.Met
 
 func (d *SecurityGroupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore security group by ID or name.",
+		MarkdownDescription: "Fetches a CloudCore security group by ID or name. API path: `/v1/security-groups`.",
 		Attributes: map[string]schema.Attribute{
-			"id":          schema.StringAttribute{Optional: true, Computed: true},
-			"name":        schema.StringAttribute{Optional: true, Computed: true},
-			"description": schema.StringAttribute{Computed: true},
-			"vpc_id":      schema.StringAttribute{Computed: true},
-			"status":      schema.StringAttribute{Computed: true},
-			"created_at":  schema.StringAttribute{Computed: true},
-			"tags":        schema.MapAttribute{Computed: true, ElementType: types.StringType},
+			"id":          schema.StringAttribute{Optional: true, Computed: true, Description: "Security group ID. One of id or name must be set."},
+			"name":        schema.StringAttribute{Optional: true, Computed: true, Description: "Security group name. One of id or name must be set."},
+			"description": schema.StringAttribute{Computed: true, Description: "Human-readable description."},
+			"vpc_id":      schema.StringAttribute{Computed: true, Description: "VPC the security group belongs to."},
+			"status":      schema.StringAttribute{Computed: true, Description: "Current security group status."},
+			"created_at":  schema.StringAttribute{Computed: true, Description: "ISO 8601 creation timestamp."},
+			"tags":        schema.MapAttribute{Computed: true, ElementType: types.StringType, Description: "Tags attached to the security group."},
 		},
 	}
 }
@@ -500,16 +500,16 @@ func (d *NFSServerDataSource) Metadata(_ context.Context, req datasource.Metadat
 
 func (d *NFSServerDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore NFS server by ID or name.",
+		MarkdownDescription: "Fetches a CloudCore NFS server by ID or name. API path: `/v1/nfs-servers`.",
 		Attributes: map[string]schema.Attribute{
-			"id":         schema.StringAttribute{Optional: true, Computed: true},
-			"name":       schema.StringAttribute{Optional: true, Computed: true},
-			"vpc_id":     schema.StringAttribute{Computed: true},
-			"flavor":     schema.StringAttribute{Computed: true},
-			"disk_gb":    schema.Int64Attribute{Computed: true},
-			"private_ip": schema.StringAttribute{Computed: true},
-			"status":     schema.StringAttribute{Computed: true},
-			"tags":       schema.MapAttribute{Computed: true, ElementType: types.StringType},
+			"id":         schema.StringAttribute{Optional: true, Computed: true, Description: "NFS server ID. One of id or name must be set."},
+			"name":       schema.StringAttribute{Optional: true, Computed: true, Description: "NFS server name. One of id or name must be set."},
+			"vpc_id":     schema.StringAttribute{Computed: true, Description: "VPC the NFS server is attached to."},
+			"flavor":     schema.StringAttribute{Computed: true, Description: "Compute flavor of the NFS server VM."},
+			"disk_gb":    schema.Int64Attribute{Computed: true, Description: "Storage disk size in GiB."},
+			"private_ip": schema.StringAttribute{Computed: true, Description: "Private IP address of the NFS server."},
+			"status":     schema.StringAttribute{Computed: true, Description: "Current NFS server status."},
+			"tags":       schema.MapAttribute{Computed: true, ElementType: types.StringType, Description: "Tags attached to the NFS server."},
 		},
 	}
 }
@@ -599,10 +599,10 @@ func (d *DNSZoneDataSource) Metadata(_ context.Context, req datasource.MetadataR
 
 func (d *DNSZoneDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore DNS zone by name.",
+		MarkdownDescription: "Fetches a CloudCore DNS zone by name. API path: `/v1/dns/zones`.",
 		Attributes: map[string]schema.Attribute{
-			"name":       schema.StringAttribute{Required: true},
-			"created_at": schema.StringAttribute{Computed: true},
+			"name":       schema.StringAttribute{Required: true, Description: "Zone name to look up (e.g. 'myapp.cloudcore.local')."},
+			"created_at": schema.StringAttribute{Computed: true, Description: "ISO 8601 timestamp when the zone was created."},
 		},
 	}
 }
@@ -674,13 +674,13 @@ func (d *DNSRecordDataSource) Metadata(_ context.Context, req datasource.Metadat
 
 func (d *DNSRecordDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Fetches a CloudCore DNS record by zone, name, and type.",
+		MarkdownDescription: "Fetches a CloudCore DNS record by zone, name, and type. API path: `/v1/dns/zones/{zone}/records`.",
 		Attributes: map[string]schema.Attribute{
-			"zone":  schema.StringAttribute{Required: true},
-			"name":  schema.StringAttribute{Required: true},
-			"type":  schema.StringAttribute{Required: true},
-			"value": schema.StringAttribute{Computed: true},
-			"ttl":   schema.Int64Attribute{Computed: true},
+			"zone":  schema.StringAttribute{Required: true, Description: "Name of the DNS zone containing the record."},
+			"name":  schema.StringAttribute{Required: true, Description: "Record name (e.g. 'www', '@')."},
+			"type":  schema.StringAttribute{Required: true, Description: "Record type: A, CNAME, or TXT."},
+			"value": schema.StringAttribute{Computed: true, Description: "Record value (IP address, hostname, or text)."},
+			"ttl":   schema.Int64Attribute{Computed: true, Description: "Time-to-live in seconds."},
 		},
 	}
 }
