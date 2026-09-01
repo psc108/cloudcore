@@ -42,7 +42,7 @@ func (r *DNSZoneResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *DNSZoneResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a CloudCore DNS zone.",
+		MarkdownDescription: "Manages a CloudCore DNS zone. The zone `name` is used as the resource ID. API path: `/v1/dns/zones`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,

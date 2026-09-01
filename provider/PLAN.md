@@ -137,7 +137,7 @@ the assumption is visible.
 
 ---
 
-## Phase 4 — Schema Polish (documentation and discoverability)
+## Phase 4 — Schema Polish (documentation and discoverability) ✓ COMPLETE
 
 ### 4.1 — Descriptions on all schema attributes
 
@@ -216,7 +216,7 @@ rationalised.
 | 2 | 2.3 Configurable request timeout | Trivial | Hardcoded limit affects all users |
 | 3 | 3.1 Retry logic | Low | Brittle under transient API failures |
 | 3 | 3.2 Pagination | Low | Silent wrong results on large accounts |
-| 4 | 4.1 Attribute descriptions | Medium | No generated documentation |
-| 4 | 4.2 Resource MarkdownDescription | Low | Poor IDE/registry experience |
+| 4 | 4.1 Attribute descriptions | Medium | No generated documentation | ✓ |
+| 4 | 4.2 Resource MarkdownDescription | Low | Poor IDE/registry experience | ✓ |
 | 5 | 5.1 Acceptance tests | Medium | No regression safety |
 | 6 | 6.1 Struct/mapping deduplication | Medium | Maintenance burden grows |

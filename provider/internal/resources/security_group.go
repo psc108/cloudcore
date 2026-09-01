@@ -82,47 +82,53 @@ func (r *SecurityGroupResource) Schema(_ context.Context, _ resource.SchemaReque
 		Attributes: map[string]schema.Attribute{
 			"protocol":    schema.StringAttribute{
 					Required: true,
-					Description: "tcp, udp, icmp, or -1 (all).",
+					Description: "Protocol: tcp, udp, icmp, or -1 (all traffic).",
 					Validators: []validator.String{
 						stringvalidator.OneOf("tcp", "udp", "icmp", "-1"),
 					},
 				},
-			"from_port":   schema.Int64Attribute{Optional: true, Description: "Start of port range."},
-			"to_port":     schema.Int64Attribute{Optional: true, Description: "End of port range."},
-			"cidr":        schema.StringAttribute{Required: true, Description: "Source/destination CIDR."},
-			"description": schema.StringAttribute{Optional: true, Description: "Rule description."},
+			"from_port":   schema.Int64Attribute{Optional: true, Description: "Start of port range (inclusive)."},
+			"to_port":     schema.Int64Attribute{Optional: true, Description: "End of port range (inclusive)."},
+			"cidr":        schema.StringAttribute{Required: true, Description: "Source (ingress) or destination (egress) CIDR block."},
+			"description": schema.StringAttribute{Optional: true, Description: "Human-readable rule description."},
 		},
 	}
 	resp.Schema = schema.Schema{
-		Description: "Manages a CloudCore security group with ingress and egress rules.",
+		MarkdownDescription: "Manages a CloudCore security group with ingress and egress rules. API path: `/v1/security-groups`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
+				Description:   "API-assigned security group identifier.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"name": schema.StringAttribute{Required: true},
+			"name": schema.StringAttribute{Required: true, Description: "Security group name."},
 			"description": schema.StringAttribute{
-				Optional: true,
-				Computed: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "Human-readable description of the security group.",
 			},
 			"vpc_id": schema.StringAttribute{
 				Required:      true,
+				Description:   "VPC the security group belongs to. Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"ingress_rules": schema.ListNestedAttribute{
 				Optional:     true,
+				Description:  "Inbound traffic rules.",
 				NestedObject: ruleSchema,
 			},
 			"egress_rules": schema.ListNestedAttribute{
 				Optional:     true,
+				Description:  "Outbound traffic rules.",
 				NestedObject: ruleSchema,
 			},
-			"status":     schema.StringAttribute{Computed: true},
+			"status":     schema.StringAttribute{Computed: true, Description: "Current security group status (API-assigned)."},
 			"created_at": schema.StringAttribute{
 				Computed:      true,
+				Description:   "ISO 8601 timestamp when the security group was created (API-assigned).",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"tags": schema.MapAttribute{Optional: true, ElementType: types.StringType},
+			"tags": schema.MapAttribute{Optional: true, ElementType: types.StringType, Description: "Key/value tags to attach to the security group."},
 		},
 	}
 }

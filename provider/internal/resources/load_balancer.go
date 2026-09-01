@@ -56,17 +56,19 @@ func (r *LoadBalancerResource) Metadata(_ context.Context, req resource.Metadata
 
 func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages a CloudCore load balancer (L4 network or L7 application). API path: `/v1/load-balancers`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "API-assigned load balancer identifier.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"name": schema.StringAttribute{Required: true},
+			"name": schema.StringAttribute{Required: true, Description: "Load balancer name."},
 			"type": schema.StringAttribute{
 				Required:    true,
-				Description: "Load balancer type: 'network' (L4) or 'application' (L7).",
+				Description: "Load balancer type: 'network' (L4) or 'application' (L7). Forces replacement on change.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -74,19 +76,22 @@ func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 					stringvalidator.OneOf("network", "application"),
 				},
 			},
-			"vpc_id": schema.StringAttribute{Required: true},
+			"vpc_id": schema.StringAttribute{Required: true, Description: "VPC the load balancer is attached to."},
 			"subnet_ids": schema.ListAttribute{
 				Required:    true,
 				ElementType: types.StringType,
+				Description: "Subnet IDs the load balancer listens on.",
 			},
 			"internal": schema.BoolAttribute{
-				Optional: true,
-				Computed: true,
+				Optional:    true,
+				Computed:    true,
+				Description: "Whether the load balancer is internal (no public IP). Defaults to false.",
 			},
-			"dns_name":   schema.StringAttribute{Computed: true},
-			"status":     schema.StringAttribute{Computed: true},
+			"dns_name":   schema.StringAttribute{Computed: true, Description: "DNS name assigned to the load balancer (API-assigned)."},
+			"status":     schema.StringAttribute{Computed: true, Description: "Current load balancer status (API-assigned)."},
 			"created_at": schema.StringAttribute{
-				Computed: true,
+				Computed:    true,
+				Description: "ISO 8601 timestamp when the load balancer was created (API-assigned).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -94,6 +99,7 @@ func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 			"tags": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
+				Description: "Key/value tags to attach to the load balancer.",
 			},
 		},
 	}
