@@ -8,9 +8,13 @@ import textwrap
 from pathlib import Path
 from typing import Optional
 
+import threading
+
 import libvirt
 
 from models import Instance, InstanceStatus
+
+_port_lock = threading.Lock()
 
 IMAGES_DIR = Path(__file__).parent / "images"
 INSTANCES_DIR = Path(__file__).parent / "instances"
@@ -372,26 +376,27 @@ def create_instance(instance: Instance) -> Instance:
     iso_path = _cloud_init_iso(instance_dir, instance.name, instance.image_id, instance.user_data, instance.users)
     use_bridge = _bridge_usable()
 
-    if use_bridge:
-        xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path)
-        instance.ssh_host_port = 0
-        instance.private_ip = ""  # will be set from DHCP lease after boot
-    else:
-        ssh_host_port = _free_port(_SSH_PORT_START, _SSH_PORT_END)
-        instance.ssh_host_port = ssh_host_port
-        instance.private_ip = "10.0.2.15"  # SLIRP convention
-        xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path, ssh_host_port)
+    with _port_lock:
+        if use_bridge:
+            xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path)
+            instance.ssh_host_port = 0
+            instance.private_ip = ""  # will be set from DHCP lease after boot
+        else:
+            ssh_host_port = _free_port(_SSH_PORT_START, _SSH_PORT_END)
+            instance.ssh_host_port = ssh_host_port
+            instance.private_ip = "10.0.2.15"  # SLIRP convention
+            xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path, ssh_host_port)
 
-    conn = _conn()
-    try:
-        dom = conn.defineXML(xml)
-        dom.create()
-        instance.status = InstanceStatus.RUNNING
-    except Exception as e:
-        instance.status = InstanceStatus.ERROR
-        raise RuntimeError(f"libvirt error: {e}") from e
-    finally:
-        conn.close()
+        conn = _conn()
+        try:
+            dom = conn.defineXML(xml)
+            dom.create()
+            instance.status = InstanceStatus.RUNNING
+        except Exception as e:
+            instance.status = InstanceStatus.ERROR
+            raise RuntimeError(f"libvirt error: {e}") from e
+        finally:
+            conn.close()
 
     return instance
 

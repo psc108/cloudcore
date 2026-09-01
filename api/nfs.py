@@ -216,25 +216,26 @@ def create_nfs_server(nfs: NfsServer, vpc_cidr: str) -> NfsServer:
     iso_path = _cloud_init_iso(nfs, vpc_cidr)
     use_bridge = compute._bridge_usable()
 
-    if use_bridge:
-        nfs.ssh_host_port = 0
-        nfs.private_ip = ""
-    else:
-        nfs.ssh_host_port = compute._free_port(_SSH_PORT_START, _SSH_PORT_END)
-        nfs.private_ip = "10.0.2.15"
+    with compute._port_lock:
+        if use_bridge:
+            nfs.ssh_host_port = 0
+            nfs.private_ip = ""
+        else:
+            nfs.ssh_host_port = compute._free_port(_SSH_PORT_START, _SSH_PORT_END)
+            nfs.private_ip = "10.0.2.15"
 
-    xml = _domain_xml(nfs, os_disk, data_disk, iso_path, vcpus, memory_mb, nfs.ssh_host_port)
+        xml = _domain_xml(nfs, os_disk, data_disk, iso_path, vcpus, memory_mb, nfs.ssh_host_port)
 
-    conn = compute._conn()
-    try:
-        dom = conn.defineXML(xml)
-        dom.create()
-        nfs.status = NfsServerStatus.RUNNING
-    except Exception as e:
-        nfs.status = NfsServerStatus.ERROR
-        raise RuntimeError(f"libvirt error: {e}") from e
-    finally:
-        conn.close()
+        conn = compute._conn()
+        try:
+            dom = conn.defineXML(xml)
+            dom.create()
+            nfs.status = NfsServerStatus.RUNNING
+        except Exception as e:
+            nfs.status = NfsServerStatus.ERROR
+            raise RuntimeError(f"libvirt error: {e}") from e
+        finally:
+            conn.close()
 
     return nfs
 

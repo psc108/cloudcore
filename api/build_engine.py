@@ -247,11 +247,12 @@ def _snapshot(api_token: str) -> dict:
     headers = {"Authorization": f"Bearer {api_token}"}
     result = {}
     for rtype, path in (
-        ("vpc",        "/v1/vpcs"),
-        ("instance",   "/v1/instances"),
-        ("lb",         "/v1/load-balancers"),
-        ("dns_zone",   "/v1/dns/zones"),
-        ("nfs_server", "/v1/nfs-servers"),
+        ("vpc",            "/v1/vpcs"),
+        ("instance",       "/v1/instances"),
+        ("lb",             "/v1/load-balancers"),
+        ("dns_zone",       "/v1/dns/zones"),
+        ("nfs_server",     "/v1/nfs-servers"),
+        ("security_group", "/v1/security-groups"),
     ):
         req = urllib.request.Request(base + path, headers=headers)
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -294,7 +295,7 @@ def _run_build(build_id: str, var_overrides: dict) -> None:
         build["exit_code"] = -1
     finally:
         build["finished_at"] = datetime.now(timezone.utc).isoformat()
-        if build["status"] == "success" and snapshot_before:
+        if snapshot_before:
             try:
                 snapshot_after = _snapshot(api_token)
                 build["provisioned"] = _diff_snapshots(snapshot_before, snapshot_after)
