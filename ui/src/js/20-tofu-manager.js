@@ -203,7 +203,10 @@ async function _tfLoadHistory() {
       <td>${resCell}</td>
       <td>${b.created_at ? fmtDate(b.created_at) : '—'}</td>
       <td>${_tfDuration(b)}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="tfViewLog('${b.id}')">Log</button></td>
+      <td style="display:flex;gap:4px">
+        <button class="btn btn-ghost btn-sm" onclick="tfViewLog('${b.id}')">Log</button>
+        ${canDestroy ? `<button class="btn btn-danger btn-sm" onclick="tfDestroySingle('${b.id}','${b.template}')">Destroy</button>` : ''}
+      </td>
     </tr>`;
   }).join('');
 }
@@ -234,6 +237,18 @@ async function tfDestroySelected() {
 
   btn.disabled = false;
   btn.textContent = '🗑 Destroy Resources';
+  await _tfLoadHistory();
+  loadDashboard();
+}
+
+async function tfDestroySingle(buildId, template) {
+  if (!confirm(`Destroy all resources from build ${buildId.slice(0,8)}… (${template})?\nThis cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/v1/tofu/builds/${buildId}`);
+    toast('Resources destroyed', 'success');
+  } catch (e) {
+    toast(`Destroy failed: ${e.message}`, 'error');
+  }
   await _tfLoadHistory();
   loadDashboard();
 }
