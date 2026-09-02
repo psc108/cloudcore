@@ -60,6 +60,29 @@ _vpc_ip_counter: dict[str, int] = {}
 _vpc_ip_lock = threading.Lock()
 
 
+def init_vpc_ip_counters(vpc_cidr_map: dict[str, str], instances: list) -> None:
+    """Seed per-VPC counters from existing instance records so restarts don't reuse IPs.
+
+    vpc_cidr_map: {vpc_id: cidr_block}
+    instances:    non-deleted Instance objects with private_ip set
+    """
+    import ipaddress
+    with _vpc_ip_lock:
+        for inst in instances:
+            cidr = vpc_cidr_map.get(inst.vpc_id)
+            if not cidr or not inst.private_ip or inst.private_ip == "10.0.2.15":
+                continue
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+                offset = int(ipaddress.ip_address(inst.private_ip)) - int(net.network_address)
+                if offset > 1:  # skip network/gateway offsets
+                    _vpc_ip_counter[inst.vpc_id] = max(
+                        _vpc_ip_counter.get(inst.vpc_id, 2), offset + 1
+                    )
+            except Exception:
+                pass
+
+
 def _allocate_slirp_ip(vpc_id: str, vpc_cidr: str) -> str:
     """Return a unique simulated private IP from the VPC's CIDR for a SLIRP instance."""
     import ipaddress

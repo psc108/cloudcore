@@ -22,3 +22,8 @@ output "lb_ids" {
   description = "Load balancer IDs keyed by resource key."
   value       = module.lb.lb_ids_by_key
 }
+
+output "lb_listen_ports" {
+  description = "Host port each load balancer listens on, keyed by resource key."
+  value       = module.lb.lb_listen_ports_by_key
+}

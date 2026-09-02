@@ -23,29 +23,31 @@ type LoadBalancerResource struct {
 }
 
 type LoadBalancerResourceModel struct {
-	ID        types.String `tfsdk:"id"`
-	Name      types.String `tfsdk:"name"`
-	Type      types.String `tfsdk:"type"`
-	VPCID     types.String `tfsdk:"vpc_id"`
-	SubnetIDs types.List   `tfsdk:"subnet_ids"`
-	Internal  types.Bool   `tfsdk:"internal"`
-	DNSName   types.String `tfsdk:"dns_name"`
-	Status    types.String `tfsdk:"status"`
-	CreatedAt types.String `tfsdk:"created_at"`
-	Tags      types.Map    `tfsdk:"tags"`
+	ID         types.String `tfsdk:"id"`
+	Name       types.String `tfsdk:"name"`
+	Type       types.String `tfsdk:"type"`
+	VPCID      types.String `tfsdk:"vpc_id"`
+	SubnetIDs  types.List   `tfsdk:"subnet_ids"`
+	Internal   types.Bool   `tfsdk:"internal"`
+	DNSName    types.String `tfsdk:"dns_name"`
+	ListenPort types.Int64  `tfsdk:"listen_port"`
+	Status     types.String `tfsdk:"status"`
+	CreatedAt  types.String `tfsdk:"created_at"`
+	Tags       types.Map    `tfsdk:"tags"`
 }
 
 type lbAPIModel struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Type      string            `json:"type"`
-	VPCID     string            `json:"vpc_id"`
-	SubnetIDs []string          `json:"subnet_ids"`
-	Internal  bool              `json:"internal"`
-	DNSName   string            `json:"dns_name"`
-	Status    string            `json:"status"`
-	CreatedAt string            `json:"created_at"`
-	Tags      map[string]string `json:"tags"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	VPCID      string            `json:"vpc_id"`
+	SubnetIDs  []string          `json:"subnet_ids"`
+	Internal   bool              `json:"internal"`
+	DNSName    string            `json:"dns_name"`
+	ListenPort int               `json:"listen_port"`
+	Status     string            `json:"status"`
+	CreatedAt  string            `json:"created_at"`
+	Tags       map[string]string `json:"tags"`
 }
 
 func NewLoadBalancerResource() resource.Resource { return &LoadBalancerResource{} }
@@ -87,8 +89,12 @@ func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 				Computed:    true,
 				Description: "Whether the load balancer is internal (no public IP). Defaults to false.",
 			},
-			"dns_name":   schema.StringAttribute{Computed: true, Description: "DNS name assigned to the load balancer (API-assigned)."},
-			"status":     schema.StringAttribute{Computed: true, Description: "Current load balancer status (API-assigned)."},
+			"dns_name": schema.StringAttribute{Computed: true, Description: "DNS name assigned to the load balancer (API-assigned)."},
+			"listen_port": schema.Int64Attribute{
+				Computed:    true,
+				Description: "Host port the load balancer listens on (e.g. 8200). Combine with dns_name to form a usable endpoint: http://127.0.0.1:<listen_port>.",
+			},
+			"status": schema.StringAttribute{Computed: true, Description: "Current load balancer status (API-assigned)."},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "ISO 8601 timestamp when the load balancer was created (API-assigned).",
@@ -124,6 +130,7 @@ func lbMapToState(ctx context.Context, result lbAPIModel, state *LoadBalancerRes
 	state.VPCID = types.StringValue(result.VPCID)
 	state.Internal = types.BoolValue(result.Internal)
 	state.DNSName = types.StringValue(result.DNSName)
+	state.ListenPort = types.Int64Value(int64(result.ListenPort))
 	state.Status = types.StringValue(result.Status)
 	state.CreatedAt = types.StringValue(result.CreatedAt)
 	subnetIDs, diags := stringsToList(ctx, result.SubnetIDs)
