@@ -14,7 +14,8 @@ import db
 import nfs_store
 import sg_store
 import sg as sg_enforce
-from models import VPC, Instance, LoadBalancer, InstanceStatus
+import ipaddress
+from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
 from sg_routes import sg_bp
@@ -126,8 +127,246 @@ def update_vpc(vpc_id):
 @app.delete("/v1/vpcs/<vpc_id>")
 @require_auth
 def delete_vpc(vpc_id):
+    active_instances = store.list_instances_by_vpc(vpc_id)
+    if active_instances:
+        return problem(409, "Conflict",
+            f"VPC '{vpc_id}' has {len(active_instances)} active instance(s) — delete them first")
+    active_lbs = [lb for lb in store.list_lbs() if lb.vpc_id == vpc_id]
+    if active_lbs:
+        return problem(409, "Conflict",
+            f"VPC '{vpc_id}' has {len(active_lbs)} active load balancer(s) — delete them first")
+    active_sgs = [sg for sg in sg_store.list_security_groups()
+                  if sg.vpc_id == vpc_id and sg.status.value == "active"]
+    if active_sgs:
+        return problem(409, "Conflict",
+            f"VPC '{vpc_id}' has {len(active_sgs)} active security group(s) — delete them first")
+    active_subnets = store.list_subnets_by_vpc(vpc_id)
+    if active_subnets:
+        return problem(409, "Conflict",
+            f"VPC '{vpc_id}' has {len(active_subnets)} active subnet(s) — delete them first")
     if not store.delete_vpc(vpc_id):
         return problem(404, "Not Found", f"VPC '{vpc_id}' not found")
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Subnets
+# ---------------------------------------------------------------------------
+
+def _cidr_contained(parent_cidr: str, child_cidr: str) -> bool:
+    try:
+        parent = ipaddress.ip_network(parent_cidr, strict=False)
+        child = ipaddress.ip_network(child_cidr, strict=False)
+        return child.subnet_of(parent)
+    except ValueError:
+        return False
+
+
+@app.get("/v1/subnets")
+@require_auth
+def list_subnets():
+    vpc_id = request.args.get("vpc_id")
+    if vpc_id:
+        return jsonify({"items": [s.to_dict() for s in store.list_subnets_by_vpc(vpc_id)]})
+    return jsonify({"items": [s.to_dict() for s in store.list_subnets()]})
+
+
+@app.post("/v1/subnets")
+@require_auth
+def create_subnet():
+    body = request.get_json(force=True) or {}
+    for field in ("name", "vpc_id", "cidr_block"):
+        if not body.get(field):
+            return problem(400, "Bad Request", f"'{field}' is required")
+
+    vpc = store.get_vpc(body["vpc_id"])
+    if not vpc:
+        return problem(404, "Not Found", f"VPC '{body['vpc_id']}' not found")
+
+    if not _cidr_contained(vpc.cidr_block, body["cidr_block"]):
+        return problem(400, "Bad Request",
+            f"Subnet CIDR '{body['cidr_block']}' is not contained within VPC CIDR '{vpc.cidr_block}'")
+
+    if store.find_subnet_by_name(body["name"]):
+        return problem(409, "Conflict", f"Subnet '{body['name']}' already exists")
+
+    subnet = Subnet(
+        name=body["name"],
+        vpc_id=body["vpc_id"],
+        cidr_block=body["cidr_block"],
+        public=bool(body.get("public", False)),
+        zone=body.get("zone", "a"),
+        tags=body.get("tags", {}),
+    )
+    store.put_subnet(subnet)
+    return jsonify(subnet.to_dict()), 201
+
+
+@app.get("/v1/subnets/<subnet_id>")
+@require_auth
+def get_subnet(subnet_id):
+    subnet = store.get_subnet(subnet_id)
+    if not subnet:
+        return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
+    return jsonify(subnet.to_dict())
+
+
+@app.put("/v1/subnets/<subnet_id>")
+@require_auth
+def update_subnet(subnet_id):
+    subnet = store.get_subnet(subnet_id)
+    if not subnet:
+        return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
+    body = request.get_json(force=True) or {}
+    subnet.name = body.get("name", subnet.name)
+    subnet.public = bool(body.get("public", subnet.public))
+    subnet.zone = body.get("zone", subnet.zone)
+    subnet.tags = body.get("tags", subnet.tags)
+    store.put_subnet(subnet)
+    return jsonify(subnet.to_dict())
+
+
+@app.delete("/v1/subnets/<subnet_id>")
+@require_auth
+def delete_subnet(subnet_id):
+    subnet = store.get_subnet(subnet_id)
+    if not subnet:
+        return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
+    active_instances = [i for i in store.list_instances_by_vpc(subnet.vpc_id)
+                        if i.subnet_id == subnet_id]
+    if active_instances:
+        return problem(409, "Conflict",
+            f"Subnet '{subnet_id}' has {len(active_instances)} active instance(s) — delete them first")
+    if not store.delete_subnet(subnet_id):
+        return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Internet Gateways
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/internet-gateways")
+@require_auth
+def list_igws():
+    vpc_id = request.args.get("vpc_id")
+    if vpc_id:
+        return jsonify({"items": [g.to_dict() for g in store.list_igws_by_vpc(vpc_id)]})
+    return jsonify({"items": [g.to_dict() for g in store.list_igws()]})
+
+
+@app.post("/v1/internet-gateways")
+@require_auth
+def create_igw():
+    body = request.get_json(force=True) or {}
+    for field in ("name", "vpc_id"):
+        if not body.get(field):
+            return problem(400, "Bad Request", f"'{field}' is required")
+    if not store.get_vpc(body["vpc_id"]):
+        return problem(404, "Not Found", f"VPC '{body['vpc_id']}' not found")
+    if store.find_igw_by_name(body["name"]):
+        return problem(409, "Conflict", f"Internet gateway '{body['name']}' already exists")
+    igw = InternetGateway(
+        name=body["name"], vpc_id=body["vpc_id"], tags=body.get("tags", {}),
+    )
+    store.put_igw(igw)
+    return jsonify(igw.to_dict()), 201
+
+
+@app.get("/v1/internet-gateways/<igw_id>")
+@require_auth
+def get_igw(igw_id):
+    igw = store.get_igw(igw_id)
+    if not igw:
+        return problem(404, "Not Found", f"Internet gateway '{igw_id}' not found")
+    return jsonify(igw.to_dict())
+
+
+@app.put("/v1/internet-gateways/<igw_id>")
+@require_auth
+def update_igw(igw_id):
+    igw = store.get_igw(igw_id)
+    if not igw:
+        return problem(404, "Not Found", f"Internet gateway '{igw_id}' not found")
+    body = request.get_json(force=True) or {}
+    igw.name = body.get("name", igw.name)
+    igw.tags = body.get("tags", igw.tags)
+    store.put_igw(igw)
+    return jsonify(igw.to_dict())
+
+
+@app.delete("/v1/internet-gateways/<igw_id>")
+@require_auth
+def delete_igw(igw_id):
+    if not store.delete_igw(igw_id):
+        return problem(404, "Not Found", f"Internet gateway '{igw_id}' not found")
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Route Tables
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/route-tables")
+@require_auth
+def list_route_tables():
+    vpc_id = request.args.get("vpc_id")
+    if vpc_id:
+        return jsonify({"items": [rt.to_dict() for rt in store.list_route_tables_by_vpc(vpc_id)]})
+    return jsonify({"items": [rt.to_dict() for rt in store.list_route_tables()]})
+
+
+@app.post("/v1/route-tables")
+@require_auth
+def create_route_table():
+    body = request.get_json(force=True) or {}
+    for field in ("name", "vpc_id"):
+        if not body.get(field):
+            return problem(400, "Bad Request", f"'{field}' is required")
+    if not store.get_vpc(body["vpc_id"]):
+        return problem(404, "Not Found", f"VPC '{body['vpc_id']}' not found")
+    if store.find_route_table_by_name(body["name"]):
+        return problem(409, "Conflict", f"Route table '{body['name']}' already exists")
+    rt = RouteTable(
+        name=body["name"],
+        vpc_id=body["vpc_id"],
+        subnet_ids=body.get("subnet_ids", []),
+        routes=body.get("routes", []),
+        tags=body.get("tags", {}),
+    )
+    store.put_route_table(rt)
+    return jsonify(rt.to_dict()), 201
+
+
+@app.get("/v1/route-tables/<rt_id>")
+@require_auth
+def get_route_table(rt_id):
+    rt = store.get_route_table(rt_id)
+    if not rt:
+        return problem(404, "Not Found", f"Route table '{rt_id}' not found")
+    return jsonify(rt.to_dict())
+
+
+@app.put("/v1/route-tables/<rt_id>")
+@require_auth
+def update_route_table(rt_id):
+    rt = store.get_route_table(rt_id)
+    if not rt:
+        return problem(404, "Not Found", f"Route table '{rt_id}' not found")
+    body = request.get_json(force=True) or {}
+    rt.name = body.get("name", rt.name)
+    rt.subnet_ids = body.get("subnet_ids", rt.subnet_ids)
+    rt.routes = body.get("routes", rt.routes)
+    rt.tags = body.get("tags", rt.tags)
+    store.put_route_table(rt)
+    return jsonify(rt.to_dict())
+
+
+@app.delete("/v1/route-tables/<rt_id>")
+@require_auth
+def delete_route_table(rt_id):
+    if not store.delete_route_table(rt_id):
+        return problem(404, "Not Found", f"Route table '{rt_id}' not found")
     return "", 204
 
 
@@ -699,25 +938,33 @@ def dns_delete_record(zone_name, name, rtype):
 @app.get("/v1/dashboard")
 @require_auth
 def dashboard():
-    vpcs      = [v.to_dict() for v in store.list_vpcs()    if v.status != "deleted"]
-    instances = [i.to_dict() for i in store.list_instances() if i.status.value not in ("deleted",)]
-    lbs       = [l.to_dict() for l in store.list_lbs()     if l.status != "deleted"]
-    zones     = dns_store.list_zones()
-    nfs_servers = [n.to_dict() for n in nfs_store.list_all()]
+    vpcs         = [v.to_dict() for v in store.list_vpcs()         if v.status != "deleted"]
+    instances    = [i.to_dict() for i in store.list_instances()    if i.status.value not in ("deleted",)]
+    lbs          = [l.to_dict() for l in store.list_lbs()          if l.status != "deleted"]
+    subnets      = [s.to_dict() for s in store.list_subnets()]
+    igws         = [g.to_dict() for g in store.list_igws()]
+    route_tables = [r.to_dict() for r in store.list_route_tables()]
+    zones        = dns_store.list_zones()
+    nfs_servers  = [n.to_dict() for n in nfs_store.list_all()]
     return jsonify({
-        "vpcs":      vpcs,
-        "instances": instances,
+        "vpcs":          vpcs,
+        "instances":     instances,
         "load_balancers": lbs,
-        "dns_zones": zones,
-        "nfs_servers": nfs_servers,
+        "subnets":       subnets,
+        "internet_gateways": igws,
+        "route_tables":  route_tables,
+        "dns_zones":     zones,
+        "nfs_servers":   nfs_servers,
         "summary": {
-            "vpcs":           len(vpcs),
-            "instances":      len(instances),
+            "vpcs":             len(vpcs),
+            "subnets":          len(subnets),
+            "internet_gateways": len(igws),
+            "instances":        len(instances),
             "instances_running": sum(1 for i in instances if i["status"] == "running"),
-            "load_balancers": len(lbs),
-            "dns_zones":      len(zones),
-            "dns_records":    sum(z["record_count"] for z in zones),
-            "nfs_servers":    len(nfs_servers),
+            "load_balancers":   len(lbs),
+            "dns_zones":        len(zones),
+            "dns_records":      sum(z["record_count"] for z in zones),
+            "nfs_servers":      len(nfs_servers),
         },
     })
 

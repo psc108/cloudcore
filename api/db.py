@@ -86,6 +86,38 @@ CREATE TABLE IF NOT EXISTS load_balancers (
     tags        TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS subnets (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    vpc_id      TEXT NOT NULL,
+    cidr_block  TEXT NOT NULL,
+    public      INTEGER NOT NULL DEFAULT 0,
+    zone        TEXT NOT NULL DEFAULT 'a',
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS internet_gateways (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    vpc_id      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS route_tables (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    vpc_id      TEXT NOT NULL,
+    subnet_ids  TEXT NOT NULL DEFAULT '[]',
+    routes      TEXT NOT NULL DEFAULT '[]',
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '{}'
+);
+
 CREATE TABLE IF NOT EXISTS dns_zones (
     name        TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL,

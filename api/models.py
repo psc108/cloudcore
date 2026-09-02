@@ -28,6 +28,21 @@ class VPCStatus(str, Enum):
     DELETED = "deleted"
 
 
+class SubnetStatus(str, Enum):
+    ACTIVE  = "active"
+    DELETED = "deleted"
+
+
+class IGWStatus(str, Enum):
+    ACTIVE  = "active"
+    DELETED = "deleted"
+
+
+class RouteTableStatus(str, Enum):
+    ACTIVE  = "active"
+    DELETED = "deleted"
+
+
 class LBStatus(str, Enum):
     ACTIVE = "active"
     DELETED = "deleted"
@@ -88,6 +103,76 @@ class VPC:
             "name": self.name,
             "cidr_block": self.cidr_block,
             "dns_support": self.dns_support,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
+
+
+@dataclass
+class Subnet:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    vpc_id: str = ""
+    cidr_block: str = ""
+    public: bool = False
+    zone: str = "a"
+    status: SubnetStatus = SubnetStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "vpc_id": self.vpc_id,
+            "cidr_block": self.cidr_block,
+            "public": self.public,
+            "zone": self.zone,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
+
+
+@dataclass
+class InternetGateway:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    vpc_id: str = ""
+    status: IGWStatus = IGWStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "vpc_id": self.vpc_id,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "tags": self.tags,
+        }
+
+
+@dataclass
+class RouteTable:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    vpc_id: str = ""
+    subnet_ids: list = field(default_factory=list)
+    routes: list = field(default_factory=list)  # [{destination_cidr, gateway_id}]
+    status: RouteTableStatus = RouteTableStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    tags: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "vpc_id": self.vpc_id,
+            "subnet_ids": self.subnet_ids,
+            "routes": self.routes,
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,

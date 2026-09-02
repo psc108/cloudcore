@@ -4,7 +4,10 @@ import json
 from typing import Optional
 
 import db
-from models import VPC, Instance, LoadBalancer, InstanceStatus, VPCStatus, LBStatus
+from models import (
+    VPC, Instance, LoadBalancer, InstanceStatus, VPCStatus, LBStatus,
+    Subnet, SubnetStatus, InternetGateway, IGWStatus, RouteTable, RouteTableStatus,
+)
 
 
 def _vpc_from_row(row) -> VPC:
@@ -50,6 +53,37 @@ def _lb_from_row(row) -> LoadBalancer:
     return lb
 
 
+def _subnet_from_row(row) -> Subnet:
+    s = Subnet(
+        id=row["id"], name=row["name"], vpc_id=row["vpc_id"],
+        cidr_block=row["cidr_block"], public=bool(row["public"]),
+        zone=row["zone"], created_at=row["created_at"],
+        tags=json.loads(row["tags"]),
+    )
+    s.status = SubnetStatus(row["status"])
+    return s
+
+
+def _igw_from_row(row) -> InternetGateway:
+    g = InternetGateway(
+        id=row["id"], name=row["name"], vpc_id=row["vpc_id"],
+        created_at=row["created_at"], tags=json.loads(row["tags"]),
+    )
+    g.status = IGWStatus(row["status"])
+    return g
+
+
+def _rt_from_row(row) -> RouteTable:
+    rt = RouteTable(
+        id=row["id"], name=row["name"], vpc_id=row["vpc_id"],
+        subnet_ids=json.loads(row["subnet_ids"]),
+        routes=json.loads(row["routes"]),
+        created_at=row["created_at"], tags=json.loads(row["tags"]),
+    )
+    rt.status = RouteTableStatus(row["status"])
+    return rt
+
+
 # Keep load() as a no-op — db.init() is called from server.py instead
 def load() -> None:
     pass
@@ -90,6 +124,149 @@ def put_vpc(vpc: VPC) -> None:
 def delete_vpc(vpc_id: str) -> bool:
     c = db.get_db().execute(
         "UPDATE vpcs SET status='deleted' WHERE id=? AND status != 'deleted'", (vpc_id,))
+    db.get_db().commit()
+    return c.rowcount > 0
+
+
+# --- Subnet ---
+
+def list_subnets() -> list[Subnet]:
+    rows = db.get_db().execute("SELECT * FROM subnets WHERE status != 'deleted'").fetchall()
+    return [_subnet_from_row(r) for r in rows]
+
+
+def list_subnets_by_vpc(vpc_id: str) -> list[Subnet]:
+    rows = db.get_db().execute(
+        "SELECT * FROM subnets WHERE vpc_id=? AND status != 'deleted'", (vpc_id,)).fetchall()
+    return [_subnet_from_row(r) for r in rows]
+
+
+def get_subnet(subnet_id: str) -> Optional[Subnet]:
+    row = db.get_db().execute(
+        "SELECT * FROM subnets WHERE id=? AND status != 'deleted'", (subnet_id,)).fetchone()
+    return _subnet_from_row(row) if row else None
+
+
+def find_subnet_by_name(name: str) -> Optional[Subnet]:
+    row = db.get_db().execute(
+        "SELECT * FROM subnets WHERE name=? AND status != 'deleted'", (name,)).fetchone()
+    return _subnet_from_row(row) if row else None
+
+
+def put_subnet(subnet: Subnet) -> None:
+    db.get_db().execute("""INSERT INTO subnets
+        (id,name,vpc_id,cidr_block,public,zone,status,created_at,tags)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, vpc_id=excluded.vpc_id, cidr_block=excluded.cidr_block,
+            public=excluded.public, zone=excluded.zone, status=excluded.status,
+            tags=excluded.tags""",
+        (subnet.id, subnet.name, subnet.vpc_id, subnet.cidr_block,
+         int(subnet.public), subnet.zone, subnet.status.value,
+         subnet.created_at, json.dumps(subnet.tags)))
+    db.get_db().commit()
+
+
+def delete_subnet(subnet_id: str) -> bool:
+    c = db.get_db().execute(
+        "UPDATE subnets SET status='deleted' WHERE id=? AND status != 'deleted'", (subnet_id,))
+    db.get_db().commit()
+    return c.rowcount > 0
+
+
+# --- Internet Gateway ---
+
+def list_igws() -> list[InternetGateway]:
+    rows = db.get_db().execute(
+        "SELECT * FROM internet_gateways WHERE status != 'deleted'").fetchall()
+    return [_igw_from_row(r) for r in rows]
+
+
+def list_igws_by_vpc(vpc_id: str) -> list[InternetGateway]:
+    rows = db.get_db().execute(
+        "SELECT * FROM internet_gateways WHERE vpc_id=? AND status != 'deleted'",
+        (vpc_id,)).fetchall()
+    return [_igw_from_row(r) for r in rows]
+
+
+def get_igw(igw_id: str) -> Optional[InternetGateway]:
+    row = db.get_db().execute(
+        "SELECT * FROM internet_gateways WHERE id=? AND status != 'deleted'",
+        (igw_id,)).fetchone()
+    return _igw_from_row(row) if row else None
+
+
+def find_igw_by_name(name: str) -> Optional[InternetGateway]:
+    row = db.get_db().execute(
+        "SELECT * FROM internet_gateways WHERE name=? AND status != 'deleted'",
+        (name,)).fetchone()
+    return _igw_from_row(row) if row else None
+
+
+def put_igw(igw: InternetGateway) -> None:
+    db.get_db().execute("""INSERT INTO internet_gateways
+        (id,name,vpc_id,status,created_at,tags)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, vpc_id=excluded.vpc_id,
+            status=excluded.status, tags=excluded.tags""",
+        (igw.id, igw.name, igw.vpc_id, igw.status.value, igw.created_at,
+         json.dumps(igw.tags)))
+    db.get_db().commit()
+
+
+def delete_igw(igw_id: str) -> bool:
+    c = db.get_db().execute(
+        "UPDATE internet_gateways SET status='deleted' WHERE id=? AND status != 'deleted'",
+        (igw_id,))
+    db.get_db().commit()
+    return c.rowcount > 0
+
+
+# --- Route Table ---
+
+def list_route_tables() -> list[RouteTable]:
+    rows = db.get_db().execute(
+        "SELECT * FROM route_tables WHERE status != 'deleted'").fetchall()
+    return [_rt_from_row(r) for r in rows]
+
+
+def list_route_tables_by_vpc(vpc_id: str) -> list[RouteTable]:
+    rows = db.get_db().execute(
+        "SELECT * FROM route_tables WHERE vpc_id=? AND status != 'deleted'",
+        (vpc_id,)).fetchall()
+    return [_rt_from_row(r) for r in rows]
+
+
+def get_route_table(rt_id: str) -> Optional[RouteTable]:
+    row = db.get_db().execute(
+        "SELECT * FROM route_tables WHERE id=? AND status != 'deleted'", (rt_id,)).fetchone()
+    return _rt_from_row(row) if row else None
+
+
+def find_route_table_by_name(name: str) -> Optional[RouteTable]:
+    row = db.get_db().execute(
+        "SELECT * FROM route_tables WHERE name=? AND status != 'deleted'",
+        (name,)).fetchone()
+    return _rt_from_row(row) if row else None
+
+
+def put_route_table(rt: RouteTable) -> None:
+    db.get_db().execute("""INSERT INTO route_tables
+        (id,name,vpc_id,subnet_ids,routes,status,created_at,tags)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, vpc_id=excluded.vpc_id, subnet_ids=excluded.subnet_ids,
+            routes=excluded.routes, status=excluded.status, tags=excluded.tags""",
+        (rt.id, rt.name, rt.vpc_id, json.dumps(rt.subnet_ids), json.dumps(rt.routes),
+         rt.status.value, rt.created_at, json.dumps(rt.tags)))
+    db.get_db().commit()
+
+
+def delete_route_table(rt_id: str) -> bool:
+    c = db.get_db().execute(
+        "UPDATE route_tables SET status='deleted' WHERE id=? AND status != 'deleted'",
+        (rt_id,))
     db.get_db().commit()
     return c.rowcount > 0
 
