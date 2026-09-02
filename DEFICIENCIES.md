@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01  
 **Scope:** `provider/` — CloudCore Terraform provider (~2,800 lines of Go)  
-**Reviewer:** Claude Code automated review
+**Reviewer:** Automated review
 
 ---
 

@@ -1,4 +1,3 @@
-[2026-08-25 13:19] CREATE .amazonq/rules/conventions.md | Project conventions and Amazon Q rules
 [2026-08-25 13:19] CREATE provider/go.mod | Go module definition
 [2026-08-25 13:19] CREATE provider/main.go | Provider entry point
 [2026-08-25 13:19] CREATE provider/internal/client/client.go | HTTP API client
@@ -99,14 +98,12 @@
 [2026-08-25 17:45] CREATE tests/run_tests.py | Test harness runner — suites + scenarios, --skip-vm, --skip-scenarios flags
 [2026-08-25 17:45] MODIFY api/server.py | Mark instance deleted synchronously before async libvirt teardown
 [2026-08-25 18:23] MODIFY ui/index.html | Replaced flat nav with dropdown groups (Infrastructure, Networking) + standalone Help button
-[2026-08-25 18:33] MODIFY .amazonq/rules/conventions.md | Added Testing Conventions section covering directory layout, run commands, suite/scenario/vm_test patterns, isolation rules, coverage rule, and framework primitives
 [2026-08-25 18:49] MODIFY api/server.py | Added GET /v1/dashboard endpoint returning aggregated live resource summary
 [2026-08-25 18:49] MODIFY ui/index.html | Added Dashboard section: stat tiles, resource panels, detail modal, auto-refresh every 60s, standalone nav button
 [2026-08-25 18:55] CREATE ui/build.sh | Build script assembling src/ into index.html with JS validation
 [2026-08-25 18:55] CREATE ui/src/css/main.css | Extracted CSS from index.html
 [2026-08-25 18:55] CREATE ui/src/html/head.html ui/src/html/body.html ui/src/html/tail.html | Extracted HTML shell
 [2026-08-25 18:55] CREATE ui/src/js/00-config.js..14-init.js | Extracted JS into 15 feature files
-[2026-08-25 18:55] MODIFY .amazonq/rules/conventions.md | Added UI Development Conventions section
 [2026-08-25 19:00] MODIFY ui/src/js/06-dashboard.js | Replace inline JSON onclick with _dashResources id-keyed store to fix broken click handlers
 [2026-08-25 19:00] MODIFY ui/src/js/07-detail-modal.js | Add openDetailById() lookup function
 [2026-08-25 19:06] MODIFY ui/src/css/main.css | Switch nav dropdown from CSS :hover to JS .open class toggle
@@ -116,7 +113,6 @@
 [2026-08-25 19:25] CREATE ui/src/js/13-dns.js | Extracted DNS functions from 07-detail-modal.js into correct file
 [2026-08-25 19:25] MODIFY ui/src/js/07-detail-modal.js | Removed DNS functions that were incorrectly included
 [2026-08-25 19:25] MODIFY ui/src/js/13-help.js->14-help.js ui/src/js/14-init.js->15-init.js | Renumbered to make room for 13-dns.js
-[2026-08-25 19:25] MODIFY .amazonq/rules/conventions.md | Updated JS file map with corrected numbering
 [2026-08-25 19:28] MODIFY HELP.md | Updated navigation (dropdowns, Dashboard), added Dashboard and DNS sections, updated API table, corrected networking section
 [2026-08-25 20:24] CREATE ansible/collections/cloudcore/plugins/modules/dns_zone.py | new Ansible module for DNS zone management
 [2026-08-25 20:24] CREATE ansible/collections/cloudcore/plugins/modules/dns_record.py | new Ansible module for DNS record management
@@ -194,7 +190,7 @@
 [2026-08-26 10:53] MODIFY ui/src/js/04-nav.js | Wire editor section to showSection
 [2026-08-26 10:53] MODIFY ui/src/css/main.css | Add editor layout, tree, file, tab and CodeMirror host styles
 [2026-08-26 10:53] MODIFY ui/index.html | Rebuilt (2793 lines)
-[2026-08-26 10:57] CREATE .gitignore | initial gitignore excluding .amazonq, build artefacts, DB, test results
+[2026-08-26 10:57] CREATE .gitignore | initial gitignore excluding build artefacts, DB, test results
 [2026-08-26 11:09] CREATE requirements.txt | Python deps for API and terminal
 [2026-08-26 11:09] CREATE scripts/install.sh | idempotent install script for new users
 [2026-08-26 11:09] MODIFY README.md | added Getting Started section with install instructions
@@ -205,7 +201,6 @@
 [2026-08-26 11:26] MODIFY ui/src/js/04-nav.js | wire loadAbout() into showSection
 [2026-08-26 11:26] MODIFY ui/src/css/main.css | about page styles
 [2026-08-26 11:26] MODIFY ui/index.html | rebuilt (2877 lines)
-[2026-08-26 11:34] MODIFY .amazonq/rules/conventions.md | added About Page maintenance rule
 [2026-08-25 00:00] CREATE api/tofu_engine.py | OpenTofu build engine — template discovery, var extraction, tofu init+apply
 [2026-08-25 00:00] CREATE api/tofu_routes.py | OpenTofu build manager API routes at /v1/tofu/...
 [2026-08-25 00:00] MODIFY api/db.py | added tofu_builds table to schema
