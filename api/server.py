@@ -745,9 +745,9 @@ def add_listener(lb_id):
         return problem(400, "Bad Request", "port must be an integer")
     if port < 1 or port > 65535:
         return problem(400, "Bad Request", "port must be between 1 and 65535")
-    protocol = body.get("protocol", "HTTP").upper()
-    if protocol not in ("HTTP", "HTTPS", "TCP"):
-        return problem(400, "Bad Request", "protocol must be HTTP, HTTPS or TCP")
+    protocol = body.get("protocol", "http")
+    if protocol.lower() not in ("http", "https", "tcp"):
+        return problem(400, "Bad Request", "protocol must be http, https or tcp")
     if any(l["port"] == port for l in lb.listeners):
         return problem(409, "Conflict", f"Listener on port {port} already exists")
     from models import new_id
@@ -757,7 +757,11 @@ def add_listener(lb_id):
         "port": port,
         "protocol": protocol,
         "target_group_id": body.get("target_group_id", ""),
-        "routing_rules": body.get("routing_rules", []),
+        # `or []`, not `.get(..., [])`: Terraform sends this key with an
+        # explicit JSON null when a caller leaves an Optional+Computed
+        # list attribute unset, so a plain default only fires when the
+        # key is absent entirely — it isn't here.
+        "routing_rules": body.get("routing_rules") or [],
         "default_action": body.get("default_action", "forward"),
         "status": "active",
     }
@@ -793,7 +797,7 @@ def update_listener(lb_id, listener_id):
         return problem(404, "Not Found", f"Listener '{listener_id}' not found")
     body = request.get_json(force=True) or {}
     lst["target_group_id"] = body.get("target_group_id", lst.get("target_group_id", ""))
-    lst["routing_rules"]   = body.get("routing_rules", lst.get("routing_rules", []))
+    lst["routing_rules"]   = body.get("routing_rules") or lst.get("routing_rules") or []
     lst["default_action"]  = body.get("default_action", lst.get("default_action", "forward"))
     try:
         lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
@@ -832,7 +836,7 @@ def _resolve_tg_backends_for_api(tg: dict, instances: list) -> list[dict]:
     """Resolve TG target instance_ids to address:port for the API response."""
     inst_map = {i.id: i for i in instances}
     result = []
-    for t in tg.get("targets", []):
+    for t in (tg.get("targets") or []):
         inst = inst_map.get(t["instance_id"])
         if inst:
             port = t.get("port") or tg.get("port", 80)
@@ -872,7 +876,7 @@ def create_target_group(lb_id):
         "name": name,
         "port": int(body["port"]),
         "protocol": body.get("protocol", "http").lower(),
-        "targets": body.get("targets", []),
+        "targets": body.get("targets") or [],
         "health_check": {
             "path": hc.get("path", "/"),
             "interval": int(hc.get("interval", 30)),
@@ -942,7 +946,7 @@ def delete_target_group(lb_id, tg_id):
         return problem(404, "Not Found", f"Target group '{tg_id}' not found")
     in_use = [l for l in lb.listeners
               if l.get("target_group_id") == tg_id
-              or any(r.get("target_group_id") == tg_id for r in l.get("routing_rules", []))]
+              or any(r.get("target_group_id") == tg_id for r in (l.get("routing_rules") or []))]
     if in_use:
         return problem(409, "Conflict",
             f"Target group '{tg_id}' is referenced by {len(in_use)} listener(s) — remove references first")

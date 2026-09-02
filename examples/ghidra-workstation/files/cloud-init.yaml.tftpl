@@ -1,0 +1,170 @@
+#cloud-config
+# Ghidra graphical workstation: XFCE desktop over TigerVNC, bridged to a
+# browser-usable noVNC client. websockify listens on all interfaces (0.0.0.0)
+# because the load balancer's traffic arrives via the guest's real network
+# interface (SLIRP hostfwd), not its loopback — the SSH-tunnel fallback still
+# works fine since "localhost" also resolves to 0.0.0.0's own bind. VNC
+# itself (TigerVNC) stays loopback-only; websockify is the sole ingress.
+# --heartbeat sends a WebSocket ping periodically so an idle desktop doesn't
+# get dropped by the load balancer's fixed 30s idle timeout.
+
+package_update: true
+packages:
+  - xfce4
+  - xfce4-terminal
+  - tigervnc-standalone-server
+  - tigervnc-common
+  - novnc
+  - websockify
+  - unzip
+  - curl
+  - gnupg
+  - ca-certificates
+
+# No `owner:` on any /home/ubuntu/... entry below: the write_files module
+# runs before users-groups creates that account, so an owner referencing it
+# fails with "Unknown user or group". Files land root-owned; runcmd chowns
+# them once ubuntu exists (see the "Desktop ownership" step below).
+write_files:
+  - path: /var/www/placeholder/index.html
+    content: |
+      <!doctype html>
+      <html><head><title>Ghidra workstation — building</title>
+      <meta http-equiv="refresh" content="10">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { font-family: sans-serif; background: #1a1a1a; color: #eee;
+               display: flex; height: 100vh; margin: 0;
+               align-items: center; justify-content: center; text-align: center; }
+        div { max-width: 32em; padding: 2em; }
+        h1 { font-size: 1.3em; }
+      </style>
+      </head><body><div>
+      <h1>Your Ghidra desktop is still building&hellip;</h1>
+      <p>First boot installs Java, the desktop, and Ghidra itself — this
+      normally takes a few minutes. This page checks again every 10
+      seconds and will switch to the desktop automatically. Nothing to
+      do here — just leave this tab open.</p>
+      </div></body></html>
+
+  - path: /etc/systemd/system/placeholder.service
+    content: |
+      [Unit]
+      Description=Ghidra workstation — "still building" placeholder page
+      # novnc.service takes over port 80 the moment it starts; systemd
+      # stops this one automatically as part of that transaction, on
+      # first boot and on every subsequent reboot alike — no manual
+      # handoff logic needed.
+      Conflicts=novnc.service
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 -m http.server 80 --directory /var/www/placeholder --bind 0.0.0.0
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /home/ubuntu/.vnc/xstartup
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      unset SESSION_MANAGER
+      unset DBUS_SESSION_BUS_ADDRESS
+      exec xfce4-session
+
+  - path: /etc/systemd/system/ghidra-vnc.service
+    content: |
+      [Unit]
+      Description=TigerVNC server (display :1) for the Ghidra desktop
+      After=network.target
+
+      [Service]
+      Type=forking
+      User=ubuntu
+      Group=ubuntu
+      WorkingDirectory=/home/ubuntu
+      Environment=HOME=/home/ubuntu
+      ExecStartPre=-/usr/bin/vncserver -kill :1
+      ExecStart=/usr/bin/vncserver :1 -geometry 1600x900 -depth 24 -localhost yes
+      ExecStop=/usr/bin/vncserver -kill :1
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/novnc.service
+    content: |
+      [Unit]
+      Description=noVNC websocket bridge for the Ghidra desktop
+      After=ghidra-vnc.service
+      Requires=ghidra-vnc.service
+      Conflicts=placeholder.service
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/websockify --web=/usr/share/novnc/ --heartbeat 15 0.0.0.0:80 localhost:5901
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /home/ubuntu/Desktop/ghidra.desktop
+    permissions: '0755'
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=Ghidra
+      Exec=/opt/ghidra/ghidraRun
+      Icon=utilities-terminal
+      Terminal=false
+      Categories=Development;
+
+runcmd:
+  # /home/ubuntu itself ships root:root on this base image (only
+  # subdirectories we explicitly created come out ubuntu-owned), which
+  # breaks XFCE writing .Xauthority/.ICEauthority/.dbus straight into
+  # $HOME. Fix the home dir itself, then hand over what write_files had
+  # to leave root-owned (owner: on those entries would fail — see above).
+  - [ chown, "ubuntu:ubuntu", /home/ubuntu ]
+  - [ chown, -R, "ubuntu:ubuntu", /home/ubuntu/.vnc, /home/ubuntu/Desktop ]
+
+  # Placeholder page first, before anything slow — this is what makes
+  # opening desktop_url immediately after apply show a "please wait" page
+  # instead of a browser connection error while the rest of this runs.
+  # Served at /vnc.html too, not just /: desktop_url points straight at
+  # /vnc.html (matching where the real noVNC page lives), so without this
+  # copy a visit during the build would 404 instead of showing the
+  # placeholder — and once novnc.service takes over, that exact same URL
+  # starts serving the real page, so the auto-refresh just picks it up.
+  - [ cp, /var/www/placeholder/index.html, /var/www/placeholder/vnc.html ]
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, --now, placeholder.service ]
+
+  # JDK 21 via Adoptium Temurin — Ubuntu 22.04's default repos don't
+  # reliably carry it, and Ghidra ${ghidra_version} requires it.
+  - [ sh, -c, "mkdir -p /etc/apt/keyrings && curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg" ]
+  - [ sh, -c, "echo \"deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo $VERSION_CODENAME) main\" > /etc/apt/sources.list.d/adoptium.list" ]
+  - [ apt-get, update ]
+  - [ apt-get, install, -y, temurin-21-jdk ]
+
+  # VNC password (classic VNC auth truncates to 8 chars — expected).
+  - [ sh, -c, "printf '%s\n' '${vnc_password}' | vncpasswd -f > /home/ubuntu/.vnc/passwd" ]
+  - [ chmod, "600", /home/ubuntu/.vnc/passwd ]
+  - [ chown, "ubuntu:ubuntu", /home/ubuntu/.vnc/passwd ]
+
+  # Ghidra: download, verify checksum, unzip.
+  - [ sh, -c, "curl -fSL --retry 5 -o /tmp/${ghidra_zip_name} https://github.com/NationalSecurityAgency/ghidra/releases/download/${ghidra_release_tag}/${ghidra_zip_name}" ]
+  - [ sh, -c, "echo '${ghidra_sha256}  /tmp/${ghidra_zip_name}' | sha256sum -c -" ]
+  - [ unzip, -q, -d, /opt, "/tmp/${ghidra_zip_name}" ]
+  - [ ln, -s, "/opt/ghidra_${ghidra_version}_PUBLIC", /opt/ghidra ]
+  - [ chown, -R, "ubuntu:ubuntu", "/opt/ghidra_${ghidra_version}_PUBLIC" ]
+  - [ rm, -f, "/tmp/${ghidra_zip_name}" ]
+
+  # Working directories for samples in / projects out.
+  - [ sh, -c, "mkdir -p /home/ubuntu/samples /home/ubuntu/ghidra-projects" ]
+  - [ chown, -R, "ubuntu:ubuntu", /home/ubuntu/samples, /home/ubuntu/ghidra-projects ]
+
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, --now, ghidra-vnc.service ]
+  - [ systemctl, enable, --now, novnc.service ]

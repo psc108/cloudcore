@@ -229,14 +229,16 @@ def _build_write_files_block(ssh_user: str, cc_pubkey: str, cc_privkey: str, ext
     write_entries = []
     runcmds = []
     for usr in all_users:
+        # No `owner:` here deliberately: the write_files module runs before
+        # users-groups creates {usr}, so an owner referencing that user
+        # fails with "Unknown user or group". Files land root-owned and the
+        # runcmd below (which runs after users-groups) chowns them.
         write_entries.append(f"""  - path: /home/{usr}/.ssh/cloudcore_ed25519
     permissions: '0600'
-    owner: '{usr}:{usr}'
     content: |
 {priv_indented}
   - path: /home/{usr}/.ssh/cloudcore_ed25519.pub
     permissions: '0644'
-    owner: '{usr}:{usr}'
     content: |
           {cc_pubkey}""")
         runcmds.append(f"""  - |
@@ -248,9 +250,53 @@ def _build_write_files_block(ssh_user: str, cc_pubkey: str, cc_privkey: str, ext
     return "write_files:\n" + "\n".join(write_entries) + "\nruncmd:\n" + "\n".join(runcmds)
 
 
+_MERGED_LIST_KEYS = ("packages", "write_files", "runcmd", "bootcmd", "ssh_authorized_keys")
+
+
+def _merge_user_data(base_cloud_config: str, extra_user_data: Optional[str]) -> str:
+    """Merge CloudCore's own cloud-config (SSH key injection) with a caller-
+    supplied user_data document into a single #cloud-config.
+
+    cloud-init's own multi-part merge semantics are not something to lean
+    on here — we merge explicitly so the result is deterministic and
+    testable. List-valued keys that matter (packages, write_files, runcmd,
+    bootcmd, ssh_authorized_keys) are concatenated, CloudCore's entries
+    first. A caller document that isn't #cloud-config (e.g. a raw shell
+    script) is dropped into write_files and invoked via runcmd instead of
+    being silently ignored.
+    """
+    import yaml
+
+    base = yaml.safe_load(base_cloud_config.split("#cloud-config", 1)[-1]) or {}
+    extra_user_data = (extra_user_data or "").strip()
+
+    if not extra_user_data:
+        merged = base
+    elif extra_user_data.startswith("#cloud-config"):
+        extra = yaml.safe_load(extra_user_data.split("#cloud-config", 1)[-1]) or {}
+        merged = dict(base)
+        for key in _MERGED_LIST_KEYS:
+            if key in extra or key in base:
+                merged[key] = list(base.get(key) or []) + list(extra.get(key) or [])
+        for key, value in extra.items():
+            if key not in _MERGED_LIST_KEYS:
+                merged[key] = value
+    else:
+        merged = dict(base)
+        merged["write_files"] = list(base.get("write_files") or []) + [{
+            "path": "/var/lib/cloud/user-supplied-script.sh",
+            "permissions": "0755",
+            "content": extra_user_data,
+        }]
+        merged["runcmd"] = list(base.get("runcmd") or []) + ["/var/lib/cloud/user-supplied-script.sh"]
+
+    return "#cloud-config\n" + yaml.safe_dump(merged, default_flow_style=False, sort_keys=False)
+
+
 def _cloud_init_iso(instance_dir: Path, instance_name: str, image_id: str,
                     user_data: Optional[str], extra_users: Optional[list] = None) -> Path:
-    """Build a cloud-init NoCloud ISO, injecting the CloudCore inter-instance keypair."""
+    """Build a cloud-init NoCloud ISO, injecting the CloudCore inter-instance keypair
+    and merging in any caller-supplied user_data (packages/write_files/runcmd/...)."""
     extra_users = extra_users or []
     meta_data = f"instance-id: {instance_name}\nlocal-hostname: {instance_name}\n"
 
@@ -258,32 +304,20 @@ def _cloud_init_iso(instance_dir: Path, instance_name: str, image_id: str,
     cc_privkey = _CC_PRIVKEY.read_text().strip() if _CC_PRIVKEY.exists() else ""
     ssh_user   = ssh_user_for_image(image_id)
 
-    # Collect any user-supplied authorized_keys from raw user_data
-    extra_keys: list[str] = []
-    if user_data:
-        import yaml
-        try:
-            parsed = yaml.safe_load(user_data.split("#cloud-config", 1)[-1])
-            if isinstance(parsed, dict):
-                extra_keys = parsed.get("ssh_authorized_keys", [])
-        except Exception:
-            pass
-
-    all_keys = extra_keys + ([cc_pubkey] if cc_pubkey else [])
-    keys_yaml = "\n".join(f"  - {k}" for k in all_keys)
-
     users_block = _build_users_block(extra_users, cc_pubkey)
     write_files_block = _build_write_files_block(ssh_user, cc_pubkey, cc_privkey, extra_users)
 
-    user_data = f"""#cloud-config
+    base_cloud_config = f"""#cloud-config
 ssh_authorized_keys:
-{keys_yaml}
+  - {cc_pubkey}
 {users_block}
 {write_files_block}
 """
 
+    merged_user_data = _merge_user_data(base_cloud_config, user_data)
+
     (instance_dir / "meta-data").write_text(meta_data)
-    (instance_dir / "user-data").write_text(user_data)
+    (instance_dir / "user-data").write_text(merged_user_data)
     iso_path = instance_dir / "cloud-init.iso"
 
     # Try genisoimage first, then xorriso

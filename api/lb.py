@@ -41,7 +41,7 @@ def _free_port(start: int, end: int) -> int:
 def _resolve_tg_servers(tg: dict, inst_map: dict) -> list[dict]:
     """Resolve a target group's targets to HAProxy server entries."""
     servers = []
-    for t in tg.get("targets", []):
+    for t in (tg.get("targets") or []):
         inst = inst_map.get(t["instance_id"])
         if not inst:
             continue
@@ -105,7 +105,10 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
             lst_port = lst["port"]
             lst_short = lst["id"].replace("-", "")[:8]
             default_tg_id = lst.get("target_group_id", "")
-            routing_rules = sorted(lst.get("routing_rules", []), key=lambda r: r.get("priority", 999))
+            # `or []`, not `.get(..., [])`: this key can be present with an
+            # explicit None (Terraform sends null for an unset
+            # Optional+Computed list), which a plain default wouldn't catch.
+            routing_rules = sorted(lst.get("routing_rules") or [], key=lambda r: r.get("priority", 999))
 
             acl_lines: list[str] = []
             use_lines: list[str] = []
