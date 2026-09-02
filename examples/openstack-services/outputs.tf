@@ -47,3 +47,18 @@ output "backend_lb_dns" {
   description = "Backend load balancer DNS name."
   value       = module.lb.lb_dns_names_by_key["backend-lb${local.sfx}"]
 }
+
+output "frontend_ssh" {
+  description = "SSH commands for frontend instances."
+  value       = module.frontend.ssh_commands_by_key
+}
+
+output "backend_ssh" {
+  description = "SSH commands for backend instances."
+  value       = module.backend.ssh_commands_by_key
+}
+
+output "mysql_ssh" {
+  description = "SSH commands for MySQL instances."
+  value       = module.mysql.ssh_commands_by_key
+}

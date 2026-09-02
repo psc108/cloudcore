@@ -22,3 +22,8 @@ output "app_private_ips" {
   description = "App instance private IPs keyed by resource key."
   value       = module.app.private_ips_by_key
 }
+
+output "app_ssh_commands" {
+  description = "SSH commands for each app instance, keyed by resource key."
+  value       = module.app.ssh_commands_by_key
+}

@@ -17,3 +17,8 @@ output "private_ips" {
   description = "Instance private IPs keyed by resource key."
   value       = module.compute.private_ips_by_key
 }
+
+output "ssh_commands" {
+  description = "SSH commands for each instance, keyed by resource key."
+  value       = module.compute.ssh_commands_by_key
+}

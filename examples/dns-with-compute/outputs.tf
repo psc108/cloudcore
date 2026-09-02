@@ -22,3 +22,8 @@ output "dns_record_values" {
   description = "DNS record values keyed by record key."
   value       = module.dns_records.record_values_by_key
 }
+
+output "ssh_commands" {
+  description = "SSH commands for each instance, keyed by resource key."
+  value       = module.compute.ssh_commands_by_key
+}

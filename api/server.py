@@ -504,6 +504,76 @@ def delete_instance(instance_id):
     return "", 204
 
 
+@app.post("/v1/instances/<instance_id>/stop")
+@require_auth
+def stop_instance(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if instance.status != InstanceStatus.RUNNING:
+        return problem(409, "Conflict",
+            f"Instance '{instance_id}' is {instance.status.value}, not running")
+    if not instance.domain_name:
+        return problem(409, "Conflict", "Instance has no associated domain — cannot stop")
+    try:
+        compute.stop_domain(instance.domain_name)
+    except Exception as e:
+        return problem(500, "Internal Server Error", str(e))
+    instance.status = InstanceStatus.STOPPED
+    store.put_instance(instance)
+    for lb in store.list_lbs():
+        if lb.vpc_id == instance.vpc_id:
+            try:
+                lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(instance.vpc_id))
+            except Exception as e:
+                app.logger.warning("LB reload after stop %s: %s", instance_id, e)
+    return jsonify(instance.to_dict())
+
+
+@app.post("/v1/instances/<instance_id>/start")
+@require_auth
+def start_instance(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if instance.status not in (InstanceStatus.STOPPED,):
+        return problem(409, "Conflict",
+            f"Instance '{instance_id}' is {instance.status.value}, not stopped")
+    if not instance.domain_name:
+        return problem(409, "Conflict", "Instance has no associated domain — cannot start")
+    try:
+        compute.start_domain(instance.domain_name)
+    except Exception as e:
+        return problem(500, "Internal Server Error", str(e))
+    instance.status = InstanceStatus.RUNNING
+    store.put_instance(instance)
+    for lb in store.list_lbs():
+        if lb.vpc_id == instance.vpc_id:
+            try:
+                lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(instance.vpc_id))
+            except Exception as e:
+                app.logger.warning("LB reload after start %s: %s", instance_id, e)
+    return jsonify(instance.to_dict())
+
+
+@app.post("/v1/instances/<instance_id>/reboot")
+@require_auth
+def reboot_instance(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if instance.status != InstanceStatus.RUNNING:
+        return problem(409, "Conflict",
+            f"Instance '{instance_id}' is {instance.status.value}, not running")
+    if not instance.domain_name:
+        return problem(409, "Conflict", "Instance has no associated domain — cannot reboot")
+    try:
+        compute.reboot_domain(instance.domain_name)
+    except Exception as e:
+        return problem(500, "Internal Server Error", str(e))
+    return jsonify(instance.to_dict())
+
+
 # ---------------------------------------------------------------------------
 # Load Balancers
 # ---------------------------------------------------------------------------

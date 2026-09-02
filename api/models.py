@@ -203,6 +203,12 @@ class Instance:
     users: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
+        # SLIRP instances are reachable at 127.0.0.1 via forwarded ports.
+        effective_public_ip = self.public_ip or ("127.0.0.1" if self.ssh_host_port else "")
+        ssh_endpoint = (
+            f"{self.ssh_user}@127.0.0.1 -p {self.ssh_host_port}"
+            if self.ssh_host_port else ""
+        )
         return {
             "id": self.id,
             "name": self.name,
@@ -212,9 +218,10 @@ class Instance:
             "subnet_id": self.subnet_id,
             "security_group_ids": self.security_group_ids,
             "private_ip": self.private_ip,
-            "public_ip": self.public_ip,
+            "public_ip": effective_public_ip,
             "ssh_port": self.ssh_host_port,
             "ssh_user": self.ssh_user,
+            "ssh_endpoint": ssh_endpoint,
             "users": self.users,
             "status": self.status.value,
             "created_at": self.created_at,

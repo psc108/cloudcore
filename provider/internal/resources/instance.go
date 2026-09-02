@@ -39,6 +39,7 @@ type InstanceResourceModel struct {
 	PublicIP         types.String   `tfsdk:"public_ip"`
 	SSHPort          types.Int64    `tfsdk:"ssh_port"`
 	SSHUser          types.String   `tfsdk:"ssh_user"`
+	SSHEndpoint      types.String   `tfsdk:"ssh_endpoint"`
 	Status           types.String   `tfsdk:"status"`
 	CreatedAt        types.String   `tfsdk:"created_at"`
 	Tags             types.Map      `tfsdk:"tags"`
@@ -58,6 +59,7 @@ type instanceAPIModel struct {
 	PublicIP         string            `json:"public_ip"`
 	SSHPort          int64             `json:"ssh_port"`
 	SSHUser          string            `json:"ssh_user"`
+	SSHEndpoint      string            `json:"ssh_endpoint"`
 	Status           string            `json:"status"`
 	CreatedAt        string            `json:"created_at"`
 	Tags             map[string]string `json:"tags"`
@@ -117,7 +119,7 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				},
 			},
 			"private_ip": schema.StringAttribute{Computed: true, Description: "Private IP address assigned by the API."},
-			"public_ip":  schema.StringAttribute{Computed: true, Description: "Public IP address, if assigned."},
+			"public_ip":  schema.StringAttribute{Computed: true, Description: "Public IP address (127.0.0.1 for SLIRP instances)."},
 			"ssh_port": schema.Int64Attribute{
 				Computed:    true,
 				Description: "Host port forwarded to the instance SSH service (SLIRP mode).",
@@ -131,6 +133,10 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"ssh_endpoint": schema.StringAttribute{
+				Computed:    true,
+				Description: "Ready-to-use SSH connection string, e.g. 'ubuntu@127.0.0.1 -p 22100'. Empty for bridge-networked instances.",
 			},
 			"status":     schema.StringAttribute{Computed: true, Description: "Current instance status (API-assigned)."},
 			"created_at": schema.StringAttribute{
@@ -176,6 +182,7 @@ func instanceMapToState(ctx context.Context, result instanceAPIModel, state *Ins
 	state.PublicIP = types.StringValue(result.PublicIP)
 	state.SSHPort = types.Int64Value(result.SSHPort)
 	state.SSHUser = types.StringValue(result.SSHUser)
+	state.SSHEndpoint = types.StringValue(result.SSHEndpoint)
 	state.Status = types.StringValue(result.Status)
 	state.CreatedAt = types.StringValue(result.CreatedAt)
 	sgIDs, diags := stringsToList(ctx, result.SecurityGroupIDs)

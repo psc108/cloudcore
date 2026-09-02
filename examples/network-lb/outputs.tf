@@ -27,3 +27,8 @@ output "lb_listen_ports" {
   description = "Host port each load balancer listens on, keyed by resource key."
   value       = module.lb.lb_listen_ports_by_key
 }
+
+output "ssh_commands" {
+  description = "SSH commands for each instance, keyed by resource key."
+  value       = module.db.ssh_commands_by_key
+}

@@ -472,12 +472,31 @@ def start_domain(domain_name: str) -> None:
         conn.close()
 
 
-def stop_instance(domain_name: str) -> None:
+def stop_domain(domain_name: str) -> None:
+    """Force-stop (power-off) a running domain."""
     conn = _conn()
     try:
         dom = conn.lookupByName(domain_name)
         if dom.isActive():
             dom.destroy()
+    except libvirt.libvirtError as e:
+        raise RuntimeError(f"libvirt error: {e}") from e
+    finally:
+        conn.close()
+
+
+# Keep old name for compatibility with any internal callers.
+stop_instance = stop_domain
+
+
+def reboot_domain(domain_name: str) -> None:
+    """Send an ACPI reboot signal to a running domain."""
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(domain_name)
+        if not dom.isActive():
+            raise RuntimeError(f"Domain {domain_name!r} is not running")
+        dom.reboot(0)
     except libvirt.libvirtError as e:
         raise RuntimeError(f"libvirt error: {e}") from e
     finally:
