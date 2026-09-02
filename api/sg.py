@@ -190,8 +190,31 @@ def apply_slirp(instance, ingress_rules: list, egress_rules: list) -> None:
 # Public interface — called from server.py
 # ---------------------------------------------------------------------------
 
+def _expand_sg_references(rules: list) -> list:
+    """Replace source_sg_id references with per-instance /32 CIDR rules."""
+    import store as resource_store
+    expanded = []
+    for rule in rules:
+        sg_id = rule.get("source_sg_id")
+        if not sg_id:
+            expanded.append(rule)
+            continue
+        source_ips = [
+            i.private_ip for i in resource_store.list_instances()
+            if sg_id in i.security_group_ids and i.private_ip
+        ]
+        if not source_ips:
+            log.debug("sg: source_sg_id %s has no running instances — rule skipped", sg_id)
+            continue
+        for ip in source_ips:
+            expanded.append({**rule, "cidr": f"{ip}/32", "source_sg_id": None})
+    return expanded
+
+
 def apply(instance, ingress_rules: list, egress_rules: list) -> None:
     """Apply security group rules to an instance (bridge or SLIRP)."""
+    ingress_rules = _expand_sg_references(ingress_rules)
+    egress_rules  = _expand_sg_references(egress_rules)
     if instance.domain_name and _instance_mac(instance.domain_name):
         apply_bridge(instance.domain_name, instance.id, ingress_rules, egress_rules)
     else:

@@ -4,6 +4,7 @@ import uuid
 from typing import Optional
 
 import db
+import dns_server
 from models import now_iso
 
 BUILTIN_ZONES = ("instances.cloudcore.local", "lb.cloudcore.local")
@@ -65,6 +66,13 @@ def list_records(zone: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _reload_dns() -> None:
+    try:
+        dns_server.reload()
+    except Exception:
+        pass
+
+
 def upsert_record(zone: str, name: str, rtype: str, value: str,
                   ttl: int = 300, resource_type: str = "manual",
                   resource_id: str = "") -> dict:
@@ -88,6 +96,7 @@ def upsert_record(zone: str, name: str, rtype: str, value: str,
             fqdn=excluded.fqdn""",
         (rec_id, zone, name, fqdn, rtype, value, ttl, resource_type, resource_id, created_at))
     db.get_db().commit()
+    _reload_dns()
     return {"id": rec_id, "zone_name": zone, "name": name, "fqdn": fqdn,
             "type": rtype, "value": value, "ttl": ttl,
             "resource_type": resource_type, "resource_id": resource_id,
@@ -99,9 +108,11 @@ def delete_record(zone: str, name: str, rtype: str) -> bool:
         "DELETE FROM dns_records WHERE zone_name=? AND name=? AND type=?",
         (zone, name, rtype.upper()))
     db.get_db().commit()
+    _reload_dns()
     return c.rowcount > 0
 
 
 def delete_records_for_resource(resource_id: str) -> None:
     db.get_db().execute("DELETE FROM dns_records WHERE resource_id=?", (resource_id,))
     db.get_db().commit()
+    _reload_dns()

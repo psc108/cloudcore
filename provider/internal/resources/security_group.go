@@ -28,6 +28,7 @@ type sgRuleModel struct {
 	FromPort    types.Int64  `tfsdk:"from_port"`
 	ToPort      types.Int64  `tfsdk:"to_port"`
 	CIDR        types.String `tfsdk:"cidr"`
+	SourceSGID  types.String `tfsdk:"source_sg_id"`
 	Description types.String `tfsdk:"description"`
 }
 
@@ -47,7 +48,8 @@ type sgRuleAPIModel struct {
 	Protocol    string `json:"protocol"`
 	FromPort    *int64 `json:"from_port,omitempty"`
 	ToPort      *int64 `json:"to_port,omitempty"`
-	CIDR        string `json:"cidr"`
+	CIDR        string `json:"cidr,omitempty"`
+	SourceSGID  string `json:"source_sg_id,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -64,11 +66,12 @@ type sgAPIModel struct {
 }
 
 var sgRuleAttrTypes = map[string]attr.Type{
-	"protocol":    types.StringType,
-	"from_port":   types.Int64Type,
-	"to_port":     types.Int64Type,
-	"cidr":        types.StringType,
-	"description": types.StringType,
+	"protocol":     types.StringType,
+	"from_port":    types.Int64Type,
+	"to_port":      types.Int64Type,
+	"cidr":         types.StringType,
+	"source_sg_id": types.StringType,
+	"description":  types.StringType,
 }
 
 func NewSecurityGroupResource() resource.Resource { return &SecurityGroupResource{} }
@@ -87,10 +90,11 @@ func (r *SecurityGroupResource) Schema(_ context.Context, _ resource.SchemaReque
 					stringvalidator.OneOf("tcp", "udp", "icmp", "-1"),
 				},
 			},
-			"from_port":   schema.Int64Attribute{Optional: true, Description: "Start of port range (inclusive)."},
-			"to_port":     schema.Int64Attribute{Optional: true, Description: "End of port range (inclusive)."},
-			"cidr":        schema.StringAttribute{Required: true, Description: "Source (ingress) or destination (egress) CIDR block."},
-			"description": schema.StringAttribute{Optional: true, Description: "Human-readable rule description."},
+			"from_port":    schema.Int64Attribute{Optional: true, Description: "Start of port range (inclusive)."},
+			"to_port":      schema.Int64Attribute{Optional: true, Description: "End of port range (inclusive)."},
+			"cidr":         schema.StringAttribute{Optional: true, Computed: true, Description: "Source (ingress) or destination (egress) CIDR block. Mutually exclusive with source_sg_id."},
+			"source_sg_id": schema.StringAttribute{Optional: true, Computed: true, Description: "Source security group ID. Traffic from any instance in that group is allowed. Mutually exclusive with cidr."},
+			"description":  schema.StringAttribute{Optional: true, Computed: true, Description: "Human-readable rule description."},
 		},
 	}
 	resp.Schema = schema.Schema{
@@ -163,11 +167,12 @@ func (r *SecurityGroupResource) rulesFromAPI(_ context.Context, apiRules []sgRul
 			tp = types.Int64Null()
 		}
 		obj, diags := types.ObjectValue(sgRuleAttrTypes, map[string]attr.Value{
-			"protocol":    types.StringValue(rule.Protocol),
-			"from_port":   fp,
-			"to_port":     tp,
-			"cidr":        types.StringValue(rule.CIDR),
-			"description": types.StringValue(rule.Description),
+			"protocol":     types.StringValue(rule.Protocol),
+			"from_port":    fp,
+			"to_port":      tp,
+			"cidr":         types.StringValue(rule.CIDR),
+			"source_sg_id": types.StringValue(rule.SourceSGID),
+			"description":  types.StringValue(rule.Description),
 		})
 		if diags.HasError() {
 			return types.ListNull(types.ObjectType{AttrTypes: sgRuleAttrTypes}), fmt.Errorf("building rule object")
@@ -191,6 +196,7 @@ func (r *SecurityGroupResource) rulesToAPI(ctx context.Context, list types.List)
 		rule := sgRuleAPIModel{
 			Protocol:    m.Protocol.ValueString(),
 			CIDR:        m.CIDR.ValueString(),
+			SourceSGID:  m.SourceSGID.ValueString(),
 			Description: m.Description.ValueString(),
 		}
 		if !m.FromPort.IsNull() && !m.FromPort.IsUnknown() {

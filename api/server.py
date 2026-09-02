@@ -9,6 +9,7 @@ import store
 import compute
 import lb as lb_backend
 import dns as dns_store
+import dns_server
 import build_engine
 import db
 import nfs_store
@@ -792,6 +793,21 @@ def delete_health_check(lb_id):
     return "", 204
 
 
+@app.get("/v1/load-balancers/<lb_id>/health")
+@require_auth
+def lb_backend_health(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    backends = lb_backend.get_health(lb_id)
+    healthy  = sum(1 for b in backends if b["healthy"])
+    return jsonify({
+        "lb_id":    lb_id,
+        "running":  lb_backend.is_running(lb_id),
+        "backends": backends,
+        "summary":  {"total": len(backends), "healthy": healthy, "unhealthy": len(backends) - healthy},
+    })
+
 
 # ---------------------------------------------------------------------------
 # Instance users
@@ -1035,6 +1051,7 @@ def dashboard():
             "dns_zones":        len(zones),
             "dns_records":      sum(z["record_count"] for z in zones),
             "nfs_servers":      len(nfs_servers),
+            "dns_resolver":     f"127.0.0.1:{dns_server.PORT}",
         },
     })
 
@@ -1103,4 +1120,5 @@ if __name__ == "__main__":
     db.init()
     dns_store.load()
     reconcile()
+    dns_server.start()
     app.run(host="127.0.0.1", port=8080, debug=False)

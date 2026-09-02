@@ -22,6 +22,12 @@ def _validate_rules(rules: list) -> str | None:
         proto = r.get("protocol", "-1")
         if proto not in _VALID_PROTOCOLS:
             return f"protocol must be one of: {', '.join(sorted(_VALID_PROTOCOLS))}"
+        has_cidr = bool(r.get("cidr"))
+        has_sg   = bool(r.get("source_sg_id"))
+        if not has_cidr and not has_sg:
+            return "each rule must have either 'cidr' or 'source_sg_id'"
+        if has_cidr and has_sg:
+            return "a rule cannot specify both 'cidr' and 'source_sg_id'"
         if proto != "-1":
             fp = r.get("from_port")
             tp = r.get("to_port")
@@ -105,6 +111,11 @@ def update_sg(sg_id):
 
 @sg_bp.delete("/v1/security-groups/<sg_id>")
 def delete_sg(sg_id):
+    attached = [i for i in resource_store.list_instances() if sg_id in i.security_group_ids]
+    if attached:
+        names = ", ".join(i.name for i in attached[:3])
+        return _problem(409, "Conflict",
+            f"Security group is attached to {len(attached)} instance(s) ({names}) — detach first")
     if not sg_store.delete(sg_id):
         return _problem(404, "Not Found", f"Security group '{sg_id}' not found")
     return "", 204

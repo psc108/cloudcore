@@ -160,6 +160,49 @@ def stop(lb_id: str) -> None:
     _sock_path(lb_id).unlink(missing_ok=True)
 
 
+def get_health(lb_id: str) -> list[dict]:
+    """Query the HAProxy stats socket for backend health. Returns [] if not running."""
+    import csv
+    import io
+    import socket as _socket
+
+    sock_path = _sock_path(lb_id)
+    if not sock_path.exists():
+        return []
+    try:
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect(str(sock_path))
+            s.sendall(b"show stat\n")
+            buf = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+        raw = buf.decode(errors="replace").lstrip("# ")
+        results = []
+        for row in csv.DictReader(io.StringIO(raw)):
+            svname = row.get("svname", "")
+            if svname in ("FRONTEND", "BACKEND", ""):
+                continue
+            status = row.get("status", "UNKNOWN")
+            results.append({
+                "name":         svname,
+                "status":       status,
+                "healthy":      status == "UP",
+                "check_status": row.get("check_status", ""),
+                "last_chk":     row.get("last_chk", ""),
+                "connections":  int(row.get("scur", 0) or 0),
+                "requests":     int(row.get("req_tot", 0) or 0),
+                "bytes_in":     int(row.get("bin", 0) or 0),
+                "bytes_out":    int(row.get("bout", 0) or 0),
+            })
+        return results
+    except Exception:
+        return []
+
+
 def is_running(lb_id: str) -> bool:
     pid_path = _pid_path(lb_id)
     if not pid_path.exists():

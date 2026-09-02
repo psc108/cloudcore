@@ -40,27 +40,31 @@ variable "security_groups" {
     - egress_rules  : map of egress rule definitions.
 
     Rule fields:
-    - ip_protocol : "tcp", "udp", "icmp", or "-1" (all traffic).
-    - from_port   : start of port range (omit for protocol "-1").
-    - to_port     : end of port range (omit for protocol "-1").
-    - cidr        : source/destination CIDR (e.g. "0.0.0.0/0").
-    - description : rule description (optional).
+    - ip_protocol  : "tcp", "udp", "icmp", or "-1" (all traffic).
+    - from_port    : start of port range (omit for protocol "-1").
+    - to_port      : end of port range (omit for protocol "-1").
+    - cidr         : source/destination CIDR. Mutually exclusive with source_sg_id.
+    - source_sg_id : source security group ID. Traffic from any instance in that
+                     group is allowed. Mutually exclusive with cidr.
+    - description  : rule description (optional).
   EOT
   type = map(object({
     description = optional(string, "Managed by OpenTofu")
     ingress_rules = optional(map(object({
-      ip_protocol = string
-      from_port   = optional(number)
-      to_port     = optional(number)
-      cidr        = optional(string, "0.0.0.0/0")
-      description = optional(string, "")
+      ip_protocol  = string
+      from_port    = optional(number)
+      to_port      = optional(number)
+      cidr         = optional(string)
+      source_sg_id = optional(string)
+      description  = optional(string, "")
     })), {})
     egress_rules = optional(map(object({
-      ip_protocol = string
-      from_port   = optional(number)
-      to_port     = optional(number)
-      cidr        = optional(string, "0.0.0.0/0")
-      description = optional(string, "")
+      ip_protocol  = string
+      from_port    = optional(number)
+      to_port      = optional(number)
+      cidr         = optional(string)
+      source_sg_id = optional(string)
+      description  = optional(string, "")
     })), {})
   }))
   default = {}
