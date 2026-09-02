@@ -136,7 +136,7 @@ def delete_vpc(vpc_id):
     if active_lbs:
         return problem(409, "Conflict",
             f"VPC '{vpc_id}' has {len(active_lbs)} active load balancer(s) — delete them first")
-    active_sgs = [sg for sg in sg_store.list_security_groups()
+    active_sgs = [sg for sg in sg_store.list_all()
                   if sg.vpc_id == vpc_id and sg.status.value == "active"]
     if active_sgs:
         return problem(409, "Conflict",
@@ -425,7 +425,13 @@ def create_instance():
                 from sg_routes import _merged_rules
                 ingress, egress = _merged_rules(instance.security_group_ids)
                 sg_enforce.apply(instance, ingress, egress)
-            # Reload any LBs in the same VPC so they pick up the new instance
+        except Exception as e:
+            from models import InstanceStatus
+            instance.status = InstanceStatus.ERROR
+            app.logger.error("Failed to create instance %s: %s", instance.id, e)
+        finally:
+            store.put_instance(instance)
+            # Reload LBs after put_instance so http_host_port is in the DB
             vpc_instances = store.list_instances_by_vpc(instance.vpc_id)
             for lb in store.list_lbs():
                 if lb.vpc_id == instance.vpc_id:
@@ -433,12 +439,6 @@ def create_instance():
                         lb_backend.reload(lb, vpc_instances=vpc_instances)
                     except Exception as lb_err:
                         app.logger.warning("LB reload failed for %s: %s", lb.id, lb_err)
-        except Exception as e:
-            from models import InstanceStatus
-            instance.status = InstanceStatus.ERROR
-            app.logger.error("Failed to create instance %s: %s", instance.id, e)
-        finally:
-            store.put_instance(instance)
 
     threading.Thread(target=_launch, daemon=True).start()
     return jsonify(instance.to_dict()), 202
@@ -1209,8 +1209,8 @@ def dns_create_record(zone_name):
     value = body.get("value", "").strip()
     if not name or not value:
         return problem(400, "Bad Request", "name and value are required")
-    if rtype not in ("A", "CNAME", "TXT", "MX"):
-        return problem(400, "Bad Request", "type must be A, CNAME, TXT, or MX")
+    if rtype not in ("A", "CNAME", "TXT", "MX", "PTR"):
+        return problem(400, "Bad Request", "type must be A, CNAME, TXT, MX, or PTR")
     rec = dns_store.upsert_record(zone_name, name, rtype, value,
                                   ttl=int(body.get("ttl", 300)))
     return jsonify(rec), 201

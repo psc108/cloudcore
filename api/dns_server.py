@@ -62,6 +62,8 @@ def _generate_config() -> str:
             parts = value.split(None, 1)
             if len(parts) == 2:
                 lines.append(f"mx-host={fqdn},{parts[1]},{parts[0]}")
+        elif rtype == "PTR":
+            lines.append(f"ptr-record={fqdn},{value}")
         # NS/SOA not supported in dnsmasq address-only mode
 
     return "\n".join(lines) + "\n"

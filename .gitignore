@@ -41,3 +41,4 @@ tests/results/
 api/lb/*.cfg
 api/lb/*.pid
 api/lb/*.sock
+.amazonq/

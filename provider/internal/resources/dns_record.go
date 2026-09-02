@@ -74,7 +74,7 @@ func (r *DNSRecordResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			},
 			"type": schema.StringAttribute{
 				Required:    true,
-				Description: "Record type: A, CNAME, or TXT.",
+				Description: "Record type: A, CNAME, TXT, MX, or PTR.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
