@@ -247,6 +247,14 @@ def delete_instance(instance_id):
     dns_store.delete_records_for_resource(instance_id)
     sg_enforce.remove(instance)
 
+    # Reload LBs in the same VPC — deleted instance is already excluded from the query
+    for lb in store.list_lbs():
+        if lb.vpc_id == instance.vpc_id:
+            try:
+                lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(instance.vpc_id))
+            except Exception as lb_err:
+                app.logger.warning("LB reload failed after instance delete %s: %s", instance_id, lb_err)
+
     def _destroy():
         try:
             compute.delete_instance(instance)
@@ -722,6 +730,11 @@ def reconcile():
     """Reconcile persisted state against live libvirt domains and HAProxy processes."""
     app.logger.info("Reconciling state...")
 
+    # Seed SLIRP IP counters from existing instance records so new instances after
+    # a server restart don't get the same IPs as existing ones.
+    vpc_cidr_map = {v.id: v.cidr_block for v in store.list_vpcs()}
+    compute.init_vpc_ip_counters(vpc_cidr_map, store.list_instances())
+
     for instance in store.list_instances():
         if not instance.domain_name:
             continue
@@ -753,9 +766,12 @@ def reconcile():
 
     for lb in store.list_lbs():
         try:
-            lb.listen_port = lb_backend.start(
-                lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-            store.put_lb(lb)
+            vpc_instances = store.list_instances_by_vpc(lb.vpc_id)
+            if lb_backend.is_running(lb.id):
+                lb_backend.reload(lb, vpc_instances=vpc_instances)
+            else:
+                lb.listen_port = lb_backend.start(lb, vpc_instances=vpc_instances)
+                store.put_lb(lb)
             dns_store.upsert_record(
                 "lb.cloudcore.local", lb.name, "A", "127.0.0.1",
                 resource_type="lb", resource_id=lb.id,
