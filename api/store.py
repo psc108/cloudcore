@@ -18,6 +18,7 @@ def _vpc_from_row(row) -> VPC:
 
 
 def _inst_from_row(row) -> Instance:
+    keys = row.keys()
     i = Instance(
         id=row["id"], name=row["name"], image_id=row["image_id"],
         flavor=row["flavor"], vpc_id=row["vpc_id"], subnet_id=row["subnet_id"],
@@ -25,7 +26,9 @@ def _inst_from_row(row) -> Instance:
         user_data=row["user_data"], private_ip=row["private_ip"],
         public_ip=row["public_ip"], created_at=row["created_at"],
         tags=json.loads(row["tags"]), domain_name=row["domain_name"],
-        ssh_host_port=row["ssh_host_port"], ssh_user=row["ssh_user"],
+        ssh_host_port=row["ssh_host_port"],
+        http_host_port=row["http_host_port"] if "http_host_port" in keys else 0,
+        ssh_user=row["ssh_user"],
         users=json.loads(row["users"]),
     )
     i.status = InstanceStatus(row["status"])
@@ -114,23 +117,32 @@ def find_instance_by_name(name: str) -> Optional[Instance]:
 def put_instance(instance: Instance) -> None:
     db.get_db().execute("""INSERT INTO instances
         (id,name,image_id,flavor,vpc_id,subnet_id,security_group_ids,user_data,
-         private_ip,public_ip,status,created_at,tags,domain_name,ssh_host_port,ssh_user,users)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         private_ip,public_ip,status,created_at,tags,domain_name,
+         ssh_host_port,http_host_port,ssh_user,users)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, image_id=excluded.image_id, flavor=excluded.flavor,
             vpc_id=excluded.vpc_id, subnet_id=excluded.subnet_id,
             security_group_ids=excluded.security_group_ids, user_data=excluded.user_data,
             private_ip=excluded.private_ip, public_ip=excluded.public_ip,
             status=excluded.status, tags=excluded.tags, domain_name=excluded.domain_name,
-            ssh_host_port=excluded.ssh_host_port, ssh_user=excluded.ssh_user,
-            users=excluded.users""",
+            ssh_host_port=excluded.ssh_host_port, http_host_port=excluded.http_host_port,
+            ssh_user=excluded.ssh_user, users=excluded.users""",
         (instance.id, instance.name, instance.image_id, instance.flavor,
          instance.vpc_id, instance.subnet_id,
          json.dumps(instance.security_group_ids), instance.user_data,
          instance.private_ip, instance.public_ip, instance.status.value,
          instance.created_at, json.dumps(instance.tags), instance.domain_name,
-         instance.ssh_host_port, instance.ssh_user, json.dumps(instance.users)))
+         instance.ssh_host_port, instance.http_host_port,
+         instance.ssh_user, json.dumps(instance.users)))
     db.get_db().commit()
+
+
+def list_instances_by_vpc(vpc_id: str) -> list[Instance]:
+    rows = db.get_db().execute(
+        "SELECT * FROM instances WHERE vpc_id=? AND status NOT IN ('deleted','error')",
+        (vpc_id,)).fetchall()
+    return [_inst_from_row(r) for r in rows]
 
 
 def delete_instance_record(instance_id: str) -> bool:

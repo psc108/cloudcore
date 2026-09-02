@@ -109,9 +109,10 @@ class Instance:
     status: InstanceStatus = InstanceStatus.PENDING
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
-    # internal: libvirt domain name and SSH port forward
+    # internal: libvirt domain name and host port forwards (SLIRP mode)
     domain_name: str = ""
     ssh_host_port: int = 0
+    http_host_port: int = 0   # host port forwarded to guest :80; 0 = bridge mode
     ssh_user: str = "ubuntu"
     # [{username, sudo, ssh_keys: [], password_hash: ""}]
     users: list = field(default_factory=list)

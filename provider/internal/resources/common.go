@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -25,4 +26,15 @@ func stringsToList(ctx context.Context, ss []string) (types.List, diag.Diagnosti
 		return types.ListNull(types.StringType), nil
 	}
 	return types.ListValueFrom(ctx, types.StringType, ss)
+}
+
+// splitTwo splits s on the first "/" into exactly two parts.
+// Returns nil when s contains no "/" separator.
+// Used by ImportState implementations that accept "parent_id/child_id" format.
+func splitTwo(s string) []string {
+	idx := strings.IndexByte(s, '/')
+	if idx < 0 {
+		return nil
+	}
+	return []string{s[:idx], s[idx+1:]}
 }

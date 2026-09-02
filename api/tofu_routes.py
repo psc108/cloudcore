@@ -104,30 +104,16 @@ def destroy_build(build_id):
     build = tofu_engine.get_build(build_id)
     if not build:
         return jsonify({"status": 404, "title": "Not Found", "detail": "Build not found"}), 404
+    if build["status"] == "destroyed":
+        return jsonify({"status": 409, "title": "Already destroyed"}), 409
 
-    provisioned = build.get("provisioned") or []
-    _PATH = {
-        "vpc":            lambda i: f"/v1/vpcs/{i}",
-        "instance":       lambda i: f"/v1/instances/{i}",
-        "lb":             lambda i: f"/v1/load-balancers/{i}",
-        "dns_zone":       lambda i: f"/v1/dns/zones/{i}",
-        "nfs_server":     lambda i: f"/v1/nfs-servers/{i}",
-        "security_group": lambda i: f"/v1/security-groups/{i}",
-    }
-    results = []
-    for r in provisioned:
-        path_fn = _PATH.get(r["type"])
-        if not path_fn:
-            continue
-        from flask import current_app
-        with current_app.test_client() as c:
-            resp = c.delete(path_fn(r["id"]),
-                            headers={"Authorization": f"Bearer {API_TOKEN}"})
-            results.append({"type": r["type"], "id": r["id"],
-                            "name": r["name"], "status": resp.status_code})
+    try:
+        success, logs = tofu_engine.run_tofu_destroy(build_id)
+    except Exception as e:
+        return jsonify({"status": 500, "title": "Destroy failed", "detail": str(e)}), 500
 
-    tofu_engine.mark_build_destroyed(build_id)
-    return jsonify({"destroyed": results}), 200
+    http_code = 200 if success else 500
+    return jsonify({"success": success, "log": logs}), http_code
 
 
 def _summary(b: dict) -> dict:

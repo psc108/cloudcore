@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cloudcore/terraform-provider-cloudcore/internal/acctest"
+	"github.com/cloudcore/terraform-provider-cloudcore/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 

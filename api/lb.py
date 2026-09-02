@@ -38,12 +38,38 @@ def _free_port(start: int, end: int) -> int:
     raise RuntimeError(f"No free port in range {start}-{end}")
 
 
-def _write_config(lb: LoadBalancer, listen_port: int) -> Path:
+def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Path:
     mode = "http" if lb.type == "application" else "tcp"
+
+    # Use explicit backends first; fall back to auto-discovering running SLIRP instances
+    # in the same VPC when no backends have been registered via the API.
+    effective_backends = lb.backends
+    # Auto-discover backends only for HTTP/application LBs.
+    # TCP/network LBs require explicit backend registration because the service
+    # port is workload-specific — there is no sensible default to assume.
+    if not effective_backends and vpc_instances and lb.type == "application":
+        effective_backends = []
+        for inst in vpc_instances:
+            if inst.http_host_port:
+                # SLIRP: host port forwarding is set up by the QEMU process at launch
+                # and stays live for the process lifetime regardless of libvirt state.
+                effective_backends.append({
+                    "name": inst.name,
+                    "address": "127.0.0.1",
+                    "port": inst.http_host_port,
+                })
+            elif inst.status.value == "running" and inst.private_ip:
+                # Bridge networking: guest IP must be confirmed reachable.
+                effective_backends.append({
+                    "name": inst.name,
+                    "address": inst.private_ip,
+                    "port": 80,
+                })
+
     backends_cfg = "\n".join(
         f"    server {b['name']} {b['address']}:{b['port']} check"
-        for b in lb.backends
-    ) if lb.backends else "    # no backends configured yet"
+        for b in effective_backends
+    ) if effective_backends else "    # no backends configured yet"
 
     # Health check options for backend
     hc = lb.health_check or {}
@@ -73,6 +99,7 @@ frontend {lb.name}-front
     default_backend {lb.name}-back
 """
 
+    http_opts = "    option  forwardfor\n    option  http-server-close\n" if mode == "http" else ""
     cfg = textwrap.dedent(f"""\
         global
             daemon
@@ -84,9 +111,7 @@ frontend {lb.name}-front
             timeout connect 5s
             timeout client  30s
             timeout server  30s
-            option  forwardfor
-            option  http-server-close
-    """) + frontends + f"""
+    """) + http_opts + frontends + f"""
 backend {lb.name}-back
     balance roundrobin
 {hc_opts}{backends_cfg}
@@ -96,18 +121,19 @@ backend {lb.name}-back
     return path
 
 
-def start(lb: LoadBalancer) -> int:
+def start(lb: LoadBalancer, vpc_instances=None) -> int:
     """Start HAProxy for this LB. Returns the listen port."""
     listen_port = lb.listen_port or _free_port(_LB_PORT_START, _LB_PORT_END)
-    cfg = _write_config(lb, listen_port)
+    cfg = _write_config(lb, listen_port, vpc_instances=vpc_instances)
     subprocess.run(["haproxy", "-f", str(cfg), "-D"], check=True)
     return listen_port
 
 
-def reload(lb: LoadBalancer) -> None:
+def reload(lb: LoadBalancer, vpc_instances=None) -> None:
     """Reload HAProxy config without dropping connections (if running)."""
     pid_path = _pid_path(lb.id)
-    cfg = _write_config(lb, lb.listen_port or _free_port(_LB_PORT_START, _LB_PORT_END))
+    cfg = _write_config(lb, lb.listen_port or _free_port(_LB_PORT_START, _LB_PORT_END),
+                        vpc_instances=vpc_instances)
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())

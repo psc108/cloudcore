@@ -167,12 +167,7 @@ func (r *SecurityGroupResource) rulesFromAPI(_ context.Context, apiRules []sgRul
 			"from_port":   fp,
 			"to_port":     tp,
 			"cidr":        types.StringValue(rule.CIDR),
-			"description": func() types.String {
-				if rule.Description == "" {
-					return types.StringNull()
-				}
-				return types.StringValue(rule.Description)
-			}(),
+			"description": types.StringValue(rule.Description),
 		})
 		if diags.HasError() {
 			return types.ListNull(types.ObjectType{AttrTypes: sgRuleAttrTypes}), fmt.Errorf("building rule object")

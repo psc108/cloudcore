@@ -117,6 +117,8 @@ func (p *CloudCoreProvider) Resources(_ context.Context) []func() resource.Resou
 		resources.NewDNSZoneResource,
 		resources.NewDNSRecordResource,
 		resources.NewNFSServerResource,
+		resources.NewLBTargetGroupResource,
+		resources.NewLBListenerResource,
 	}
 }
 

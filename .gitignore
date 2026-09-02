@@ -37,3 +37,8 @@ tests/results/
 # Editor
 *.swp
 *.swo
+
+# HAProxy runtime configs and pids
+api/lb/*.cfg
+api/lb/*.pid
+api/lb/*.sock

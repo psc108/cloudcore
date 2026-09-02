@@ -288,25 +288,10 @@ def _find_tofu() -> str:
     )
 
 
-def _execute_tofu(build: dict, var_overrides: dict) -> None:
-    src_dir = EXAMPLES_DIR / build["template"]
-    if not src_dir.exists():
-        raise FileNotFoundError(f"Example directory not found: {build['template']}")
-
-    # Use the example directory directly but wipe any stale state first
-    import shutil
-    work_dir = src_dir
-    for stale in ("terraform.tfstate", "terraform.tfstate.backup"):
-        p = work_dir / stale
-        if p.exists():
-            p.unlink()
-
-    tofu = _find_tofu()
-
-    # Build -var flags for connection vars; everything else goes via TF_VAR_ env
-    api_url   = var_overrides.get("cloudcore_api_url",   "http://127.0.0.1:8080")
-    api_token = var_overrides.get("cloudcore_api_token", "dev-token")
-
+def _build_env(var_overrides: dict) -> tuple[dict, Path]:
+    """Return (env dict, tofurc path) for running tofu commands."""
+    api_url   = var_overrides.get("cloudcore_api_url",   os.environ.get("CLOUDCORE_API_URL",   "http://127.0.0.1:8080"))
+    api_token = var_overrides.get("cloudcore_api_token", os.environ.get("CLOUDCORE_API_TOKEN", "dev-token"))
     tofurc = Path.home() / ".tofurc"
     env = {
         **os.environ,
@@ -317,23 +302,105 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
     }
     if tofurc.exists():
         env["TF_CLI_CONFIG_FILE"] = str(tofurc)
-    # Pass any extra user vars as TF_VAR_*
     for k, v in var_overrides.items():
         if k not in ("cloudcore_api_url", "cloudcore_api_token"):
             env[f"TF_VAR_{k}"] = str(v)
+    return env, tofurc
+
+
+def _stream_cmd(cmd: list[str], env: dict, cwd: str, on_line) -> int:
+    """Run cmd, stream each output line through on_line. Returns exit code."""
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, env=env, cwd=cwd,
+    )
+    for line in proc.stdout:
+        on_line(line.rstrip())
+    proc.wait()
+    return proc.returncode
+
+
+def run_tofu_destroy(build_id: str) -> tuple[bool, list[str]]:
+    """Run ``tofu destroy`` for a build's template directory.
+
+    Returns (success, log_lines).  Marks the source build as 'destroyed' in the
+    database on success.  Safe to call even when there is no state file.
+    """
+    build = get_build(build_id)
+    if not build:
+        raise ValueError(f"Build {build_id} not found")
+
+    template   = build["template"]
+    var_ovr    = build.get("var_overrides", {})
+    work_dir   = EXAMPLES_DIR / template
+    state_file = work_dir / "terraform.tfstate"
+    logs: list[str] = []
+
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    logs.append(f"[{ts}] Starting tofu destroy: {template}")
+
+    if not work_dir.exists():
+        logs.append(f"[{ts}] ERROR: template directory not found: {template}")
+        return False, logs
+
+    if not state_file.exists():
+        logs.append(f"[{ts}] No state file found — nothing to destroy.")
+        mark_build_destroyed(build_id)
+        return True, logs
+
+    env, tofurc = _build_env(var_ovr)
+    tofu = _find_tofu()
+
+    def _emit(line: str) -> None:
+        ts2 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        logs.append(f"[{ts2}] {line}")
+
+    _emit(f"$ {tofu} destroy -auto-approve -no-color")
+    _emit("─" * 60)
+    rc = _stream_cmd([tofu, "destroy", "-auto-approve", "-no-color"], env, str(work_dir), _emit)
+    _emit("─" * 60)
+    _emit(f"Finished with exit code {rc}")
+
+    if rc == 0:
+        mark_build_destroyed(build_id)
+    return rc == 0, logs
+
+
+def _execute_tofu(build: dict, var_overrides: dict) -> None:
+    src_dir = EXAMPLES_DIR / build["template"]
+    if not src_dir.exists():
+        raise FileNotFoundError(f"Example directory not found: {build['template']}")
+
+    work_dir = src_dir
+    env, tofurc = _build_env(var_overrides)
+    tofu = _find_tofu()
 
     def _run_cmd(cmd: list[str]) -> int:
         _log(build, f"$ {' '.join(cmd)}")
         _log(build, "─" * 60)
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, env=env, cwd=str(work_dir),
-        )
-        for line in proc.stdout:
-            _log(build, line.rstrip())
-        proc.wait()
+        rc = _stream_cmd(cmd, env, str(work_dir), lambda line: _log(build, line))
         _log(build, "─" * 60)
-        return proc.returncode
+        return rc
+
+    # If the example directory has an existing state file with resources, destroy
+    # those resources first so the fresh apply starts from a clean slate.
+    state_file = work_dir / "terraform.tfstate"
+    if state_file.exists():
+        try:
+            state_data = json.loads(state_file.read_text())
+            if state_data.get("resources"):
+                _log(build, "Existing state with resources detected — running tofu destroy before apply...")
+                rc = _run_cmd([tofu, "destroy", "-auto-approve", "-no-color"])
+                if rc != 0:
+                    _log(build, f"WARNING: pre-apply destroy exited {rc} — continuing anyway")
+        except Exception as ex:
+            _log(build, f"WARNING: could not read existing state: {ex}")
+
+    # Remove any stale state files before the fresh apply
+    for stale in ("terraform.tfstate", "terraform.tfstate.backup"):
+        p = work_dir / stale
+        if p.exists():
+            p.unlink()
 
     # With dev_overrides, tofu init always fails trying to resolve the provider from
     # the registry. Skip init if modules are already cached (.terraform exists);

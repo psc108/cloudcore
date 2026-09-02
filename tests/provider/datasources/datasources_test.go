@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/cloudcore/terraform-provider-cloudcore/internal/acctest"
+	"github.com/cloudcore/terraform-provider-cloudcore/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
@@ -20,7 +20,7 @@ resource "cloudcore_vpc" "src" {
   cidr_block = "10.93.0.0/16"
 }
 data "cloudcore_vpc" "by_name" {
-  name = cloudcore_vpc.src.name
+  name       = cloudcore_vpc.src.name
   depends_on = [cloudcore_vpc.src]
 }`,
 				Check: resource.ComposeTestCheckFunc(
@@ -44,7 +44,7 @@ resource "cloudcore_vpc" "src" {
   cidr_block = "10.92.0.0/16"
 }
 data "cloudcore_vpc" "by_id" {
-  id = cloudcore_vpc.src.id
+  id         = cloudcore_vpc.src.id
   depends_on = [cloudcore_vpc.src]
 }`,
 				Check: resource.ComposeTestCheckFunc(
@@ -74,7 +74,7 @@ resource "cloudcore_instance" "src" {
   subnet_id = "default"
 }
 data "cloudcore_instance" "by_name" {
-  name = cloudcore_instance.src.name
+  name       = cloudcore_instance.src.name
   depends_on = [cloudcore_instance.src]
 }`,
 				Check: resource.ComposeTestCheckFunc(
