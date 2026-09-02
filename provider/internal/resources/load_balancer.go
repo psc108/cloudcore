@@ -23,31 +23,37 @@ type LoadBalancerResource struct {
 }
 
 type LoadBalancerResourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	Name       types.String `tfsdk:"name"`
-	Type       types.String `tfsdk:"type"`
-	VPCID      types.String `tfsdk:"vpc_id"`
-	SubnetIDs  types.List   `tfsdk:"subnet_ids"`
-	Internal   types.Bool   `tfsdk:"internal"`
-	DNSName    types.String `tfsdk:"dns_name"`
-	ListenPort types.Int64  `tfsdk:"listen_port"`
-	Status     types.String `tfsdk:"status"`
-	CreatedAt  types.String `tfsdk:"created_at"`
-	Tags       types.Map    `tfsdk:"tags"`
+	ID                 types.String `tfsdk:"id"`
+	Name               types.String `tfsdk:"name"`
+	Type               types.String `tfsdk:"type"`
+	VPCID              types.String `tfsdk:"vpc_id"`
+	SubnetIDs          types.List   `tfsdk:"subnet_ids"`
+	Internal           types.Bool   `tfsdk:"internal"`
+	DNSName            types.String `tfsdk:"dns_name"`
+	ListenPort         types.Int64  `tfsdk:"listen_port"`
+	StickySessions     types.Bool   `tfsdk:"sticky_sessions"`
+	CookieName         types.String `tfsdk:"cookie_name"`
+	DeletionProtection types.Bool   `tfsdk:"deletion_protection"`
+	Status             types.String `tfsdk:"status"`
+	CreatedAt          types.String `tfsdk:"created_at"`
+	Tags               types.Map    `tfsdk:"tags"`
 }
 
 type lbAPIModel struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Type       string            `json:"type"`
-	VPCID      string            `json:"vpc_id"`
-	SubnetIDs  []string          `json:"subnet_ids"`
-	Internal   bool              `json:"internal"`
-	DNSName    string            `json:"dns_name"`
-	ListenPort int               `json:"listen_port"`
-	Status     string            `json:"status"`
-	CreatedAt  string            `json:"created_at"`
-	Tags       map[string]string `json:"tags"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Type               string            `json:"type"`
+	VPCID              string            `json:"vpc_id"`
+	SubnetIDs          []string          `json:"subnet_ids"`
+	Internal           bool              `json:"internal"`
+	DNSName            string            `json:"dns_name"`
+	ListenPort         int               `json:"listen_port"`
+	StickySessions     bool              `json:"sticky_sessions"`
+	CookieName         string            `json:"cookie_name"`
+	DeletionProtection bool              `json:"deletion_protection"`
+	Status             string            `json:"status"`
+	CreatedAt          string            `json:"created_at"`
+	Tags               map[string]string `json:"tags"`
 }
 
 func NewLoadBalancerResource() resource.Resource { return &LoadBalancerResource{} }
@@ -94,6 +100,21 @@ func (r *LoadBalancerResource) Schema(_ context.Context, _ resource.SchemaReques
 				Computed:    true,
 				Description: "Host port the load balancer listens on (e.g. 8200). Combine with dns_name to form a usable endpoint: http://127.0.0.1:<listen_port>.",
 			},
+			"sticky_sessions": schema.BoolAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Enable sticky sessions (cookie-based session affinity). Application LBs only.",
+			},
+			"cookie_name": schema.StringAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Cookie name used for session affinity when sticky_sessions is enabled. Defaults to 'SERVERID'.",
+			},
+			"deletion_protection": schema.BoolAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Prevent accidental deletion. When true, DELETE requests return 409 until disabled.",
+			},
 			"status": schema.StringAttribute{Computed: true, Description: "Current load balancer status (API-assigned)."},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
@@ -131,6 +152,9 @@ func lbMapToState(ctx context.Context, result lbAPIModel, state *LoadBalancerRes
 	state.Internal = types.BoolValue(result.Internal)
 	state.DNSName = types.StringValue(result.DNSName)
 	state.ListenPort = types.Int64Value(int64(result.ListenPort))
+	state.StickySessions = types.BoolValue(result.StickySessions)
+	state.CookieName = types.StringValue(result.CookieName)
+	state.DeletionProtection = types.BoolValue(result.DeletionProtection)
 	state.Status = types.StringValue(result.Status)
 	state.CreatedAt = types.StringValue(result.CreatedAt)
 	subnetIDs, diags := stringsToList(ctx, result.SubnetIDs)
@@ -159,12 +183,15 @@ func (r *LoadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 	resp.Diagnostics.Append(plan.Tags.ElementsAs(ctx, &tags, false)...)
 
 	body := lbAPIModel{
-		Name:      plan.Name.ValueString(),
-		Type:      plan.Type.ValueString(),
-		VPCID:     plan.VPCID.ValueString(),
-		SubnetIDs: subnetIDs,
-		Internal:  plan.Internal.ValueBool(),
-		Tags:      tags,
+		Name:               plan.Name.ValueString(),
+		Type:               plan.Type.ValueString(),
+		VPCID:              plan.VPCID.ValueString(),
+		SubnetIDs:          subnetIDs,
+		Internal:           plan.Internal.ValueBool(),
+		StickySessions:     plan.StickySessions.ValueBool(),
+		CookieName:         plan.CookieName.ValueString(),
+		DeletionProtection: plan.DeletionProtection.ValueBool(),
+		Tags:               tags,
 	}
 
 	var result lbAPIModel
@@ -216,12 +243,15 @@ func (r *LoadBalancerResource) Update(ctx context.Context, req resource.UpdateRe
 	resp.Diagnostics.Append(plan.Tags.ElementsAs(ctx, &tags, false)...)
 
 	body := lbAPIModel{
-		Name:      plan.Name.ValueString(),
-		Type:      plan.Type.ValueString(),
-		VPCID:     plan.VPCID.ValueString(),
-		SubnetIDs: subnetIDs,
-		Internal:  plan.Internal.ValueBool(),
-		Tags:      tags,
+		Name:               plan.Name.ValueString(),
+		Type:               plan.Type.ValueString(),
+		VPCID:              plan.VPCID.ValueString(),
+		SubnetIDs:          subnetIDs,
+		Internal:           plan.Internal.ValueBool(),
+		StickySessions:     plan.StickySessions.ValueBool(),
+		CookieName:         plan.CookieName.ValueString(),
+		DeletionProtection: plan.DeletionProtection.ValueBool(),
+		Tags:               tags,
 	}
 
 	var result lbAPIModel

@@ -317,6 +317,20 @@ def _bridge_usable() -> bool:
     )
 
 
+def _console_log_path(instance_id: str) -> Path:
+    return INSTANCES_DIR / instance_id / "console.log"
+
+
+def get_console_output(instance_id: str, lines: int = 200) -> str:
+    """Return the last `lines` lines from the instance serial console log."""
+    log = _console_log_path(instance_id)
+    if not log.exists():
+        return ""
+    text = log.read_text(errors="replace")
+    all_lines = text.splitlines()
+    return "\n".join(all_lines[-lines:]) if len(all_lines) > lines else text
+
+
 def _domain_xml_slirp(
     domain_name: str,
     vcpus: int,
@@ -325,8 +339,11 @@ def _domain_xml_slirp(
     iso_path: Path,
     ssh_host_port: int,
     http_host_port: int,
+    instance_id: str = "",
 ) -> str:
     memory_kib = memory_mb * 1024
+    log_file = str(_console_log_path(instance_id)) if instance_id else ""
+    log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
     return textwrap.dedent(f"""\
         <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
           <name>{domain_name}</name>
@@ -350,7 +367,7 @@ def _domain_xml_slirp(
               <target dev='sda' bus='sata'/>
               <readonly/>
             </disk>
-            <serial type='pty'><target port='0'/></serial>
+            <serial type='pty'>{log_elem}<target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
           </devices>
           <qemu:commandline>
@@ -369,8 +386,11 @@ def _domain_xml_bridge(
     memory_mb: int,
     disk_path: Path,
     iso_path: Path,
+    instance_id: str = "",
 ) -> str:
     memory_kib = memory_mb * 1024
+    log_file = str(_console_log_path(instance_id)) if instance_id else ""
+    log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
     return textwrap.dedent(f"""\
         <domain type='kvm'>
           <name>{domain_name}</name>
@@ -398,7 +418,7 @@ def _domain_xml_bridge(
               <source bridge='{BRIDGE_NAME}'/>
               <model type='virtio'/>
             </interface>
-            <serial type='pty'><target port='0'/></serial>
+            <serial type='pty'>{log_elem}<target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
           </devices>
         </domain>
@@ -430,7 +450,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
 
     with _port_lock:
         if use_bridge:
-            xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path)
+            xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path,
+                                     instance_id=instance.id)
             instance.ssh_host_port = 0
             instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
@@ -443,7 +464,7 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             # Allocate a unique simulated private IP from the VPC CIDR
             instance.private_ip = _allocate_slirp_ip(instance.vpc_id, vpc_cidr)
             xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path,
-                                    ssh_host_port, http_host_port)
+                                    ssh_host_port, http_host_port, instance_id=instance.id)
 
         conn = _conn()
         try:

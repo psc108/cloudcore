@@ -200,7 +200,17 @@ def _migrate_columns() -> None:
     existing = {row[1] for row in _conn.execute("PRAGMA table_info(instances)").fetchall()}
     if "http_host_port" not in existing:
         _conn.execute("ALTER TABLE instances ADD COLUMN http_host_port INTEGER NOT NULL DEFAULT 0")
-        _conn.commit()
+
+    lb_cols = {row[1] for row in _conn.execute("PRAGMA table_info(load_balancers)").fetchall()}
+    if "sticky_sessions" not in lb_cols:
+        _conn.execute("ALTER TABLE load_balancers ADD COLUMN sticky_sessions INTEGER NOT NULL DEFAULT 0")
+    if "cookie_name" not in lb_cols:
+        _conn.execute("ALTER TABLE load_balancers ADD COLUMN cookie_name TEXT NOT NULL DEFAULT 'SERVERID'")
+    if "target_groups" not in lb_cols:
+        _conn.execute("ALTER TABLE load_balancers ADD COLUMN target_groups TEXT NOT NULL DEFAULT '[]'")
+    if "deletion_protection" not in lb_cols:
+        _conn.execute("ALTER TABLE load_balancers ADD COLUMN deletion_protection INTEGER NOT NULL DEFAULT 0")
+    _conn.commit()
 
 
 def get_db() -> sqlite3.Connection:

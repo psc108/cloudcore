@@ -28,6 +28,7 @@ type sgRuleModel struct {
 	FromPort    types.Int64  `tfsdk:"from_port"`
 	ToPort      types.Int64  `tfsdk:"to_port"`
 	CIDR        types.String `tfsdk:"cidr"`
+	CIDRv6      types.String `tfsdk:"cidr_ipv6"`
 	SourceSGID  types.String `tfsdk:"source_sg_id"`
 	Description types.String `tfsdk:"description"`
 }
@@ -49,6 +50,7 @@ type sgRuleAPIModel struct {
 	FromPort    *int64 `json:"from_port,omitempty"`
 	ToPort      *int64 `json:"to_port,omitempty"`
 	CIDR        string `json:"cidr,omitempty"`
+	CIDRv6      string `json:"cidr_ipv6,omitempty"`
 	SourceSGID  string `json:"source_sg_id,omitempty"`
 	Description string `json:"description,omitempty"`
 }
@@ -70,6 +72,7 @@ var sgRuleAttrTypes = map[string]attr.Type{
 	"from_port":    types.Int64Type,
 	"to_port":      types.Int64Type,
 	"cidr":         types.StringType,
+	"cidr_ipv6":    types.StringType,
 	"source_sg_id": types.StringType,
 	"description":  types.StringType,
 }
@@ -92,8 +95,9 @@ func (r *SecurityGroupResource) Schema(_ context.Context, _ resource.SchemaReque
 			},
 			"from_port":    schema.Int64Attribute{Optional: true, Description: "Start of port range (inclusive)."},
 			"to_port":      schema.Int64Attribute{Optional: true, Description: "End of port range (inclusive)."},
-			"cidr":         schema.StringAttribute{Optional: true, Computed: true, Description: "Source (ingress) or destination (egress) CIDR block. Mutually exclusive with source_sg_id."},
-			"source_sg_id": schema.StringAttribute{Optional: true, Computed: true, Description: "Source security group ID. Traffic from any instance in that group is allowed. Mutually exclusive with cidr."},
+			"cidr":         schema.StringAttribute{Optional: true, Computed: true, Description: "IPv4 source (ingress) or destination (egress) CIDR block. Mutually exclusive with source_sg_id."},
+			"cidr_ipv6":    schema.StringAttribute{Optional: true, Computed: true, Description: "IPv6 source (ingress) or destination (egress) CIDR block. Can be combined with cidr for dual-stack rules."},
+			"source_sg_id": schema.StringAttribute{Optional: true, Computed: true, Description: "Source security group ID. Traffic from any instance in that group is allowed. Mutually exclusive with cidr/cidr_ipv6."},
 			"description":  schema.StringAttribute{Optional: true, Computed: true, Description: "Human-readable rule description."},
 		},
 	}
@@ -171,6 +175,7 @@ func (r *SecurityGroupResource) rulesFromAPI(_ context.Context, apiRules []sgRul
 			"from_port":    fp,
 			"to_port":      tp,
 			"cidr":         types.StringValue(rule.CIDR),
+			"cidr_ipv6":    types.StringValue(rule.CIDRv6),
 			"source_sg_id": types.StringValue(rule.SourceSGID),
 			"description":  types.StringValue(rule.Description),
 		})
@@ -196,6 +201,7 @@ func (r *SecurityGroupResource) rulesToAPI(ctx context.Context, list types.List)
 		rule := sgRuleAPIModel{
 			Protocol:    m.Protocol.ValueString(),
 			CIDR:        m.CIDR.ValueString(),
+			CIDRv6:      m.CIDRv6.ValueString(),
 			SourceSGID:  m.SourceSGID.ValueString(),
 			Description: m.Description.ValueString(),
 		}

@@ -575,6 +575,21 @@ def reboot_instance(instance_id):
     return jsonify(instance.to_dict())
 
 
+@app.get("/v1/instances/<instance_id>/console")
+@require_auth
+def instance_console(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    lines = request.args.get("lines", 200, type=int)
+    output = compute.get_console_output(instance_id, lines=lines)
+    if not output and not compute._console_log_path(instance_id).exists():
+        return problem(404, "Not Found",
+            "Console log not available — instance was created before serial logging was added "
+            "or has not written any output yet")
+    return jsonify({"instance_id": instance_id, "output": output})
+
+
 # ---------------------------------------------------------------------------
 # Load Balancers
 # ---------------------------------------------------------------------------
@@ -603,6 +618,9 @@ def create_lb():
         internal=body.get("internal", False),
         dns_name=f"{name}.lb.cloudcore.local",
         backends=body.get("backends", []),
+        sticky_sessions=bool(body.get("sticky_sessions", False)),
+        cookie_name=body.get("cookie_name", "SERVERID"),
+        deletion_protection=bool(body.get("deletion_protection", False)),
         tags=body.get("tags", {}),
     )
     try:
@@ -641,6 +659,9 @@ def update_lb(lb_id):
     lb.subnet_ids = body.get("subnet_ids", lb.subnet_ids)
     lb.internal = body.get("internal", lb.internal)
     lb.backends = body.get("backends", lb.backends)
+    lb.sticky_sessions = bool(body.get("sticky_sessions", lb.sticky_sessions))
+    lb.cookie_name = body.get("cookie_name", lb.cookie_name)
+    lb.deletion_protection = bool(body.get("deletion_protection", lb.deletion_protection))
     lb.tags = body.get("tags", lb.tags)
     try:
         lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
@@ -653,8 +674,13 @@ def update_lb(lb_id):
 @app.delete("/v1/load-balancers/<lb_id>")
 @require_auth
 def delete_lb(lb_id):
-    if not store.delete_lb(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
         return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    if lb.deletion_protection:
+        return problem(409, "Conflict",
+            f"Load balancer '{lb_id}' has deletion protection enabled — disable it first")
+    store.delete_lb(lb_id)
     lb_backend.stop(lb_id)
     dns_store.delete_records_for_resource(lb_id)
     return "", 204
@@ -694,6 +720,15 @@ def remove_backend(lb_id, backend_name):
     return "", 204
 
 
+@app.get("/v1/load-balancers/<lb_id>/listeners")
+@require_auth
+def list_listeners(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    return jsonify({"items": lb.listeners})
+
+
 @app.post("/v1/load-balancers/<lb_id>/listeners")
 @require_auth
 def add_listener(lb_id):
@@ -718,9 +753,13 @@ def add_listener(lb_id):
     from models import new_id
     listener = {
         "id": new_id(),
+        "lb_id": lb_id,
         "port": port,
         "protocol": protocol,
+        "target_group_id": body.get("target_group_id", ""),
+        "routing_rules": body.get("routing_rules", []),
         "default_action": body.get("default_action", "forward"),
+        "status": "active",
     }
     lb.listeners.append(listener)
     try:
@@ -729,6 +768,39 @@ def add_listener(lb_id):
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
     return jsonify(listener), 201
+
+
+@app.get("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
+@require_auth
+def get_listener(lb_id, listener_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    lst = next((l for l in lb.listeners if l["id"] == listener_id), None)
+    if not lst:
+        return problem(404, "Not Found", f"Listener '{listener_id}' not found")
+    return jsonify(lst)
+
+
+@app.put("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
+@require_auth
+def update_listener(lb_id, listener_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    lst = next((l for l in lb.listeners if l["id"] == listener_id), None)
+    if not lst:
+        return problem(404, "Not Found", f"Listener '{listener_id}' not found")
+    body = request.get_json(force=True) or {}
+    lst["target_group_id"] = body.get("target_group_id", lst.get("target_group_id", ""))
+    lst["routing_rules"]   = body.get("routing_rules", lst.get("routing_rules", []))
+    lst["default_action"]  = body.get("default_action", lst.get("default_action", "forward"))
+    try:
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return jsonify(lst)
 
 
 @app.delete("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
@@ -740,6 +812,141 @@ def remove_listener(lb_id, listener_id):
     if not any(l["id"] == listener_id for l in lb.listeners):
         return problem(404, "Not Found", f"Listener '{listener_id}' not found")
     lb.listeners = [l for l in lb.listeners if l["id"] != listener_id]
+    try:
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Target Groups
+# ---------------------------------------------------------------------------
+
+def _find_tg(lb: LoadBalancer, tg_id: str) -> dict | None:
+    return next((t for t in lb.target_groups if t["id"] == tg_id), None)
+
+
+def _resolve_tg_backends_for_api(tg: dict, instances: list) -> list[dict]:
+    """Resolve TG target instance_ids to address:port for the API response."""
+    inst_map = {i.id: i for i in instances}
+    result = []
+    for t in tg.get("targets", []):
+        inst = inst_map.get(t["instance_id"])
+        if inst:
+            port = t.get("port") or tg.get("port", 80)
+            addr = "127.0.0.1" if inst.http_host_port else (inst.private_ip or "")
+            result.append({**t, "address": addr, "resolved_port": inst.http_host_port or port})
+    return result
+
+
+@app.get("/v1/load-balancers/<lb_id>/target-groups")
+@require_auth
+def list_target_groups(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    return jsonify({"items": lb.target_groups})
+
+
+@app.post("/v1/load-balancers/<lb_id>/target-groups")
+@require_auth
+def create_target_group(lb_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    body = request.get_json(force=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return problem(400, "Bad Request", "name is required")
+    if not body.get("port"):
+        return problem(400, "Bad Request", "port is required")
+    if any(t["name"] == name for t in lb.target_groups):
+        return problem(409, "Conflict", f"Target group '{name}' already exists on this LB")
+    from models import new_id
+    hc = body.get("health_check", {})
+    tg = {
+        "id": new_id(),
+        "lb_id": lb_id,
+        "name": name,
+        "port": int(body["port"]),
+        "protocol": body.get("protocol", "http").lower(),
+        "targets": body.get("targets", []),
+        "health_check": {
+            "path": hc.get("path", "/"),
+            "interval": int(hc.get("interval", 30)),
+            "healthy_threshold": int(hc.get("healthy_threshold", 2)),
+            "unhealthy_threshold": int(hc.get("unhealthy_threshold", 2)),
+        },
+        "status": "active",
+    }
+    lb.target_groups.append(tg)
+    try:
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return jsonify(tg), 201
+
+
+@app.get("/v1/load-balancers/<lb_id>/target-groups/<tg_id>")
+@require_auth
+def get_target_group(lb_id, tg_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    tg = _find_tg(lb, tg_id)
+    if not tg:
+        return problem(404, "Not Found", f"Target group '{tg_id}' not found")
+    return jsonify(tg)
+
+
+@app.put("/v1/load-balancers/<lb_id>/target-groups/<tg_id>")
+@require_auth
+def update_target_group(lb_id, tg_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    tg = _find_tg(lb, tg_id)
+    if not tg:
+        return problem(404, "Not Found", f"Target group '{tg_id}' not found")
+    body = request.get_json(force=True) or {}
+    tg["name"]    = body.get("name", tg["name"])
+    tg["port"]    = int(body.get("port", tg["port"]))
+    tg["protocol"] = body.get("protocol", tg["protocol"])
+    tg["targets"] = body.get("targets", tg["targets"])
+    if "health_check" in body:
+        hc = body["health_check"]
+        tg["health_check"] = {
+            "path": hc.get("path", tg["health_check"].get("path", "/")),
+            "interval": int(hc.get("interval", tg["health_check"].get("interval", 30))),
+            "healthy_threshold": int(hc.get("healthy_threshold", tg["health_check"].get("healthy_threshold", 2))),
+            "unhealthy_threshold": int(hc.get("unhealthy_threshold", tg["health_check"].get("unhealthy_threshold", 2))),
+        }
+    try:
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+    except Exception as e:
+        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+    store.put_lb(lb)
+    return jsonify(tg)
+
+
+@app.delete("/v1/load-balancers/<lb_id>/target-groups/<tg_id>")
+@require_auth
+def delete_target_group(lb_id, tg_id):
+    lb = store.get_lb(lb_id)
+    if not lb:
+        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+    if not _find_tg(lb, tg_id):
+        return problem(404, "Not Found", f"Target group '{tg_id}' not found")
+    in_use = [l for l in lb.listeners
+              if l.get("target_group_id") == tg_id
+              or any(r.get("target_group_id") == tg_id for r in l.get("routing_rules", []))]
+    if in_use:
+        return problem(409, "Conflict",
+            f"Target group '{tg_id}' is referenced by {len(in_use)} listener(s) — remove references first")
+    lb.target_groups = [t for t in lb.target_groups if t["id"] != tg_id]
     try:
         lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
@@ -1002,8 +1209,8 @@ def dns_create_record(zone_name):
     value = body.get("value", "").strip()
     if not name or not value:
         return problem(400, "Bad Request", "name and value are required")
-    if rtype not in ("A", "CNAME", "TXT"):
-        return problem(400, "Bad Request", "type must be A, CNAME or TXT")
+    if rtype not in ("A", "CNAME", "TXT", "MX"):
+        return problem(400, "Bad Request", "type must be A, CNAME, TXT, or MX")
     rec = dns_store.upsert_record(zone_name, name, rtype, value,
                                   ttl=int(body.get("ttl", 300)))
     return jsonify(rec), 201

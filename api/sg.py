@@ -57,23 +57,44 @@ def _chain_name(sg_id: str) -> str:
 
 
 def _iptables_rule_args(rule: dict, direction: str) -> list[list[str]]:
-    """Convert a rule dict to one or more iptables argument lists (without -A/-D chain)."""
+    """Convert a rule dict to iptables argument lists.
+
+    Returns a list of (cmd, args) pairs where cmd is 'iptables' or 'ip6tables'.
+    cidr_ipv6 rules produce ip6tables entries; cidr rules produce iptables entries.
+    """
     proto = rule.get("protocol", "-1")
-    cidr  = rule.get("cidr", "0.0.0.0/0")
     fp    = rule.get("from_port")
     tp    = rule.get("to_port")
+    flag  = "-s" if direction == "ingress" else "-d"
 
-    if proto == "-1":
-        return [["-s" if direction == "ingress" else "-d", cidr, "-j", "ACCEPT"]]
+    results = []
 
-    args = ["-p", proto, "-s" if direction == "ingress" else "-d", cidr]
-    if fp is not None and tp is not None:
-        if fp == tp:
-            args += ["--dport", str(fp)]
+    for cidr_field, cmd in (("cidr", "iptables"), ("cidr_ipv6", "ip6tables")):
+        cidr = rule.get(cidr_field)
+        if not cidr:
+            continue
+        if proto == "-1":
+            results.append((cmd, [flag, cidr, "-j", "ACCEPT"]))
         else:
-            args += ["--dport", f"{fp}:{tp}"]
-    args += ["-j", "ACCEPT"]
-    return [args]
+            args = ["-p", proto, flag, cidr]
+            if fp is not None and tp is not None:
+                args += ["--dport", str(fp) if fp == tp else f"{fp}:{tp}"]
+            args += ["-j", "ACCEPT"]
+            results.append((cmd, args))
+
+    # Fall back to iptables with 0.0.0.0/0 if neither cidr field is set
+    if not results and not rule.get("source_sg_id"):
+        cidr = "0.0.0.0/0"
+        if proto == "-1":
+            results.append(("iptables", [flag, cidr, "-j", "ACCEPT"]))
+        else:
+            args = ["-p", proto, flag, cidr]
+            if fp is not None and tp is not None:
+                args += ["--dport", str(fp) if fp == tp else f"{fp}:{tp}"]
+            args += ["-j", "ACCEPT"]
+            results.append(("iptables", args))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +135,8 @@ def apply_bridge(domain_name: str, sg_id: str,
 
     # Default deny at end of chain
     for rule in ingress_rules:
-        for args in _iptables_rule_args(rule, "ingress"):
-            _run(["iptables", "-A", chain] + args, check=False)
+        for cmd, args in _iptables_rule_args(rule, "ingress"):
+            _run([cmd, "-A", chain] + args, check=False)
     _run(["iptables", "-A", chain, "-j", "DROP"], check=False)
 
     # Jump from FORWARD chain for this MAC
@@ -153,16 +174,24 @@ def _build_iptables_script(ingress_rules: list, egress_rules: list) -> str:
     ]
     for rule in ingress_rules:
         proto = rule.get("protocol", "-1")
-        cidr  = rule.get("cidr", "0.0.0.0/0")
         fp    = rule.get("from_port")
         tp    = rule.get("to_port")
-        if proto == "-1":
-            lines.append(f"iptables -A INPUT -s {cidr} -j ACCEPT")
-        else:
-            dport = ""
-            if fp is not None and tp is not None:
-                dport = f"--dport {fp}" if fp == tp else f"--dport {fp}:{tp}"
-            lines.append(f"iptables -A INPUT -p {proto} -s {cidr} {dport} -j ACCEPT".strip())
+        dport = ""
+        if fp is not None and tp is not None:
+            dport = f"--dport {fp}" if fp == tp else f"--dport {fp}:{tp}"
+        for cidr_field, cmd in (("cidr", "iptables"), ("cidr_ipv6", "ip6tables")):
+            cidr = rule.get(cidr_field)
+            if not cidr:
+                continue
+            if proto == "-1":
+                lines.append(f"{cmd} -A INPUT -s {cidr} -j ACCEPT")
+            else:
+                lines.append(f"{cmd} -A INPUT -p {proto} -s {cidr} {dport} -j ACCEPT".strip())
+        if not rule.get("cidr") and not rule.get("cidr_ipv6") and not rule.get("source_sg_id"):
+            if proto == "-1":
+                lines.append("iptables -A INPUT -j ACCEPT")
+            else:
+                lines.append(f"iptables -A INPUT -p {proto} {dport} -j ACCEPT".strip())
     return "\n".join(lines)
 
 

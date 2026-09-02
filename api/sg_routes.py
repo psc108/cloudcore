@@ -18,16 +18,23 @@ def _problem(status, title, detail):
 
 def _validate_rules(rules: list) -> str | None:
     """Return an error string if any rule is invalid, else None."""
+    import ipaddress
     for r in rules:
         proto = r.get("protocol", "-1")
         if proto not in _VALID_PROTOCOLS:
             return f"protocol must be one of: {', '.join(sorted(_VALID_PROTOCOLS))}"
-        has_cidr = bool(r.get("cidr"))
-        has_sg   = bool(r.get("source_sg_id"))
-        if not has_cidr and not has_sg:
-            return "each rule must have either 'cidr' or 'source_sg_id'"
-        if has_cidr and has_sg:
-            return "a rule cannot specify both 'cidr' and 'source_sg_id'"
+        has_cidr    = bool(r.get("cidr"))
+        has_cidr_v6 = bool(r.get("cidr_ipv6"))
+        has_sg      = bool(r.get("source_sg_id"))
+        if not has_cidr and not has_cidr_v6 and not has_sg:
+            return "each rule must have 'cidr', 'cidr_ipv6', or 'source_sg_id'"
+        if has_sg and (has_cidr or has_cidr_v6):
+            return "a rule cannot specify both 'source_sg_id' and a CIDR"
+        if has_cidr_v6:
+            try:
+                ipaddress.ip_network(r["cidr_ipv6"], strict=False)
+            except ValueError:
+                return f"cidr_ipv6 '{r['cidr_ipv6']}' is not a valid IPv6 CIDR"
         if proto != "-1":
             fp = r.get("from_port")
             tp = r.get("to_port")

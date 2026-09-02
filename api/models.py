@@ -271,10 +271,15 @@ class LoadBalancer:
     dns_name: str = ""
     listen_port: int = 0
     backends: list = field(default_factory=list)  # [{name, address, port}]
-    # [{id, port, protocol, default_action}]  protocol: HTTP|HTTPS|TCP
+    # [{id, port, protocol, target_group_id, routing_rules, default_action}]
     listeners: list = field(default_factory=list)
     # {protocol, path, interval, healthy_threshold, unhealthy_threshold}
     health_check: dict = field(default_factory=dict)
+    # [{id, name, port, protocol, targets, health_check, status}]
+    target_groups: list = field(default_factory=list)
+    sticky_sessions: bool = False
+    cookie_name: str = "SERVERID"
+    deletion_protection: bool = False
     status: LBStatus = LBStatus.ACTIVE
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
@@ -292,6 +297,10 @@ class LoadBalancer:
             "backends": self.backends,
             "listeners": self.listeners,
             "health_check": self.health_check,
+            "target_groups": self.target_groups,
+            "sticky_sessions": self.sticky_sessions,
+            "cookie_name": self.cookie_name,
+            "deletion_protection": self.deletion_protection,
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,

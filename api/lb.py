@@ -38,68 +38,148 @@ def _free_port(start: int, end: int) -> int:
     raise RuntimeError(f"No free port in range {start}-{end}")
 
 
+def _resolve_tg_servers(tg: dict, inst_map: dict) -> list[dict]:
+    """Resolve a target group's targets to HAProxy server entries."""
+    servers = []
+    for t in tg.get("targets", []):
+        inst = inst_map.get(t["instance_id"])
+        if not inst:
+            continue
+        tg_port = t.get("port") or tg.get("port", 80)
+        if inst.http_host_port:
+            servers.append({"name": inst.name, "address": "127.0.0.1", "port": inst.http_host_port})
+        elif inst.private_ip:
+            servers.append({"name": inst.name, "address": inst.private_ip, "port": tg_port})
+    return servers
+
+
+def _servers_cfg(servers: list[dict], sticky: bool, cookie: str) -> str:
+    if not servers:
+        return "    # no targets registered"
+    if sticky:
+        return "\n".join(
+            f"    server {s['name']} {s['address']}:{s['port']} check cookie {s['name']}"
+            for s in servers
+        )
+    return "\n".join(
+        f"    server {s['name']} {s['address']}:{s['port']} check"
+        for s in servers
+    )
+
+
 def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Path:
     mode = "http" if lb.type == "application" else "tcp"
+    sticky = lb.sticky_sessions and mode == "http"
+    cookie = lb.cookie_name or "SERVERID"
+    sticky_line = f"    cookie {cookie} insert indirect nocache\n" if sticky else ""
 
-    # Use explicit backends first; fall back to auto-discovering running SLIRP instances
-    # in the same VPC when no backends have been registered via the API.
+    inst_map = {i.id: i for i in (vpc_instances or [])}
+
+    # --- Resolve target groups → backend sections ---
+    tg_sections: dict[str, tuple[str, str]] = {}  # tg_id -> (backend_name, cfg_block)
+    for tg in lb.target_groups:
+        tg_id = tg["id"]
+        back_name = f"tg-{tg_id[:8]}-back"
+        servers = _resolve_tg_servers(tg, inst_map)
+        hc = tg.get("health_check", {})
+        hc_opts = ""
+        if hc and mode == "http" and hc.get("path"):
+            hc_opts = (
+                f"    option httpchk GET {hc.get('path', '/')}\n"
+                f"    default-server inter {hc.get('interval', 30)}s "
+                f"rise {hc.get('healthy_threshold', 2)} "
+                f"fall {hc.get('unhealthy_threshold', 3)}\n"
+            )
+        tg_sections[tg_id] = (back_name, (
+            f"\nbackend {back_name}\n"
+            f"    balance roundrobin\n"
+            f"{sticky_line}{hc_opts}"
+            f"{_servers_cfg(servers, sticky, cookie)}\n"
+        ))
+
+    # --- Build frontend blocks ---
+    referenced_tgs: set[str] = set()
+    frontend_blocks = ""
+    if lb.listeners:
+        for lst in lb.listeners:
+            lst_port = lst["port"]
+            lst_short = lst["id"].replace("-", "")[:8]
+            default_tg_id = lst.get("target_group_id", "")
+            routing_rules = sorted(lst.get("routing_rules", []), key=lambda r: r.get("priority", 999))
+
+            acl_lines: list[str] = []
+            use_lines: list[str] = []
+            for idx, rule in enumerate(routing_rules):
+                conds = rule.get("conditions", {})
+                path_pat = conds.get("path_pattern", "")
+                host_hdr = conds.get("host_header", "")
+                rtg_id = rule.get("target_group_id", "")
+                if not rtg_id or rtg_id not in tg_sections:
+                    continue
+                back_name = tg_sections[rtg_id][0]
+                acl_parts: list[str] = []
+                if path_pat:
+                    aname = f"r{idx}p"
+                    if path_pat.endswith("*"):
+                        acl_lines.append(f"    acl {aname} path_beg {path_pat[:-1]}")
+                    else:
+                        acl_lines.append(f"    acl {aname} path {path_pat}")
+                    acl_parts.append(aname)
+                if host_hdr:
+                    aname = f"r{idx}h"
+                    acl_lines.append(f"    acl {aname} hdr(host) -i {host_hdr}")
+                    acl_parts.append(aname)
+                if acl_parts:
+                    use_lines.append(f"    use_backend {back_name} if {' '.join(acl_parts)}")
+                    referenced_tgs.add(rtg_id)
+
+            default_back = f"{lb.name}-back"
+            if default_tg_id and default_tg_id in tg_sections:
+                default_back = tg_sections[default_tg_id][0]
+                referenced_tgs.add(default_tg_id)
+
+            acl_block = ("\n".join(acl_lines) + "\n") if acl_lines else ""
+            use_block = ("\n".join(use_lines) + "\n") if use_lines else ""
+            frontend_blocks += (
+                f"\nfrontend {lb.name}-{lst_short}\n"
+                f"    bind 127.0.0.1:{lst_port}\n"
+                f"{acl_block}{use_block}"
+                f"    default_backend {default_back}\n"
+            )
+    else:
+        frontend_blocks = (
+            f"\nfrontend {lb.name}-front\n"
+            f"    bind 127.0.0.1:{listen_port}\n"
+            f"    default_backend {lb.name}-back\n"
+        )
+
+    # --- Default backend (auto-discover or explicit) ---
     effective_backends = lb.backends
-    # Auto-discover backends only for HTTP/application LBs.
-    # TCP/network LBs require explicit backend registration because the service
-    # port is workload-specific — there is no sensible default to assume.
     if not effective_backends and vpc_instances and lb.type == "application":
         effective_backends = []
         for inst in vpc_instances:
             if inst.http_host_port:
-                # SLIRP: host port forwarding is set up by the QEMU process at launch
-                # and stays live for the process lifetime regardless of libvirt state.
-                effective_backends.append({
-                    "name": inst.name,
-                    "address": "127.0.0.1",
-                    "port": inst.http_host_port,
-                })
+                effective_backends.append({"name": inst.name, "address": "127.0.0.1", "port": inst.http_host_port})
             elif inst.status.value == "running" and inst.private_ip:
-                # Bridge networking: guest IP must be confirmed reachable.
-                effective_backends.append({
-                    "name": inst.name,
-                    "address": inst.private_ip,
-                    "port": 80,
-                })
+                effective_backends.append({"name": inst.name, "address": inst.private_ip, "port": 80})
 
-    backends_cfg = "\n".join(
-        f"    server {b['name']} {b['address']}:{b['port']} check"
-        for b in effective_backends
-    ) if effective_backends else "    # no backends configured yet"
-
-    # Health check options for backend
     hc = lb.health_check or {}
     hc_opts = ""
     if hc and mode == "http":
-        path     = hc.get("path", "/")
-        interval = hc.get("interval", 30)
-        rise     = hc.get("healthy_threshold", 2)
-        fall     = hc.get("unhealthy_threshold", 3)
-        hc_opts  = f"    option httpchk GET {path}\n    default-server inter {interval}s rise {rise} fall {fall}\n"
-
-    # Build frontend blocks — one per listener, plus the legacy listen_port if no listeners
-    frontends = ""
-    if lb.listeners:
-        for lst in lb.listeners:
-            lst_port = lst["port"]
-            lst_id   = lst["id"].replace("-", "")[:8]
-            frontends += f"""
-frontend {lb.name}-{lst_id}
-    bind 127.0.0.1:{lst_port}
-    default_backend {lb.name}-back
-"""
-    else:
-        frontends = f"""
-frontend {lb.name}-front
-    bind 127.0.0.1:{listen_port}
-    default_backend {lb.name}-back
-"""
+        hc_opts = (
+            f"    option httpchk GET {hc.get('path', '/')}\n"
+            f"    default-server inter {hc.get('interval', 30)}s "
+            f"rise {hc.get('healthy_threshold', 2)} "
+            f"fall {hc.get('unhealthy_threshold', 3)}\n"
+        )
 
     http_opts = "    option  forwardfor\n    option  http-server-close\n" if mode == "http" else ""
+
+    # Extra backend sections for all TGs referenced by routing rules
+    extra_backends = "".join(
+        block for tg_id, (_, block) in tg_sections.items() if tg_id in referenced_tgs
+    )
+
     cfg = textwrap.dedent(f"""\
         global
             daemon
@@ -111,11 +191,13 @@ frontend {lb.name}-front
             timeout connect 5s
             timeout client  30s
             timeout server  30s
-    """) + http_opts + frontends + f"""
-backend {lb.name}-back
-    balance roundrobin
-{hc_opts}{backends_cfg}
-"""
+    """) + http_opts + frontend_blocks + (
+        f"\nbackend {lb.name}-back\n"
+        f"    balance roundrobin\n"
+        f"{sticky_line}{hc_opts}"
+        f"{_servers_cfg(effective_backends, sticky, cookie)}\n"
+    ) + extra_backends
+
     path = _cfg_path(lb.id)
     path.write_text(cfg)
     return path

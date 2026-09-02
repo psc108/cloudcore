@@ -43,9 +43,10 @@ variable "security_groups" {
     - ip_protocol  : "tcp", "udp", "icmp", or "-1" (all traffic).
     - from_port    : start of port range (omit for protocol "-1").
     - to_port      : end of port range (omit for protocol "-1").
-    - cidr         : source/destination CIDR. Mutually exclusive with source_sg_id.
+    - cidr         : IPv4 source/destination CIDR. Mutually exclusive with source_sg_id.
+    - cidr_ipv6    : IPv6 source/destination CIDR. Can combine with cidr for dual-stack.
     - source_sg_id : source security group ID. Traffic from any instance in that
-                     group is allowed. Mutually exclusive with cidr.
+                     group is allowed. Mutually exclusive with cidr/cidr_ipv6.
     - description  : rule description (optional).
   EOT
   type = map(object({
@@ -55,6 +56,7 @@ variable "security_groups" {
       from_port    = optional(number)
       to_port      = optional(number)
       cidr         = optional(string)
+      cidr_ipv6    = optional(string)
       source_sg_id = optional(string)
       description  = optional(string, "")
     })), {})
@@ -63,6 +65,7 @@ variable "security_groups" {
       from_port    = optional(number)
       to_port      = optional(number)
       cidr         = optional(string)
+      cidr_ipv6    = optional(string)
       source_sg_id = optional(string)
       description  = optional(string, "")
     })), {})

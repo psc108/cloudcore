@@ -11,6 +11,7 @@ resource "cloudcore_security_group" "this" {
     from_port    = r.from_port
     to_port      = r.to_port
     cidr         = r.cidr
+    cidr_ipv6    = r.cidr_ipv6
     source_sg_id = r.source_sg_id
     description  = r.description
   }]
@@ -20,6 +21,7 @@ resource "cloudcore_security_group" "this" {
     from_port    = r.from_port
     to_port      = r.to_port
     cidr         = r.cidr
+    cidr_ipv6    = r.cidr_ipv6
     source_sg_id = r.source_sg_id
     description  = r.description
   }]

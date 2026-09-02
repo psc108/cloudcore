@@ -39,6 +39,7 @@ def _inst_from_row(row) -> Instance:
 
 
 def _lb_from_row(row) -> LoadBalancer:
+    keys = row.keys()
     lb = LoadBalancer(
         id=row["id"], name=row["name"], type=row["type"], vpc_id=row["vpc_id"],
         subnet_ids=json.loads(row["subnet_ids"]), internal=bool(row["internal"]),
@@ -46,6 +47,10 @@ def _lb_from_row(row) -> LoadBalancer:
         backends=json.loads(row["backends"]),
         listeners=json.loads(row["listeners"]) if row["listeners"] else [],
         health_check=json.loads(row["health_check"]) if row["health_check"] else {},
+        target_groups=json.loads(row["target_groups"]) if "target_groups" in keys and row["target_groups"] else [],
+        sticky_sessions=bool(row["sticky_sessions"]) if "sticky_sessions" in keys else False,
+        cookie_name=row["cookie_name"] if "cookie_name" in keys else "SERVERID",
+        deletion_protection=bool(row["deletion_protection"]) if "deletion_protection" in keys else False,
         created_at=row["created_at"],
         tags=json.loads(row["tags"]),
     )
@@ -351,17 +356,22 @@ def find_lb_by_name(name: str) -> Optional[LoadBalancer]:
 
 def put_lb(lb: LoadBalancer) -> None:
     db.get_db().execute("""INSERT INTO load_balancers
-        (id,name,type,vpc_id,subnet_ids,internal,dns_name,listen_port,backends,listeners,health_check,status,created_at,tags)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        (id,name,type,vpc_id,subnet_ids,internal,dns_name,listen_port,backends,listeners,
+         health_check,target_groups,sticky_sessions,cookie_name,deletion_protection,status,created_at,tags)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, type=excluded.type, vpc_id=excluded.vpc_id,
             subnet_ids=excluded.subnet_ids, internal=excluded.internal,
             dns_name=excluded.dns_name, listen_port=excluded.listen_port,
             backends=excluded.backends, listeners=excluded.listeners,
-            health_check=excluded.health_check, status=excluded.status, tags=excluded.tags""",
+            health_check=excluded.health_check, target_groups=excluded.target_groups,
+            sticky_sessions=excluded.sticky_sessions, cookie_name=excluded.cookie_name,
+            deletion_protection=excluded.deletion_protection,
+            status=excluded.status, tags=excluded.tags""",
         (lb.id, lb.name, lb.type, lb.vpc_id, json.dumps(lb.subnet_ids),
          int(lb.internal), lb.dns_name, lb.listen_port, json.dumps(lb.backends),
-         json.dumps(lb.listeners), json.dumps(lb.health_check),
+         json.dumps(lb.listeners), json.dumps(lb.health_check), json.dumps(lb.target_groups),
+         int(lb.sticky_sessions), lb.cookie_name, int(lb.deletion_protection),
          lb.status.value, lb.created_at, json.dumps(lb.tags)))
     db.get_db().commit()
 
