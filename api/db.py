@@ -159,7 +159,16 @@ def init(db_file: Path | None = None) -> None:
     _conn.row_factory = sqlite3.Row
     _conn.executescript(_SCHEMA)
     _conn.commit()
+    _migrate_columns()
     _migrate_json()
+
+
+def _migrate_columns() -> None:
+    """Add columns introduced after initial schema release."""
+    existing = {row[1] for row in _conn.execute("PRAGMA table_info(instances)").fetchall()}
+    if "http_host_port" not in existing:
+        _conn.execute("ALTER TABLE instances ADD COLUMN http_host_port INTEGER NOT NULL DEFAULT 0")
+        _conn.commit()
 
 
 def get_db() -> sqlite3.Connection:

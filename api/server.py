@@ -167,10 +167,13 @@ def create_instance():
     )
     store.put_instance(instance)
 
+    vpc = store.get_vpc(instance.vpc_id)
+    vpc_cidr = vpc.cidr_block if vpc else "10.0.0.0/8"
+
     # Launch VM asynchronously so the API returns immediately
     def _launch():
         try:
-            compute.create_instance(instance)
+            compute.create_instance(instance, vpc_cidr=vpc_cidr)
             ip = compute.get_instance_ip(instance.domain_name)
             instance.private_ip = ip
             dns_store.upsert_record(
@@ -182,6 +185,14 @@ def create_instance():
                 from sg_routes import _merged_rules
                 ingress, egress = _merged_rules(instance.security_group_ids)
                 sg_enforce.apply(instance, ingress, egress)
+            # Reload any LBs in the same VPC so they pick up the new instance
+            vpc_instances = store.list_instances_by_vpc(instance.vpc_id)
+            for lb in store.list_lbs():
+                if lb.vpc_id == instance.vpc_id:
+                    try:
+                        lb_backend.reload(lb, vpc_instances=vpc_instances)
+                    except Exception as lb_err:
+                        app.logger.warning("LB reload failed for %s: %s", lb.id, lb_err)
         except Exception as e:
             from models import InstanceStatus
             instance.status = InstanceStatus.ERROR
@@ -277,7 +288,8 @@ def create_lb():
         tags=body.get("tags", {}),
     )
     try:
-        lb.listen_port = lb_backend.start(lb)
+        lb.listen_port = lb_backend.start(
+            lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy start failed for %s: %s", lb.id, e)
     store.put_lb(lb)
@@ -313,7 +325,7 @@ def update_lb(lb_id):
     lb.backends = body.get("backends", lb.backends)
     lb.tags = body.get("tags", lb.tags)
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -342,7 +354,7 @@ def add_backend(lb_id):
             return problem(400, "Bad Request", f"{field} is required")
     lb.backends.append({"name": body["name"], "address": body["address"], "port": int(body["port"])})
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -357,7 +369,7 @@ def remove_backend(lb_id, backend_name):
         return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
     lb.backends = [b for b in lb.backends if b["name"] != backend_name]
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -394,7 +406,7 @@ def add_listener(lb_id):
     }
     lb.listeners.append(listener)
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -411,7 +423,7 @@ def remove_listener(lb_id, listener_id):
         return problem(404, "Not Found", f"Listener '{listener_id}' not found")
     lb.listeners = [l for l in lb.listeners if l["id"] != listener_id]
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -441,7 +453,7 @@ def set_health_check(lb_id):
         "unhealthy_threshold": int(body.get("unhealthy_threshold", 3)),
     }
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -456,7 +468,7 @@ def delete_health_check(lb_id):
         return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
     lb.health_check = {}
     try:
-        lb_backend.reload(lb)
+        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
     except Exception as e:
         app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
     store.put_lb(lb)
@@ -714,24 +726,35 @@ def reconcile():
         if not instance.domain_name:
             continue
         live = compute.get_instance_status(instance.domain_name)
-        if live == InstanceStatus.DELETED:
-            instance.status = InstanceStatus.STOPPED
-            instance.private_ip = ""
-        else:
+        if live in (InstanceStatus.DELETED, InstanceStatus.STOPPED):
+            if instance.status == InstanceStatus.RUNNING:
+                # Domain was lost (libvirtd restart) — try to bring it back up
+                app.logger.info("  restarting domain %s (was running, now %s)",
+                                instance.domain_name, live.value)
+                try:
+                    compute.start_domain(instance.domain_name)
+                    live = InstanceStatus.RUNNING
+                except Exception as e:
+                    app.logger.warning("  could not restart %s: %s", instance.domain_name, e)
+                    live = InstanceStatus.STOPPED
+            if live != InstanceStatus.RUNNING:
+                instance.status = InstanceStatus.STOPPED
+                instance.private_ip = ""
+        if live == InstanceStatus.RUNNING:
             instance.status = live
-            if live == InstanceStatus.RUNNING:
-                if not instance.private_ip:
-                    instance.private_ip = compute.get_instance_ip(instance.domain_name)
-                dns_store.upsert_record(
-                    "instances.cloudcore.local", instance.name, "A",
-                    instance.private_ip or "127.0.0.1",
-                    resource_type="instance", resource_id=instance.id,
-                )
+            if not instance.private_ip:
+                instance.private_ip = compute.get_instance_ip(instance.domain_name)
+            dns_store.upsert_record(
+                "instances.cloudcore.local", instance.name, "A",
+                instance.private_ip or "127.0.0.1",
+                resource_type="instance", resource_id=instance.id,
+            )
         store.put_instance(instance)
 
     for lb in store.list_lbs():
         try:
-            lb.listen_port = lb_backend.start(lb)
+            lb.listen_port = lb_backend.start(
+                lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
             store.put_lb(lb)
             dns_store.upsert_record(
                 "lb.cloudcore.local", lb.name, "A", "127.0.0.1",

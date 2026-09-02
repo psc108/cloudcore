@@ -48,9 +48,28 @@ def ssh_user_for_image(image_id: str) -> str:
             return user
     return "ubuntu"
 
-# Port range for SSH forwarding (SLIRP path)
-_SSH_PORT_START = 12200
-_SSH_PORT_END = 12299
+# Port ranges for SLIRP host-to-guest forwarding
+_SSH_PORT_START  = 12200
+_SSH_PORT_END    = 12299
+_HTTP_PORT_START = 12800
+_HTTP_PORT_END   = 12899
+
+# Per-VPC IP counter for unique simulated private IPs in SLIRP mode.
+# Maps vpc_id → next host-bits offset (starts at 2; .0 = network, .1 = gateway).
+_vpc_ip_counter: dict[str, int] = {}
+_vpc_ip_lock = threading.Lock()
+
+
+def _allocate_slirp_ip(vpc_id: str, vpc_cidr: str) -> str:
+    """Return a unique simulated private IP from the VPC's CIDR for a SLIRP instance."""
+    import ipaddress
+    with _vpc_ip_lock:
+        offset = _vpc_ip_counter.get(vpc_id, 2)
+        _vpc_ip_counter[vpc_id] = offset + 1
+    net = ipaddress.ip_network(vpc_cidr, strict=False)
+    # Allocate from the first /24 in the VPC (e.g. 10.10.0.0/16 → 10.10.0.x)
+    host_ip = net.network_address + offset
+    return str(host_ip)
 
 # Bridge name for persistent networking (created by setup-network.sh)
 BRIDGE_NAME = "ccbr0"
@@ -282,6 +301,7 @@ def _domain_xml_slirp(
     disk_path: Path,
     iso_path: Path,
     ssh_host_port: int,
+    http_host_port: int,
 ) -> str:
     memory_kib = memory_mb * 1024
     return textwrap.dedent(f"""\
@@ -312,7 +332,7 @@ def _domain_xml_slirp(
           </devices>
           <qemu:commandline>
             <qemu:arg value='-netdev'/>
-            <qemu:arg value='user,id=ccnet0,hostfwd=tcp:127.0.0.1:{ssh_host_port}-:22'/>
+            <qemu:arg value='user,id=ccnet0,hostfwd=tcp:127.0.0.1:{ssh_host_port}-:22,hostfwd=tcp:127.0.0.1:{http_host_port}-:80'/>
             <qemu:arg value='-device'/>
             <qemu:arg value='virtio-net-pci,netdev=ccnet0,bus=pci.0,addr=0x5'/>
           </qemu:commandline>
@@ -363,7 +383,7 @@ def _domain_xml_bridge(
 
 
 
-def create_instance(instance: Instance) -> Instance:
+def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instance:
     flavor = FLAVORS.get(instance.flavor)
     if flavor is None:
         raise ValueError(f"Unknown flavor '{instance.flavor}'. Available: {list(FLAVORS)}")
@@ -389,13 +409,18 @@ def create_instance(instance: Instance) -> Instance:
         if use_bridge:
             xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path)
             instance.ssh_host_port = 0
+            instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
         else:
-            ssh_host_port = _free_port(_SSH_PORT_START, _SSH_PORT_END)
+            ssh_host_port  = _free_port(_SSH_PORT_START,  _SSH_PORT_END)
+            http_host_port = _free_port(_HTTP_PORT_START, _HTTP_PORT_END)
             _scrub_known_hosts(ssh_host_port)
-            instance.ssh_host_port = ssh_host_port
-            instance.private_ip = "10.0.2.15"  # SLIRP convention
-            xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path, ssh_host_port)
+            instance.ssh_host_port  = ssh_host_port
+            instance.http_host_port = http_host_port
+            # Allocate a unique simulated private IP from the VPC CIDR
+            instance.private_ip = _allocate_slirp_ip(instance.vpc_id, vpc_cidr)
+            xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path,
+                                    ssh_host_port, http_host_port)
 
         conn = _conn()
         try:
@@ -409,6 +434,19 @@ def create_instance(instance: Instance) -> Instance:
             conn.close()
 
     return instance
+
+
+def start_domain(domain_name: str) -> None:
+    """Start a defined-but-stopped libvirt domain (e.g. after daemon restart)."""
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(domain_name)
+        if not dom.isActive():
+            dom.create()
+    except libvirt.libvirtError as e:
+        raise RuntimeError(f"libvirt error: {e}") from e
+    finally:
+        conn.close()
 
 
 def stop_instance(domain_name: str) -> None:

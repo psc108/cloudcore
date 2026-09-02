@@ -291,3 +291,80 @@
 [2025-07-14 14:15] MODIFY modules/security-groups/main.tf | Fixed dynamic blocks → list attribute syntax for ingress_rules/egress_rules
 [2025-07-14 14:15] MODIFY modules/nfs-server/main.tf | Fixed dynamic blocks → list attribute syntax for shares; removed read-only path field
 [2025-07-14 14:15] MODIFY ansible/examples/08-openstack-services.yml | Added wait tags to all polling/VM-dependent tasks; removed mount var refs from instance user_data; fixed summary task
+[2025-07-14 14:45] MODIFY 19 files | Replaced registry.terraform.io/cloudcore with registry.opentofu.org/cloudcore across all modules, examples, provider main.go and conventions.md
+[2025-07-14 15:00] MODIFY examples/openstack-services/main.tf | Added numbered header comment matching convention of all other examples
+[2026-08-30 15:54] MODIFY api/build_engine.py | add 08-openstack-services.yml to Ansible _TEMPLATE_META catalogue
+[2026-08-30 16:16] MODIFY api/build_engine.py | auto-append --skip-tags wait to ansible-playbook when bridge not usable (SLIRP mode)
+[2026-08-30 17:48] MODIFY api/nfs.py | suppress auto-balloon device and move SLIRP net to addr=0x7 to fix PCI slot collision
+[2026-08-30 17:55] MODIFY ui/src/js/07-detail-modal.js | add nfs to titles, _detailSectionMap, and fieldMap to fix "undefined: name" in dashboard
+[2026-08-30 17:55] MODIFY ui/index.html | rebuild
+[2026-08-30 18:05] MODIFY ui/src/js/21-nfs.js | add SSH panel to NFS expanded row with copy button
+[2026-08-30 18:05] MODIFY ui/index.html | rebuild
+[2026-08-30 18:20] MODIFY api/terminal.py | add nfs_store fallback lookup so NFS server IDs resolve to SSH sessions
+[2026-08-30 18:20] MODIFY ui/src/js/11-terminal.js | fetch NFS servers alongside instances in terminal panel
+[2026-08-30 18:20] MODIFY ui/index.html | rebuild
+[2026-08-30 18:45] MODIFY api/nfs.py | fix cloud-init user-data: replace textwrap.dedent with unindented f-string; move /etc/exports population to runcmd echo to avoid YAML block scalar indentation errors causing SSH auth failure
+[2026-08-30 19:10] MODIFY ui/src/js/16-build-manager.js | add per-row Destroy button and bmDestroySingle() to Ansible build history
+[2026-08-30 19:10] MODIFY ui/src/js/20-tofu-manager.js | add per-row Destroy button and tfDestroySingle() to OpenTofu build history
+[2026-08-30 19:10] MODIFY ui/index.html | rebuild
+[2026-08-31 09:00] MODIFY api/nfs_routes.py | fix KeyError on share["path"] in mount-config route — use get() with /exports/<name> fallback
+[2026-08-31 13:55] MODIFY api/tofu_engine.py | set TF_CLI_CONFIG_FILE from ~/.tofurc; skip tofu init when dev_overrides active to avoid registry lookup failure
+[2026-09-01 15:23] MODIFY api/tofu_engine.py | wipe terraform.tfstate before each build; skip tofu init when dev_overrides active and .terraform cache present
+[2026-09-01 15:23] MODIFY .gitignore | add **/.terraform/, **/terraform.tfstate, **/terraform.tfstate.backup
+[2026-09-01 18:04] MODIFY api/compute.py | add _port_lock threading.Lock to serialize port allocation + VM define, preventing concurrent instances from getting same ssh_host_port
+[2026-09-01 18:04] MODIFY api/nfs.py | wrap NFS VM creation in compute._port_lock for same reason
+[2026-09-01 18:04] MODIFY api/db.py | switch get_db() to per-thread connections via threading.local to fix SQLite concurrent write errors
+[2026-09-01 18:04] MODIFY api/tofu_engine.py | add security_group to _snapshot(); always capture provisioned diff on failure too
+[2026-09-01 18:04] MODIFY api/build_engine.py | same snapshot/provisioned fixes as tofu_engine
+[2026-09-01 18:04] MODIFY api/tofu_routes.py | add security_group to destroy _PATH map
+[2026-09-01 18:04] MODIFY api/build_manager_routes.py | add security_group to destroy _PATH map
+[2026-09-01 18:20] CREATE provider/IMPROVEMENTS.md | phased provider improvement plan
+[2026-09-01 18:20] MODIFY provider/internal/client/client.go | add NotFoundError type for typed 404 detection
+[2026-09-01 18:20] MODIFY provider/internal/resources/vpc.go | 404->RemoveResource on Read; map API result in Update
+[2026-09-01 18:20] MODIFY provider/internal/resources/instance.go | 404->RemoveResource; RequiresReplace on vpc_id; map API result in Update
+[2026-09-01 18:20] MODIFY provider/internal/resources/load_balancer.go | 404->RemoveResource on Read; map API result in Update
+[2026-09-01 18:20] MODIFY provider/internal/resources/security_group.go | 404->RemoveResource on Read; map all fields from API result in Update
+[2026-09-01 18:20] MODIFY provider/internal/resources/nfs_server.go | 404->RemoveResource on Read
+[2026-09-01 18:20] MODIFY provider/internal/resources/dns_zone.go | add id attribute (= name)
+[2026-09-01 18:20] MODIFY provider/internal/resources/dns_record.go | add id attribute (= zone/name/type)
+[2025-07-14 10:15] MODIFY provider/internal/resources/nfs_server.go | phase 2.1: remove early returns from share loops so re-read always executes after partial failure
+[2025-07-14 10:15] MODIFY provider/internal/datasources/datasources.go | phase 2.3: error when neither id nor name provided in vpc/instance/lb data sources
+[2025-07-14 10:35] MODIFY provider/internal/datasources/datasources.go | phase 3.1: add security_group, nfs_server, dns_zone, dns_record data sources
+[2025-07-14 10:35] MODIFY provider/internal/provider/provider.go | phase 3.1: register four new data sources
+[2025-07-14 10:55] MODIFY provider/internal/client/client.go | phase 4.1: add WithTimeout functional option to client.New
+[2025-07-14 10:55] MODIFY provider/go.mod | phase 4.2: upgrade terraform-plugin-framework v1.11->v1.19, x/net v0.23->v0.58, grpc v1.79->v1.82.1, Go toolchain 1.22->1.25
+[2025-07-14 10:55] MODIFY provider/IMPROVEMENTS.md | mark phase 4 items complete
+[2025-07-14 11:20] MODIFY api/compute.py | add _scrub_known_hosts helper; call on port assignment in create_instance
+[2025-07-14 11:20] MODIFY api/nfs.py | call _scrub_known_hosts on port assignment; add UserKnownHostsFile=/dev/null to reload_exports SSH call
+[2025-07-14 11:20] MODIFY api/server.py | add UserKnownHostsFile=/dev/null to _ssh_run to prevent known_hosts conflicts blocking instance management
+[2025-07-14 11:35] MODIFY README.md | update Go version, modules table (3->9), provider resources table (3->7), resource coverage table, remove stale DNS/NFS note
+[2025-07-14 12:00] CREATE provider/PLAN.md | merged DEFICIENCIES.md + gap analysis into 6-phase implementation plan
+[2025-07-14 13:30] MODIFY provider/internal/resources/instance.go | phases 1.3+2.1+2.2: flavor validator, timeouts+polling, ssh_port/ssh_user outputs
+[2025-07-14 13:30] MODIFY provider/internal/resources/nfs_server.go | phases 1.3+2.1: flavor validator, timeouts+polling on create
+[2025-07-14 13:30] MODIFY provider/internal/resources/load_balancer.go | phase 1.3: type validator (network/application)
+[2025-07-14 13:30] MODIFY provider/internal/resources/security_group.go | phase 1.3: protocol validator (tcp/udp/icmp/-1)
+[2025-07-14 13:30] MODIFY provider/internal/provider/provider.go | phases 1.2+2.3: TLS warning, request_timeout attribute
+[2025-07-14 13:30] MODIFY provider/internal/client/client.go | phase 3.1: retry with exponential backoff on 429/5xx, WithRetries option
+[2025-07-14 13:30] MODIFY provider/internal/datasources/datasources.go | phase 3.2: document no-pagination assumption
+[2025-07-14 13:30] MODIFY provider/PLAN.md | mark phases 1-3 complete
+[2026-09-01 20:58] MODIFY provider/internal/resources/vpc.go | phase 4: MarkdownDescription + attribute descriptions
+[2026-09-01 20:58] MODIFY provider/internal/resources/instance.go | phase 4: MarkdownDescription + attribute descriptions
+[2026-09-01 20:58] MODIFY provider/internal/resources/load_balancer.go | phase 4: MarkdownDescription + attribute descriptions
+[2026-09-01 20:58] MODIFY provider/internal/resources/security_group.go | phase 4: MarkdownDescription + attribute descriptions
+[2026-09-01 20:58] MODIFY provider/internal/resources/nfs_server.go | phase 4: MarkdownDescription + attribute descriptions
+[2026-09-01 20:58] MODIFY provider/internal/resources/dns_zone.go | phase 4: MarkdownDescription
+[2026-09-01 20:58] MODIFY provider/internal/resources/dns_record.go | phase 4: MarkdownDescription
+[2026-09-01 20:58] MODIFY provider/internal/datasources/datasources.go | phase 4: MarkdownDescription + attribute descriptions on all 7 data sources
+[2026-09-01 20:58] MODIFY provider/PLAN.md | phase 4 marked complete
+[2026-09-01 21:49] CREATE provider/internal/acctest/acctest.go | shared test helper: ProviderFactories, Skip guard, ProviderConfig
+[2026-09-01 21:49] CREATE provider/internal/resources/common.go | phase 6: tagsToMap + stringsToList helpers; null-preserving for Optional attrs
+[2026-09-01 21:49] MODIFY provider/internal/resources/vpc.go | phase 6: vpcMapToState helper, use common helpers
+[2026-09-01 21:49] MODIFY provider/internal/resources/instance.go | phase 6: instanceMapToState helper; fix timeouts.Value in ImportState
+[2026-09-01 21:49] MODIFY provider/internal/resources/load_balancer.go | phase 6: lbMapToState helper
+[2026-09-01 21:49] MODIFY provider/internal/resources/security_group.go | phase 6: sgMapToState helper; null description + null empty rules list
+[2026-09-01 21:49] MODIFY provider/internal/resources/nfs_server.go | phase 6: nfsMapToState helper; fix timeouts.Value in ImportState
+[2026-09-01 21:49] CREATE provider/internal/resources/vpc_test.go | phase 5: TestAccVPC_basic (create/update tags/import), TestAccVPC_dnsSupport
+[2026-09-01 21:49] CREATE provider/internal/resources/instance_test.go | phase 5: TestAccInstance_basic (polls to running + import), TestAccInstance_flavorValidation
+[2026-09-01 21:49] CREATE provider/internal/resources/security_group_test.go | phase 5: TestAccSecurityGroup_basic (create/update rules/import), TestAccSecurityGroup_protocolValidation
+[2026-09-01 21:49] CREATE provider/internal/datasources/datasources_test.go | phase 5: VPC by-name, VPC by-id, instance by-name, missing-key error
+[2026-09-01 21:49] MODIFY provider/PLAN.md | phases 5 and 6 marked complete
