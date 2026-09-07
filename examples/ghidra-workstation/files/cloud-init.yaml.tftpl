@@ -154,8 +154,22 @@ runcmd:
   - [ chown, "ubuntu:ubuntu", /home/ubuntu/.vnc/passwd ]
 
   # Ghidra: download, verify checksum, unzip.
-  - [ sh, -c, "curl -fSL --retry 5 -o /tmp/${ghidra_zip_name} https://github.com/NationalSecurityAgency/ghidra/releases/download/${ghidra_release_tag}/${ghidra_zip_name}" ]
-  - [ sh, -c, "echo '${ghidra_sha256}  /tmp/${ghidra_zip_name}' | sha256sum -c -" ]
+  #
+  # --speed-limit/--speed-time/-C -: this platform's guest networking has
+  # been observed to occasionally stall completely mid-transfer (throughput
+  # decaying toward zero while the connection stays technically open) —
+  # plain `--retry` doesn't catch that, it only handles hard connection
+  # failures. Aborting after 20s under 50KB/s and resuming (-C -) rather
+  # than restarting turns a stall into a brief hiccup instead of a hang.
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/${ghidra_zip_name} \
+        https://github.com/NationalSecurityAgency/ghidra/releases/download/${ghidra_release_tag}/${ghidra_zip_name} && break
+      echo "Ghidra download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${ghidra_sha256}  /tmp/${ghidra_zip_name}' | sha256sum -c -
   - [ unzip, -q, -d, /opt, "/tmp/${ghidra_zip_name}" ]
   - [ ln, -s, "/opt/ghidra_${ghidra_version}_PUBLIC", /opt/ghidra ]
   - [ chown, -R, "ubuntu:ubuntu", "/opt/ghidra_${ghidra_version}_PUBLIC" ]

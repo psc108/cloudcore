@@ -43,13 +43,20 @@ async function tfSelectTemplate(dirName) {
   }
 
   const data = await api('GET', `/v1/tofu/templates/${dirName}/vars`);
-  _tfRenderVarForm(dirName, tpl, data.vars || {});
+  await _tfRenderVarForm(dirName, tpl, data.vars || {});
   const panel = document.getElementById('tf-var-panel');
   panel.style.display = 'block';
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function _tfRenderVarForm(dirName, tpl, schema) {
+// Variables named exactly this get rendered as a <select> of host USB
+// devices instead of a free-text field — trainees shouldn't have to look
+// up a vendor:product ID by hand. Only this one exists today; a name
+// match is simpler than adding a schema-level "kind" flag for a field
+// type that only one template uses.
+const _TF_USB_DEVICE_VAR = 'usb_device_id';
+
+async function _tfRenderVarForm(dirName, tpl, schema) {
   document.getElementById('tf-form-title').textContent = tpl ? tpl.title : dirName;
   document.getElementById('tf-submit-dirname').value = dirName;
 
@@ -61,15 +68,93 @@ function _tfRenderVarForm(dirName, tpl, schema) {
     return;
   }
 
-  container.innerHTML = editable.map(([key, meta]) => `
+  let usbDevices = null;
+  if (editable.some(([key]) => key === _TF_USB_DEVICE_VAR)) {
+    try {
+      const usbData = await api('GET', '/v1/usb-devices');
+      usbDevices = usbData.items || [];
+    } catch (e) {
+      usbDevices = [];
+    }
+  }
+
+  container.innerHTML = editable.map(([key, meta]) => {
+    if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
+    return `
+      <div class="field">
+        <label>${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}</label>
+        <input type="${key.includes('token') ? 'password' : 'text'}"
+               id="tf-var-${key}"
+               data-key="${key}"
+               data-required="${meta.required ? '1' : '0'}"
+               placeholder="${meta.required ? 'Required — no default value' : ''}"
+               value="${_esc(String(meta.default ?? ''))}">
+      </div>
+    `;
+  }).join('');
+}
+
+function _tfRenderUsbField(key, meta, devices) {
+  const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
+
+  if (devices === null || !devices.length) {
+    return `
+      <div class="field">
+        <label>${label}</label>
+        <select id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}" disabled>
+          <option value="">No USB devices detected</option>
+        </select>
+        <span class="bm-field-hint">Plug in the adapter into the CloudCore host, then reopen this template.</span>
+      </div>
+    `;
+  }
+
+  const toOption = d => {
+    const id = `${d.vendor_id}:${d.product_id}`;
+    let suffix = '';
+    if (d.blocked) suffix = ` — blocked (${d.block_reason || 'unsafe device'})`;
+    else if (d.attached_to) suffix = ` — already attached elsewhere`;
+    const disabled = (d.blocked || d.attached_to) ? 'disabled' : '';
+    return `<option value="${_esc(id)}" ${disabled}>${_esc(d.description || id)} (${_esc(id)})${_esc(suffix)}</option>`;
+  };
+
+  const likely = devices.filter(d => d.likely_wifi_adapter);
+  const other  = devices.filter(d => !d.likely_wifi_adapter);
+  const otherIds = other.map(d => `${d.vendor_id}:${d.product_id}`);
+
+  const likelyGroup = likely.length
+    ? `<optgroup label="Likely WiFi adapters">${likely.map(toOption).join('')}</optgroup>` : '';
+  const otherGroup = other.length
+    ? `<optgroup label="Other detected devices">${other.map(toOption).join('')}</optgroup>` : '';
+
+  const anyEligible = devices.some(d => !d.blocked && !d.attached_to);
+  const anyLikelyEligible = likely.some(d => !d.blocked && !d.attached_to);
+
+  return `
     <div class="field">
-      <label>${key.replace(/_/g, ' ')}</label>
-      <input type="${key.includes('token') ? 'password' : 'text'}"
-             id="tf-var-${key}"
-             data-key="${key}"
-             value="${_esc(String(meta.default ?? ''))}">
+      <label>${label}</label>
+      <select id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}"
+              data-nonwifi-ids="${_esc(JSON.stringify(otherIds))}"
+              onchange="_tfUsbFieldChanged(this)">
+        <option value="">-- select a USB adapter --</option>
+        ${likelyGroup}
+        ${otherGroup}
+      </select>
+      <span class="bm-field-hint bm-required" id="tf-var-${key}-warn" style="display:none">
+        This isn't recognized as a WiFi adapter — double check it's the right device before building.
+      </span>
+      ${anyEligible
+        ? (anyLikelyEligible ? '' : '<span class="bm-field-hint">No obvious WiFi adapter detected — check "Other detected devices" if you know which one it is.</span>')
+        : '<span class="bm-field-hint">No eligible device — every detected device is blocked or already in use.</span>'}
     </div>
-  `).join('');
+  `;
+}
+
+function _tfUsbFieldChanged(select) {
+  const warn = document.getElementById(`${select.id}-warn`);
+  if (!warn) return;
+  const nonWifiIds = JSON.parse(select.dataset.nonwifiIds || '[]');
+  warn.style.display = nonWifiIds.includes(select.value) ? 'block' : 'none';
 }
 
 async function tfSubmitBuild() {
@@ -77,9 +162,35 @@ async function tfSubmitBuild() {
   if (!dirName) { toast('Select a template first', 'error'); return; }
 
   const vars = {};
-  document.querySelectorAll('#tf-var-fields input[data-key]').forEach(el => {
-    if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
+  const missing = [];
+  document.querySelectorAll('#tf-var-fields input[data-key], #tf-var-fields select[data-key]').forEach(el => {
+    el.classList.remove('bm-field-error');
+    const val = el.value.trim();
+    if (val) {
+      vars[el.dataset.key] = val;
+    } else if (el.dataset.required === '1') {
+      missing.push(el.dataset.key);
+      el.classList.add('bm-field-error');
+    }
   });
+
+  if (missing.length) {
+    toast(`Missing required value${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`, 'error');
+    return;
+  }
+
+  // Selecting a device outside "Likely WiFi adapters" is easy to do by
+  // mistake (e.g. picking the host's own Bluetooth chip) and the failure
+  // mode isn't a clean error — it's a fully "successful" build with no
+  // working radio. One extra confirmation catches that before it burns
+  // several minutes of provisioning.
+  for (const select of document.querySelectorAll('#tf-var-fields select[data-nonwifi-ids]')) {
+    const nonWifiIds = JSON.parse(select.dataset.nonwifiIds || '[]');
+    if (nonWifiIds.includes(select.value)) {
+      const label = select.options[select.selectedIndex]?.textContent.trim() || select.value;
+      if (!confirm(`"${label}" doesn't look like a WiFi adapter. Build anyway?`)) return;
+    }
+  }
 
   const btn = document.getElementById('tf-submit-btn');
   btn.disabled = true;

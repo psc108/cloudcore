@@ -47,7 +47,21 @@ def submit_build():
     template = body.get("template", "").strip()
     if not template:
         return jsonify({"status": 400, "title": "Bad Request", "detail": "template is required"}), 400
-    build = tofu_engine.submit_build(template, body.get("vars", {}), body.get("created_by", "ui"))
+
+    var_overrides = body.get("vars") or {}
+    try:
+        schema = tofu_engine.extract_template_vars(template)
+    except FileNotFoundError as e:
+        return jsonify({"status": 404, "title": "Not Found", "detail": str(e)}), 404
+    missing = [k for k, meta in schema.items()
+               if meta.get("required") and not str(var_overrides.get(k, "")).strip()]
+    if missing:
+        return jsonify({
+            "status": 400, "title": "Bad Request",
+            "detail": f"Missing required variable(s): {', '.join(missing)}",
+        }), 400
+
+    build = tofu_engine.submit_build(template, var_overrides, body.get("created_by", "ui"))
     return jsonify(_summary(build)), 202
 
 

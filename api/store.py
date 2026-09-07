@@ -26,6 +26,7 @@ def _inst_from_row(row) -> Instance:
         id=row["id"], name=row["name"], image_id=row["image_id"],
         flavor=row["flavor"], vpc_id=row["vpc_id"], subnet_id=row["subnet_id"],
         security_group_ids=json.loads(row["security_group_ids"]),
+        usb_device_ids=json.loads(row["usb_device_ids"]) if "usb_device_ids" in keys and row["usb_device_ids"] else [],
         user_data=row["user_data"], private_ip=row["private_ip"],
         public_ip=row["public_ip"], created_at=row["created_at"],
         tags=json.loads(row["tags"]), domain_name=row["domain_name"],
@@ -298,21 +299,23 @@ def find_instance_by_name(name: str) -> Optional[Instance]:
 
 def put_instance(instance: Instance) -> None:
     db.get_db().execute("""INSERT INTO instances
-        (id,name,image_id,flavor,vpc_id,subnet_id,security_group_ids,user_data,
+        (id,name,image_id,flavor,vpc_id,subnet_id,security_group_ids,usb_device_ids,user_data,
          private_ip,public_ip,status,created_at,tags,domain_name,
          ssh_host_port,http_host_port,ssh_user,users)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, image_id=excluded.image_id, flavor=excluded.flavor,
             vpc_id=excluded.vpc_id, subnet_id=excluded.subnet_id,
-            security_group_ids=excluded.security_group_ids, user_data=excluded.user_data,
+            security_group_ids=excluded.security_group_ids, usb_device_ids=excluded.usb_device_ids,
+            user_data=excluded.user_data,
             private_ip=excluded.private_ip, public_ip=excluded.public_ip,
             status=excluded.status, tags=excluded.tags, domain_name=excluded.domain_name,
             ssh_host_port=excluded.ssh_host_port, http_host_port=excluded.http_host_port,
             ssh_user=excluded.ssh_user, users=excluded.users""",
         (instance.id, instance.name, instance.image_id, instance.flavor,
          instance.vpc_id, instance.subnet_id,
-         json.dumps(instance.security_group_ids), instance.user_data,
+         json.dumps(instance.security_group_ids), json.dumps(instance.usb_device_ids),
+         instance.user_data,
          instance.private_ip, instance.public_ip, instance.status.value,
          instance.created_at, json.dumps(instance.tags), instance.domain_name,
          instance.ssh_host_port, instance.http_host_port,

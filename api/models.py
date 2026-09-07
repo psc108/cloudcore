@@ -188,6 +188,7 @@ class Instance:
     vpc_id: str = ""
     subnet_id: str = ""
     security_group_ids: list = field(default_factory=list)
+    usb_device_ids: list = field(default_factory=list)  # ["vvvv:pppp", ...]
     user_data: Optional[str] = None
     private_ip: str = ""
     public_ip: str = ""
@@ -217,6 +218,7 @@ class Instance:
             "vpc_id": self.vpc_id,
             "subnet_id": self.subnet_id,
             "security_group_ids": self.security_group_ids,
+            "usb_device_ids": self.usb_device_ids,
             "private_ip": self.private_ip,
             "public_ip": effective_public_ip,
             "ssh_port": self.ssh_host_port,

@@ -124,6 +124,27 @@ def list_templates() -> list[dict]:
 # Variable extraction from variables.tf
 # ---------------------------------------------------------------------------
 
+def _extract_balanced_block(content: str, open_brace_pos: int) -> str:
+    """Return the text between open_brace_pos (a '{') and its matching '}',
+    tracking nesting depth so a nested block (e.g. `validation { ... }`,
+    or even just a `{n}` regex quantifier inside a quoted string — both
+    real cases hit by actual variables.tf files in this repo) doesn't
+    fool a naive "stop at the first closing brace" scan into truncating
+    the block early. Doesn't need to be string-literal-aware: a brace
+    that's just quantifier syntax inside a string still nets to zero
+    depth change, since it's one '{' immediately followed by one '}'.
+    """
+    depth = 0
+    for i in range(open_brace_pos, len(content)):
+        if content[i] == "{":
+            depth += 1
+        elif content[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return content[open_brace_pos + 1:i]
+    return content[open_brace_pos + 1:]  # unterminated — best effort
+
+
 def extract_template_vars(dir_name: str) -> dict:
     # Prefer variables.tf (best-practice layout); fall back to main.tf for legacy examples
     example_dir = EXAMPLES_DIR / dir_name
@@ -136,18 +157,19 @@ def extract_template_vars(dir_name: str) -> dict:
     content = path.read_text()
     schema = {}
 
-    # Match both single-line and multi-line variable blocks
-    for block in re.finditer(
-        r'variable\s+"(\w+)"\s*\{([^}]*)\}', content, re.DOTALL
-    ):
-        name = block.group(1)
-        body = block.group(2)
+    for header in re.finditer(r'variable\s+"(\w+)"\s*\{', content):
+        name = header.group(1)
+        body = _extract_balanced_block(content, header.end() - 1)
         default_match = re.search(r'default\s*=\s*"([^"]*)"', body) or \
                         re.search(r'default\s*=\s*(\S+)', body)
         if default_match:
-            schema[name] = {"default": default_match.group(1).strip(), "derived": False}
+            schema[name] = {"default": default_match.group(1).strip(), "derived": False, "required": False}
         else:
-            schema[name] = {"default": "", "derived": False}
+            # No default = in the block means Terraform will hard-fail
+            # the apply if this isn't supplied — surfaced distinctly from
+            # "has a default that happens to be empty" so the UI can flag
+            # it rather than silently omitting it from the build request.
+            schema[name] = {"default": "", "derived": False, "required": True}
 
     schema.update(_connection_vars())
     return schema
@@ -155,8 +177,8 @@ def extract_template_vars(dir_name: str) -> dict:
 
 def _connection_vars() -> dict:
     return {
-        "cloudcore_api_url":   {"default": "http://127.0.0.1:8080", "derived": False},
-        "cloudcore_api_token": {"default": "dev-token",             "derived": False},
+        "cloudcore_api_url":   {"default": "http://127.0.0.1:8080", "derived": False, "required": False},
+        "cloudcore_api_token": {"default": "dev-token",             "derived": False, "required": False},
     }
 
 

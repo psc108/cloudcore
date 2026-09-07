@@ -254,6 +254,9 @@
     border-color: var(--accent);
   }
   .field textarea { resize: vertical; min-height: 80px; }
+  .bm-required { color: var(--danger); }
+  .field input.bm-field-error, .field select.bm-field-error { border-color: var(--danger); }
+  .field .bm-field-hint { font-size: 11px; color: var(--text-muted); }
   .field select option { background: var(--surface2); }
 
   .form-actions {

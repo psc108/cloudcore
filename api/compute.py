@@ -12,6 +12,7 @@ import threading
 
 import libvirt
 
+import usb
 from models import Instance, InstanceStatus
 
 _port_lock = threading.Lock()
@@ -374,6 +375,7 @@ def _domain_xml_slirp(
     ssh_host_port: int,
     http_host_port: int,
     instance_id: str = "",
+    usb_hostdev_xml: str = "",
 ) -> str:
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
@@ -403,6 +405,7 @@ def _domain_xml_slirp(
             </disk>
             <serial type='pty'>{log_elem}<target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
+            {usb_hostdev_xml}
           </devices>
           <qemu:commandline>
             <qemu:arg value='-netdev'/>
@@ -421,6 +424,7 @@ def _domain_xml_bridge(
     disk_path: Path,
     iso_path: Path,
     instance_id: str = "",
+    usb_hostdev_xml: str = "",
 ) -> str:
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
@@ -454,6 +458,7 @@ def _domain_xml_bridge(
             </interface>
             <serial type='pty'>{log_elem}<target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
+            {usb_hostdev_xml}
           </devices>
         </domain>
     """)
@@ -482,10 +487,23 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
     iso_path = _cloud_init_iso(instance_dir, instance.name, instance.image_id, instance.user_data, instance.users)
     use_bridge = _bridge_usable()
 
+    # Re-validate USB devices here too, immediately before building XML —
+    # never trust that a check done moments earlier (in the API handler)
+    # still holds; the device could have been claimed by a concurrent
+    # request in between.
+    usb_hostdev_xml = ""
+    if instance.usb_device_ids:
+        with usb._usb_lock:
+            for usb_id in instance.usb_device_ids:
+                err = usb.validate_attachable(usb_id, instance.id)
+                if err:
+                    raise RuntimeError(f"USB passthrough failed: {err}")
+            usb_hostdev_xml = "".join(usb.hostdev_xml(u) for u in instance.usb_device_ids)
+
     with _port_lock:
         if use_bridge:
             xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path,
-                                     instance_id=instance.id)
+                                     instance_id=instance.id, usb_hostdev_xml=usb_hostdev_xml)
             instance.ssh_host_port = 0
             instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
@@ -498,7 +516,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             # Allocate a unique simulated private IP from the VPC CIDR
             instance.private_ip = _allocate_slirp_ip(instance.vpc_id, vpc_cidr)
             xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path,
-                                    ssh_host_port, http_host_port, instance_id=instance.id)
+                                    ssh_host_port, http_host_port, instance_id=instance.id,
+                                    usb_hostdev_xml=usb_hostdev_xml)
 
         conn = _conn()
         try:
@@ -512,6 +531,44 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             conn.close()
 
     return instance
+
+
+def sync_usb_devices(instance: Instance, added: list[str], removed: list[str]) -> None:
+    """Hot-attach/detach USB devices on an existing domain.
+
+    Uses AFFECT_CONFIG unconditionally (so the persistent domain
+    definition always reflects the change, taking effect on next boot
+    even if the domain is currently stopped) plus AFFECT_LIVE when the
+    domain is actually running (so it takes effect immediately too, no
+    restart needed). This is new ground for this codebase — nothing else
+    in compute.py mutates a live domain's device list, only its power
+    state — so it's deliberately narrow: one call per device, errors
+    collected rather than raised immediately, so one failed device doesn't
+    stop the rest from being applied.
+    """
+    if not added and not removed:
+        return
+    conn = _conn()
+    errors = []
+    try:
+        dom = conn.lookupByName(instance.domain_name)
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if dom.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+        for usb_id in removed:
+            try:
+                dom.detachDeviceFlags(usb.hostdev_xml(usb_id), flags)
+            except libvirt.libvirtError as e:
+                errors.append(f"detach {usb_id}: {e}")
+        for usb_id in added:
+            try:
+                dom.attachDeviceFlags(usb.hostdev_xml(usb_id), flags)
+            except libvirt.libvirtError as e:
+                errors.append(f"attach {usb_id}: {e}")
+    finally:
+        conn.close()
+    if errors:
+        raise RuntimeError("USB device sync had errors: " + "; ".join(errors))
 
 
 def start_domain(domain_name: str) -> None:

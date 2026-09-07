@@ -34,6 +34,7 @@ type InstanceResourceModel struct {
 	VPCID            types.String   `tfsdk:"vpc_id"`
 	SubnetID         types.String   `tfsdk:"subnet_id"`
 	SecurityGroupIDs types.List     `tfsdk:"security_group_ids"`
+	UsbDeviceIDs     types.List     `tfsdk:"usb_device_ids"`
 	UserData         types.String   `tfsdk:"user_data"`
 	PrivateIP        types.String   `tfsdk:"private_ip"`
 	PublicIP         types.String   `tfsdk:"public_ip"`
@@ -54,6 +55,7 @@ type instanceAPIModel struct {
 	VPCID            string            `json:"vpc_id"`
 	SubnetID         string            `json:"subnet_id"`
 	SecurityGroupIDs []string          `json:"security_group_ids"`
+	UsbDeviceIDs     []string          `json:"usb_device_ids"`
 	UserData         string            `json:"user_data,omitempty"`
 	PrivateIP        string            `json:"private_ip"`
 	PublicIP         string            `json:"public_ip"`
@@ -109,6 +111,11 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				Optional:    true,
 				ElementType: types.StringType,
 				Description: "List of security group IDs to attach to the instance.",
+			},
+			"usb_device_ids": schema.ListAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "List of host USB device IDs (\"vendor_id:product_id\", from the cloudcore_usb_devices data source) to pass through to the instance. Mutable in place — devices are hot-attached/detached rather than requiring instance replacement. A device already attached to a different instance, or blocked (HID/hub/etc, see the data source), is rejected by the API.",
 			},
 			"user_data": schema.StringAttribute{
 				Optional:    true,
@@ -190,6 +197,11 @@ func instanceMapToState(ctx context.Context, result instanceAPIModel, state *Ins
 		return fmt.Errorf("converting security_group_ids")
 	}
 	state.SecurityGroupIDs = sgIDs
+	usbIDs, diags := stringsToList(ctx, result.UsbDeviceIDs)
+	if diags.HasError() {
+		return fmt.Errorf("converting usb_device_ids")
+	}
+	state.UsbDeviceIDs = usbIDs
 	tags, diags := tagsToMap(ctx, result.Tags)
 	if diags.HasError() {
 		return fmt.Errorf("converting tags")
@@ -215,6 +227,8 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 
 	sgIDs := []string{}
 	resp.Diagnostics.Append(plan.SecurityGroupIDs.ElementsAs(ctx, &sgIDs, false)...)
+	usbIDs := []string{}
+	resp.Diagnostics.Append(plan.UsbDeviceIDs.ElementsAs(ctx, &usbIDs, false)...)
 	tags := map[string]string{}
 	resp.Diagnostics.Append(plan.Tags.ElementsAs(ctx, &tags, false)...)
 
@@ -225,6 +239,7 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 		VPCID:            plan.VPCID.ValueString(),
 		SubnetID:         plan.SubnetID.ValueString(),
 		SecurityGroupIDs: sgIDs,
+		UsbDeviceIDs:     usbIDs,
 		UserData:         plan.UserData.ValueString(),
 		Tags:             tags,
 	}
@@ -308,6 +323,8 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 
 	sgIDs := []string{}
 	resp.Diagnostics.Append(plan.SecurityGroupIDs.ElementsAs(ctx, &sgIDs, false)...)
+	usbIDs := []string{}
+	resp.Diagnostics.Append(plan.UsbDeviceIDs.ElementsAs(ctx, &usbIDs, false)...)
 	tags := map[string]string{}
 	resp.Diagnostics.Append(plan.Tags.ElementsAs(ctx, &tags, false)...)
 
@@ -318,6 +335,7 @@ func (r *InstanceResource) Update(ctx context.Context, req resource.UpdateReques
 		VPCID:            plan.VPCID.ValueString(),
 		SubnetID:         plan.SubnetID.ValueString(),
 		SecurityGroupIDs: sgIDs,
+		UsbDeviceIDs:     usbIDs,
 		Tags:             tags,
 	}
 

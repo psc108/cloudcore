@@ -64,6 +64,12 @@ variable "security_group_ids" {
   default     = []
 }
 
+variable "usb_device_ids" {
+  description = "Host USB device IDs (\"vendor_id:product_id\", from the cloudcore_usb_devices data source) to pass through to every instance in the group. Mutable in place — see cloudcore_instance's usb_device_ids for details."
+  type        = list(string)
+  default     = []
+}
+
 variable "user_data" {
   description = "Cloud-init user data applied to all instances in the group."
   type        = string

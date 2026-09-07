@@ -16,6 +16,7 @@ import nfs_store
 import sg_store
 import sg as sg_enforce
 import ipaddress
+import usb
 from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
@@ -23,6 +24,7 @@ from sg_routes import sg_bp
 from editor_routes import editor_bp
 from about_routes import about_bp
 from tofu_routes import tofu_bp
+from usb_routes import usb_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 HELP_FILE = os.path.join(os.path.dirname(__file__), "..", "HELP.md")
@@ -33,6 +35,7 @@ app.register_blueprint(sg_bp)
 app.register_blueprint(editor_bp)
 app.register_blueprint(about_bp)
 app.register_blueprint(tofu_bp)
+app.register_blueprint(usb_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -394,18 +397,31 @@ def create_instance():
     if store.find_instance_by_name(name):
         return problem(409, "Conflict", f"Instance '{name}' already exists")
 
-    instance = Instance(
-        name=name,
-        image_id=body["image_id"],
-        flavor=body["flavor"],
-        vpc_id=body["vpc_id"],
-        subnet_id=body["subnet_id"],
-        security_group_ids=body.get("security_group_ids", []),
-        user_data=body.get("user_data"),
-        ssh_user=compute.ssh_user_for_image(body["image_id"]),
-        tags=body.get("tags", {}),
-    )
-    store.put_instance(instance)
+    # `or []`, not `.get(key, [])`: Terraform sends an explicit JSON null
+    # for an unset Optional list attribute, which a plain default doesn't
+    # catch since the key is present — same bug class already fixed in
+    # the LB listener/target-group code earlier this session.
+    usb_device_ids = body.get("usb_device_ids") or []
+
+    with usb._usb_lock:
+        for usb_id in usb_device_ids:
+            err = usb.validate_attachable(usb_id, None)
+            if err:
+                return problem(409, "Conflict", err)
+
+        instance = Instance(
+            name=name,
+            image_id=body["image_id"],
+            flavor=body["flavor"],
+            vpc_id=body["vpc_id"],
+            subnet_id=body["subnet_id"],
+            security_group_ids=body.get("security_group_ids") or [],
+            usb_device_ids=usb_device_ids,
+            user_data=body.get("user_data"),
+            ssh_user=compute.ssh_user_for_image(body["image_id"]),
+            tags=body.get("tags", {}),
+        )
+        store.put_instance(instance)
 
     vpc = store.get_vpc(instance.vpc_id)
     vpc_cidr = vpc.cidr_block if vpc else "10.0.0.0/8"
@@ -471,7 +487,35 @@ def update_instance(instance_id):
     body = request.get_json(force=True) or {}
     instance.name = body.get("name", instance.name)
     instance.tags = body.get("tags", instance.tags)
-    store.put_instance(instance)
+
+    added, removed = [], []
+    if "usb_device_ids" in body:
+        # `or []`, not a bare index: Terraform sends this key with an
+        # explicit JSON null whenever the attribute is left unset in HCL
+        # (confirmed directly — the Go provider does this on every
+        # Update() call, not just when a change is actually intended for
+        # this field) — same bug class as the LB listener/target-group
+        # code fixed earlier this session, just a different call site.
+        new_ids = body["usb_device_ids"] or []
+        with usb._usb_lock:
+            for usb_id in new_ids:
+                err = usb.validate_attachable(usb_id, instance.id)
+                if err:
+                    return problem(409, "Conflict", err)
+            old_ids = set(instance.usb_device_ids)
+            added = list(set(new_ids) - old_ids)
+            removed = list(old_ids - set(new_ids))
+            instance.usb_device_ids = new_ids
+            store.put_instance(instance)
+    else:
+        store.put_instance(instance)
+
+    if (added or removed) and instance.domain_name:
+        try:
+            compute.sync_usb_devices(instance, added, removed)
+        except Exception as e:
+            return problem(500, "Internal Server Error", str(e))
+
     return jsonify(instance.to_dict())
 
 

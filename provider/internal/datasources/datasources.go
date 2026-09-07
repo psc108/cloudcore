@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/cloudcore/terraform-provider-cloudcore/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -725,4 +726,123 @@ func (d *DNSRecordDataSource) Read(ctx context.Context, req datasource.ReadReque
 	}
 	resp.Diagnostics.AddError("DNS record not found", fmt.Sprintf("no %s record named %q in zone %q",
 		config.Type.ValueString(), config.Name.ValueString(), config.Zone.ValueString()))
+}
+
+// ── USB devices data source ──────────────────────────────────────────────
+// Unlike every other data source in this file, this one has no id/name
+// lookup key — USB devices are discovered host hardware, not user-created
+// objects with a natural name to filter by. It always returns everything
+// GET /v1/usb-devices reports (including blocked devices, each with the
+// reason it's blocked) and lets the caller filter in HCL, e.g.:
+//   [for d in data.cloudcore_usb_devices.this.items : d.id if !d.blocked][0]
+
+var _ datasource.DataSource = &UsbDevicesDataSource{}
+
+type UsbDevicesDataSource struct{ client *client.Client }
+
+type UsbDevicesDataSourceModel struct {
+	Items types.List `tfsdk:"items"`
+}
+
+type usbDeviceItemAPI struct {
+	ID          string  `json:"id"`
+	VendorID    string  `json:"vendor_id"`
+	ProductID   string  `json:"product_id"`
+	Description string  `json:"description"`
+	Blocked     bool    `json:"blocked"`
+	BlockReason *string `json:"block_reason"`
+	AttachedTo  *string `json:"attached_to"`
+}
+
+var usbDeviceAttrTypes = map[string]attr.Type{
+	"id":           types.StringType,
+	"vendor_id":    types.StringType,
+	"product_id":   types.StringType,
+	"description":  types.StringType,
+	"blocked":      types.BoolType,
+	"block_reason": types.StringType,
+	"attached_to":  types.StringType,
+}
+
+func NewUsbDevicesDataSource() datasource.DataSource { return &UsbDevicesDataSource{} }
+
+func (d *UsbDevicesDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_usb_devices"
+}
+
+func (d *UsbDevicesDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Lists USB devices physically attached to the CloudCore host, for passthrough via `cloudcore_instance.usb_device_ids`. API path: `/v1/usb-devices`.",
+		Attributes: map[string]schema.Attribute{
+			"items": schema.ListNestedAttribute{
+				Computed:    true,
+				Description: "All discovered devices, including blocked ones.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"id":           schema.StringAttribute{Computed: true, Description: "\"vendor_id:product_id\" — pass this to usb_device_ids."},
+						"vendor_id":    schema.StringAttribute{Computed: true},
+						"product_id":   schema.StringAttribute{Computed: true},
+						"description":  schema.StringAttribute{Computed: true, Description: "Human-readable device name."},
+						"blocked":      schema.BoolAttribute{Computed: true, Description: "True if this device can never be attached (HID, hub, or name-denylisted — see block_reason)."},
+						"block_reason": schema.StringAttribute{Computed: true, Description: "Why the device is blocked, or null if it isn't."},
+						"attached_to":  schema.StringAttribute{Computed: true, Description: "ID of the instance currently owning this device, or null if free."},
+					},
+				},
+			},
+		},
+	}
+}
+
+func (d *UsbDevicesDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	c, ok := req.ProviderData.(*client.Client)
+	if !ok {
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("got %T", req.ProviderData))
+		return
+	}
+	d.client = c
+}
+
+func (d *UsbDevicesDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var list struct {
+		Items []usbDeviceItemAPI `json:"items"`
+	}
+	if err := d.client.Get(ctx, "/v1/usb-devices", &list); err != nil {
+		resp.Diagnostics.AddError("List USB devices failed", err.Error())
+		return
+	}
+
+	elems := make([]attr.Value, len(list.Items))
+	for i, dev := range list.Items {
+		blockReason := types.StringNull()
+		if dev.BlockReason != nil {
+			blockReason = types.StringValue(*dev.BlockReason)
+		}
+		attachedTo := types.StringNull()
+		if dev.AttachedTo != nil {
+			attachedTo = types.StringValue(*dev.AttachedTo)
+		}
+		obj, diags := types.ObjectValue(usbDeviceAttrTypes, map[string]attr.Value{
+			"id":           types.StringValue(dev.ID),
+			"vendor_id":    types.StringValue(dev.VendorID),
+			"product_id":   types.StringValue(dev.ProductID),
+			"description":  types.StringValue(dev.Description),
+			"blocked":      types.BoolValue(dev.Blocked),
+			"block_reason": blockReason,
+			"attached_to":  attachedTo,
+		})
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		elems[i] = obj
+	}
+	items, diags := types.ListValue(types.ObjectType{AttrTypes: usbDeviceAttrTypes}, elems)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &UsbDevicesDataSourceModel{Items: items})...)
 }

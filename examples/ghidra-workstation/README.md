@@ -27,7 +27,12 @@ packages, and a ~570 MB Ghidra archive. A small placeholder web server
 occupies `desktop_url` for that window (systemd hands the port to the real
 desktop the instant it's ready, via a `Conflicts=` relationship between the
 two services — see the cloud-init template) so visiting the URL early
-shows a "still building" page instead of a browser connection error.
+shows a "still building" page instead of a browser connection error. The
+Ghidra download itself uses a stall-tolerant retry loop (`curl
+--speed-limit ... -C -`, resume rather than restart) rather than a single
+attempt — this platform's guest networking has been observed to
+occasionally stall completely mid-transfer on large files, which plain
+`curl --retry` doesn't catch since the connection stays technically open.
 
 ## Access model
 

@@ -15,7 +15,15 @@ resource "cloudcore_instance" "this" {
   flavor             = var.flavor
   vpc_id             = var.vpc_id
   subnet_id          = var.subnet_id
-  security_group_ids = var.security_group_ids
+  # length(...) > 0 ? ... : null, not the bare variable: the provider's
+  # stringsToList collapses an empty API response into a null list (to
+  # match Terraform's "attribute omitted" convention), so a *configured*
+  # empty list here would plan as `[]` but read back as `null` after
+  # apply — "provider produced inconsistent result after apply". Passing
+  # null explicitly when empty keeps the plan and the post-apply state
+  # in agreement.
+  security_group_ids = length(var.security_group_ids) > 0 ? var.security_group_ids : null
+  usb_device_ids     = length(var.usb_device_ids) > 0 ? var.usb_device_ids : null
   user_data          = var.user_data
   tags               = merge(local.common_tags, var.tags, {
     Name          = "${var.project}-${var.environment}-${var.name}-${each.key}"
