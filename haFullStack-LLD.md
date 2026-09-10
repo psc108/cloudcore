@@ -23,6 +23,7 @@ slice below rather than repeated inline. Sections currently complete:
 | 1 | Load Balancer Tier — Client to Frontend (L7) | Lab/OpenTofu built and verified ([findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu)); On-Prem/AWS and Ansible still pending |
 | 2 | Database Tier — MySQL High Availability | Lab/OpenTofu built, failure-tested, and F-021 fixed ([findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier)); On-Prem/AWS and Ansible still pending |
 | 3 | Identity Tier — Keystone | Built and failure-tested (Lab) |
+| 4 | Message Broker Tier — RabbitMQ | Draft, under review |
 
 Per the session plan: every slice gets built and verified on Lab/OpenTofu
 first, as one growing stack (not independent per-slice templates) —
@@ -1192,6 +1193,270 @@ to redesign around them.
 
 ---
 
+## 4. Message Broker Tier — RabbitMQ
+
+### 4.1 Scope
+
+**In scope for this section:** 3× RabbitMQ instances forming a real
+cluster with quorum queues (per `haFullStack.md` §6, F-002's 3-node
+correction), exposed through the existing NGINX nodes' `stream{}` context
+(AMQP, same mechanism as §2's MySQL proxying), and a `rabbitmq-status.html`
+page on the frontend tier — same pattern as §2/§3's status pages.
+
+**A claim in `haFullStack.md` §10 to verify, not assume:** its failure-mode
+table says a 2-of-3 node loss leaves "affected queues have no leader and
+stop accepting operations," requiring manual `rabbitmqctl force_boot`
+recovery. Quorum queues are Raft-based, and Raft's majority-quorum
+requirement is the same theoretical mechanism Group Replication's Paxos
+implementation was assumed to enforce — which F-021 found didn't hold in
+practice for MySQL (the survivor reconfigured to a smaller legitimate
+group instead of refusing writes). RabbitMQ's Raft implementation may
+behave exactly as documented, or may not — this gets its own dedicated
+failure-mode test (§4.3.1a test 2) rather than being assumed either way,
+the same discipline that caught F-021 and F-027.
+
+**Deliberately not a new VPC/subnet:** reuses the existing one, same
+growing-stack pattern as §2/§3.
+
+**A structural difference from §3 (Keystone), matching §2 (MySQL)
+instead:** RabbitMQ clustering is **not** genuinely symmetric the way
+Keystone's active-active pair was. A new node's Erlang runtime starts as
+its own single-node cluster by default; joining an existing cluster is an
+explicit, one-directional operation (`rabbitmqctl join_cluster
+rabbit@<seed>`) run *on the joining node*, pointed at an already-running
+seed. This is the same bootstrap/seed-vs-joiner asymmetry §2.3.2 solved
+for MySQL via two separate `modules/compute` calls — the same pattern
+applies here (one seed node's `user_data`, two joiners' `user_data`
+referencing the seed's known IP), not `modules/instance-group`.
+
+**A second shared-secret problem, matching Keystone's Fernet keys:**
+every node in an Erlang cluster must share an identical `.erlang.cookie`
+file — RabbitMQ clustering silently refuses to connect nodes with
+mismatched cookies. Same fix as §3.3.1's Fernet keys: generate once via
+Terraform's `random` provider, inject identically into all three nodes'
+`user_data`, no runtime coordination needed.
+
+**Node addressing — IP-based, not hostname-based, as the default choice
+here:** RabbitMQ's own node identity is `rabbit@<hostname>` by default,
+and clustering requires every node to resolve every other node's
+hostname. CloudCore's guest-visible DNS is now fixed (F-022) and could
+support this directly via `RABBITMQ_NODENAME=rabbit@<fqdn>` against the
+`instances.cloudcore.internal` zone — but that fix is recent and this
+would be its first real load-bearing use for inter-node clustering
+specifically (as opposed to F-022's own verification, which only tested
+simple guest-to-guest resolution). Defaulting to
+`RABBITMQ_NODENAME=rabbit@<ip>` instead — RabbitMQ explicitly supports
+IP-based node names for exactly this kind of environment — matches the
+already-proven, lower-risk pattern used for MySQL's `report_host` (F-017)
+and avoids making this slice's success depend on a fix that hasn't been
+exercised this way before. Worth trying the DNS-based form in a later
+slice once there's a second data point beyond this session's own
+introduction of it.
+
+**Explicitly out of scope, for later slices:** the backend application
+tier's own AMQP publish/consume logic (§1.1 already deferred the backend
+tier generally), TLS between broker and clients (`haFullStack.md` §4/§12,
+Phase 4's own scope, not this slice's).
+
+### 4.2 Environment and Tooling Matrix
+
+| Environment | Mechanism | Why | IaC Tool(s) |
+|---|---|---|---|
+| **Lab** (this platform) | 3× RabbitMQ, quorum queues, fronted by the existing NGINX `stream{}` | Validates the actual HLD-designed architecture (3-node Raft quorum) against real infrastructure | OpenTofu or Ansible |
+| **On-Prem** | Same — 3× RabbitMQ + NGINX `stream{}` | Same architecture as Lab — this is the environment the HLD design was actually written for | OpenTofu or Ansible |
+| **AWS** | **Amazon MQ for RabbitMQ** (managed) — genuinely comparable to how §1 replaced Keepalived with ALB and §2 replaced Group Replication with RDS, unlike §3's Keystone (no equivalent managed substitute exists there) | AWS ships a real, wire-compatible managed RabbitMQ offering (multi-AZ, quorum queues supported) — worth using rather than hand-rolling Erlang clustering on EC2 unless a specific reason rules it out | OpenTofu or Ansible against `aws_mq_broker` |
+
+### 4.3 Lab Environment (CloudCore)
+
+#### 4.3.1 Design
+
+- Reuses the existing VPC/subnet — one growing stack, not a new one.
+- New security group `rabbitmq`: ingress `5672` (AMQP) and `15672`
+  (management UI) from the `nginx` SG's subnet only (matching §2/§3's
+  pattern — nothing in this tier is exposed directly to clients), plus
+  `4369` (EPMD, Erlang port-mapper daemon) and `25672` (Erlang
+  distribution/inter-node traffic) restricted to the bridge subnet for
+  cluster members to reach each other, plus SSH.
+- Erlang cookie generated once via `random_id` (Terraform), injected
+  identically into all three nodes' `user_data` as
+  `/var/lib/rabbitmq/.erlang.cookie` (owned `rabbitmq:rabbitmq`,
+  `0400` — RabbitMQ refuses to start if this file's permissions are too
+  open, unlike Keystone's Fernet keys which only needed `0600`).
+- 3× RabbitMQ instances via two `modules/compute` calls (seed, then
+  joiners referencing the seed's known IP) — same structural reason as
+  §2.3.2's MySQL split, see §4.1.
+- Cluster formation on each joiner: `rabbitmqctl stop_app`,
+  `rabbitmqctl join_cluster rabbit@<seed-ip>`, `rabbitmqctl start_app` —
+  with the same explicit wait/retry loop pattern as MySQL's joiners
+  (§2.3.2), waiting for the seed's own `rabbitmqctl status` to succeed
+  before attempting to join, since cloud-init on all three nodes runs
+  concurrently.
+- Quorum queue default policy set on the seed node only, once clustered:
+  `rabbitmqctl set_policy quorum-default "^" '{"queue-type":"quorum"}' --apply-to queues`
+  (`haFullStack.md` §6.3) — a cluster-wide policy, not a per-node
+  operation, same reasoning as Keystone's `keystone-manage bootstrap`
+  needing to run only once.
+- Management UI enabled via `rabbitmq-plugins enable rabbitmq_management`
+  on every node (a local plugin-activation command, not a cluster-wide
+  operation — needs to run on each node individually) — used by the
+  status script for a simple HTTP-based cluster/queue health check
+  instead of parsing `rabbitmqctl` CLI output over SSH, matching
+  Keystone's status script preferring a real HTTP client over CLI
+  parsing.
+- Admin user: a Lab-only `admin:admin` credential created via
+  `rabbitmqctl add_user`/`set_user_tags ... administrator` on the seed
+  node only (same one-time, shared-DB-equivalent reasoning as Keystone's
+  bootstrap) — same "lab-only placeholder, not production" convention as
+  every other credential in this stack.
+- NGINX gets a second `upstream`/`server` pair added to its **existing**
+  `stream{}` block (`nginx-stream.conf.tftpl`, extended — not a new file,
+  since `stream{}` can only appear once as a top-level context in
+  `nginx.conf`, unlike `http{}` server blocks which §3.3.1 could
+  concatenate across separate files) — `server { listen 5672; proxy_pass
+  rabbitmq_amqp; }`, mirroring the existing MySQL `:3306` block exactly.
+- Frontend gets a new `rabbitmq-status.py` timer (same rolling-history
+  pattern as `mysql-status.py`/`keystone-status.py`) — connects to the
+  management HTTP API (port 15672, `admin:admin`) via the VIP for a
+  cluster-overview check (`GET /api/nodes`, `GET /api/queues`), and
+  separately publishes and consumes a real test message through a quorum
+  queue on every check, proving durability through the real path rather
+  than just reporting cluster membership. Verdict logic: `OK` if all 3
+  nodes report running and the publish/consume round-trip succeeds;
+  `DEGRADED` if fewer than 3 nodes are running but the round-trip still
+  succeeds; `CRITICAL` if the round-trip itself fails.
+
+#### 4.3.1a Failure-Mode Test Matrix
+
+| # | Test | What it proves | Expected result |
+|---|---|---|---|
+| 1 | Stop one RabbitMQ node | 3-node quorum survives losing 1, matching MySQL's own tolerance (§2's F-001 argument) | `DEGRADED`-equivalent (2/3 nodes), publish/consume keeps working — same "correctly reports reduced redundancy rather than papering over it" design as Keystone's test 1 (§3.3.1a), not literally "zero impact" |
+| 2 | Stop 2 of 3 RabbitMQ nodes | Whether Raft-based quorum queues actually refuse operations below majority (as `haFullStack.md` §10 claims) or reconfigure and continue (as Group Replication actually did, F-021) — resolves this rather than assuming either way | Not assumed — this is the test that answers it, the same standing 2A-13 had for the DB tier and 3A-11 had for Identity |
+| 3 | Publish/consume through test 1's single-node failure | Zero message loss for confirmed publishes on quorum queues (`haFullStack.md` §6.5's claim) | A message published before the stop, on a quorum queue, is still consumable after — no data loss for a tolerated failure |
+| 4 | Restart a stopped node | Whether a previously-clustered node auto-rejoins on its own (cluster membership is disk-persisted in RabbitMQ, unlike MySQL's `group_replication_start_on_boot=OFF` requiring an explicit restart command) or needs the same manual `join_cluster` step as first-time joining | Not assumed — RabbitMQ's docs suggest auto-rejoin, but this project's own experience (F-020) is that a node's *specific role* at cluster-formation time can create asymmetric gaps invisible from the general docs alone |
+| 5 | Stop all 3 RabbitMQ nodes | Genuine broker-tier outage — the one failure mode with no redundancy left to test | `rabbitmq-status.html` correctly shows `CRITICAL` |
+
+Test 2 carries the same weight 2A-13 and 3A-11 did for their tiers —
+`haFullStack.md` §10's specific manual-recovery claim (`rabbitmqctl
+force_boot`) either gets confirmed as the real, necessary procedure or
+corrected based on what actually happens.
+
+#### 4.3.2 OpenTofu Implementation
+
+Illustrative — to be proven and corrected against real infrastructure,
+same process as §1/§2/§3:
+
+```hcl
+# examples/ha-frontend-lb/main.tf  (additions — illustrative)
+
+resource "random_id" "erlang_cookie" { byte_length = 20 }
+
+module "security_groups" {
+  # ...existing groups, plus:
+  security_groups = {
+    # ...
+    rabbitmq = {
+      description = "RabbitMQ tier — AMQP/management from nginx SG only, Erlang clustering within the bridge subnet, plus SSH"
+      ingress_rules = {
+        amqp    = { ip_protocol = "tcp", from_port = 5672,  to_port = 5672,  cidr = local.bridge_cidr }
+        mgmt    = { ip_protocol = "tcp", from_port = 15672, to_port = 15672, cidr = local.bridge_cidr }
+        epmd    = { ip_protocol = "tcp", from_port = 4369,  to_port = 4369,  cidr = local.bridge_cidr }
+        erldist = { ip_protocol = "tcp", from_port = 25672, to_port = 25672, cidr = local.bridge_cidr }
+        ssh     = { ip_protocol = "tcp", from_port = 22,    to_port = 22,    cidr = var.admin_cidr }
+      }
+      egress_rules = { all = { ip_protocol = "-1", cidr = "0.0.0.0/0" } }
+    }
+  }
+}
+
+module "rabbitmq_seed" {
+  source    = "../../modules/compute"
+  project   = var.project
+  environment = var.environment
+  owner     = var.owner
+  instances = local.rabbitmq_seed_instance
+}
+
+module "rabbitmq_joiners" {
+  source    = "../../modules/compute"
+  project   = var.project
+  environment = var.environment
+  owner     = var.owner
+  instances = local.rabbitmq_joiner_instances
+}
+```
+
+`local.rabbitmq_joiner_instances`' `user_data` references
+`module.rabbitmq_seed.private_ips_by_key`'s now-known IP, same
+self-reference-avoidance mechanism as §2.3.2's MySQL split. NGINX's
+`user_data` now also depends on `module.rabbitmq_seed`/`_joiners` for the
+`stream{}` block's second upstream, alongside `module.proxysql` and
+`module.keystone` from the earlier slices.
+
+#### 4.3.3 Ansible Implementation
+
+Same provisioning shape as §1.3.3/§2.3.3/§3.3.3 — `security_group` ×1,
+`instance` ×1 (seed) then ×2 (joiners, looped, referencing the seed's
+registered IP fact) via the existing `instance` module. Erlang cookie
+generation has no direct Ansible-native equivalent to Terraform's
+`random_id`, same substitution as §3.3.3 used for Fernet keys —
+`openssl rand -base64 30` run once via a local task, passed as a
+`user_data` template variable to all three `instance` tasks.
+
+---
+
+### 4.4 On-Prem Environment
+
+Architecturally identical to Lab — same 3-node RabbitMQ cluster, quorum
+queues, fronted by the same NGINX `stream{}` tier. Same open question as
+§1.4/§2.4/§3.4: an existing on-prem message broker (an existing RabbitMQ
+cluster, Kafka, ActiveMQ, a managed internal service) may make this whole
+tier unnecessary duplication for a given estate — a real per-deployment
+decision, not resolved generically here.
+
+### 4.5 AWS Environment
+
+**A real managed-service substitution, unlike §3's Keystone** — Amazon MQ
+for RabbitMQ is wire-compatible with standard RabbitMQ clients and
+supports quorum queues, multi-AZ deployment, and the same AMQP 0-9-1
+protocol this design already assumes. Default assumption for AWS unless
+a specific reason (a required RabbitMQ plugin Amazon MQ doesn't support,
+a cost constraint, an existing hand-rolled deployment) rules it out —
+confirm the specific broker-engine version and plugin support needed
+before committing, not assumed settled here.
+
+### 4.6 Cross-Environment Consistency
+
+| Aspect | Lab | On-Prem | AWS |
+|---|---|---|---|
+| RabbitMQ node count | 3 (quorum-tolerant) | 3 | Amazon MQ multi-AZ (managed, node count abstracted) |
+| Erlang cookie distribution | Terraform `random_id`, injected at apply time | Same, or Ansible `openssl rand` equivalent | N/A — managed service |
+| Node addressing | IP-based (`rabbit@<ip>`), not hostname/DNS-based — see §4.1 | Same, or real DNS if available | N/A — managed service |
+| Client routing | Dedicated port via NGINX `stream{}` (5672), matching §2's MySQL pattern | Same | Amazon MQ's own endpoint |
+| Failure tolerance | Loses 1 of 3 — tolerated (pending test 2's actual result); loses 2 of 3 — not assumed, being tested | Same | Managed — AWS's own SLA, not this design's concern |
+
+### 4.7 Open Items Before Implementation
+
+- **The 2-node-loss recovery claim (`haFullStack.md` §10)** — resolve via
+  test 2, don't assume either the documented `force_boot` procedure or a
+  MySQL-like silent-continue outcome. Whichever it is, `haFullStack.md`
+  §10 gets corrected to match, the same way §5.3 was by F-021 and §7 was
+  by F-027.
+- **Node-restart auto-rejoin behavior** — resolve via test 4; RabbitMQ's
+  general documentation suggests this differs from MySQL's
+  `start_on_boot=OFF` default, but this project's own experience (F-020)
+  is reason enough not to assume it from general docs alone.
+- **IP-based vs. DNS-based node naming** — deliberately deferred to a
+  later slice per §4.1; revisit once guest DNS (F-022) has a second real
+  load-bearing use case beyond this session's own introduction of it.
+- **AWS Amazon MQ specifics** — plugin support, exact version compatibility,
+  and cost need a real decision before that build starts, not assumed
+  from this LLD's default recommendation alone.
+- **On-prem existing message broker** — as with the DB and Identity
+  tiers, confirm whether a given estate already has one before assuming
+  this design is needed wholesale.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -1206,3 +1471,4 @@ to redesign around them.
 | v0.8 | 2026-09-10 | Paul Scott | §3.3.1 corrected: guest-network DNS resolution of CloudCore-managed hostnames is now fixed (F-022), not a standing limitation — the port-based Keystone routing decision itself is unchanged, since it was never based on that limitation in the first place. |
 | v0.9 | 2026-09-10 | Paul Scott | §3 built and failure-tested for real. §3.3.1a's test matrix filled in with actual results — test 1's "zero impact" expectation didn't hold (status correctly reads `DEGRADED` while one node is down, by design); tests 2-5 confirmed as expected, including the memcached question (F-027, `haFullStack.md` §7 corrected to v1.5). Two real deploy bugs found and fixed along the way (F-025, F-026). New open item: a restart-reachability gap on this platform, distinct from ICMP/SSH readiness (F-028). |
 | v0.10 | 2026-09-10 | Paul Scott | F-028 corrected: not a CloudCore platform gap — confirmed via direct reproduction to be `mod_wsgi`'s own ~30s worker-startup latency, an application characteristic, not a bug. §3.3.1a and §3.7 updated to match; nothing to change in CloudCore for this. |
+| v0.11 | 2026-09-10 | Paul Scott | Fourth slice — §4, Message Broker Tier (RabbitMQ): 3-node quorum-queue cluster (seed + 2 joiners, mirroring MySQL's bootstrap/joiner split, not Keystone's homogeneous pair), shared Erlang cookie via the same pattern as Keystone's Fernet keys, IP-based node naming by deliberate choice over the newly-available guest DNS. Flagged `haFullStack.md` §10's 2-node-loss claim as unverified (likely to repeat F-021's pattern) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |

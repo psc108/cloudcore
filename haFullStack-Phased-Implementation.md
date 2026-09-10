@@ -29,6 +29,7 @@ environment/tool combination as each phase completes.
 | 1 | Load Balancer Tier — Client to Frontend | LLD §1 | Phase 1.A (Lab/OpenTofu) done — see [findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu); 1.B–1.F pending |
 | 2 | Database Tier — MySQL High Availability | LLD §2 | Phase 2.A complete (2A-01–2A-17) — see [findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier); On-Prem/AWS and Ansible still pending |
 | 3 | Identity Tier — Keystone | LLD §3 | Phase 3.A complete (3A-01–3A-15) — see [findings](haFullStack-Findings-Log.md#phase-3a--lab-opentofu-identity-tier); On-Prem/AWS and Ansible still pending |
+| 4 | Message Broker Tier — RabbitMQ | LLD §4 | Draft, under review |
 
 ---
 
@@ -239,6 +240,62 @@ Not started — same as 3.E.
 
 ---
 
+## Phase 4 — Message Broker Tier: RabbitMQ
+
+Extends `examples/ha-frontend-lb/` further in place — same growing
+stack. Per the build order above, only Phase 4.A is worked now.
+
+### Phase 4.A — Lab, OpenTofu
+
+| ID | Task | Description | Status |
+|---|---|---|---|
+| 4A-01 | Security group | `rabbitmq` (5672 AMQP + 15672 management from `nginx` SG's subnet, 4369 EPMD + 25672 Erlang distribution within the bridge subnet for inter-node clustering, plus SSH), per LLD §4.3.1 | Pending |
+| 4A-02 | Erlang cookie generation | `random_id` (20 bytes) in Terraform, reusing the `hashicorp/random` provider dependency already added for Keystone — identical cookie injected into all 3 nodes' `user_data`, no runtime coordination needed | Pending |
+| 4A-03 | RabbitMQ seed + joiner cloud-init | Seed node (single-node cluster by default) + 2 joiners (`rabbitmqctl join_cluster` against the seed's known IP) — `modules/compute` ×2 calls, mirroring §2.3.2's MySQL bootstrap/joiner split, per LLD §4.3.1 | Pending |
+| 4A-04 | Quorum policy + admin user | `rabbitmqctl set_policy quorum-default` and `admin:admin` administrator user, both run once on the seed node only after clustering completes, per LLD §4.3.1 | Pending |
+| 4A-05 | Management plugin | `rabbitmq-plugins enable rabbitmq_management` on every node (per-node, not cluster-wide) | Pending |
+| 4A-06 | Extend NGINX `stream{}` | Add a second `upstream`/`server` pair (AMQP, port 5672) to the existing `nginx-stream.conf.tftpl` — not a new file, `stream{}` can only appear once, per LLD §4.3.1 | Pending |
+| 4A-07 | Extend frontend cloud-init — `rabbitmq-status.py` | Same systemd-timer/rolling-history pattern as `mysql-status.py`/`keystone-status.py`; cluster-overview check via the management HTTP API through the VIP, plus a real publish/consume round-trip through a quorum queue on every check, per LLD §4.3.1 | Pending |
+| 4A-08 | `tofu apply` | Stand up for real against this CloudCore instance | Pending |
+| 4A-09 | Verify cluster formation + status page | `rabbitmq-status.html` shows `OK` through the full real path (VIP → NGINX → RabbitMQ → publish/consume round-trip) | Pending |
+| 4A-10 | Failure test 1 — stop one RabbitMQ node | LLD §4.3.1a test 1: 2/3 nodes, publish/consume keeps working, status correctly reflects reduced redundancy | Pending |
+| 4A-11 | Failure test 2 — stop 2 of 3 nodes | LLD §4.3.1a test 2: resolves whether `haFullStack.md` §10's documented `force_boot` recovery procedure is real, or whether Raft-based quorum queues reconfigure and continue like Group Replication did (F-021). Not optional — same standing as 2A-13/3A-11 | Pending |
+| 4A-12 | Failure test 3 — publish/consume through test 1's failure | LLD §4.3.1a test 3: a message published before a tolerated single-node failure is still consumable after — zero loss for confirmed publishes on a quorum queue | Pending |
+| 4A-13 | Failure test 4 — restart a stopped node | LLD §4.3.1a test 4: confirm whether a previously-clustered node auto-rejoins on restart or needs an explicit `join_cluster` step again, matching F-020's caution not to assume from general docs alone | Pending |
+| 4A-14 | Failure test 5 — stop all 3 RabbitMQ nodes | LLD §4.3.1a test 5: genuine outage, `rabbitmq-status.html` correctly shows `CRITICAL` | Pending |
+| 4A-15 | Teardown | `tofu destroy`; confirm no orphaned resources | Pending |
+
+**Verification for this phase (Lab/OpenTofu):** 4A-09 through 4A-14 are
+the real test. 4A-11 carries the same weight 2A-13 and 3A-11 did for
+their tiers — it's the test that actually resolves whether
+`haFullStack.md` §10 is correct about 2-node-loss recovery, rather than
+carrying an unverified claim forward a third time in the same project.
+
+### Phase 4.B — Lab, Ansible
+
+Not started — waits for every phase's `.A` to be done first, per the
+build order above.
+
+### Phase 4.C — On-Prem, OpenTofu
+
+Not started — architecturally identical to Lab, per LLD §4.4.
+
+### Phase 4.D — On-Prem, Ansible
+
+Not started — same as 4.C, via Ansible.
+
+### Phase 4.E — AWS, OpenTofu
+
+Not started — Amazon MQ for RabbitMQ is the default assumption per LLD
+§4.5, unlike Keystone's genuinely-undecided AWS question, but exact
+version/plugin compatibility needs confirming before this starts.
+
+### Phase 4.F — AWS, Ansible
+
+Not started — same as 4.E.
+
+---
+
 ## Cross-Cutting Notes
 
 - Every phase's `.A` (Lab) sub-path is the only one that can be built and
@@ -273,3 +330,4 @@ Not started — same as 3.E.
 | v0.10 | 2026-09-10 | Paul Scott | Phase 3.A built and failure-tested for real (3A-01–3A-14 done). Two real deploy bugs found and fixed (F-025, F-026). Test 3A-11 resolved the memcached question — shared Fernet keys, not memcached, enable cross-node validation (F-027), correcting `haFullStack.md` §7. Test 3A-10's outcome differs from the original "zero impact" expectation — the status page correctly shows `DEGRADED` while one node is down, by design, and instance restarts carry a real TCP-reachability settling window distinct from ICMP/SSH readiness (F-028). |
 | v0.11 | 2026-09-10 | Paul Scott | Teardown (3A-15) done — clean `tofu destroy`, 23 resources, no orphaned instances/VPCs. Phase 3.A fully complete. |
 | v0.12 | 2026-09-10 | Paul Scott | F-028 corrected — not a CloudCore platform gap. Direct follow-up investigation (a clean isolated service showing zero restart gap, then real Keystone/Apache reproducing the exact symptom with precise timing) traced it to `mod_wsgi`'s own ~30s worker-startup latency. Nothing to change in CloudCore. |
+| v0.13 | 2026-09-10 | Paul Scott | Fourth phase — Phase 4, Message Broker Tier (RabbitMQ), all six environment/tool paths. Test 4A-11 carries the same weight 2A-13/3A-11 did — it's what actually resolves whether `haFullStack.md` §10's 2-node-loss recovery claim is correct. Draft, not yet built. |
