@@ -64,6 +64,29 @@
         state: absent
       loop: "{{ dns_zones_to_delete }}"
 
+    # ── Security groups ──────────────────────────────────────────────────────
+    # Required since examples 09-11 started attaching real security groups
+    # (01-08 never did) — DELETE /v1/vpcs/{id} rejects with 409 if the VPC
+    # still has any active security group attached, so this must run after
+    # instance deletion (which clears the "attached to an instance" 409
+    # check) and before VPC deletion below.
+    - name: List security groups
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/security-groups"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: sg_list
+
+    - name: Delete example security groups
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ sg_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
     # ── VPCs ──────────────────────────────────────────────────────────────────
     - name: List VPCs
       ansible.builtin.uri:

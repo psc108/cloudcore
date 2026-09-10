@@ -1,0 +1,231 @@
+---
+# 10-kiwix-library.yml
+# VPC + security group + a single instance running kiwix-serve, fronted by
+# a plain HTTP (application-type) load balancer with instance auto-discovery
+# — no explicit target group/listener needed, since kiwix-serve is a normal
+# stateless HTTP server with no WebSocket. Ansible port of
+# examples/kiwix-library (OpenTofu). No required variables — same as the
+# OpenTofu template.
+# Run: ansible-playbook -i ../inventory.ini 10-kiwix-library.yml
+- name: "Example 10 — Kiwix library"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    sg_name: "{{ project }}-{{ env }}-{{ build_suffix }}-kiwix-sg"
+    instance_name: "{{ project }}-{{ env }}-{{ build_suffix }}-kiwix-01"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-kiwix-lb"
+    admin_cidr: "0.0.0.0/0"
+    instance_flavor: standard.medium
+    kiwix_tools_version: "3.8.2"
+    kiwix_tools_url: "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.2.tar.gz"
+    kiwix_tools_sha256: "b0ae98dd344aa0469a15ab42feff6d5aafb79541a82fb4e2647c74b073123815"
+    zim_url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_nopic_2026-06.zim"
+    zim_filename: "wikipedia_en_top_nopic_2026-06.zim"
+    zim_md5: "e3d9f0cf29462733508062fe45b91ff9"
+
+  tasks:
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.30.0.0/16"
+        dns_support: true
+        tags: &common_tags
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create security group
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ sg_name }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        description: "Kiwix library — SSH + HTTP, scoped to admin_cidr"
+        ingress_rules:
+          - protocol: tcp
+            from_port: 22
+            to_port: 22
+            cidr: "{{ admin_cidr }}"
+          - protocol: tcp
+            from_port: 80
+            to_port: 80
+            cidr: "{{ admin_cidr }}"
+        egress_rules:
+          - protocol: "-1"
+            cidr: "0.0.0.0/0"
+        tags:
+          <<: *common_tags
+          Role: kiwix-sg
+      register: sg
+
+    - name: Create Kiwix instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ instance_name }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ instance_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        security_group_ids: ["{{ sg.security_group.id }}"]
+        tags:
+          <<: *common_tags
+          Role: kiwix
+        user_data: |
+          #cloud-config
+          # Kiwix library: kiwix-serve (a static, dependency-free binary) serving an
+          # offline content archive over plain HTTP. No desktop, no VNC — kiwix-serve
+          # already renders a normal browsable website, so the load balancer in front
+          # of this can be plain "application" (HTTP) mode rather than the TCP
+          # passthrough the Ghidra workstation template needs for its WebSocket.
+
+          package_update: true
+          packages:
+            - curl
+            - ca-certificates
+
+          write_files:
+            - path: /var/www/placeholder/index.html
+              content: |
+                <!doctype html>
+                <html><head><title>Kiwix library — building</title>
+                <meta http-equiv="refresh" content="10">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                  body { font-family: sans-serif; background: #1a1a1a; color: #eee;
+                         display: flex; height: 100vh; margin: 0;
+                         align-items: center; justify-content: center; text-align: center; }
+                  div { max-width: 32em; padding: 2em; }
+                  h1 { font-size: 1.3em; }
+                </style>
+                </head><body><div>
+                <h1>Your Kiwix library is still building&hellip;</h1>
+                <p>First boot downloads kiwix-serve and the content archive — this
+                normally takes a minute or two. This page checks again every 10
+                seconds and will switch to the library automatically. Nothing to
+                do here — just leave this tab open.</p>
+                </div></body></html>
+
+            - path: /etc/systemd/system/placeholder.service
+              content: |
+                [Unit]
+                Description=Kiwix library — "still building" placeholder page
+                # kiwix-serve.service takes over port 80 the moment it starts;
+                # systemd stops this one automatically as part of that transaction,
+                # on first boot and on every subsequent reboot alike — no manual
+                # handoff logic needed.
+                Conflicts=kiwix-serve.service
+
+                [Service]
+                Type=simple
+                ExecStart=/usr/bin/python3 -m http.server 80 --directory /var/www/placeholder --bind 0.0.0.0
+                Restart=on-failure
+
+                [Install]
+                WantedBy=multi-user.target
+
+            - path: /etc/systemd/system/kiwix-serve.service
+              content: |
+                [Unit]
+                Description=kiwix-serve — serves the Kiwix content library over HTTP
+                Conflicts=placeholder.service
+
+                [Service]
+                Type=simple
+                ExecStart=/opt/kiwix/kiwix-serve --port=80 --address=all --nodatealiases /opt/kiwix/data/{{ zim_filename }}
+                Restart=on-failure
+
+                [Install]
+                WantedBy=multi-user.target
+
+          runcmd:
+            # Placeholder first, before anything slow — this is what makes opening
+            # desktop_url immediately after apply show a "please wait" page instead
+            # of a browser connection error while the rest of this runs. Served at
+            # / directly: unlike the Ghidra template, kiwix-serve's real homepage is
+            # also at /, so no path-matching trick is needed here.
+            - [ systemctl, daemon-reload ]
+            - [ systemctl, enable, --now, placeholder.service ]
+
+            # kiwix-serve: download, verify checksum, unpack. Statically linked —
+            # no runtime dependencies to install (unlike Ghidra's JDK requirement).
+            #
+            # --speed-limit/--speed-time/-C -: this platform's guest networking has
+            # been observed to occasionally stall completely mid-transfer (throughput
+            # decaying toward zero while the connection stays technically open) —
+            # plain `--retry` doesn't catch that, it only handles hard connection
+            # failures. Aborting after 20s under 50KB/s and resuming (-C -) rather
+            # than restarting turns a stall into a brief hiccup instead of a hang.
+            - |
+              for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+                  -C - -o /tmp/kiwix-tools.tar.gz '{{ kiwix_tools_url }}' && break
+                echo "kiwix-tools download attempt $attempt stalled/failed, retrying..." >&2
+                sleep 5
+              done
+              echo '{{ kiwix_tools_sha256 }}  /tmp/kiwix-tools.tar.gz' | sha256sum -c -
+            - [ mkdir, -p, /opt/kiwix/data ]
+            - [ sh, -c, "tar -xzf /tmp/kiwix-tools.tar.gz -C /tmp" ]
+            - [ sh, -c, "cp /tmp/kiwix-tools_linux-x86_64-{{ kiwix_tools_version }}/kiwix-serve /opt/kiwix/kiwix-serve" ]
+            - [ chmod, "755", /opt/kiwix/kiwix-serve ]
+            - [ rm, -rf, "/tmp/kiwix-tools_linux-x86_64-{{ kiwix_tools_version }}", /tmp/kiwix-tools.tar.gz ]
+
+            # Content archive: same stall-tolerant download (see above) — this file
+            # is multi-GB, the single most likely place a transient stall costs real
+            # time if left unhandled. Checksum is MD5, the only hash Kiwix itself
+            # publishes for ZIM files.
+            - |
+              for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+                  -C - -o /opt/kiwix/data/{{ zim_filename }} '{{ zim_url }}' && break
+                echo "ZIM download attempt $attempt stalled/failed, retrying..." >&2
+                sleep 5
+              done
+              echo '{{ zim_md5 }}  /opt/kiwix/data/{{ zim_filename }}' | md5sum -c -
+
+            - [ systemctl, daemon-reload ]
+            - [ systemctl, enable, --now, kiwix-serve.service ]
+      register: instance
+
+    - name: Wait for instance running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ instance.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+      tags: [wait]
+
+    # No explicit target group/listener, and no explicit backend
+    # registration either: the backend auto-discovers running instances in
+    # the same VPC for type=application load balancers — deliberately
+    # simpler than 04-load-balanced-web.yml's explicit-backends pattern,
+    # matching the OpenTofu kiwix-library template's own approach.
+    - name: Create load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: application
+        vpc_id: "{{ vpc.vpc.id }}"
+        internal: false
+        tags:
+          <<: *common_tags
+          Role: ingress
+      register: lb
+
+    - name: Show access info
+      ansible.builtin.debug:
+        msg: >
+          desktop_url=http://127.0.0.1:{{ lb.load_balancer.listen_port }}/,
+          ssh=ssh -p {{ poll.json.ssh_port }} ubuntu@127.0.0.1

@@ -1,0 +1,381 @@
+---
+# 11-wifi-sniffer.yml
+# VPC + security group + a single instance running Kismet (fed by a
+# passed-through USB WiFi adapter in monitor mode) + the aircrack-ng suite,
+# fronted by a network (L4/TCP-passthrough) load balancer — Kismet's live
+# dashboard is WebSocket-driven, same reasoning as the Ghidra template's
+# noVNC. Ansible port of examples/wifi-sniffer (OpenTofu).
+# Run: ansible-playbook -i ../inventory.ini 11-wifi-sniffer.yml \
+#        -e usb_device_id=0bda:8812
+- name: "Example 11 — WiFi sniffer"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    sg_name: "{{ project }}-{{ env }}-{{ build_suffix }}-sniffer-sg"
+    instance_name: "{{ project }}-{{ env }}-{{ build_suffix }}-sniffer-01"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-sniffer-lb"
+    admin_cidr: "0.0.0.0/0"
+    instance_flavor: standard.medium
+    lb_port: 8700
+    rtl8812au_driver_ref: "v5.6.4.2"
+    # No generic default is possible — this needs your specific physical
+    # adapter's host USB ID. Same "obvious placeholder + assert" approach
+    # as vnc_password in 09-ghidra-workstation.yml, since this collection's
+    # vars: have no native "no default = required" concept. Run the
+    # "Show host USB devices" task below (or `-e usb_device_id=...` on the
+    # command line) to find the real value first.
+    usb_device_id: "CHANGE_ME:0000"
+
+  tasks:
+    - name: List host USB devices
+      cloudcore.cloudcore.usb_device_info:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+      register: usb
+
+    - name: Show host USB devices
+      ansible.builtin.debug:
+        msg: >-
+          {{ usb.devices | map(attribute='id') | zip(usb.devices | map(attribute='description'))
+             | map('join', ' — ') | list }}
+
+    - name: Require a real usb_device_id
+      ansible.builtin.assert:
+        that:
+          - usb_device_id != "CHANGE_ME:0000"
+          - usb_device_id is match("^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$")
+        fail_msg: >-
+          Set usb_device_id to your WiFi adapter's real "vendor_id:product_id"
+          (see the USB device list above), e.g. -e usb_device_id=0bda:8812.
+
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.40.0.0/16"
+        dns_support: true
+        tags: &common_tags
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create security group
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ sg_name }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        description: "WiFi sniffer — SSH + dashboard, scoped to admin_cidr"
+        ingress_rules:
+          - protocol: tcp
+            from_port: 22
+            to_port: 22
+            cidr: "{{ admin_cidr }}"
+          - protocol: tcp
+            from_port: "{{ lb_port }}"
+            to_port: "{{ lb_port }}"
+            cidr: "{{ admin_cidr }}"
+        egress_rules:
+          - protocol: "-1"
+            cidr: "0.0.0.0/0"
+        tags:
+          <<: *common_tags
+          Role: sniffer-sg
+      register: sg
+
+    - name: Create sniffer instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ instance_name }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ instance_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        security_group_ids: ["{{ sg.security_group.id }}"]
+        usb_device_ids: ["{{ usb_device_id }}"]
+        tags:
+          <<: *common_tags
+          Role: sniffer
+        user_data: |
+          #cloud-config
+          # WiFi sniffer: Kismet (WebSocket-driven live dashboard) fed by a
+          # passed-through USB WiFi adapter running the aircrack-ng-maintained
+          # RTL8812AU driver in monitor mode, plus the aircrack-ng suite/tshark/
+          # hcxtools for deeper offline analysis over SSH.
+          #
+          # Kismet is configured onto port 80 (its own default is 2501) to match
+          # the one guest port this platform's per-instance hostfwd/target-group
+          # plumbing forwards — same reason the Ghidra template's noVNC listens on
+          # 80 rather than its own tool defaults.
+
+          # linux-headers-generic and linux-modules-extra-generic are deliberately
+          # NOT in packages: below — installing kernel-module packages by the
+          # generic/floating meta-name is wrong here, verified the hard way: it
+          # pulled in a newer kernel image than the one actually running (the base
+          # image ships 187, "-generic" resolved to 191), which needs a reboot to
+          # take effect — meanwhile the headers/modules-extra that got installed
+          # were for the NOT-yet-booted 191 kernel, not the running 187 one, so
+          # the DKMS build and modprobe would both target the wrong kernel
+          # entirely. These two are installed via runcmd instead, pinned to
+          # $(uname -r) explicitly, so they always match whatever kernel this
+          # instance actually boots.
+          package_update: true
+          packages:
+            - build-essential
+            - dkms
+            - bc
+            - libelf-dev
+            - git
+            - curl
+            - gnupg
+            - ca-certificates
+            - aircrack-ng
+            - hcxtools
+            - hcxdumptool
+            - tcpdump
+
+          write_files:
+            - path: /var/www/placeholder/index.html
+              content: |
+                <!doctype html>
+                <html><head><title>WiFi sniffer — building</title>
+                <meta http-equiv="refresh" content="10">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                  body { font-family: sans-serif; background: #1a1a1a; color: #eee;
+                         display: flex; height: 100vh; margin: 0;
+                         align-items: center; justify-content: center; text-align: center; }
+                  div { max-width: 32em; padding: 2em; }
+                  h1 { font-size: 1.3em; }
+                </style>
+                </head><body><div>
+                <h1>Your WiFi monitoring dashboard is still building&hellip;</h1>
+                <p>First boot installs Kismet, the aircrack-ng suite, and builds
+                the WiFi adapter's driver from source — this normally takes a
+                couple of minutes. This page checks again every 10 seconds and
+                will switch to the dashboard automatically. Nothing to do here —
+                just leave this tab open.</p>
+                </div></body></html>
+
+            - path: /etc/systemd/system/placeholder.service
+              content: |
+                [Unit]
+                Description=WiFi sniffer — "still building" placeholder page
+                # kismet.service takes over port 80 the moment it starts; systemd
+                # stops this one automatically as part of that transaction, on
+                # first boot and on every subsequent reboot alike — no manual
+                # handoff logic needed.
+                Conflicts=kismet.service
+
+                [Service]
+                Type=simple
+                ExecStart=/usr/bin/python3 -m http.server 80 --directory /var/www/placeholder --bind 0.0.0.0
+                Restart=on-failure
+
+                [Install]
+                WantedBy=multi-user.target
+
+            - path: /etc/systemd/system/kismet.service.d/override.conf
+              content: |
+                [Unit]
+                Conflicts=placeholder.service
+
+            - path: /etc/modprobe.d/blacklist-rtl8xxxu.conf
+              content: |
+                # Ubuntu's in-kernel rtl8xxxu driver can claim this adapter before
+                # the aircrack-ng driver gets a chance to, and doesn't support
+                # monitor mode for this chipset. Keep it from ever binding.
+                blacklist rtl8xxxu
+
+            - path: /etc/udev/rules.d/81-wifi-passthrough-no-autosuspend.rules
+              content: |
+                # USB autosuspend on a monitor-mode adapter causes exactly the kind
+                # of intermittent captures/injection failures that are hard to
+                # diagnose after the fact — disable it unconditionally for this driver.
+                ACTION=="add", SUBSYSTEM=="usb", DRIVERS=="88XXau", TEST=="power/control", ATTR{power/control}="on"
+
+            - path: /etc/kismet/kismet_site.conf
+              content: |
+                httpd_port=80
+                log_prefix=/home/ubuntu/kismet-logs/
+                # source=<interface> is appended by runcmd once the driver is built
+                # and the adapter's interface name is known — it isn't predictable
+                # ahead of time (Ubuntu's persistent naming gives USB WiFi adapters
+                # names like wlx<mac>, not wlan0).
+
+          runcmd:
+            # Placeholder first, before anything slow — this is what makes opening
+            # desktop_url immediately after apply show a "please wait" page instead
+            # of a browser connection error while the rest of this runs.
+            - [ systemctl, daemon-reload ]
+            - [ systemctl, enable, --now, placeholder.service ]
+
+            # Kernel headers + the wireless-modules package (cfg80211/mac80211 —
+            # Ubuntu splits these out of the base kernel-modules package to keep
+            # server/cloud images smaller), pinned to the exact running kernel —
+            # see the note above packages: for why this can't be the "-generic"
+            # floating name.
+            - [ sh, -c, "apt-get install -y linux-headers-$(uname -r) linux-modules-extra-$(uname -r)" ]
+
+            # tshark: preseed the debconf question packaging asks interactively
+            # ("should non-superusers be able to capture packets?") before install,
+            # since this runs unattended — then let the ubuntu user actually use
+            # that. Installed via runcmd rather than the packages: list above
+            # specifically so this preseed lands before apt processes it (packages:
+            # installs run before runcmd, so an earlier attempt in packages: would
+            # already have prompted/defaulted before any preseed could apply).
+            - [ sh, -c, "echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections" ]
+            - [ sh, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y tshark" ]
+            - [ usermod, -aG, wireshark, ubuntu ]
+
+            # Kismet: official apt repo, modern keyring-based setup (no apt-key).
+            #
+            # kismet-common/install-setuid is a *critical*-priority debconf
+            # question ("should Kismet's capture helpers be installed suid-root?")
+            # asked by kismet-common AND separately by every one of the ~15
+            # kismet-capture-* sub-packages the metapackage pulls in — `apt-get
+            # install -y` only auto-confirms apt's own prompts, not debconf's, so
+            # without preseeding this, install hangs forever waiting for a terminal
+            # that will never answer it. Preseed the known answer (its own
+            # packaged default, "true" — the more secure option, capture helpers
+            # via capabilities rather than the whole daemon running full-root) and
+            # set noninteractive as a catch-all in case any sub-package asks
+            # something else this wasn't written against.
+            - |
+              echo 'kismet-common kismet-common/install-setuid boolean true' | debconf-set-selections
+              wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet \
+                | gpg --dearmor | tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null
+              echo 'deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/jammy jammy main' \
+                | tee /etc/apt/sources.list.d/kismet.list >/dev/null
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y kismet
+            - [ usermod, -aG, kismet, ubuntu ]
+
+            # RTL8812AU driver: the aircrack-ng-maintained fork is the only one
+            # with working monitor mode + injection for this chipset (the
+            # commonly-suggested morrownr fork is explicit in its own README that
+            # it does NOT support monitor mode — wrong tool for this adapter).
+            #
+            # git's own stall-detection flags (http.lowSpeedLimit/Time), same idea
+            # as the curl --speed-limit pattern the Ghidra/Kiwix templates use —
+            # this platform's guest networking has been observed to occasionally
+            # stall completely mid-transfer, which a plain `git clone` wouldn't
+            # detect since the connection stays technically open.
+            - |
+              for attempt in 1 2 3 4 5; do
+                rm -rf /opt/rtl8812au
+                git -c http.lowSpeedLimit=51200 -c http.lowSpeedTime=20 \
+                  clone -b {{ rtl8812au_driver_ref }} --depth 1 \
+                  https://github.com/aircrack-ng/rtl8812au.git /opt/rtl8812au && break
+                echo "rtl8812au clone attempt $attempt failed, retrying..." >&2
+                sleep 5
+              done
+              cd /opt/rtl8812au
+              make dkms_install
+              rmmod rtl8xxxu 2>/dev/null || true
+              # cfg80211 provides symbols 88XXau needs (cfg80211_*, ieee80211_*).
+              # On a normal desktop it's auto-loaded the moment real WiFi hardware
+              # is detected via a module-alias match, before any driver for it
+              # would run — but that detection path can't be relied on here
+              # unconditionally, so load it explicitly rather than assuming it.
+              modprobe cfg80211
+              modprobe 88XXau
+
+            # Re-trigger udev now that the driver's actually bound, so the
+            # no-autosuspend rule above (matched on DRIVERS=="88XXau") applies —
+            # it couldn't match anything before this point.
+            - [ udevadm, trigger, "--action=add", "--subsystem-match=usb" ]
+
+            # The adapter's interface name isn't predictable ahead of time
+            # (Ubuntu's persistent-naming gives USB WiFi adapters names like
+            # wlx<mac>) — detect it after the driver's bound rather than guessing.
+            - |
+              iface=""
+              for attempt in $(seq 1 30); do
+                for d in /sys/class/net/*/wireless; do
+                  [ -d "$d" ] || continue
+                  iface=$(basename "$(dirname "$d")")
+                  break
+                done
+                [ -n "$iface" ] && break
+                sleep 2
+              done
+              if [ -z "$iface" ]; then
+                echo "ERROR: no wireless interface appeared after driver install" >&2
+              else
+                echo "source=$iface" >> /etc/kismet/kismet_site.conf
+              fi
+
+            # Kismet runs as root (its packaged systemd unit), so log files it
+            # creates here would otherwise be root-owned despite the directory
+            # itself being chowned to ubuntu. setgid makes new files inherit the
+            # ubuntu group automatically, so scp/rm/mv from the ubuntu user works
+            # without sudo — chown alone on the directory wouldn't achieve that.
+            - [ sh, -c, "mkdir -p /home/ubuntu/kismet-logs" ]
+            - [ chown, "ubuntu:ubuntu", /home/ubuntu/kismet-logs ]
+            - [ chmod, "2775", /home/ubuntu/kismet-logs ]
+
+            - [ systemctl, daemon-reload ]
+            - [ systemctl, enable, kismet.service ]
+            - [ systemctl, restart, kismet.service ]
+      register: instance
+
+    - name: Wait for instance running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ instance.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: poll
+      until: poll.json.status == "running"
+      retries: 30
+      delay: 5
+      tags: [wait]
+
+    - name: Create load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: network
+        vpc_id: "{{ vpc.vpc.id }}"
+        internal: false
+        tags:
+          <<: *common_tags
+          Role: ingress
+      register: lb
+
+    - name: Create target group
+      cloudcore.cloudcore.lb_target_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-sniffer-tg"
+        port: 80
+        protocol: tcp
+        targets:
+          - instance_id: "{{ instance.instance.id }}"
+            port: 80
+      register: tg
+
+    - name: Create listener
+      cloudcore.cloudcore.lb_listener:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        port: "{{ lb_port }}"
+        protocol: tcp
+        target_group_id: "{{ tg.target_group.id }}"
+
+    - name: Show access info
+      ansible.builtin.debug:
+        msg: >
+          desktop_url=http://127.0.0.1:{{ lb_port }}/,
+          ssh=ssh -p {{ poll.json.ssh_port }} ubuntu@127.0.0.1

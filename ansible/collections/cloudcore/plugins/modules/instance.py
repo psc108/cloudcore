@@ -25,6 +25,17 @@ options:
     type: list
     elements: str
     default: []
+  usb_device_ids:
+    description: >-
+      Host USB device IDs ("vendor_id:product_id", from the
+      usb_device_info module) to pass through to the instance. Mutable
+      in place — devices are hot-attached/detached rather than requiring
+      instance replacement. A device already attached to a different
+      instance, or blocked (HID/hub/etc — see usb_device_info), is
+      rejected by the API with a 409.
+    type: list
+    elements: str
+    default: []
   user_data:
     type: str
     no_log: true
@@ -71,6 +82,7 @@ def run_module():
             vpc_id=dict(type="str"),
             subnet_id=dict(type="str"),
             security_group_ids=dict(type="list", elements="str", default=[]),
+            usb_device_ids=dict(type="list", elements="str", default=[]),
             user_data=dict(type="str", no_log=True),
             tags=dict(type="dict", default={}),
             state=dict(type="str", default="present", choices=["present", "absent"]),
@@ -101,6 +113,7 @@ def run_module():
         "vpc_id": module.params["vpc_id"],
         "subnet_id": module.params["subnet_id"],
         "security_group_ids": module.params["security_group_ids"],
+        "usb_device_ids": module.params["usb_device_ids"],
         "user_data": module.params["user_data"],
         "tags": module.params["tags"],
     }
@@ -111,10 +124,17 @@ def run_module():
         result = client.post("/v1/instances", body)
         module.exit_json(changed=True, instance=result)
 
+    # security_group_ids/usb_device_ids compared as sorted lists so
+    # order differences don't cause a false "changed" — both were
+    # previously excluded from this diff entirely (a silent no-op on
+    # update even though the API supports changing them), which would
+    # have carried straight over to usb_device_ids if left unfixed.
     changed = (
         existing.get("image_id") != body["image_id"]
         or existing.get("flavor") != body["flavor"]
         or existing.get("tags") != body["tags"]
+        or sorted(existing.get("security_group_ids") or []) != sorted(body["security_group_ids"])
+        or sorted(existing.get("usb_device_ids") or []) != sorted(body["usb_device_ids"])
     )
     if not changed:
         module.exit_json(changed=False, instance=existing)
