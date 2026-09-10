@@ -16,8 +16,109 @@ _local = threading.local()
 _lock = threading.Lock()
 
 
+class _SerializedConnection(sqlite3.Connection):
+    """Connection that serializes writers through the module-level ``_lock``,
+    shared across every thread's own connection.
+
+    SQLite (WAL mode included) only ever allows one writer at a time.
+    Background work (instance launch/destroy, SG apply/remove — see
+    server.py's ``threading.Thread(target=..., daemon=True)`` call sites)
+    runs concurrently with the main request thread, each with its own
+    connection via get_db()'s thread-local pattern, and with no
+    coordination a write-heavy burst (e.g. several instances launching
+    at once) contends for SQLite's single write lock. Contended callers
+    then fall back to SQLite's own slow busy-wait retry for up to the
+    full 30s `timeout` each, which compounds across many threads into
+    multi-minute stalls or outright "database is locked" errors.
+
+    A DML statement opens an implicit SQLite transaction (and takes the
+    real file-level write lock) on its first execute() and holds it until
+    the *separate*, later commit()/rollback() call — call sites in this
+    codebase always do those as two distinct calls, often with other work
+    in between. Acquiring and releasing ``_lock`` around each individual
+    execute() call is therefore not enough: another thread's connection
+    can acquire the (by-then-free) Python lock and immediately hit the
+    first thread's still-open transaction, hitting the exact same
+    OperationalError this is meant to prevent. Instead, once a call opens
+    a transaction (``in_transaction`` becomes True), the lock is held
+    across subsequent calls on this connection until commit()/rollback()
+    closes it; a plain read (no open transaction) releases immediately.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._holding_lock = False
+
+    def _acquire(self):
+        if not self._holding_lock:
+            _lock.acquire()
+            self._holding_lock = True
+
+    def _release_if_idle(self):
+        if self._holding_lock and not self.in_transaction:
+            self._holding_lock = False
+            _lock.release()
+
+    def _release_unconditionally(self):
+        if self._holding_lock:
+            self._holding_lock = False
+            _lock.release()
+
+    def execute(self, *args, **kwargs):
+        self._acquire()
+        try:
+            result = super().execute(*args, **kwargs)
+        except Exception:
+            # A failed statement (e.g. a UNIQUE-constraint IntegrityError)
+            # leaves in_transaction True with no automatic rollback — call
+            # sites across this codebase generally don't catch sqlite
+            # errors and roll back explicitly. Releasing unconditionally
+            # here trades a (rare, already-buggy) fallback to SQLite's own
+            # native busy-wait for that lingering transaction, instead of
+            # this thread holding the process-wide lock forever and
+            # blocking every other write with no timeout at all.
+            self._release_unconditionally()
+            raise
+        self._release_if_idle()
+        return result
+
+    def executemany(self, *args, **kwargs):
+        self._acquire()
+        try:
+            result = super().executemany(*args, **kwargs)
+        except Exception:
+            self._release_unconditionally()
+            raise
+        self._release_if_idle()
+        return result
+
+    def executescript(self, *args, **kwargs):
+        self._acquire()
+        try:
+            result = super().executescript(*args, **kwargs)
+        except Exception:
+            self._release_unconditionally()
+            raise
+        self._release_if_idle()
+        return result
+
+    def commit(self):
+        try:
+            return super().commit()
+        finally:
+            self._release_unconditionally()
+
+    def rollback(self):
+        try:
+            return super().rollback()
+        finally:
+            self._release_unconditionally()
+
+
 def _new_conn(path: Path) -> sqlite3.Connection:
-    c = sqlite3.connect(str(path), check_same_thread=True, timeout=30)
+    c = sqlite3.connect(
+        str(path), check_same_thread=True, timeout=30, factory=_SerializedConnection
+    )
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
@@ -185,7 +286,7 @@ CREATE TABLE IF NOT EXISTS builds (
 
 CREATE TABLE IF NOT EXISTS help_articles (
     id          TEXT PRIMARY KEY,
-    slug        TEXT NOT NULL UNIQUE,
+    slug        TEXT NOT NULL,
     title       TEXT NOT NULL,
     category    TEXT NOT NULL DEFAULT 'General',
     content     TEXT NOT NULL DEFAULT '',
@@ -193,6 +294,12 @@ CREATE TABLE IF NOT EXISTS help_articles (
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
+
+-- Slug uniqueness is scoped to non-deleted articles (not a plain column
+-- UNIQUE) so a slug frees up for reuse once its article is soft-deleted,
+-- matching help_store.find_by_slug()'s own "status != 'deleted'" check.
+CREATE UNIQUE INDEX IF NOT EXISTS help_articles_slug_active_uq
+    ON help_articles(slug) WHERE status != 'deleted';
 
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
@@ -227,6 +334,7 @@ def init(db_file: Path | None = None) -> None:
     _conn.executescript(_SCHEMA)
     _conn.commit()
     _migrate_columns()
+    _migrate_help_articles_slug_uniqueness()
     _migrate_json()
     _seed_help_from_markdown()
 
@@ -250,6 +358,62 @@ def _migrate_columns() -> None:
         _conn.execute("ALTER TABLE load_balancers ADD COLUMN target_groups TEXT NOT NULL DEFAULT '[]'")
     if "deletion_protection" not in lb_cols:
         _conn.execute("ALTER TABLE load_balancers ADD COLUMN deletion_protection INTEGER NOT NULL DEFAULT 0")
+    _conn.commit()
+
+
+def _migrate_help_articles_slug_uniqueness() -> None:
+    """Replace the old column-level UNIQUE(slug) — enforced against every
+    row including soft-deleted ones — with a partial unique index scoped
+    to status != 'deleted'. help_store.find_by_slug() already only checks
+    non-deleted rows for a conflict, so a stale soft-deleted row was
+    silently invisible to that pre-check yet still blocked a fresh INSERT
+    at the DB level, raising an uncaught IntegrityError. SQLite can't drop
+    a column-level UNIQUE via ALTER TABLE, so this rebuilds the table when
+    the old constraint is still present; a fresh database already gets the
+    corrected schema directly from _SCHEMA and skips this entirely.
+    """
+    import re
+
+    row = _conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='help_articles'"
+    ).fetchone()
+    if row is None or not re.search(r"slug\s+TEXT\s+NOT\s+NULL\s+UNIQUE", row[0], re.IGNORECASE):
+        return
+    _conn.executescript("""
+        CREATE TABLE help_articles_new (
+            id          TEXT PRIMARY KEY,
+            slug        TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            category    TEXT NOT NULL DEFAULT 'General',
+            content     TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT 'active',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+        INSERT INTO help_articles_new (id, slug, title, category, content, status, created_at, updated_at)
+            SELECT id, slug, title, category, content, status, created_at, updated_at FROM help_articles;
+        DROP TABLE help_articles;
+        ALTER TABLE help_articles_new RENAME TO help_articles;
+        CREATE UNIQUE INDEX IF NOT EXISTS help_articles_slug_active_uq
+            ON help_articles(slug) WHERE status != 'deleted';
+        CREATE TRIGGER IF NOT EXISTS help_articles_ai AFTER INSERT ON help_articles BEGIN
+          INSERT INTO help_articles_fts(rowid, title, category, content)
+          VALUES (new.rowid, new.title, new.category, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS help_articles_ad AFTER DELETE ON help_articles BEGIN
+          INSERT INTO help_articles_fts(help_articles_fts, rowid, title, category, content)
+          VALUES ('delete', old.rowid, old.title, old.category, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS help_articles_au AFTER UPDATE ON help_articles BEGIN
+          INSERT INTO help_articles_fts(help_articles_fts, rowid, title, category, content)
+          VALUES ('delete', old.rowid, old.title, old.category, old.content);
+          INSERT INTO help_articles_fts(rowid, title, category, content)
+          VALUES (new.rowid, new.title, new.category, new.content);
+        END;
+    """)
+    # Table was dropped/rebuilt with new rowids — the FTS5 external-content
+    # index no longer lines up with them until forced to rebuild.
+    _conn.execute("INSERT INTO help_articles_fts(help_articles_fts) VALUES('rebuild')")
     _conn.commit()
 
 

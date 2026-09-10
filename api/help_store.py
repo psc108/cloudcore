@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import sqlite3
+
 import db
 from models import HelpArticle, HelpArticleStatus, now_iso
 
@@ -18,15 +20,26 @@ def _from_row(row) -> HelpArticle:
 
 def put(a: HelpArticle) -> None:
     a.updated_at = now_iso()
-    db.get_db().execute("""INSERT INTO help_articles
-        (id,slug,title,category,content,status,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            slug=excluded.slug, title=excluded.title, category=excluded.category,
-            content=excluded.content, status=excluded.status, updated_at=excluded.updated_at""",
-        (a.id, a.slug, a.title, a.category, a.content, a.status.value,
-         a.created_at, a.updated_at))
-    db.get_db().commit()
+    c = db.get_db()
+    try:
+        c.execute("""INSERT INTO help_articles
+            (id,slug,title,category,content,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                slug=excluded.slug, title=excluded.title, category=excluded.category,
+                content=excluded.content, status=excluded.status, updated_at=excluded.updated_at""",
+            (a.id, a.slug, a.title, a.category, a.content, a.status.value,
+             a.created_at, a.updated_at))
+    except sqlite3.IntegrityError:
+        # ON CONFLICT(id) only covers the id column — a slug collision
+        # (route-level find_by_slug() missed it, e.g. a race between two
+        # concurrent creates) still raises here. Roll back explicitly:
+        # left uncommitted, this connection would keep holding SQLite's
+        # real write lock indefinitely since nothing else in this call
+        # path would ever commit or roll back it.
+        c.rollback()
+        raise ValueError(f"Slug '{a.slug}' already exists")
+    c.commit()
 
 
 def get(article_id: str) -> Optional[HelpArticle]:

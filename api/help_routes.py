@@ -42,7 +42,10 @@ def create_help_article():
         category=body.get("category") or "General",
         content=body.get("content", ""),
     )
-    help_store.put(article)
+    try:
+        help_store.put(article)
+    except ValueError as e:
+        return _problem(409, "Conflict", str(e))
     return jsonify(article.to_dict()), 201
 
 
@@ -67,7 +70,10 @@ def update_help_article(article_id):
         a.category = body["category"] or "General"
     if "content" in body:
         a.content = body["content"]
-    help_store.put(a)
+    try:
+        help_store.put(a)
+    except ValueError as e:
+        return _problem(409, "Conflict", str(e))
     return jsonify(a.to_dict())
 
 
