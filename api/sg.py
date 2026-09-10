@@ -131,7 +131,28 @@ def _mac_jump_exists(chain: str, mac: str, parent: str) -> bool:
 
 def apply_bridge(domain_name: str, sg_id: str,
                  ingress_rules: list, egress_rules: list) -> None:
-    """Apply security group rules for a bridge-networked instance."""
+    """Apply security group rules for a bridge-networked instance.
+
+    Only egress is actually enforceable this way: iptables' xt_mac module
+    only matches a packet's SOURCE MAC (`man iptables-extensions` — no
+    destination-MAC match exists), so the single MAC-matched FORWARD-chain
+    jump this function installs can only ever intercept traffic LEAVING
+    the instance, never traffic arriving at it. This function therefore
+    enforces egress_rules against that chain. ingress_rules is accepted
+    for API-shape symmetry but has no bridge-mode enforcement path here —
+    a previous version of this function applied ingress_rules to this
+    same source-MAC-matched (i.e. egress-direction) chain instead, which
+    meant egress_rules was silently never enforced at all (found while
+    building the ha-frontend-lb MySQL/ProxySQL slice: apt/curl over the
+    open internet was unreachable despite an explicit permissive
+    egress_rules entry) and ingress_rules was being misapplied to
+    outbound traffic instead of inbound. True ingress filtering would
+    need destination-IP matching instead (this chain has no way to match
+    "traffic arriving at this instance" any other way), which needs the
+    instance's private_ip already known — not guaranteed at the point
+    this is first called (see F-007) — plus re-application once it is;
+    that's a separate, larger fix, not done here.
+    """
     mac = _instance_mac(domain_name)
     if not mac:
         log.warning("sg.apply_bridge: no MAC found for %s, skipping", domain_name)
@@ -142,8 +163,8 @@ def apply_bridge(domain_name: str, sg_id: str,
     _flush_chain(chain)
 
     # Default deny at end of chain
-    for rule in ingress_rules:
-        for cmd, args in _iptables_rule_args(rule, "ingress"):
+    for rule in egress_rules:
+        for cmd, args in _iptables_rule_args(rule, "egress"):
             _run([cmd, "-A", chain] + args, check=False)
     _run(["iptables", "-A", chain, "-j", "DROP"], check=False)
 
