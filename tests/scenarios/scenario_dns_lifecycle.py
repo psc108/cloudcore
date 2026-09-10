@@ -48,14 +48,14 @@ class ScenarioDNSLifecycle:
     # ── LB DNS (no VM needed) ─────────────────────────────────────────────────
     def test_01_lb_dns_record_created_immediately(self):
         lb = make_lb("sc-dns-lb-main", self.vpc["id"])
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         names = [r["name"] for r in data["items"]]
         assert_in("sc-dns-lb-main", names, "lb DNS record created on LB create")
         delete_lb(lb["id"])
 
     def test_02_lb_dns_record_value_is_loopback(self):
         lb = make_lb("sc-dns-lb-val", self.vpc["id"])
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         r = next((r for r in data["items"] if r["name"] == "sc-dns-lb-val"), None)
         if r is None:
             raise AssertionError("lb DNS record not found")
@@ -64,7 +64,7 @@ class ScenarioDNSLifecycle:
 
     def test_03_lb_dns_record_has_correct_resource_id(self):
         lb = make_lb("sc-dns-lb-rid", self.vpc["id"])
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         r = next((r for r in data["items"] if r["name"] == "sc-dns-lb-rid"), None)
         if r is None:
             raise AssertionError("lb DNS record not found")
@@ -75,7 +75,7 @@ class ScenarioDNSLifecycle:
         lb = make_lb("sc-dns-lb-bk", self.vpc["id"])
         req("POST", f"/v1/load-balancers/{lb['id']}/backends",
             {"name": "srv-01", "address": "192.168.100.10", "port": 80}, expected=201)
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         recs = [r for r in data["items"] if r["name"] == "sc-dns-lb-bk"]
         assert_eq(len(recs), 1, "still exactly one DNS record after adding backend")
         assert_eq(recs[0]["value"], "127.0.0.1", "value unchanged after backend add")
@@ -85,7 +85,7 @@ class ScenarioDNSLifecycle:
         lb = make_lb("sc-dns-lb-rm", self.vpc["id"])
         delete_lb(lb["id"])
         time.sleep(0.5)
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         assert_not_in("sc-dns-lb-rm", [r["name"] for r in data["items"]],
                       "lb DNS record removed on delete")
 
@@ -118,7 +118,7 @@ class ScenarioDNSLifecycle:
         inst = _poll_running(inst["id"])
 
         _, data = req("GET",
-            f"/v1/dns/zones/{_ZE('instances.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('instances.cloudcore.internal')}/records")
         names = [r["name"] for r in data["items"]]
         assert_in("sc-dns-inst-main", names, "instance DNS record created on running")
 
@@ -131,7 +131,7 @@ class ScenarioDNSLifecycle:
             raise AssertionError("sc-dns-inst-main not found — run test_07 first")
 
         _, recs = req("GET",
-            f"/v1/dns/zones/{_ZE('instances.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('instances.cloudcore.internal')}/records")
         r = next((r for r in recs["items"] if r["name"] == "sc-dns-inst-main"), None)
         if r is None:
             raise AssertionError("instance DNS record not found")
@@ -151,7 +151,7 @@ class ScenarioDNSLifecycle:
         time.sleep(2)
 
         _, recs = req("GET",
-            f"/v1/dns/zones/{_ZE('instances.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('instances.cloudcore.internal')}/records")
         assert_not_in("sc-dns-inst-main", [r["name"] for r in recs["items"]],
                       "instance DNS record removed on terminate")
         delete_vpc(self.vpc["id"])

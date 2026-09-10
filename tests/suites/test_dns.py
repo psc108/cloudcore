@@ -22,19 +22,19 @@ class TestDNS:
     def test_builtin_zones_exist(self):
         _, data = req("GET", "/v1/dns/zones")
         names = [z["name"] for z in data["items"]]
-        assert_in("instances.cloudcore.local", names, "instances zone")
-        assert_in("lb.cloudcore.local",        names, "lb zone")
+        assert_in("instances.cloudcore.internal", names, "instances zone")
+        assert_in("lb.cloudcore.internal",        names, "lb zone")
 
     def test_builtin_zones_flagged(self):
         _, data = req("GET", "/v1/dns/zones")
         for z in data["items"]:
-            if z["name"] in ("instances.cloudcore.local", "lb.cloudcore.local"):
+            if z["name"] in ("instances.cloudcore.internal", "lb.cloudcore.internal"):
                 assert_eq(z["builtin"], True, f"{z['name']} builtin flag")
 
     def test_builtin_zone_delete_blocked(self):
-        req("DELETE", f"/v1/dns/zones/{_ZE('instances.cloudcore.local')}",
+        req("DELETE", f"/v1/dns/zones/{_ZE('instances.cloudcore.internal')}",
             expected=400)
-        req("DELETE", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}",
+        req("DELETE", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}",
             expected=400)
 
     # ── Zone CRUD ─────────────────────────────────────────────────────────────
@@ -216,14 +216,14 @@ class TestDNS:
     # ── Auto-registration ─────────────────────────────────────────────────────
     def test_lb_auto_registers_dns(self):
         lb = make_lb("t-dns-lb-auto", self.vpc["id"])
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         assert_in("t-dns-lb-auto", [r["name"] for r in data["items"]],
                   "lb auto-registered")
         delete_lb(lb["id"])
 
     def test_lb_dns_record_value_is_loopback(self):
         lb = make_lb("t-dns-lb-val", self.vpc["id"])
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         r = next((r for r in data["items"] if r["name"] == "t-dns-lb-val"), None)
         if r is None:
             raise AssertionError("lb record not found")
@@ -232,7 +232,7 @@ class TestDNS:
 
     def test_lb_dns_resource_type_is_lb(self):
         lb = make_lb("t-dns-lb-rtype", self.vpc["id"])
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         r = next((r for r in data["items"] if r["name"] == "t-dns-lb-rtype"), None)
         if r is None:
             raise AssertionError("lb record not found")
@@ -244,6 +244,6 @@ class TestDNS:
         lb = make_lb("t-dns-lb-rm", self.vpc["id"])
         delete_lb(lb["id"])
         time.sleep(0.5)
-        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+        _, data = req("GET", f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         assert_not_in("t-dns-lb-rm", [r["name"] for r in data["items"]],
                       "DNS record removed after LB delete")

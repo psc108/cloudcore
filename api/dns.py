@@ -7,7 +7,7 @@ import db
 import dns_server
 from models import now_iso
 
-BUILTIN_ZONES = ("instances.cloudcore.local", "lb.cloudcore.local")
+BUILTIN_ZONES = ("instances.cloudcore.internal", "lb.cloudcore.internal")
 
 
 def load() -> None:

@@ -4,7 +4,7 @@ Listens on 127.0.0.1:5353 (no root required). Config is regenerated from
 the DNS store and dnsmasq is reloaded (SIGHUP) after every record change.
 
 To resolve from the host:
-    dig @127.0.0.1 -p 5353 instance-name.instances.cloudcore.local
+    dig @127.0.0.1 -p 5353 instance-name.instances.cloudcore.internal
 """
 from __future__ import annotations
 

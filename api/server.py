@@ -444,7 +444,7 @@ def create_instance():
             ip = compute.get_instance_ip(instance.domain_name)
             instance.private_ip = ip
             dns_store.upsert_record(
-                "instances.cloudcore.local", instance.name, "A",
+                "instances.cloudcore.internal", instance.name, "A",
                 ip or "127.0.0.1", resource_type="instance", resource_id=instance.id,
             )
             # Apply security group rules once the VM is up
@@ -492,7 +492,7 @@ def get_instance(instance_id):
                 # on this same self-correcting refresh so the DNS record
                 # doesn't stay wrong for the instance's whole lifetime.
                 dns_store.upsert_record(
-                    "instances.cloudcore.local", instance.name, "A",
+                    "instances.cloudcore.internal", instance.name, "A",
                     instance.private_ip, resource_type="instance", resource_id=instance.id,
                 )
         store.put_instance(instance)
@@ -681,7 +681,7 @@ def create_lb():
         vpc_id=body.get("vpc_id", ""),
         subnet_ids=body.get("subnet_ids", []),
         internal=body.get("internal", False),
-        dns_name=f"{name}.lb.cloudcore.local",
+        dns_name=f"{name}.lb.cloudcore.internal",
         backends=body.get("backends", []),
         sticky_sessions=bool(body.get("sticky_sessions", False)),
         cookie_name=body.get("cookie_name", "SERVERID"),
@@ -696,7 +696,7 @@ def create_lb():
     store.put_lb(lb)
     try:
         dns_store.upsert_record(
-            "lb.cloudcore.local", lb.name, "A", "127.0.0.1",
+            "lb.cloudcore.internal", lb.name, "A", "127.0.0.1",
             resource_type="lb", resource_id=lb.id,
         )
     except Exception as e:
@@ -1368,7 +1368,7 @@ def reconcile():
             if not instance.private_ip:
                 instance.private_ip = compute.get_instance_ip(instance.domain_name)
             dns_store.upsert_record(
-                "instances.cloudcore.local", instance.name, "A",
+                "instances.cloudcore.internal", instance.name, "A",
                 instance.private_ip or "127.0.0.1",
                 resource_type="instance", resource_id=instance.id,
             )
@@ -1383,7 +1383,7 @@ def reconcile():
                 lb.listen_port = lb_backend.start(lb, vpc_instances=vpc_instances)
                 store.put_lb(lb)
             dns_store.upsert_record(
-                "lb.cloudcore.local", lb.name, "A", "127.0.0.1",
+                "lb.cloudcore.internal", lb.name, "A", "127.0.0.1",
                 resource_type="lb", resource_id=lb.id,
             )
         except Exception as e:

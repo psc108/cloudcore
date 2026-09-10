@@ -100,7 +100,7 @@ class TestVM:
         }, expected=202)
         iid  = inst["id"]
         inst = _poll_running(iid)
-        zenc = urllib.parse.quote("instances.cloudcore.local", safe="")
+        zenc = urllib.parse.quote("instances.cloudcore.internal", safe="")
         _, data = req("GET", f"/v1/dns/zones/{zenc}/records")
         assert_in("t-vm-dns", [r["name"] for r in data["items"]],
                   "instance auto-registered in DNS")

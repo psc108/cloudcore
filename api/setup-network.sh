@@ -82,22 +82,30 @@ fi
 [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null || true
 sleep 0.5
 
-# Start dnsmasq for DHCP on the bridge. --dhcp-option hands guests a real
-# DNS server directly (this dnsmasq instance itself stays --no-resolv /
-# DHCP-only, it doesn't proxy DNS queries) — without this, guests get an IP
-# but no resolver at all, and anything in cloud-init needing name
-# resolution (apt installs, curl downloads, ...) fails outright.
+# Start dnsmasq for DHCP+DNS on the bridge. Guests are handed the GATEWAY
+# (this dnsmasq itself) as their DNS server, not public DNS directly —
+# --server=/cloudcore.internal/127.0.0.1#5353 forwards queries for CloudCore's
+# own zones (instances.cloudcore.internal, lb.cloudcore.internal — see
+# api/dns.py's BUILTIN_ZONES) to the API's own dns_server.py, which already
+# maintains that data but binds host-loopback-only and was previously
+# unreachable from any guest. Plain --server=IP entries (no domain) are the
+# default/catch-all for everything else, so normal internet resolution
+# (apt installs, curl downloads, ...) keeps working unchanged. --no-resolv
+# is kept so this never depends on the host's own /etc/resolv.conf state.
 touch "$LEASE_FILE"
 dnsmasq \
   --interface="$BRIDGE" \
   --bind-interfaces \
   --dhcp-range="${DHCP_START},${DHCP_END},12h" \
-  --dhcp-option="option:dns-server,8.8.8.8,1.1.1.1" \
+  --dhcp-option="option:dns-server,${GW}" \
+  --server="/cloudcore.internal/127.0.0.1#5353" \
+  --server=8.8.8.8 \
+  --server=1.1.1.1 \
   --dhcp-leasefile="$LEASE_FILE" \
   --pid-file="$PIDFILE" \
   --log-facility=/var/log/cloudcore-dnsmasq.log \
   --no-resolv \
   --except-interface=lo
 
-echo "Bridge $BRIDGE up at ${GW}/24, DHCP ${DHCP_START}-${DHCP_END}, DNS 8.8.8.8/1.1.1.1"
+echo "Bridge $BRIDGE up at ${GW}/24, DHCP ${DHCP_START}-${DHCP_END}, DNS ${GW} (cloudcore.internal -> API DNS, everything else -> 8.8.8.8/1.1.1.1)"
 echo "Run 'sudo bash api/teardown-network.sh' to remove."

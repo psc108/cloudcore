@@ -51,7 +51,7 @@ class TestLoadBalancers:
 
     def test_create_dns_name_set(self):
         lb = make_lb("t-lb-dnsname", self.vpc["id"])
-        assert_eq(lb["dns_name"], "t-lb-dnsname.lb.cloudcore.local", "dns_name")
+        assert_eq(lb["dns_name"], "t-lb-dnsname.lb.cloudcore.internal", "dns_name")
         delete_lb(lb["id"])
 
     def test_create_listen_port_in_range(self):

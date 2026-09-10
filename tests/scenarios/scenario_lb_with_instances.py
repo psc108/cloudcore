@@ -161,14 +161,14 @@ class ScenarioLBWithInstances:
     @vm_test
     def test_06_dns_records_exist(self):
         _, inst_recs = req("GET",
-            f"/v1/dns/zones/{_ZE('instances.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('instances.cloudcore.internal')}/records")
         inst_names = [r["name"] for r in inst_recs["items"]]
         for n in (1, 2):
             assert_in(f"sc-lb-inst-{n}", inst_names,
                       f"sc-lb-inst-{n} in instances DNS")
 
         _, lb_recs = req("GET",
-            f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         lb_names = [r["name"] for r in lb_recs["items"]]
         assert_in("sc-lb-main", lb_names, "sc-lb-main in lb DNS")
 
@@ -188,12 +188,12 @@ class ScenarioLBWithInstances:
         time.sleep(2)
 
         _, lb_recs = req("GET",
-            f"/v1/dns/zones/{_ZE('lb.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('lb.cloudcore.internal')}/records")
         assert_not_in("sc-lb-main", [r["name"] for r in lb_recs["items"]],
                       "lb DNS record removed")
 
         _, inst_recs = req("GET",
-            f"/v1/dns/zones/{_ZE('instances.cloudcore.local')}/records")
+            f"/v1/dns/zones/{_ZE('instances.cloudcore.internal')}/records")
         inst_names = [r["name"] for r in inst_recs["items"]]
         for n in (1, 2):
             assert_not_in(f"sc-lb-inst-{n}", inst_names,
