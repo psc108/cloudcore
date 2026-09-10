@@ -1,0 +1,52 @@
+#cloud-config
+# NGINX reverse-proxies to the frontend tier's real bridged IPs, baked in
+# at apply time via modules.frontend.private_ips_by_key — the OpenTofu
+# provider's Create() blocks until an instance's private_ip is populated
+# for exactly this reason (see provider/internal/resources/instance.go),
+# so those addresses are already known and stable by the time this
+# cloud-init runs. Keepalived's interface can't be known at apply time
+# (bridged instances get "ens2", assigned at guest boot — SLIRP
+# instances get "ens5") so it's detected at runtime and substituted into
+# the config below rather than hardcoded.
+package_update: true
+packages:
+  - nginx
+  - keepalived
+
+write_files:
+  - path: /etc/nginx/sites-available/default
+    content: |
+      ${indent(6, nginx_conf)}
+  - path: /etc/keepalived/keepalived.conf.template
+    content: |
+      vrrp_instance VI_1 {
+          state ${keepalived_state}
+          interface __IFACE__
+          virtual_router_id ${vrrp_router_id}
+          priority ${keepalived_priority}
+          advert_int 1
+          authentication {
+              auth_type PASS
+              auth_pass ${vrrp_auth_pass}
+          }
+          virtual_ipaddress {
+              ${vip_address}/24
+          }
+      }
+  # Kept as its own script (rather than inline runcmd shell) so the awk/sed
+  # quoting lives in a plain literal block scalar, not a YAML plain scalar
+  # list item — a runcmd one-liner with "-F': '" and "{...}" in it breaks
+  # cloud-config's YAML parsing (colon-space and flow-indicator characters
+  # aren't safe in an unquoted scalar).
+  - path: /usr/local/sbin/render-keepalived-conf.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      IFACE=$(ip -o link show up | awk -F': ' '$2!="lo"{print $2; exit}')
+      sed "s/__IFACE__/$IFACE/" /etc/keepalived/keepalived.conf.template > /etc/keepalived/keepalived.conf
+
+runcmd:
+  - /usr/local/sbin/render-keepalived-conf.sh
+  - systemctl restart nginx
+  - systemctl enable --now keepalived

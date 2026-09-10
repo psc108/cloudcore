@@ -1,0 +1,15 @@
+#cloud-config
+package_update: true
+packages:
+  - nginx
+
+write_files:
+  - path: /var/www/html/index.html
+    content: |
+      <!doctype html>
+      <html><head><title>Frontend</title></head>
+      <body><h1>Served by __HOSTNAME__</h1></body></html>
+
+runcmd:
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
+  - systemctl restart nginx
