@@ -34,6 +34,23 @@ locals {
     proxysql_ips = values(module.proxysql.private_ips_by_key)
   })
 
+  # http{}-context server{} block for Keystone, sibling to the frontend
+  # one — both end up in the same sites-available/default file (see
+  # nginx_conf below), matching haFullStack-LLD.md §3.3.1's explicit
+  # framing: dedicated port 5000, not vhost routing, per direct
+  # confirmation this matches the real backend application's own
+  # addressing scheme (not a DNS workaround — CloudCore's guest DNS is
+  # fixed as of F-022, but that was never the reason for this choice).
+  nginx_keystone_conf = templatefile("${path.module}/files/nginx-keystone.conf.tftpl", {
+    keystone_ips = values(module.keystone.private_ips_by_key)
+  })
+
+  # Concatenated, not two separate files — sites-available/default only
+  # loads once per vhost-style config in this setup, and both are
+  # http{}-context server{} blocks that coexist fine in one file (each
+  # with its own listen directive: 80 vs 5000).
+  nginx_conf = "${local.nginx_frontend_conf}\n${local.nginx_keystone_conf}"
+
   nginx_instances = {
     for role, cfg in local.nginx_roles : "nginx-${role}${local.sfx}" => {
       image_id            = "ubuntu-22.04"
@@ -47,7 +64,7 @@ locals {
         vip_address          = var.vip_address
         vrrp_router_id       = local.vrrp_router_id
         vrrp_auth_pass       = local.vrrp_auth_pass
-        nginx_conf           = local.nginx_frontend_conf
+        nginx_conf           = local.nginx_conf
         nginx_stream_conf    = local.nginx_stream_conf
       })
     }
@@ -59,6 +76,7 @@ locals {
   mysql_repl_password  = "changeme-repl"
   mysql_monitor_password = "changeme-monitor"
   mysql_app_password   = "changeme-app"
+  mysql_keystone_password = "changeme-keystone" # lab-only placeholder, not a production secret
 
   # Node "a" only — modules/compute's per-key user_data can't reference
   # that same module call's own private_ips_by_key output, so it's split
@@ -81,6 +99,7 @@ locals {
         repl_password     = local.mysql_repl_password
         monitor_password  = local.mysql_monitor_password
         app_password      = local.mysql_app_password
+        keystone_password = local.mysql_keystone_password
       })
     }
   }
@@ -105,6 +124,7 @@ locals {
         repl_password     = local.mysql_repl_password
         monitor_password  = local.mysql_monitor_password
         app_password      = local.mysql_app_password
+        keystone_password = local.mysql_keystone_password
       })
     }
   }
@@ -127,10 +147,37 @@ locals {
     mysql_ips             = local.mysql_all_ips
     monitor_password      = local.mysql_monitor_password
     app_password           = local.mysql_app_password
+    keystone_password      = local.mysql_keystone_password
   })
 
   frontend_user_data = templatefile("${path.module}/files/frontend-cloud-init.yaml.tftpl", {
     vip_address  = var.vip_address
     app_password = local.mysql_app_password
+    keystone_ips = values(module.keystone.private_ips_by_key)
+  })
+
+  memcached_user_data = templatefile("${path.module}/files/memcached-cloud-init.yaml.tftpl", {})
+
+  # keystone-manage db_sync/bootstrap connect through the VIP -> NGINX
+  # stream{} -> ProxySQL -> MySQL path, same as appuser's clusterdemo
+  # connection in §2 — proves the identity tier's DB dependency through
+  # the same real path being validated elsewhere, not a direct backdoor
+  # connection to one MySQL node.
+  memcached_servers_csv = join(",", [for ip in values(module.memcached.private_ips_by_key) : "${ip}:11211"])
+
+  # random_id.b64_url omits the trailing "=" padding that a 32-byte
+  # value needs to be valid standard base64 (43 chars, 43 % 4 == 3, one
+  # "=" short of a multiple of 4) — Python's base64.urlsafe_b64decode()
+  # (used internally by keystone's Fernet token provider) requires it and
+  # fails with "Incorrect padding" without it, found directly via a real
+  # 500 on token issuance. keystone-manage fernet_setup's own generated
+  # keys always carry this padding, which is what made the difference
+  # obvious once compared side by side.
+  keystone_user_data = templatefile("${path.module}/files/keystone-cloud-init.yaml.tftpl", {
+    vip_address           = var.vip_address
+    keystone_password     = local.mysql_keystone_password
+    memcached_servers_csv = local.memcached_servers_csv
+    fernet_key0           = "${random_id.fernet_key0.b64_url}="
+    fernet_key1           = "${random_id.fernet_key1.b64_url}="
   })
 }

@@ -1,0 +1,27 @@
+#cloud-config
+# memcached — Fernet token-validation cache for the Keystone tier. Both
+# nodes are genuinely independent (no clustering/replication between
+# them); Keystone's own oslo.cache client is responsible for sharding
+# which key goes to which server given the list of both. Access is
+# already scoped to the keystone security group alone at the network
+# layer (haFullStack-LLD.md §3.3.1) — 0.0.0.0 here, not a hardcoded
+# detected IP, matches the same bind-address reasoning used for MySQL
+# (see mysql-cloud-init.yaml.tftpl): the real bridged IP isn't known
+# until runtime, and the security group is what actually restricts who
+# can reach it, not the bind address.
+package_update: true
+packages:
+  - memcached
+
+write_files:
+  - path: /etc/memcached.conf
+    content: |
+      -d
+      logfile /var/log/memcached.log
+      -m 64
+      -p 11211
+      -u memcache
+      -l 0.0.0.0
+
+runcmd:
+  - systemctl restart memcached

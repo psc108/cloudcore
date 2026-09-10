@@ -18,6 +18,7 @@ write_files:
       <html><head><title>Frontend</title></head>
       <body><h1>Served by __HOSTNAME__</h1>
       <p><a href="/mysql-status.html">MySQL cluster status</a></p>
+      <p><a href="/keystone-status.html">Keystone status</a></p>
       </body></html>
 
   - path: /usr/local/sbin/mysql-status.py
@@ -225,8 +226,188 @@ write_files:
       [Install]
       WantedBy=timers.target
 
+  # Issues a token through the VIP (proves the full real path — Keepalived
+  # + NGINX + Keystone — same as mysql-status.py does for the DB tier),
+  # then validates that same token directly against EVERY Keystone node's
+  # own IP, bypassing the VIP/NGINX round-robin for the validation step
+  # specifically. Deliberately checks every node rather than trying to
+  # infer which one happened to answer the issuance request — that would
+  # need extra plumbing (e.g. an nginx $upstream_addr header) for no real
+  # gain, since validating against all nodes proves cross-node consistency
+  # more thoroughly than checking just one "other" node would.
+  - path: /usr/local/sbin/keystone-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import json, datetime, urllib.request, urllib.error
+
+      VIP = "${vip_address}"
+      KEYSTONE_IPS = ${jsonencode(keystone_ips)}
+      ADMIN_USER = "admin"
+      ADMIN_PASSWORD = "admin"
+      HISTORY_FILE = "/var/log/keystone-cluster-status-history.json"
+      MAX_HISTORY = 60
+
+      def request(url, method="GET", body=None, headers=None, timeout=5):
+          data = json.dumps(body).encode() if body is not None else None
+          req = urllib.request.Request(url, data=data, method=method,
+                                        headers=headers or {})
+          if body is not None:
+              req.add_header("Content-Type", "application/json")
+          try:
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  return resp.status, dict(resp.headers), resp.read()
+          except urllib.error.HTTPError as e:
+              return e.code, dict(e.headers or {}), e.read()
+          except Exception as e:
+              return None, None, str(e).encode()
+
+      def issue_token():
+          body = {
+              "auth": {
+                  "identity": {
+                      "methods": ["password"],
+                      "password": {"user": {"name": ADMIN_USER,
+                                             "domain": {"id": "default"},
+                                             "password": ADMIN_PASSWORD}},
+                  },
+                  "scope": {"project": {"name": "admin", "domain": {"id": "default"}}},
+              }
+          }
+          status, headers, raw = request(f"http://{VIP}:5000/v3/auth/tokens",
+                                          method="POST", body=body)
+          if status != 201:
+              return None, f"issuance failed (HTTP {status}): {raw[:200].decode(errors='replace')}"
+          token = headers.get("X-Subject-Token")
+          if not token:
+              return None, "issuance returned 201 but no X-Subject-Token header"
+          return token, None
+
+      def validate_against(node_ip, token):
+          status, _, raw = request(
+              f"http://{node_ip}:5000/v3/auth/tokens",
+              headers={"X-Auth-Token": token, "X-Subject-Token": token},
+          )
+          if status == 200:
+              return True, None
+          return False, f"HTTP {status}: {raw[:200].decode(errors='replace')}"
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "error": None,
+                    "validations": []}
+
+          token, err = issue_token()
+          if err:
+              status["error"] = err
+              write_status(status)
+              return
+
+          all_ok = True
+          for ip in KEYSTONE_IPS:
+              ok, verr = validate_against(ip, token)
+              status["validations"].append({"node": ip, "ok": ok, "error": verr})
+              if not ok:
+                  all_ok = False
+
+          status["verdict"] = "OK" if all_ok else "DEGRADED"
+          if not all_ok:
+              status["error"] = "token issued successfully but failed to validate on at least one node — check shared Fernet key material"
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "nodes_validated": sum(1 for v in status["validations"] if v["ok"]),
+              "nodes_total": len(status["validations"]),
+              "error": status["error"],
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/keystone-cluster-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+          validations_html = "".join(
+              f"<li>{v['node']} — {'OK' if v['ok'] else 'FAILED: ' + str(v['error'])}</li>"
+              for v in status["validations"]
+          )
+          error_html = f"<p style='color:#c0392b'>{status['error']}</p>" if status["error"] else ""
+
+          history_rows = ""
+          for h in reversed(history):
+              c = colors.get(h["verdict"], "#666")
+              err = f" — {h['error']}" if h["error"] else ""
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{c}'>{h['verdict']}</td>"
+                  f"<td>{h['nodes_validated']}/{h['nodes_total']}</td>"
+                  f"<td>{err}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>Keystone Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+      </style></head>
+      <body>
+      <h1>Keystone Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} — token issued via VIP, validated directly against every node</p>
+      {error_html}
+      <h2>Cross-Node Validation</h2>
+      <ul>{validations_html}</ul>
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Nodes Validated</th><th>Error</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/keystone-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/keystone-status.service
+    content: |
+      [Unit]
+      Description=Refresh Keystone cluster status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/keystone-status.py
+
+  - path: /etc/systemd/system/keystone-status.timer
+    content: |
+      [Unit]
+      Description=Run keystone-status.service every 2s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
 runcmd:
   - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
   - systemctl restart nginx
   - systemctl daemon-reload
   - systemctl enable --now mysql-status.timer
+  - systemctl enable --now keystone-status.timer

@@ -62,3 +62,23 @@ output "proxysql_ssh_commands" {
   description = "SSH commands for the ProxySQL instances, keyed by two-digit index."
   value       = module.proxysql.ssh_commands_by_key
 }
+
+output "keystone_private_ips" {
+  description = "Keystone instance private IPs keyed by two-digit index."
+  value       = module.keystone.private_ips_by_key
+}
+
+output "keystone_ssh_commands" {
+  description = "SSH commands for the Keystone instances, keyed by two-digit index."
+  value       = module.keystone.ssh_commands_by_key
+}
+
+output "memcached_private_ips" {
+  description = "memcached instance private IPs keyed by two-digit index."
+  value       = module.memcached.private_ips_by_key
+}
+
+output "keystone_status_url" {
+  description = "Live Keystone status page — proves token issuance and cross-node validation through the full real path."
+  value       = "http://${var.vip_address}/keystone-status.html"
+}

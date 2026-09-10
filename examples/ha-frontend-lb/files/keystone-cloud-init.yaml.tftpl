@@ -1,0 +1,102 @@
+#cloud-config
+# Keystone identity node — genuinely active-active, no per-node role.
+# Both nodes run this identical script: keystone-manage db_sync and
+# bootstrap are both safe to run unconditionally and concurrently on
+# every node (confirmed directly against a real install — re-running
+# either against an already-initialized database is a clean no-op, not a
+# duplicate/error), so this needs none of MySQL's bootstrap/joiner
+# user_data split (haFullStack-LLD.md §3.3.1). The `keystone` apt package
+# already ships Apache + mod_wsgi wired up to listen on :5000 out of the
+# box (confirmed directly) — no separate systemd unit or reverse-proxy
+# config of our own is needed for the daemon itself.
+package_update: true
+packages:
+  - keystone
+  - python3-pymysql
+  - python3-memcache
+  - mysql-client
+
+write_files:
+  # Identical Fernet key material on both nodes, generated once in
+  # Terraform (main.tf's random_id resources) — writing these directly
+  # instead of running `keystone-manage fernet_setup` on each node
+  # separately, which would generate two different, incompatible key
+  # sets. File format confirmed directly: fernet_setup writes the raw
+  # base64url key as the file's entire content, no wrapper — exactly
+  # random_id's own .b64_url output.
+  #
+  # Written to a plain root-owned staging path here, NOT directly to
+  # /etc/keystone/fernet-keys/ with owner: keystone:keystone — cloud-init's
+  # write_files module runs before the packages stage, so the keystone
+  # system user doesn't exist yet at this point (confirmed directly: an
+  # owner: on one of these entries made write_files fail outright with
+  # "Unknown user or group: keystone", which aborts the WHOLE write_files
+  # module, silently skipping every other file in this list too —
+  # including setup-keystone.sh below). Moved into place with correct
+  # ownership in runcmd instead, which runs after packages are installed.
+  - path: /root/fernet-key-0
+    permissions: '0600'
+    content: ${fernet_key0}
+  - path: /root/fernet-key-1
+    permissions: '0600'
+    content: ${fernet_key1}
+
+  - path: /usr/local/sbin/setup-keystone.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      mkdir -p /etc/keystone/fernet-keys
+      mv /root/fernet-key-0 /etc/keystone/fernet-keys/0
+      mv /root/fernet-key-1 /etc/keystone/fernet-keys/1
+      chown -R keystone:keystone /etc/keystone/fernet-keys
+      chmod 600 /etc/keystone/fernet-keys/0 /etc/keystone/fernet-keys/1
+
+      # Wait for the shared MySQL path (VIP -> NGINX stream{} -> ProxySQL
+      # -> MySQL) to actually accept the keystone user's connection before
+      # running db_sync — cloud-init on every tier runs concurrently, so
+      # NGINX/ProxySQL/MySQL may not be ready yet at this exact moment.
+      # Matches this stack's established pattern (see mysql-cloud-init.yaml.tftpl's
+      # own wait loop) of an explicit retry rather than relying on
+      # Terraform apply order, which doesn't wait for cloud-init to finish
+      # on any other node either.
+      for i in $(seq 1 60); do
+        mysql -h "${vip_address}" -P 3306 -u keystone -p'${keystone_password}' \
+          -e "SELECT 1" >/dev/null 2>&1 && break
+        sleep 5
+      done
+
+      python3 - <<'PYEOF'
+      import configparser
+      c = configparser.ConfigParser(strict=False)
+      c.read('/etc/keystone/keystone.conf')
+      c['database']['connection'] = 'mysql+pymysql://keystone:${keystone_password}@${vip_address}:3306/keystone'
+      if 'cache' not in c:
+          c['cache'] = {}
+      c['cache']['enabled'] = 'true'
+      c['cache']['backend'] = 'dogpile.cache.memcached'
+      c['cache']['memcache_servers'] = '${memcached_servers_csv}'
+      with open('/etc/keystone/keystone.conf', 'w') as f:
+          c.write(f)
+      PYEOF
+      chown keystone:keystone /etc/keystone/keystone.conf
+
+      keystone-manage db_sync
+
+      # admin:admin — a deliberate, explicit Lab-only credential (see
+      # haFullStack-LLD.md §3.3.1), same convention as vrrp_auth_pass and
+      # the MySQL passwords. Endpoint URLs all point at the VIP:5000 —
+      # this Lab has no distinct admin/internal network to separate them
+      # onto, unlike a real deployment.
+      keystone-manage bootstrap \
+        --bootstrap-username admin --bootstrap-password admin \
+        --bootstrap-project-name admin --bootstrap-role-name admin \
+        --bootstrap-service-name keystone \
+        --bootstrap-admin-url "http://${vip_address}:5000/v3" \
+        --bootstrap-public-url "http://${vip_address}:5000/v3" \
+        --bootstrap-internal-url "http://${vip_address}:5000/v3"
+
+runcmd:
+  - /usr/local/sbin/setup-keystone.sh
+  - systemctl restart apache2

@@ -84,8 +84,40 @@ module "security_groups" {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
       }
     }
+    "keystone${local.sfx}" = {
+      description = "Keystone identity tier — API from the NGINX nodes' subnet only, plus SSH"
+      ingress_rules = {
+        api = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = local.bridge_cidr }
+        ssh = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+      }
+      egress_rules = {
+        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
+      }
+    }
+    "memcached${local.sfx}" = {
+      description = "memcached — Keystone tier's subnet only, never exposed beyond it; plus SSH"
+      ingress_rules = {
+        memcache = { ip_protocol = "tcp", from_port = 11211, to_port = 11211, cidr = local.bridge_cidr }
+        ssh      = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+      }
+      egress_rules = {
+        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
+      }
+    }
   }
 }
+
+# Both Keystone nodes need identical Fernet key material from first boot —
+# generated once here and injected into both nodes' user_data, no runtime
+# cross-node coordination needed (haFullStack-LLD.md §3.3.1). File "0" is
+# the primary (encrypt+decrypt) key, "1" the secondary (decrypt-only,
+# needed by keystone-manage fernet_setup's own rotation model even though
+# this Lab slice never rotates) — byte_length=32 matches Fernet's expected
+# key size exactly, and random_id's .b64_url output is byte-for-byte the
+# same format keystone-manage fernet_setup itself writes to
+# /etc/keystone/fernet-keys/, confirmed directly against a real install.
+resource "random_id" "fernet_key0" { byte_length = 32 }
+resource "random_id" "fernet_key1" { byte_length = 32 }
 
 module "frontend" {
   source = "../../modules/instance-group"
@@ -149,11 +181,54 @@ module "proxysql" {
   user_data           = local.proxysql_user_data
 }
 
+module "memcached" {
+  source = "../../modules/instance-group"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  name                = "memcached${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.memcached_flavor
+  count_instances     = 2
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+  security_group_ids  = [module.security_groups.security_group_ids_by_key["memcached${local.sfx}"]]
+  user_data           = local.memcached_user_data
+}
+
+# instance-group, not compute: unlike MySQL's bootstrap/joiner split or
+# NGINX's MASTER/BACKUP split, both Keystone nodes run genuinely identical
+# config — no per-node role. keystone-manage db_sync and bootstrap are
+# both safe to run unconditionally and concurrently on every node
+# (confirmed directly: re-running each against an already-initialized
+# database is a clean no-op, not a duplicate/error) — the "only needs to
+# run on one node" framing in haFullStack-LLD.md §3.3.1 describes the
+# logical effect, not a requirement for genuinely identical user_data.
+module "keystone" {
+  source = "../../modules/instance-group"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  name                = "keystone${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.keystone_flavor
+  count_instances     = 2
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+  security_group_ids  = [module.security_groups.security_group_ids_by_key["keystone${local.sfx}"]]
+  user_data           = local.keystone_user_data
+}
+
 # Per-node (not instance-group) since the two NGINX nodes need different
 # Keepalived state/priority — modules/compute takes per-key user_data
 # natively via its instances map, so this is a single module call rather
 # than two separate resources. Now also depends on module.proxysql (for
-# the stream{} block's upstream) alongside module.frontend from §1.
+# the stream{} block's upstream) and module.keystone (for the :5000
+# server{} block's upstream) alongside module.frontend from §1.
 module "nginx" {
   source = "../../modules/compute"
 

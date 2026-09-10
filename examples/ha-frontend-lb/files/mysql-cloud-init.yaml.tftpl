@@ -117,6 +117,16 @@ write_files:
       );
       INSERT INTO clusterdemo.heartbeat (id, counter, updated_at) VALUES (1, 0, NOW())
         ON DUPLICATE KEY UPDATE updated_at = NOW();
+
+      -- Keystone's own database + dedicated user (own credentials, not
+      -- shared with appuser) — haFullStack-LLD.md §3.3.1. Same
+      -- mysql_native_password reasoning as every other user here: no TLS
+      -- set up between nodes in this Lab, and ProxySQL/8.0's default
+      -- caching_sha2_password needs a secure connection to authenticate
+      -- at all (F-019).
+      CREATE USER IF NOT EXISTS 'keystone'@'%' IDENTIFIED WITH mysql_native_password BY '${keystone_password}';
+      CREATE DATABASE IF NOT EXISTS keystone;
+      GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%';
       SQL
       %{ else ~}
       # Wait for the bootstrap node's group to actually be ONLINE before

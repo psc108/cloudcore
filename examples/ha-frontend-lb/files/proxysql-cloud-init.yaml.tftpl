@@ -58,6 +58,7 @@ write_files:
       UPDATE global_variables SET variable_value='${monitor_password}' WHERE variable_name='mysql-monitor_password';
 
       INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('appuser', '${app_password}', 10);
+      INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('keystone', '${keystone_password}', 10);
 
       LOAD MYSQL VARIABLES TO RUNTIME;
       LOAD MYSQL SERVERS TO RUNTIME;

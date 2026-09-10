@@ -69,3 +69,15 @@ variable "proxysql_flavor" {
   type        = string
   default     = "standard.small"
 }
+
+variable "keystone_flavor" {
+  description = "Compute flavor for the two Keystone identity nodes."
+  type        = string
+  default     = "standard.small"
+}
+
+variable "memcached_flavor" {
+  description = "Compute flavor for the two memcached nodes."
+  type        = string
+  default     = "standard.nano"
+}
