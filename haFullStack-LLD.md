@@ -1003,12 +1003,13 @@ question for the AWS build of this slice, not glossed over.
   dedicated listen port (5000, matching Keystone's own native port)
   instead, per direct confirmation: this matches how the real backend
   application actually addresses Keystone once it exists, not a Lab-only
-  workaround for missing DNS** — worth being precise about, since Lab
-  guest-network DNS genuinely doesn't reach vhost-routing usability
-  (CloudCore's own DNS server is confirmed working — F-010–F-014 — but
-  host-loopback-only, unreachable from bridge-network guests; that's a
-  real, separate limitation, just not the reason for this particular
-  decision). More detail on the real application's addressing scheme is
+  workaround for missing DNS** — worth being precise about, since
+  guest-network DNS resolution of CloudCore-managed hostnames is now
+  fixed (F-022: CloudCore's own DNS server, confirmed working since
+  F-010–F-014, was host-loopback-only and unreachable from guests until
+  the bridge dnsmasq was made to forward guest queries to it). Vhost
+  routing would work fine here today; it's still not what this decision
+  is based on. More detail on the real application's addressing scheme is
   expected once the backend tier itself is built — this may need
   revisiting then, not assumed settled from this slice alone.
 - Frontend gets a new `keystone-status.py` timer (same systemd-timer
@@ -1196,3 +1197,4 @@ to redesign around them.
 | v0.5 | 2026-09-10 | Paul Scott | §2.3.1a test 3's expected outcome corrected after actually running it — Group Replication does not provide split-brain protection by default (F-021); §5.1's fault-tolerance argument for 3 nodes still holds, but the network-partition protection §5.3 claimed does not exist without an explicit fix. Added as a new, significant open item in §2.7. |
 | v0.6 | 2026-09-10 | Paul Scott | F-021 fixed, not just flagged — `quorum-watchdog.py` added to §2.3.2's MySQL cloud-init, §2.3.1b's self-healing table and §2.7's open item both updated to reflect the real, verified fix (including a second bug found building it: `read_only` vs `super_read_only`). |
 | v0.7 | 2026-09-10 | Paul Scott | Third slice — §3, Identity Tier (Keystone): 2-node active-active, shared MySQL backend, memcached Fernet cache, `admin:admin` bootstrap, Lab-substitution port-based routing instead of vhosts. Flagged `haFullStack.md` §7's memcached claim as unverified (likely the shared Fernet keys, not memcached, actually enable cross-node validation) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |
+| v0.8 | 2026-09-10 | Paul Scott | §3.3.1 corrected: guest-network DNS resolution of CloudCore-managed hostnames is now fixed (F-022), not a standing limitation — the port-based Keystone routing decision itself is unchanged, since it was never based on that limitation in the first place. |

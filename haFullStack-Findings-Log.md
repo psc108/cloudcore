@@ -29,6 +29,7 @@ fixed — if a later slice hits a variant of an old problem, it gets a new
 | [Phase 1.A — Lab, OpenTofu](#phase-1a--lab-opentofu) | [F-003](#f-003--bridged-instances-silently-fall-back-to-slirp-without-etcqemubridgeconf) – [F-009](#f-009--templatefilecloud-init-yaml-broke-on-indent-and-inline-runcmd-quoting) |
 | [Platform Hardening (post-Phase 1.A review)](#platform-hardening-post-phase-1a-review) | [F-010](#f-010--bridge-mode-security-group-enforcement-silently-fails-100-of-the-time-not-just-under-concurrency) – [F-014](#f-014--dns-a-records-had-the-same-launch-time-stale-value-bug-private_ip-had-f-007) |
 | [Phase 2.A — Lab, OpenTofu (Database Tier)](#phase-2a--lab-opentofu-database-tier) | [F-015](#f-015--bridge-mode-security-groups-silently-block-all-general-internet-egress) – [F-021](#f-021--the-whole-point-of-test-3-didnt-hold-the-survivor-doesnt-refuse-writes-after-losing-quorum) |
+| [Platform Hardening (post-Phase 2.A review)](#platform-hardening-post-phase-2a-review) | [F-022](#f-022--cloudcores-dns-was-confirmed-working-but-guests-couldnt-reach-it) – [F-024](#f-024--help_articlesslug-uniqueness-didnt-account-for-soft-deletes) |
 
 ---
 
@@ -816,6 +817,150 @@ blocked/degraded 3-node one).
 
 ---
 
+## Platform Hardening (post-Phase 2.A review)
+
+Same pattern as the post-Phase 1.A review — a pause before starting
+Phase 3 to fix platform-level gaps rather than carry them forward.
+Motivated directly by lessons from the Database Tier build (F-017's
+hostname-resolution gap in particular); the SQLite and help-articles
+findings were surfaced incidentally while sanity-checking the DNS work
+against the full test suite, not sought out deliberately.
+
+### F-022 — CloudCore's DNS was confirmed working but guests couldn't reach it
+
+**Where:** `api/setup-network.sh`, `api/dns.py`, `api/dns_server.py`,
+`api/server.py`.
+
+**Symptom:** CloudCore's own DNS server was confirmed working by
+F-012–F-014, but only via `127.0.0.1:5353` on the host — nothing inside
+a guest VM could resolve a CloudCore-managed hostname at all. This is
+the same class of gap F-017 hit directly (MySQL's distributed recovery
+connecting to a donor by hostname, unresolvable from inside a guest);
+fixing it at the platform level means the next slice that needs
+guest-to-guest hostname resolution doesn't have to work around it again.
+
+**Fix:** The bridge's own DHCP dnsmasq (`setup-network.sh`) now also
+serves DNS to guests — handing out itself as the DNS server and
+forwarding CloudCore's own zones to the existing API dnsmasq
+(`127.0.0.1:5353`), with public DNS kept as the default catch-all so
+normal internet resolution (`apt`, `curl`, ...) is unaffected.
+
+**A second issue found building the fix:** guest-side resolution worked
+via a direct `dig` against the bridge dnsmasq, but failed (`SERVFAIL`)
+through the guest's own default resolver (`systemd-resolved`'s stub at
+`127.0.0.53`). Root cause: CloudCore's zones used a `.local` suffix,
+which RFC 6762 reserves for mDNS — `systemd-resolved` refuses to forward
+genuine unicast queries for it regardless of configured DNS server, by
+design, not a bug in this fix. Fixed by renaming CloudCore's zone suffix
+from `.local` to `.internal` — the suffix RFC 9476 actually reserves for
+this purpose — throughout the codebase (source, tests, UI, live DB),
+rather than working around the resolver's correct behavior.
+
+**Verified by:** `getent hosts` and `dig` through the guest's own default
+resolver correctly resolving an instance's real private IP end-to-end;
+external DNS (`google.com`) still resolving correctly through the same
+path; the host-side `dns_server.py` path unaffected.
+
+---
+
+### F-023 — Concurrent writes could hang or 500 with "database is locked" — and the first fix attempt could have hung worse
+
+**Where:** `api/db.py`.
+
+**Symptom:** `tests/run_tests.py --skip-vm` occasionally stalled
+indefinitely under write-heavy load (confirmed genuine — zero CPU-time
+progress across repeated checks, not just slow) or threw uncaught 500s
+with `sqlite3.OperationalError: database is locked`.
+
+**Root cause:** SQLite (WAL mode included) only ever allows one writer
+at a time. Flask's dev server runs multi-threaded by default — `app.run()`
+sets `threaded=True` itself; checking only Werkzeug's own lower-level
+default (`False`) gives the wrong answer. CloudCore also spawns
+background daemon threads for instance launch/destroy and SG
+apply/remove (`server.py`'s `threading.Thread(..., daemon=True)` call
+sites). Each thread gets its own SQLite connection via `get_db()`'s
+existing thread-local pattern, and a `threading.Lock()` already defined
+in `db.py` for exactly this coordination was dead code — never
+referenced anywhere else in the file.
+
+**Fix:** A `_SerializedConnection(sqlite3.Connection)` subclass,
+installed via `sqlite3.connect(..., factory=...)`, that makes the
+existing lock actually serialize writers. The first attempt — acquiring
+and releasing the lock around each individual `execute()`/`commit()`
+call — was insufficient: an INSERT opens an implicit transaction and
+holds the real file-level write lock from `execute()` until the
+*separate*, later `commit()` call, so releasing the Python lock in
+between let another thread's connection slip in and hit the same error.
+Fixed by tracking `Connection.in_transaction`: the lock is held across a
+connection's calls once a transaction opens, released only on
+`commit()`/`rollback()` (or immediately, for a plain read).
+
+**A second bug found building the fix, before it shipped:** a failed
+statement (see F-024) leaves `in_transaction` `True` with no automatic
+rollback. Releasing the lock only when idle meant a connection left in
+that state would hold the process-wide lock **indefinitely** if its
+caller never explicitly rolled back — strictly worse than the original
+bug, since `Lock.acquire()` has no timeout at all. Caught by
+deliberately reproducing the exact scenario (a write that raises with no
+`except`/rollback around it) before considering the fix complete, not by
+accident. Fixed by releasing the lock unconditionally on any exception,
+which degrades gracefully to SQLite's own native 30s busy-wait for that
+one case instead of hanging forever.
+
+**Verified by:** An 80-way concurrent-write stress test directly against
+the running server (0 errors, ~1s total — down from repeated 30s+
+stalls/500s beforehand); a direct repro of the exception-path bug,
+confirming it now fails after SQLite's native 30s timeout rather than
+hanging indefinitely; a full `tests/run_tests.py --skip-vm` run to
+genuine completion with 0 `database is locked` errors anywhere in the
+server log (first two attempts at this looked complete but had actually
+only captured a background launcher process exiting immediately, not the
+real test run — caught by checking the process was still alive rather
+than trusting an early "completed" signal).
+
+---
+
+### F-024 — `help_articles.slug` uniqueness didn't account for soft-deletes
+
+**Where:** `api/db.py` schema, `api/help_store.py`, `api/help_routes.py`.
+
+**Symptom:** Found while investigating F-023 — repeated `POST
+/v1/help/articles` calls threw an uncaught 500
+(`sqlite3.IntegrityError: UNIQUE constraint failed: help_articles.slug`)
+during test runs. Each one left a dangling, never-committed-or-rolled-
+back transaction (`help_store.put()` had no exception handling around
+the insert), which — combined with F-023's bug above — is what cascaded
+into the ~30s-per-test stalls seen through most of the rest of that test
+run.
+
+**Root cause:** `help_store.find_by_slug()`'s own duplicate-check
+already excludes soft-deleted articles (`WHERE status != 'deleted'`),
+but the schema's `slug TEXT NOT NULL UNIQUE` constraint applied to
+*every* row regardless of status. A slug reused after its article was
+soft-deleted passed the app-level pre-check (which assumed reuse was
+fine) but still collided with the raw DB constraint (which didn't know
+about soft-deletes at all).
+
+**Fix:** Replaced the column-level `UNIQUE` with a partial unique index
+scoped to `status != 'deleted'`, matching what `find_by_slug()` already
+assumed — via a table-rebuild migration for existing databases (SQLite
+can't drop a column-level `UNIQUE` via `ALTER TABLE`), forcing an FTS5
+index rebuild afterward since rowids aren't guaranteed preserved across
+the rebuild. `help_store.put()` now also catches the residual
+race-condition case (two concurrent creates racing for the same free
+slug) explicitly, rolls back, and raises a catchable error instead of
+leaving a dangling transaction — routes return a clean 409.
+
+**Verified by:** Migration run against the live DB (all 39 existing
+articles, 21 of them soft-deleted, preserved exactly; FTS search still
+functional); a manual create → soft-delete → recreate-with-same-slug
+cycle through the real API (now `201`, previously an uncaught `500`);
+confirmed a genuine still-*active* slug conflict still correctly returns
+`409`; the full Help suite (25 tests) passing in the same complete test
+run that verified F-023.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -826,3 +971,4 @@ blocked/degraded 3-node one).
 | v0.4 | 2026-09-10 | Paul Scott | Failure-mode testing (2A-11, 2A-12, 2A-14): secondary loss and primary failover both self-healed automatically with ProxySQL auto-retagging, measured primary-failover RTO ~3.5s (beats the assumed ~5-10s). Restart-and-rejoin confirmed working for a joiner node but revealed F-020 — the bootstrap node has no permanent seed and can't rejoin an existing group on its own after a restart, unlike joiner nodes; fixed manually for this run, flagged as a real open item rather than templated. |
 | v0.5 | 2026-09-10 | Paul Scott | F-021 — the most significant finding this session: test 3 (2A-13, stop 2 of 3 nodes) revealed the survivor does not actually refuse writes after losing quorum by default, contradicting `haFullStack.md` §5.3's own original claim. `haFullStack.md` corrected to v1.3. Real split-brain protection is a new, undecided open item, not a same-session fix. |
 | v0.6 | 2026-09-10 | Paul Scott | F-021 fixed: `quorum-watchdog.py` deployed and verified against a real below-quorum cycle run twice. A second bug found and fixed building the fix itself — `super_read_only=OFF` doesn't clear the separate `read_only` flag, which silently blocked ProxySQL from ever re-admitting a recovered node as a writer. `haFullStack.md` corrected to v1.4. |
+| v0.7 | 2026-09-10 | Paul Scott | Platform Hardening (post-Phase 2.A review): guest-visible DNS + `.local`→`.internal` zone rename (F-022, motivated by F-017's hostname-resolution gap); SQLite write-serialization fix for a real hang/`database is locked` failure mode under concurrent load, including a worse indefinite-hang bug caught and fixed in the first attempt before it shipped (F-023); `help_articles.slug` uniqueness corrected to exclude soft-deletes via a partial unique index (F-024). All three found and fixed outside any specific slice, ahead of starting Phase 3. |
