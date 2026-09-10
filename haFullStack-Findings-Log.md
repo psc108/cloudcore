@@ -30,6 +30,7 @@ fixed — if a later slice hits a variant of an old problem, it gets a new
 | [Platform Hardening (post-Phase 1.A review)](#platform-hardening-post-phase-1a-review) | [F-010](#f-010--bridge-mode-security-group-enforcement-silently-fails-100-of-the-time-not-just-under-concurrency) – [F-014](#f-014--dns-a-records-had-the-same-launch-time-stale-value-bug-private_ip-had-f-007) |
 | [Phase 2.A — Lab, OpenTofu (Database Tier)](#phase-2a--lab-opentofu-database-tier) | [F-015](#f-015--bridge-mode-security-groups-silently-block-all-general-internet-egress) – [F-021](#f-021--the-whole-point-of-test-3-didnt-hold-the-survivor-doesnt-refuse-writes-after-losing-quorum) |
 | [Platform Hardening (post-Phase 2.A review)](#platform-hardening-post-phase-2a-review) | [F-022](#f-022--cloudcores-dns-was-confirmed-working-but-guests-couldnt-reach-it) – [F-024](#f-024--help_articlesslug-uniqueness-didnt-account-for-soft-deletes) |
+| [Phase 3.A — Lab, OpenTofu (Identity Tier)](#phase-3a--lab-opentofu-identity-tier) | [F-025](#f-025--random_idb64_url-needs-padding-added-before-keystone-can-use-it-as-a-fernet-key) – [F-028](#f-028--a-stopped-then-started-instance-has-a-real-tcp-reachability-gap-distinct-from-icmpssh-readiness) |
 
 ---
 
@@ -961,6 +962,66 @@ run that verified F-023.
 
 ---
 
+## Phase 3.A — Lab, OpenTofu (Identity Tier)
+
+### F-025 — `random_id.b64_url` needs padding added before Keystone can use it as a Fernet key
+
+**Where:** `examples/ha-frontend-lb/main.tf`'s `random_id.fernet_key0`/`fernet_key1`, `locals.tf`'s `keystone_user_data`.
+
+**Symptom:** Every token-issuance request returned an uncaught 500. Apache's `keystone.log` traced it to `binascii.Error: Incorrect padding` inside `cryptography.fernet.Fernet.__init__`, called from Keystone's own Fernet token provider while loading the key material from `/etc/keystone/fernet-keys/0`.
+
+**Root cause:** A 32-byte value base64-encodes to 43 characters — one short of the next multiple of 4 that standard base64 (including base64url) needs for valid padding. `random_id`'s `.b64_url` attribute outputs the unpadded 43-character form; Python's `base64.urlsafe_b64decode()` (used internally by the `cryptography` library) requires the padding and rejects unpadded input outright. `keystone-manage fernet_setup`'s own generated keys always carry the trailing `=`, which is what made the mismatch obvious once compared side by side against a real one from the earlier probe VM.
+
+**Fix:** Append the padding directly where the key values are passed into the template: `fernet_key0 = "${random_id.fernet_key0.b64_url}="` (byte_length=32 always needs exactly one `=`, not a general-purpose padding calculation).
+
+**Verified by:** Direct token issuance against both Keystone nodes after the fix, both returning `HTTP 201` with a real Fernet token.
+
+---
+
+### F-026 — cloud-init's `write_files` module runs *before* packages install
+
+**Where:** `examples/ha-frontend-lb/files/keystone-cloud-init.yaml.tftpl`.
+
+**Symptom:** `cloud-init status` reported `error`; `/usr/local/sbin/setup-keystone.sh` was never written to disk at all (`runcmd` failed with "not found"), despite appearing earlier in the same `write_files` list as the Fernet key files.
+
+**Root cause:** The Fernet key file entries specified `owner: keystone:keystone`. cloud-init's `write_files` module runs before the `packages` stage, so the `keystone` system user (created by the `keystone` package's own postinst) doesn't exist yet at that point — confirmed directly via `cloud-init status --long`: `OSError('Unknown user or group: "getpwnam(): name not found: \'keystone\'"')`. A single failing entry aborts the **entire** `write_files` module, silently skipping every other file in the same list — including the setup script that was never actually broken itself.
+
+**A related, secondary gap found while fixing this:** the Keystone nodes' `packages` list never included `mysql-client`, so `setup-keystone.sh`'s own MySQL-readiness wait-loop (`mysql -h ... -e "SELECT 1"`) silently failed every iteration (command not found) without ever confirming real readiness, exhausting its full 5-minute timeout on every boot regardless of whether MySQL was actually ready. Not a correctness bug — `db_sync` itself still connects independently via `pymysql` and succeeds on its own merits once actually invoked — but a real, wasteful gap, fixed by adding `mysql-client` to the package list.
+
+**Fix:** Write the Fernet keys to a plain root-owned staging path (`/root/fernet-key-0`/`-1`, no `owner:`) in `write_files`, then `mkdir -p`, `mv`, `chown keystone:keystone`, and `chmod 600` them explicitly as the first steps of `setup-keystone.sh` in `runcmd` — which runs after packages are installed. Added `mysql-client` to the packages list for the wait-loop fix.
+
+**Verified by:** `cloud-init status` reporting `done` (not `error`) on a fresh apply of both Keystone nodes; direct confirmation the Fernet keys landed at `/etc/keystone/fernet-keys/0`/`1` with correct `keystone:keystone` ownership and `0600` permissions.
+
+---
+
+### F-027 — Shared Fernet keys, not memcached, enable cross-node token validation
+
+**Where:** `haFullStack.md` §7 (now corrected); resolved by failure-mode test 2 (3A-11).
+
+**Symptom/question:** `haFullStack.md` §7 claimed memcached "is what allows either Keystone instance to validate a token issued by the other." `haFullStack-LLD.md` §3.1 flagged this as likely imprecise before building anything, arguing Fernet's self-describing bearer tokens need only shared key material — the same discipline that caught F-021 for the DB tier. Given its own standing (equivalent to 2A-13), this got a dedicated test rather than being assumed either way.
+
+**Result:** A token issued directly against Keystone node A, with node A then **stopped entirely** (not just also-reachable), validated successfully (`HTTP 200`) directly against node B. Separately, stopping one and then both memcached nodes (tests 3/4) left basic token issuance and validation working throughout — slower while a dead memcached connection attempt was still being retried, but never a hard failure. This confirms the LLD's claim and `haFullStack.md` §7's original text is wrong.
+
+**Fix:** `haFullStack.md` §7 corrected — memcached's actual role is caching validation results and propagating revocation state, not enabling cross-node validation at all; that's shared Fernet key material, which §7 now documents needing to be distributed identically to every node.
+
+**Verified by:** Direct `HTTP 200`/`HTTP 201` responses for all four scenarios above, run against real instances with real stop/start cycles, not simulated.
+
+---
+
+### F-028 — A stopped-then-started instance has a real TCP-reachability gap distinct from ICMP/SSH readiness
+
+**Where:** Observed during failure-mode tests 1 and 5 (3A-10, 3A-14) — platform-level (CloudCore's bridged networking / libvirt instance restart), not specific to Keystone.
+
+**Symptom:** After restarting a stopped instance, `ping` and `ssh` succeeded almost immediately, and the guest's own `ss -tlnp` confirmed the service was already listening — but external TCP connections to that port (from the host, and from other guests) failed outright for roughly 1-2 minutes before starting to succeed, with no gradual degradation in between (works or doesn't, no partial/slow responses). Reproduced twice, independently, on different node pairs.
+
+**Root cause:** Not fully pinned down (out of scope to chase further for this slice) — ICMP and an already-established SSH client connection succeeding immediately rules out a simple "guest not booted yet" explanation, and the service being confirmed locally listening rules out an application-level cause. The pattern (L2/L3 reachable, but new TCP connections specifically fail for a window after a restart) is consistent with bridge FDB or ARP-cache staleness on the host side specific to *new* connection attempts, but this wasn't confirmed against packet captures.
+
+**Consequence:** A real, measurable component of recovery time for any "restart a stopped node" scenario on this platform — `keystone-status.py`'s `DEGRADED`/`CRITICAL` readings during tests 1 and 5 partly reflect this window, not purely Keystone's own boot time. Worth factoring into RTO expectations for any future failure-mode test that restarts an instance, on any tier.
+
+**Not fixed** — flagged as a platform characteristic to be aware of, not a code bug with an obvious fix at this layer.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -972,3 +1033,4 @@ run that verified F-023.
 | v0.5 | 2026-09-10 | Paul Scott | F-021 — the most significant finding this session: test 3 (2A-13, stop 2 of 3 nodes) revealed the survivor does not actually refuse writes after losing quorum by default, contradicting `haFullStack.md` §5.3's own original claim. `haFullStack.md` corrected to v1.3. Real split-brain protection is a new, undecided open item, not a same-session fix. |
 | v0.6 | 2026-09-10 | Paul Scott | F-021 fixed: `quorum-watchdog.py` deployed and verified against a real below-quorum cycle run twice. A second bug found and fixed building the fix itself — `super_read_only=OFF` doesn't clear the separate `read_only` flag, which silently blocked ProxySQL from ever re-admitting a recovered node as a writer. `haFullStack.md` corrected to v1.4. |
 | v0.7 | 2026-09-10 | Paul Scott | Platform Hardening (post-Phase 2.A review): guest-visible DNS + `.local`→`.internal` zone rename (F-022, motivated by F-017's hostname-resolution gap); SQLite write-serialization fix for a real hang/`database is locked` failure mode under concurrent load, including a worse indefinite-hang bug caught and fixed in the first attempt before it shipped (F-023); `help_articles.slug` uniqueness corrected to exclude soft-deletes via a partial unique index (F-024). All three found and fixed outside any specific slice, ahead of starting Phase 3. |
+| v0.8 | 2026-09-10 | Paul Scott | Third phase built and failure-tested for real — Phase 3.A, Identity Tier (Keystone). Two real deploy bugs found and fixed (missing Fernet-key base64 padding, F-025; cloud-init `write_files` running before packages install plus a related missing-package gap, F-026). Failure test 2 (3A-11) resolved the memcached question definitively — shared Fernet keys, not memcached, enable cross-node validation, correcting `haFullStack.md` §7 (F-027). A platform-level TCP-reachability gap after instance restart, distinct from ICMP/SSH readiness, observed and documented rather than chased to a fix (F-028). |

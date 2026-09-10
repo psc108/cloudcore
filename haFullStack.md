@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v1.4 | 10 September 2026 | Paul Scott
+v1.5 | 10 September 2026 | Paul Scott
 
 ---
 
@@ -578,25 +578,27 @@ which makes active-active the natural deployment mode.
 
 - Deploy Keystone in active-active mode; both instances share the MySQL
   backend described in Section 5.
-- Use memcached (itself deployed as a 2-node pool) for Fernet token caching —
-  this is what allows either Keystone instance to validate a token issued by
-  the other.
+- Both instances need the **same Fernet key material**, distributed to
+  every node at deploy time — this, not memcached, is what allows either
+  Keystone instance to validate a token issued by the other, since Fernet
+  tokens are self-describing bearer tokens any node holding the matching
+  keys can decrypt and validate on its own.
+- Use memcached (itself deployed as a 2-node pool) to cache validation
+  results and propagate revocation state — a performance/consistency
+  layer, not a requirement for cross-node validation to work at all.
 - NGINX load-balances the Keystone API over HTTP (Section 3.1) — no session
-  affinity required, since token validation state lives in memcached, not
-  in-process.
+  affinity required, since neither token validation nor the Fernet keys
+  live in-process.
 
-> **Flagged, not yet verified** (`haFullStack-LLD.md` §3.1) — the
-> memcached claim above is very likely imprecise, the same way §5.3's
-> failure table was before it got built and tested (F-021). Fernet
-> tokens are self-describing bearer tokens; any Keystone node holding
-> the *same Fernet key material* can decrypt and validate a token issued
-> by any other node holding it, with no memcached involvement at all.
-> memcached's actual role is more likely caching validation results and
-> propagating the revocation list — not the mechanism that enables
-> cross-node validation in the first place, which this section doesn't
-> mention needing to distribute at all. Getting its own failure-mode
-> test (LLD §3.3.1a test 2) rather than being carried forward unverified
-> a second time in this document.
+> **Corrected** (`haFullStack-LLD.md` §3.1, `haFullStack-Findings-Log.md`
+> F-027) — this section previously claimed memcached was what enabled
+> cross-node validation. Failure-mode test 2 (3A-11) settled it directly:
+> a token issued by one Keystone node, with that node then stopped
+> entirely, still validated successfully against the other node with
+> zero memcached involvement; stopping one and then both memcached nodes
+> separately left basic issuance and validation working throughout (F-027).
+> Same discipline that caught F-021 — tested rather than carried forward
+> on faith a second time.
 
 ---
 
@@ -814,3 +816,4 @@ journalctl -u keepalived -f
 | v1.2 | 2026-09-10 | Paul Scott | Same fix applied to RabbitMQ — quorum queues are Raft-based and subject to the identical majority-quorum constraint (§6.2); bumped from 2 to 3 nodes, updated cluster formation, quorum policy group size, the stream{} upstream, failure-mode table, monitoring targets, and rollout plan accordingly. |
 | v1.3 | 2026-09-10 | Paul Scott | Corrected §5.3's "two nodes fail simultaneously" row after actually building and testing it (`haFullStack-Findings-Log.md` F-021): Group Replication does **not** drop the survivor out of `ONLINE` or block writes by default — it expels unreachable members and continues as a legitimate, smaller group. Real split-brain protection needs an explicit fix (external enforcement or fencing), not assumed from the topology. |
 | v1.4 | 2026-09-10 | Paul Scott | F-021 fixed, not just documented: a local per-node `quorum-watchdog` enforces `super_read_only` below the original cluster's majority. Verified with the full below-quorum cycle run twice, including a real self-inflicted bug found and fixed along the way (`read_only` vs. `super_read_only`). §5.3 updated to reflect the real, working RTO/RPO. |
+| v1.5 | 2026-09-10 | Paul Scott | §7 corrected after Phase 3.A's failure-mode test 2 (`haFullStack-Findings-Log.md` F-027): shared Fernet key material, not memcached, is what enables cross-node token validation — memcached's real role is caching validation results and revocation state. Confirmed directly: a token issued by one Keystone node validated successfully on the other with that first node fully stopped, zero memcached involvement. |

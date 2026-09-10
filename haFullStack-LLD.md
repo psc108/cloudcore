@@ -22,7 +22,7 @@ slice below rather than repeated inline. Sections currently complete:
 |---|---|---|
 | 1 | Load Balancer Tier — Client to Frontend (L7) | Lab/OpenTofu built and verified ([findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu)); On-Prem/AWS and Ansible still pending |
 | 2 | Database Tier — MySQL High Availability | Lab/OpenTofu built, failure-tested, and F-021 fixed ([findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier)); On-Prem/AWS and Ansible still pending |
-| 3 | Identity Tier — Keystone | Draft, under review |
+| 3 | Identity Tier — Keystone | Built and failure-tested (Lab) |
 
 Per the session plan: every slice gets built and verified on Lab/OpenTofu
 first, as one growing stack (not independent per-slice templates) —
@@ -918,18 +918,18 @@ requires a live DB round-trip), which is most of what "tested in
 combination with the full stack" means in practice — no separate
 combined mega-test is needed on top of it.
 
-**A claim in `haFullStack.md` §7 to verify, not assume:** it says
-memcached "is what allows either Keystone instance to validate a token
-issued by the other." That's very likely imprecise. Fernet tokens are
-self-describing bearer tokens — any Keystone node holding the *same
-Fernet key material* can decrypt and validate a token issued by any
-other node holding it, with zero memcached involvement. memcached's
-actual role is caching validation results (performance) and propagating
-the revocation event list quickly — not the mechanism that makes
-cross-node validation possible at all. The real enabler is **shared
-Fernet keys**, which §7 doesn't mention needing to distribute at all.
-This gets its own failure-mode test (§3.3.1a test 2) rather than being
-assumed either way — the same discipline that caught F-021.
+**A claim in `haFullStack.md` §7, verified and corrected (F-027):** it
+said memcached "is what allows either Keystone instance to validate a
+token issued by the other." Failure-mode test 2 (§3.3.1a) settled this
+directly rather than assuming it either way — the same discipline that
+caught F-021: a token issued by one Keystone node, with that node then
+stopped entirely, validated successfully directly against the other node
+with zero memcached involvement. The real enabler is **shared Fernet
+key material**; memcached's actual role is caching validation results
+and propagating revocation state, confirmed by stopping one and then
+both memcached nodes separately and finding basic issuance/validation
+kept working throughout, just slower. `haFullStack.md` §7 corrected to
+v1.5 to match.
 
 **Explicitly out of scope, for later slices:** the backend application
 tier itself (§1.1 already deferred this), RabbitMQ, TLS/mTLS between
@@ -1027,13 +1027,13 @@ question for the AWS build of this slice, not glossed over.
 
 #### 3.3.1a Failure-Mode Test Matrix
 
-| # | Test | What it proves | Expected result |
-|---|---|---|---|
-| 1 | Stop one Keystone node | Active-active genuinely means zero failover delay, not just "a fast failover" | Zero impact — the surviving node keeps answering immediately, no election/promotion step exists to wait on (unlike §2's MySQL primary failover, which has a real, measured RTO) |
-| 2 | Get a token from node A, stop node A, validate that token against node B | Whether cross-node validation is really enabled by shared Fernet keys (as this LLD argues) or genuinely depends on memcached (as `haFullStack.md` §7 claims) | Token validates successfully via node B — if this fails, the claim in §3.1 was wrong instead and memcached (or something else) actually matters here; either outcome is real information, not assumed |
-| 3 | Stop one memcached node | memcached is a performance/revocation cache, not required for basic Fernet validation (per §3.1's claim, being tested here too) | Token issuance and validation keep working — slower, or with more redundant crypto work, but not broken |
-| 4 | Stop both memcached nodes | Same as test 3, pushed further — is memcached ever a hard dependency for basic auth, or only for revocation-list propagation | Basic token issuance/validation still works; a revoked-token check may not propagate as fast without memcached available, but that's a different claim than "auth is down" |
-| 5 | Stop both Keystone nodes | Genuine identity-tier outage — the one failure mode with no redundancy left to test | `keystone-status.html` correctly shows `CRITICAL`, distinct from `DEGRADED` |
+| # | Test | What it proves | Expected result | Actual result |
+|---|---|---|---|---|
+| 1 | Stop one Keystone node | Active-active genuinely means zero failover delay, not just "a fast failover" | Zero impact — the surviving node keeps answering immediately, no election/promotion step exists to wait on (unlike §2's MySQL primary failover, which has a real, measured RTO) | **Differs.** VIP-routed issuance fails over quickly (brief `CRITICAL` blip at the moment, matching NGINX's default failure-detection window), but the status page then reads `DEGRADED`, not `OK`, for the entire outage — by design: `keystone-status.py` deliberately validates directly against every node's own IP, so it correctly reports one node unreachable rather than only checking through the VIP (F-025-adjacent — see F-028 for a related restart-reachability finding) |
+| 2 | Get a token from node A, stop node A, validate that token against node B | Whether cross-node validation is really enabled by shared Fernet keys (as this LLD argues) or genuinely depends on memcached (as `haFullStack.md` §7 claims) | Token validates successfully via node B — if this fails, the claim in §3.1 was wrong instead and memcached (or something else) actually matters here; either outcome is real information, not assumed | **Confirmed as expected.** `HTTP 200` validating node A's token against node B with node A fully stopped, zero memcached involvement (F-027) |
+| 3 | Stop one memcached node | memcached is a performance/revocation cache, not required for basic Fernet validation (per §3.1's claim, being tested here too) | Token issuance and validation keep working — slower, or with more redundant crypto work, but not broken | **Confirmed as expected.** `HTTP 201`, ~3s instead of sub-second |
+| 4 | Stop both memcached nodes | Same as test 3, pushed further — is memcached ever a hard dependency for basic auth, or only for revocation-list propagation | Basic token issuance/validation still works; a revoked-token check may not propagate as fast without memcached available, but that's a different claim than "auth is down" | **Confirmed as expected.** Still succeeded (4.7s) with both nodes down; first attempt right after the second node went down hit a 15s client timeout with no response, consistent with a one-time retry/backoff penalty rather than a hard block |
+| 5 | Stop both Keystone nodes | Genuine identity-tier outage — the one failure mode with no redundancy left to test | `keystone-status.html` correctly shows `CRITICAL`, distinct from `DEGRADED` | **Confirmed as expected.** Recovered cleanly to `OK` once restarted, subject to the same restart-reachability window as test 1 (F-028) |
 
 Test 2 is this slice's equivalent of §2's test 3 (2A-13) — the one most
 likely to be skipped as "obviously fine," and the one actually worth
@@ -1163,10 +1163,16 @@ to redesign around them.
 - **AWS Keystone architecture** — genuinely undecided (§3.2/§3.5), not
   just unconfirmed detail. Needs a real decision (Keystone-on-EC2 vs. a
   deliberate redesign around IAM/Cognito) before that build starts.
-- **Memcached's actual role — resolve via test 2/3/4, don't assume
-  either the original doc or this LLD's counter-claim.** `haFullStack.md`
-  §7 will need correcting one way or the other once this is tested for
-  real, the same way §5.3 was corrected by F-021.
+- ~~Memcached's actual role~~ — **resolved (F-027).** Tests 2/3/4 confirmed
+  shared Fernet keys, not memcached, enable cross-node validation.
+  `haFullStack.md` §7 corrected to v1.5.
+- **Restart-reachability window (F-028)** — a stopped-then-started
+  instance on this Lab platform has a real ~1-2 minute window where
+  ICMP/SSH succeed but new TCP connections to an application port don't,
+  observed during tests 1 and 5. Root cause not pinned down (platform
+  networking, not Keystone-specific); worth factoring into RTO
+  expectations for any future restart-based failure test on any tier,
+  not something to chase further in this slice.
 - **Fernet key rotation** — this slice generates static keys once and
   never rotates them; a real deployment needs `keystone-manage
   fernet_rotate` on a schedule with distribution to every node. Out of
@@ -1198,3 +1204,4 @@ to redesign around them.
 | v0.6 | 2026-09-10 | Paul Scott | F-021 fixed, not just flagged — `quorum-watchdog.py` added to §2.3.2's MySQL cloud-init, §2.3.1b's self-healing table and §2.7's open item both updated to reflect the real, verified fix (including a second bug found building it: `read_only` vs `super_read_only`). |
 | v0.7 | 2026-09-10 | Paul Scott | Third slice — §3, Identity Tier (Keystone): 2-node active-active, shared MySQL backend, memcached Fernet cache, `admin:admin` bootstrap, Lab-substitution port-based routing instead of vhosts. Flagged `haFullStack.md` §7's memcached claim as unverified (likely the shared Fernet keys, not memcached, actually enable cross-node validation) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |
 | v0.8 | 2026-09-10 | Paul Scott | §3.3.1 corrected: guest-network DNS resolution of CloudCore-managed hostnames is now fixed (F-022), not a standing limitation — the port-based Keystone routing decision itself is unchanged, since it was never based on that limitation in the first place. |
+| v0.9 | 2026-09-10 | Paul Scott | §3 built and failure-tested for real. §3.3.1a's test matrix filled in with actual results — test 1's "zero impact" expectation didn't hold (status correctly reads `DEGRADED` while one node is down, by design); tests 2-5 confirmed as expected, including the memcached question (F-027, `haFullStack.md` §7 corrected to v1.5). Two real deploy bugs found and fixed along the way (F-025, F-026). New open item: a restart-reachability gap on this platform, distinct from ICMP/SSH readiness (F-028). |
