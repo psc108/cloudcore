@@ -585,6 +585,19 @@ which makes active-active the natural deployment mode.
   affinity required, since token validation state lives in memcached, not
   in-process.
 
+> **Flagged, not yet verified** (`haFullStack-LLD.md` §3.1) — the
+> memcached claim above is very likely imprecise, the same way §5.3's
+> failure table was before it got built and tested (F-021). Fernet
+> tokens are self-describing bearer tokens; any Keystone node holding
+> the *same Fernet key material* can decrypt and validate a token issued
+> by any other node holding it, with no memcached involvement at all.
+> memcached's actual role is more likely caching validation results and
+> propagating the revocation list — not the mechanism that enables
+> cross-node validation in the first place, which this section doesn't
+> mention needing to distribute at all. Getting its own failure-mode
+> test (LLD §3.3.1a test 2) rather than being carried forward unverified
+> a second time in this document.
+
 ---
 
 ## 8. Network Topology and Port Mapping

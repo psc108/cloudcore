@@ -22,6 +22,7 @@ slice below rather than repeated inline. Sections currently complete:
 |---|---|---|
 | 1 | Load Balancer Tier — Client to Frontend (L7) | Lab/OpenTofu built and verified ([findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu)); On-Prem/AWS and Ansible still pending |
 | 2 | Database Tier — MySQL High Availability | Lab/OpenTofu built, failure-tested, and F-021 fixed ([findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier)); On-Prem/AWS and Ansible still pending |
+| 3 | Identity Tier — Keystone | Draft, under review |
 
 Per the session plan: every slice gets built and verified on Lab/OpenTofu
 first, as one growing stack (not independent per-slice templates) —
@@ -897,6 +898,293 @@ resource "aws_db_proxy" "mysql" {
 
 ---
 
+## 3. Identity Tier — Keystone
+
+### 3.1 Scope
+
+**In scope for this section:** 2× Keystone instances (active-active, per
+`haFullStack.md` §7), a 2-node memcached pool for Fernet token caching,
+exposing Keystone through the existing NGINX nodes, and a
+`keystone-status.html` page on the frontend tier proving it works —
+same pattern as §2's `mysql-status.html`.
+
+**Deliberately not a separate database tier:** Keystone shares the
+*existing* 3-node MySQL cluster from §2 (a new `keystone` database and
+user on it), not a new one — matching `haFullStack.md` §7's "both
+instances share the MySQL backend described in Section 5" and this
+session's "one growing stack" plan. This also means Keystone's own
+health check inherently proves MySQL connectivity too (token issuance
+requires a live DB round-trip), which is most of what "tested in
+combination with the full stack" means in practice — no separate
+combined mega-test is needed on top of it.
+
+**A claim in `haFullStack.md` §7 to verify, not assume:** it says
+memcached "is what allows either Keystone instance to validate a token
+issued by the other." That's very likely imprecise. Fernet tokens are
+self-describing bearer tokens — any Keystone node holding the *same
+Fernet key material* can decrypt and validate a token issued by any
+other node holding it, with zero memcached involvement. memcached's
+actual role is caching validation results (performance) and propagating
+the revocation event list quickly — not the mechanism that makes
+cross-node validation possible at all. The real enabler is **shared
+Fernet keys**, which §7 doesn't mention needing to distribute at all.
+This gets its own failure-mode test (§3.3.1a test 2) rather than being
+assumed either way — the same discipline that caught F-021.
+
+**Explicitly out of scope, for later slices:** the backend application
+tier itself (§1.1 already deferred this), RabbitMQ, TLS/mTLS between
+services (`haFullStack.md` §12/Phase 4's own scope, not this slice's).
+
+### 3.2 Environment and Tooling Matrix
+
+| Environment | Mechanism | Why | IaC Tool(s) |
+|---|---|---|---|
+| **Lab** (this platform) | 2× Keystone + 2× memcached, active-active, fronted by the existing NGINX nodes | Validates the actual HLD-designed architecture (active-active identity, shared token validation) against real infrastructure | OpenTofu or Ansible |
+| **On-Prem** | Same — 2× Keystone + 2× memcached + NGINX | Same architecture as Lab — this is the environment the HLD design was actually written for | OpenTofu or Ansible |
+| **AWS** | **Open item, not resolved here** — Keystone is OpenStack software, not an AWS-native service; no managed substitute exists the way RDS substituted for hand-rolled MySQL HA in §2 | Likely still Keystone-on-EC2 (same as Lab/On-Prem) rather than a managed replacement, but confirm before building — see §3.7 | OpenTofu or Ansible |
+
+Unlike §1 (AWS replaced Keepalived with ALB) and §2 (AWS replaced Group
+Replication with RDS), there's no obvious AWS-native drop-in for
+Keystone specifically — IAM/Cognito solve a related but not equivalent
+problem (they're not OpenStack Identity API v3 compatible, and nothing
+in this stack currently expects them to be). Flagged as a real open
+question for the AWS build of this slice, not glossed over.
+
+---
+
+### 3.3 Lab Environment (CloudCore)
+
+#### 3.3.1 Design
+
+- Reuses the existing VPC/subnet and the existing 3-node MySQL cluster
+  from §2 — one growing stack, not a new one. A new `keystone` MySQL
+  database and a new `keystone` DB user (own credentials, not shared
+  with `appuser`) are created on it, same install-time pattern as
+  `clusterdemo`/`appuser` in §2.3.2.
+- Two new security groups: `keystone` (ingress 5000 from the `nginx` SG
+  only, plus SSH) and `memcached` (ingress 11211 from the `keystone` SG
+  only, plus SSH) — memcached is never exposed outside the Keystone
+  tier itself.
+- 2× Keystone instances via `modules/instance-group` — **not**
+  `modules/compute` this time: unlike MySQL's bootstrap/joiner asymmetry
+  or NGINX's MASTER/BACKUP split, both Keystone nodes run genuinely
+  identical config (active-active, no per-node role), so the simpler,
+  homogeneous module is the right fit here, not the map-based one.
+- 2× memcached instances via `modules/instance-group` — same reasoning,
+  identical config on both.
+- **Fernet key generation — the real fix for the memcached claim above.**
+  Both Keystone nodes need the *same* Fernet key material from first
+  boot, or token validation silently breaks across the pair (a client
+  whose request happens to round-robin to "the other" node gets a bogus
+  "token invalid," not an obvious error). Generated once in Terraform
+  using the `random` provider (`random_id`, 32 bytes, base64url output —
+  exactly Fernet's expected key format) and injected identically into
+  both nodes' `user_data` — no runtime cross-node coordination needed at
+  all, unlike MySQL's donor-based bootstrap. This is a **new provider
+  dependency** (`hashicorp/random`), added to `versions.tf`. Static keys
+  generated once and never rotated is a known Lab-only simplification —
+  a real deployment needs `keystone-manage fernet_rotate` on a schedule
+  with the rotated keys distributed to every node, out of scope here.
+- Admin bootstrap: `keystone-manage bootstrap` with
+  `--bootstrap-password admin` and the default `admin` username — **a
+  deliberate, explicit Lab-only credential** (`admin:admin`), same
+  "lab-only placeholder, not production" convention as `vrrp_auth_pass`
+  and the MySQL passwords in §2.3.2. Only needs to run on **one** of the
+  two Keystone nodes (it's a DB write against the shared `keystone`
+  database, not a per-node operation) — the other node just needs the
+  schema and Fernet keys already in place to serve requests against the
+  same data, mirroring the "one node does the one-time setup" pattern
+  from §2's MySQL bootstrap node, but far simpler here since there's no
+  replication protocol to bootstrap, just a shared DB write.
+- NGINX gets Keystone added to its existing `http{}` context (sibling to
+  the frontend `server{}` block from §1, both already present in the
+  same `sites-available/default`) — `haFullStack.md` §7/§8 specify
+  hostname-based vhost routing (`identity.example.com`). **Routes via a
+  dedicated listen port (5000, matching Keystone's own native port)
+  instead, per direct confirmation: this matches how the real backend
+  application actually addresses Keystone once it exists, not a Lab-only
+  workaround for missing DNS** — worth being precise about, since Lab
+  guest-network DNS genuinely doesn't reach vhost-routing usability
+  (CloudCore's own DNS server is confirmed working — F-010–F-014 — but
+  host-loopback-only, unreachable from bridge-network guests; that's a
+  real, separate limitation, just not the reason for this particular
+  decision). More detail on the real application's addressing scheme is
+  expected once the backend tier itself is built — this may need
+  revisiting then, not assumed settled from this slice alone.
+- Frontend gets a new `keystone-status.py` timer (same systemd-timer
+  pattern as `mysql-status.py`, same rolling-history JSON + HTML
+  approach) — connects through the VIP on :5000, requests a token with
+  the `admin:admin` credential, and separately re-validates that same
+  token through **the other** Keystone node specifically (not just
+  "whichever NGINX round-robins to" — the check needs to deliberately
+  target both nodes across two requests to prove cross-node validation,
+  not accidentally only ever hit one). Verdict logic: `OK` if token
+  issuance succeeds and cross-node validation succeeds; `DEGRADED` if
+  issuance succeeds but cross-node validation fails (exactly the
+  scenario the Fernet-key-sharing question above would produce);
+  `CRITICAL` if issuance itself fails.
+
+#### 3.3.1a Failure-Mode Test Matrix
+
+| # | Test | What it proves | Expected result |
+|---|---|---|---|
+| 1 | Stop one Keystone node | Active-active genuinely means zero failover delay, not just "a fast failover" | Zero impact — the surviving node keeps answering immediately, no election/promotion step exists to wait on (unlike §2's MySQL primary failover, which has a real, measured RTO) |
+| 2 | Get a token from node A, stop node A, validate that token against node B | Whether cross-node validation is really enabled by shared Fernet keys (as this LLD argues) or genuinely depends on memcached (as `haFullStack.md` §7 claims) | Token validates successfully via node B — if this fails, the claim in §3.1 was wrong instead and memcached (or something else) actually matters here; either outcome is real information, not assumed |
+| 3 | Stop one memcached node | memcached is a performance/revocation cache, not required for basic Fernet validation (per §3.1's claim, being tested here too) | Token issuance and validation keep working — slower, or with more redundant crypto work, but not broken |
+| 4 | Stop both memcached nodes | Same as test 3, pushed further — is memcached ever a hard dependency for basic auth, or only for revocation-list propagation | Basic token issuance/validation still works; a revoked-token check may not propagate as fast without memcached available, but that's a different claim than "auth is down" |
+| 5 | Stop both Keystone nodes | Genuine identity-tier outage — the one failure mode with no redundancy left to test | `keystone-status.html` correctly shows `CRITICAL`, distinct from `DEGRADED` |
+
+Test 2 is this slice's equivalent of §2's test 3 (2A-13) — the one most
+likely to be skipped as "obviously fine," and the one actually worth
+running, because it's the test that resolves the memcached question
+rather than assuming either the design doc or this LLD's counter-claim.
+
+#### 3.3.2 OpenTofu Implementation
+
+Illustrative — to be proven and corrected against real infrastructure,
+same process as §1/§2:
+
+```hcl
+# examples/ha-frontend-lb/main.tf  (additions — illustrative)
+
+module "security_groups" {
+  # ...existing nginx/frontend/mysql/proxysql groups, plus:
+  security_groups = {
+    # ...
+    keystone = {
+      description = "Keystone identity tier — API from nginx SG only, plus SSH"
+      ingress_rules = {
+        api = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = local.bridge_cidr }
+        ssh = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+      }
+      egress_rules = { all = { ip_protocol = "-1", cidr = "0.0.0.0/0" } }
+    }
+    memcached = {
+      description = "memcached — Keystone SG only, plus SSH"
+      ingress_rules = {
+        memcache = { ip_protocol = "tcp", from_port = 11211, to_port = 11211, cidr = local.bridge_cidr }
+        ssh      = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+      }
+      egress_rules = { all = { ip_protocol = "-1", cidr = "0.0.0.0/0" } }
+    }
+  }
+}
+
+resource "random_id" "fernet_key0" { byte_length = 32 }
+resource "random_id" "fernet_key1" { byte_length = 32 }
+
+module "memcached" {
+  source              = "../../modules/instance-group"
+  project             = var.project
+  environment         = var.environment
+  owner               = var.owner
+  name                = "memcached${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.memcached_flavor
+  count_instances     = 2
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+  security_group_ids  = [module.security_groups.security_group_ids_by_key["memcached${local.sfx}"]]
+  user_data           = local.memcached_user_data
+}
+
+module "keystone" {
+  source              = "../../modules/instance-group"
+  project             = var.project
+  environment         = var.environment
+  owner               = var.owner
+  name                = "keystone${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.keystone_flavor
+  count_instances     = 2
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+  security_group_ids  = [module.security_groups.security_group_ids_by_key["keystone${local.sfx}"]]
+  user_data           = local.keystone_user_data   # references mysql_all_ips + memcached IPs + fernet keys
+}
+```
+
+`local.keystone_user_data` needs `module.memcached`'s IPs and the MySQL
+cluster's IPs (both already-known outputs by this point in the apply
+graph, same mechanism as ProxySQL referencing MySQL in §2) plus the two
+`random_id` resources' `.b64_url` outputs — no self-reference problem
+here at all, since both Keystone nodes get genuinely identical
+`user_data` (no per-node bootstrap/joiner split), so this doesn't need
+§2.3.2's two-module-call pattern.
+
+#### 3.3.3 Ansible Implementation
+
+Same provisioning shape as §1.3.3/§2.3.3 — new `security_group` ×2,
+`instance` ×2 for memcached and ×2 for Keystone (all four with identical
+`user_data` within their pair, a simple loop suffices, no per-instance
+branching needed). Fernet key generation has no direct Ansible-native
+equivalent to Terraform's `random_id` resource — `openssl rand
+-base64 32` run once via a local task, with the result passed as a
+`user_data` template variable to both `instance` tasks, is the closest
+equivalent.
+
+---
+
+### 3.4 On-Prem Environment
+
+Architecturally identical to Lab — same 2× Keystone + 2× memcached,
+active-active, shared MySQL backend — with real vhost-based routing
+(`identity.example.com`) instead of Lab's dedicated-port substitution,
+since real DNS is available. Same open question as §1.4/§2.4: an
+existing on-prem identity provider (LDAP, an existing Keystone
+deployment, SSO) may make this whole tier unnecessary duplication for a
+given estate — a real per-deployment decision, not resolved generically
+here.
+
+### 3.5 AWS Environment
+
+**Genuinely open, not just illustrative** — unlike §1/§2, there isn't an
+obvious managed-service substitution to sketch here. Keystone-on-EC2
+(identical to Lab/On-Prem, just a different provider) is the default
+assumption until confirmed otherwise; IAM/Cognito are NOT drop-in
+replacements (different API, different token model, nothing in this
+stack currently expects OpenStack Identity API v3 compatibility from
+them) and shouldn't be assumed as a substitution without a real decision
+to redesign around them.
+
+### 3.6 Cross-Environment Consistency
+
+| Aspect | Lab | On-Prem | AWS |
+|---|---|---|---|
+| Keystone node count | 2 (active-active) | 2 (active-active) | 2 (active-active) — until confirmed otherwise |
+| memcached node count | 2 | 2 | 2 |
+| Fernet key distribution | Terraform `random_id`, injected at apply time | Same, or Ansible `openssl rand` equivalent | Same |
+| Client routing | Dedicated port (matches the real backend application's addressing, per direct confirmation — not a Lab-only DNS workaround) | Vhost (`identity.example.com`) as originally documented — may need revisiting once the backend tier confirms its actual addressing scheme | Vhost, or ALB path/host rule if reusing §1's ALB — same caveat |
+| Failure tolerance | Either node lost — zero impact, no election | Same | Same |
+
+### 3.7 Open Items Before Implementation
+
+- **AWS Keystone architecture** — genuinely undecided (§3.2/§3.5), not
+  just unconfirmed detail. Needs a real decision (Keystone-on-EC2 vs. a
+  deliberate redesign around IAM/Cognito) before that build starts.
+- **Memcached's actual role — resolve via test 2/3/4, don't assume
+  either the original doc or this LLD's counter-claim.** `haFullStack.md`
+  §7 will need correcting one way or the other once this is tested for
+  real, the same way §5.3 was corrected by F-021.
+- **Fernet key rotation** — this slice generates static keys once and
+  never rotates them; a real deployment needs `keystone-manage
+  fernet_rotate` on a schedule with distribution to every node. Out of
+  scope for Lab validation, but should be flagged before this pattern is
+  treated as production-ready anywhere.
+- **On-prem/AWS existing identity provider** — as with the DB tier,
+  confirm whether a given estate already has one before assuming this
+  design is needed wholesale.
+- **Keystone's real client-addressing scheme (port vs. vhost) —
+  confirmed for Lab, not yet for On-Prem/AWS.** Direct confirmation: the
+  real backend application addresses Keystone by port, which is why Lab
+  uses a dedicated port rather than `haFullStack.md` §7/§8's originally
+  documented vhost routing. Whether On-Prem/AWS should follow the same
+  scheme or the originally-documented vhost approach isn't settled —
+  more detail is expected once the backend tier itself is built. Don't
+  assume either way for those builds without revisiting this.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -907,3 +1195,4 @@ resource "aws_db_proxy" "mysql" {
 | v0.4 | 2026-09-10 | Paul Scott | Built and failure-tested for real. §2.7's first four open items resolved (bootstrap sequencing, seed self-reference, monitor credentials, status-script complexity, the last extended with a rolling history view). New open item: the bootstrap node has no permanent seed for its own rejoin after a restart (F-020) — fixed per-incident, not yet templated. |
 | v0.5 | 2026-09-10 | Paul Scott | §2.3.1a test 3's expected outcome corrected after actually running it — Group Replication does not provide split-brain protection by default (F-021); §5.1's fault-tolerance argument for 3 nodes still holds, but the network-partition protection §5.3 claimed does not exist without an explicit fix. Added as a new, significant open item in §2.7. |
 | v0.6 | 2026-09-10 | Paul Scott | F-021 fixed, not just flagged — `quorum-watchdog.py` added to §2.3.2's MySQL cloud-init, §2.3.1b's self-healing table and §2.7's open item both updated to reflect the real, verified fix (including a second bug found building it: `read_only` vs `super_read_only`). |
+| v0.7 | 2026-09-10 | Paul Scott | Third slice — §3, Identity Tier (Keystone): 2-node active-active, shared MySQL backend, memcached Fernet cache, `admin:admin` bootstrap, Lab-substitution port-based routing instead of vhosts. Flagged `haFullStack.md` §7's memcached claim as unverified (likely the shared Fernet keys, not memcached, actually enable cross-node validation) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |

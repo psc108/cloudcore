@@ -28,6 +28,7 @@ environment/tool combination as each phase completes.
 |---|---|---|---|
 | 1 | Load Balancer Tier — Client to Frontend | LLD §1 | Phase 1.A (Lab/OpenTofu) done — see [findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu); 1.B–1.F pending |
 | 2 | Database Tier — MySQL High Availability | LLD §2 | Phase 2.A complete (2A-01–2A-17) — see [findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier); On-Prem/AWS and Ansible still pending |
+| 3 | Identity Tier — Keystone | LLD §3 | Draft, under review |
 
 ---
 
@@ -181,6 +182,63 @@ Not started — same as 2.E, via `amazon.aws`.
 
 ---
 
+## Phase 3 — Identity Tier: Keystone
+
+Extends `examples/ha-frontend-lb/` further in place — same growing
+stack. Per the build order above, only Phase 3.A is worked now.
+
+### Phase 3.A — Lab, OpenTofu
+
+| ID | Task | Description | Status |
+|---|---|---|---|
+| 3A-01 | Security groups | `keystone` (5000 from `nginx` SG only, plus SSH), `memcached` (11211 from `keystone` SG only, plus SSH), per LLD §3.3.1 | Pending |
+| 3A-02 | Fernet key generation | `random_id` (32 bytes, base64url) ×2 in Terraform, new `hashicorp/random` provider dependency — same identical key material injected into both Keystone nodes' `user_data`, no runtime coordination needed | Pending |
+| 3A-03 | Keystone `keystone` DB + user | New database and dedicated `keystone` user on the existing §2 MySQL cluster (through ProxySQL, not a new DB tier), per LLD §3.3.1 | Pending |
+| 3A-04 | memcached cloud-init | 2 identical nodes via `modules/instance-group`, per LLD §3.3.2 | Pending |
+| 3A-05 | Keystone cloud-init | 2 identical nodes via `modules/instance-group` (no bootstrap/joiner split needed — genuinely active-active); `keystone-manage bootstrap --bootstrap-password admin` on one node only, per LLD §3.3.1 | Pending |
+| 3A-06 | Extend NGINX cloud-init | Add Keystone routing — dedicated port 5000, matching how the real backend application addresses Keystone (confirmed directly, not a Lab DNS workaround — see LLD §3.3.1) | Pending |
+| 3A-07 | Extend frontend cloud-init — `keystone-status.py` | Same systemd-timer/rolling-history pattern as `mysql-status.py`; issues a token via the VIP, then deliberately re-validates it against **the other** Keystone node specifically, per LLD §3.3.1 | Pending |
+| 3A-08 | `tofu apply` | Stand up for real against this CloudCore instance | Pending |
+| 3A-09 | Verify token issuance + cross-node validation | `keystone-status.html` shows `OK` through the full real path (VIP → NGINX → Keystone → MySQL/memcached) | Pending |
+| 3A-10 | Failure test 1 — stop one Keystone node | LLD §3.3.1a test 1: zero impact, no election/promotion delay (unlike MySQL's primary failover in §2) | Pending |
+| 3A-11 | Failure test 2 — the memcached question | LLD §3.3.1a test 2: get a token from node A, stop node A, validate it against node B — resolves whether shared Fernet keys (this LLD's claim) or memcached (`haFullStack.md` §7's claim) is what actually enables cross-node validation. Not optional — same standing as 2A-13 was for the DB tier | Pending |
+| 3A-12 | Failure test 3 — stop one memcached node | LLD §3.3.1a test 3: token issuance/validation keep working | Pending |
+| 3A-13 | Failure test 4 — stop both memcached nodes | LLD §3.3.1a test 4: pushes test 3 further — is memcached ever a hard dependency for basic auth | Pending |
+| 3A-14 | Failure test 5 — stop both Keystone nodes | LLD §3.3.1a test 5: genuine outage, `keystone-status.html` correctly shows `CRITICAL` | Pending |
+| 3A-15 | Teardown | `tofu destroy`; confirm no orphaned resources | Pending |
+
+**Verification for this phase (Lab/OpenTofu):** 3A-09 through 3A-14 are
+the real test. 3A-11 carries the same weight 2A-13 did for the DB tier —
+it's the test that actually resolves whether `haFullStack.md` §7 is
+correct about memcached, rather than carrying an unverified claim
+forward a second time in the same project.
+
+### Phase 3.B — Lab, Ansible
+
+Not started — waits for every phase's `.A` to be done first, per the
+build order above.
+
+### Phase 3.C — On-Prem, OpenTofu
+
+Not started — real vhost routing (`identity.example.com`) instead of
+Lab's dedicated-port substitution, per LLD §3.4.
+
+### Phase 3.D — On-Prem, Ansible
+
+Not started — same as 3.C, via Ansible.
+
+### Phase 3.E — AWS, OpenTofu
+
+Not started — genuinely undecided per LLD §3.5/§3.7 (Keystone-on-EC2 vs.
+a deliberate IAM/Cognito redesign), not just unconfirmed detail. Don't
+start speculatively.
+
+### Phase 3.F — AWS, Ansible
+
+Not started — same as 3.E.
+
+---
+
 ## Cross-Cutting Notes
 
 - Every phase's `.A` (Lab) sub-path is the only one that can be built and
@@ -211,3 +269,4 @@ Not started — same as 2.E, via `amazon.aws`.
 | v0.6 | 2026-09-10 | Paul Scott | Failure-mode tests 2A-11, 2A-12, 2A-14 done and passed as expected. 2A-13 done but overturned the expected outcome (F-021) — the survivor doesn't refuse writes below quorum by default, correcting `haFullStack.md` §5.3. 2A-15 and teardown (2A-16) still pending. |
 | v0.7 | 2026-09-10 | Paul Scott | 2A-15 done — automatic rejoin confirmed in ~4s with zero manual intervention after a simulated network partition. All 5 failure-mode tests complete; only teardown (2A-16) remains. |
 | v0.8 | 2026-09-10 | Paul Scott | New task 2A-16 — fixed F-021 for real with `quorum-watchdog.py`, verified by re-running 2A-13's scenario twice (catching a second bug, `read_only` vs `super_read_only`, in the fix's own first attempt). Teardown renumbered to 2A-17. |
+| v0.9 | 2026-09-10 | Paul Scott | Third phase — Phase 3, Identity Tier (Keystone), all six environment/tool paths. Test 3A-11 carries the same weight 2A-13 did — it's what actually resolves whether `haFullStack.md` §7's memcached claim is correct. Draft, not yet built. |
