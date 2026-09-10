@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -13,6 +14,11 @@ def new_id() -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def slugify(text: str) -> str:
+    s = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+    return s or new_id()[:8]
 
 
 class InstanceStatus(str, Enum):
@@ -306,4 +312,33 @@ class LoadBalancer:
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,
+        }
+
+
+class HelpArticleStatus(str, Enum):
+    ACTIVE  = "active"
+    DELETED = "deleted"
+
+
+@dataclass
+class HelpArticle:
+    id: str = field(default_factory=new_id)
+    slug: str = ""
+    title: str = ""
+    category: str = "General"
+    content: str = ""
+    status: HelpArticleStatus = HelpArticleStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "slug": self.slug,
+            "title": self.title,
+            "category": self.category,
+            "content": self.content,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }

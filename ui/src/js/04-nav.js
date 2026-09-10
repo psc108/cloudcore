@@ -42,6 +42,7 @@ function showSection(name, btn) {
   if (name === 'tofu')           loadTofuManager();
   if (name === 'editor')         loadEditor();
   if (name === 'about')          loadAbout();
+  if (name === 'help')           loadHelpManager();
 }
 
 function showSectionByName(name) {

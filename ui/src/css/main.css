@@ -678,6 +678,8 @@
   }
   .ed-cm-host .CodeMirror-scroll { height: 100%; }
 
+  .hm-preview-host { flex: 1; overflow-y: auto; padding: 20px 28px; line-height: 1.7; font-size: 14px; }
+
   /* ── About ── */
   .about-heading {
     font-size: 12px;

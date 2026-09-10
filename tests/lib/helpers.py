@@ -105,6 +105,26 @@ def cleanup_nfs_by_prefix(prefix: str) -> None:
         time.sleep(1)
 
 
+def make_help_article(title: str, category: str = "General", content: str = "") -> dict:
+    _, body = req("POST", "/v1/help/articles", {
+        "title": title,
+        "category": category,
+        "content": content,
+    }, expected=201)
+    return body
+
+
+def delete_help_article(article_id: str) -> None:
+    req("DELETE", f"/v1/help/articles/{article_id}", expected=204)
+
+
+def cleanup_help_by_prefix(prefix: str) -> None:
+    _, data = req("GET", "/v1/help/articles")
+    found = [item for item in data["items"] if item["title"].startswith(prefix)]
+    for item in found:
+        req("DELETE", f"/v1/help/articles/{item['id']}", expected=(204, 404))
+
+
 def make_sg(name: str, vpc_id: str, description: str = "",
             ingress_rules: list | None = None,
             egress_rules: list | None = None) -> dict:

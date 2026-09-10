@@ -41,7 +41,7 @@
     </div>
     <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
     <button id="nav-about" onclick="showSection('about', this)">About</button>
-    <button onclick="openHelp()">Help</button>
+    <button id="nav-help" onclick="showSection('help', this)">Help</button>
   </nav>
   <div class="status-dot" id="api-dot"></div>
   <span class="status-label" id="api-label">Connecting…</span>
@@ -693,6 +693,48 @@
 
   </div>
 
+  <!-- ═══════════════════════════ Help ═══════════════════════════ -->
+  <div id="section-help" class="section">
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="card-header" style="padding:16px 20px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:12px;flex:1">
+          <h2>Help</h2>
+          <span id="hm-title" class="ed-filename">No article open</span>
+          <span id="hm-dirty-ind" class="ed-dirty" title="Unsaved changes"></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="hm-preview-btn" class="btn btn-ghost btn-sm" onclick="hmToggleEdit()" disabled>Edit</button>
+          <button id="hm-rename-btn" class="btn btn-ghost btn-sm" onclick="hmEditMeta()" disabled>Rename</button>
+          <button class="btn btn-ghost btn-sm" onclick="hmNewArticle()">+ New Article</button>
+          <button id="hm-delete-btn" class="btn btn-ghost btn-sm" onclick="hmDeleteArticle()" disabled>Delete</button>
+          <button id="hm-save-btn" class="btn btn-primary btn-sm" onclick="hmSaveArticle()" disabled>Save</button>
+        </div>
+      </div>
+      <!-- New/rename meta panel -->
+      <div id="hm-meta-panel" style="display:none;align-items:center;gap:8px;padding:10px 20px;background:var(--surface2);border-bottom:1px solid var(--border)">
+        <label style="font-size:12px;color:var(--text-muted);white-space:nowrap">Title:</label>
+        <input id="hm-meta-title" type="text" placeholder="Article title"
+               style="flex:1;max-width:280px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:6px 10px;font-size:13px">
+        <label style="font-size:12px;color:var(--text-muted);white-space:nowrap">Category:</label>
+        <input id="hm-meta-category" type="text" placeholder="General"
+               style="flex:1;max-width:200px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:6px 10px;font-size:13px"
+               onkeydown="if(event.key==='Enter')hmConfirmMeta();if(event.key==='Escape')hmCancelMeta()">
+        <button class="btn btn-primary btn-sm" onclick="hmConfirmMeta()">Save</button>
+        <button class="btn btn-ghost btn-sm" onclick="hmCancelMeta()">Cancel</button>
+      </div>
+      <!-- Two-panel layout -->
+      <div class="ed-layout">
+        <div class="ed-tree" style="display:flex;flex-direction:column;padding:0">
+          <input id="hm-search-input" type="text" placeholder="Search articles…" oninput="hmOnSearchInput()"
+                 style="margin:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:6px 10px;font-size:13px">
+          <div id="hm-article-list" style="overflow-y:auto;flex:1">Loading&hellip;</div>
+        </div>
+        <div id="hm-cm-host" class="ed-cm-host"></div>
+        <div id="hm-preview-host" class="hm-preview-host" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <div id="toast-container"></div>
@@ -706,14 +748,6 @@
     <div class="detail-goto">
       <button class="btn btn-primary" id="detail-goto-btn">Open in full view &rarr;</button>
     </div>
-  </div>
-</div>
-
-<!-- ── Help modal ── -->
-<div id="help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:800;overflow-y:auto;padding:40px 20px">
-  <div style="max-width:820px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;position:relative">
-    <button onclick="closeHelp()" style="position:absolute;top:16px;right:16px;background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1">✕</button>
-    <div id="help-content" style="line-height:1.7;font-size:14px">Loading…</div>
   </div>
 </div>
 

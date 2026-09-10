@@ -1,22 +1,4 @@
-// ── Help ─────────────────────────────────────────────────────────────────────
-let _helpLoaded = false;
-
-async function openHelp() {
-  document.getElementById('help-modal').style.display = 'block';
-  if (_helpLoaded) return;
-  try {
-    const res = await fetch(API_BASE + '/help', { headers: { 'Authorization': `Bearer ${API_TOKEN}` } });
-    const md  = await res.text();
-    document.getElementById('help-content').innerHTML = mdToHtml(md);
-    _helpLoaded = true;
-  } catch (e) {
-    document.getElementById('help-content').textContent = 'Failed to load help: ' + e.message;
-  }
-}
-
-function closeHelp() {
-  document.getElementById('help-modal').style.display = 'none';
-}
+// ── Markdown renderer (used by Help Manager preview) ──────────────────────────
 
 function mdToHtml(md) {
   return md

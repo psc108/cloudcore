@@ -181,6 +181,39 @@ CREATE TABLE IF NOT EXISTS builds (
     exit_code       INTEGER,
     provisioned     TEXT NOT NULL DEFAULT '[]'
 );
+
+CREATE TABLE IF NOT EXISTS help_articles (
+    id          TEXT PRIMARY KEY,
+    slug        TEXT NOT NULL UNIQUE,
+    title       TEXT NOT NULL,
+    category    TEXT NOT NULL DEFAULT 'General',
+    content     TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
+    title, category, content,
+    content='help_articles', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS help_articles_ai AFTER INSERT ON help_articles BEGIN
+  INSERT INTO help_articles_fts(rowid, title, category, content)
+  VALUES (new.rowid, new.title, new.category, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS help_articles_ad AFTER DELETE ON help_articles BEGIN
+  INSERT INTO help_articles_fts(help_articles_fts, rowid, title, category, content)
+  VALUES ('delete', old.rowid, old.title, old.category, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS help_articles_au AFTER UPDATE ON help_articles BEGIN
+  INSERT INTO help_articles_fts(help_articles_fts, rowid, title, category, content)
+  VALUES ('delete', old.rowid, old.title, old.category, old.content);
+  INSERT INTO help_articles_fts(rowid, title, category, content)
+  VALUES (new.rowid, new.title, new.category, new.content);
+END;
 """
 
 
@@ -194,6 +227,7 @@ def init(db_file: Path | None = None) -> None:
     _conn.commit()
     _migrate_columns()
     _migrate_json()
+    _seed_help_from_markdown()
 
 
 def _migrate_columns() -> None:
@@ -213,6 +247,51 @@ def _migrate_columns() -> None:
         _conn.execute("ALTER TABLE load_balancers ADD COLUMN target_groups TEXT NOT NULL DEFAULT '[]'")
     if "deletion_protection" not in lb_cols:
         _conn.execute("ALTER TABLE load_balancers ADD COLUMN deletion_protection INTEGER NOT NULL DEFAULT 0")
+    _conn.commit()
+
+
+_HELP_MD_FILE = Path(__file__).parent.parent / "HELP.md"
+
+_HELP_CATEGORY_MAP = {
+    "Navigation": "Getting Started", "Dashboard": "Getting Started",
+    "VPCs": "Infrastructure", "Instances": "Infrastructure",
+    "USB Device Passthrough": "Infrastructure", "Load Balancers": "Infrastructure",
+    "Terminal": "Infrastructure", "DNS": "Networking",
+    "NFS Servers": "Storage", "Builds — Ansible": "Builds",
+    "Builds — OpenTofu": "Builds", "Build History and Destroy": "Builds",
+    "Editor": "Reference", "About": "Reference", "API Reference": "Reference",
+    "Networking": "Networking", "Service Management": "Reference",
+}
+
+
+def _seed_help_from_markdown() -> None:
+    """One-time import of HELP.md into help_articles, one article per
+    top-level '##' section. Gated on the TABLE being empty (never on file
+    existence) — HELP.md is git-tracked and must be left untouched, unlike
+    the JSON files _migrate_json() renames after import."""
+    if _conn.execute("SELECT COUNT(*) FROM help_articles").fetchone()[0]:
+        return
+    if not _HELP_MD_FILE.exists():
+        return
+    import re
+    from models import new_id, now_iso, slugify
+    text = _HELP_MD_FILE.read_text()
+    parts = re.split(r'(?m)^## (.+)$', text)
+    ts = now_iso()
+    seeds = []
+    if parts[0].strip():
+        seeds.append(("Overview", "General", parts[0].strip()))
+    for i in range(1, len(parts), 2):
+        heading = parts[i].strip()
+        body = parts[i + 1] if i + 1 < len(parts) else ""
+        seeds.append((heading, _HELP_CATEGORY_MAP.get(heading, "General"),
+                      f"## {heading}\n{body.rstrip()}\n"))
+    for title, category, content in seeds:
+        _conn.execute(
+            """INSERT OR IGNORE INTO help_articles
+               (id,slug,title,category,content,status,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (new_id(), slugify(title), title, category, content, "active", ts, ts))
     _conn.commit()
 
 

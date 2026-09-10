@@ -25,9 +25,9 @@ from editor_routes import editor_bp
 from about_routes import about_bp
 from tofu_routes import tofu_bp
 from usb_routes import usb_bp
+from help_routes import help_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
-HELP_FILE = os.path.join(os.path.dirname(__file__), "..", "HELP.md")
 app = Flask(__name__)
 app.register_blueprint(build_manager_blueprint)
 app.register_blueprint(nfs_bp)
@@ -36,6 +36,7 @@ app.register_blueprint(editor_bp)
 app.register_blueprint(about_bp)
 app.register_blueprint(tofu_bp)
 app.register_blueprint(usb_bp)
+app.register_blueprint(help_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -50,15 +51,6 @@ def _cors(response):
 @app.get("/")
 def ui():
     return send_from_directory(UI_DIR, "index.html")
-
-
-@app.get("/help")
-def help_doc():
-    try:
-        with open(HELP_FILE) as f:
-            return f.read(), 200, {"Content-Type": "text/markdown; charset=utf-8"}
-    except FileNotFoundError:
-        return problem(404, "Not Found", "HELP.md not found")
 
 
 def require_auth(f):
