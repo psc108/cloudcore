@@ -1029,11 +1029,11 @@ question for the AWS build of this slice, not glossed over.
 
 | # | Test | What it proves | Expected result | Actual result |
 |---|---|---|---|---|
-| 1 | Stop one Keystone node | Active-active genuinely means zero failover delay, not just "a fast failover" | Zero impact — the surviving node keeps answering immediately, no election/promotion step exists to wait on (unlike §2's MySQL primary failover, which has a real, measured RTO) | **Differs.** VIP-routed issuance fails over quickly (brief `CRITICAL` blip at the moment, matching NGINX's default failure-detection window), but the status page then reads `DEGRADED`, not `OK`, for the entire outage — by design: `keystone-status.py` deliberately validates directly against every node's own IP, so it correctly reports one node unreachable rather than only checking through the VIP (F-025-adjacent — see F-028 for a related restart-reachability finding) |
+| 1 | Stop one Keystone node | Active-active genuinely means zero failover delay, not just "a fast failover" | Zero impact — the surviving node keeps answering immediately, no election/promotion step exists to wait on (unlike §2's MySQL primary failover, which has a real, measured RTO) | **Differs.** VIP-routed issuance fails over quickly (brief `CRITICAL` blip at the moment, matching NGINX's default failure-detection window), but the status page then reads `DEGRADED`, not `OK`, for the entire outage — by design: `keystone-status.py` deliberately validates directly against every node's own IP, so it correctly reports one node unreachable rather than only checking through the VIP. A restarted node also takes ~30s longer than SSH/ping suggest before it actually answers, due to `mod_wsgi`'s own worker startup time, not a platform issue (F-028) |
 | 2 | Get a token from node A, stop node A, validate that token against node B | Whether cross-node validation is really enabled by shared Fernet keys (as this LLD argues) or genuinely depends on memcached (as `haFullStack.md` §7 claims) | Token validates successfully via node B — if this fails, the claim in §3.1 was wrong instead and memcached (or something else) actually matters here; either outcome is real information, not assumed | **Confirmed as expected.** `HTTP 200` validating node A's token against node B with node A fully stopped, zero memcached involvement (F-027) |
 | 3 | Stop one memcached node | memcached is a performance/revocation cache, not required for basic Fernet validation (per §3.1's claim, being tested here too) | Token issuance and validation keep working — slower, or with more redundant crypto work, but not broken | **Confirmed as expected.** `HTTP 201`, ~3s instead of sub-second |
 | 4 | Stop both memcached nodes | Same as test 3, pushed further — is memcached ever a hard dependency for basic auth, or only for revocation-list propagation | Basic token issuance/validation still works; a revoked-token check may not propagate as fast without memcached available, but that's a different claim than "auth is down" | **Confirmed as expected.** Still succeeded (4.7s) with both nodes down; first attempt right after the second node went down hit a 15s client timeout with no response, consistent with a one-time retry/backoff penalty rather than a hard block |
-| 5 | Stop both Keystone nodes | Genuine identity-tier outage — the one failure mode with no redundancy left to test | `keystone-status.html` correctly shows `CRITICAL`, distinct from `DEGRADED` | **Confirmed as expected.** Recovered cleanly to `OK` once restarted, subject to the same restart-reachability window as test 1 (F-028) |
+| 5 | Stop both Keystone nodes | Genuine identity-tier outage — the one failure mode with no redundancy left to test | `keystone-status.html` correctly shows `CRITICAL`, distinct from `DEGRADED` | **Confirmed as expected.** Recovered cleanly to `OK` once restarted, subject to the same `mod_wsgi` worker-startup delay as test 1 (F-028) |
 
 Test 2 is this slice's equivalent of §2's test 3 (2A-13) — the one most
 likely to be skipped as "obviously fine," and the one actually worth
@@ -1166,13 +1166,13 @@ to redesign around them.
 - ~~Memcached's actual role~~ — **resolved (F-027).** Tests 2/3/4 confirmed
   shared Fernet keys, not memcached, enable cross-node validation.
   `haFullStack.md` §7 corrected to v1.5.
-- **Restart-reachability window (F-028)** — a stopped-then-started
-  instance on this Lab platform has a real ~1-2 minute window where
-  ICMP/SSH succeed but new TCP connections to an application port don't,
-  observed during tests 1 and 5. Root cause not pinned down (platform
-  networking, not Keystone-specific); worth factoring into RTO
-  expectations for any future restart-based failure test on any tier,
-  not something to chase further in this slice.
+- ~~Restart-reachability window~~ — **resolved (F-028).** Not a CloudCore
+  platform gap — `mod_wsgi`'s own worker-process startup takes ~30s after
+  Apache itself is already listening, confirmed by precise timing against
+  a real Keystone install and by a clean isolated service showing zero
+  such gap. Worth remembering for any future restart-based test of an
+  Apache/mod_wsgi service specifically, not a platform characteristic to
+  account for generically.
 - **Fernet key rotation** — this slice generates static keys once and
   never rotates them; a real deployment needs `keystone-manage
   fernet_rotate` on a schedule with distribution to every node. Out of
@@ -1205,3 +1205,4 @@ to redesign around them.
 | v0.7 | 2026-09-10 | Paul Scott | Third slice — §3, Identity Tier (Keystone): 2-node active-active, shared MySQL backend, memcached Fernet cache, `admin:admin` bootstrap, Lab-substitution port-based routing instead of vhosts. Flagged `haFullStack.md` §7's memcached claim as unverified (likely the shared Fernet keys, not memcached, actually enable cross-node validation) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |
 | v0.8 | 2026-09-10 | Paul Scott | §3.3.1 corrected: guest-network DNS resolution of CloudCore-managed hostnames is now fixed (F-022), not a standing limitation — the port-based Keystone routing decision itself is unchanged, since it was never based on that limitation in the first place. |
 | v0.9 | 2026-09-10 | Paul Scott | §3 built and failure-tested for real. §3.3.1a's test matrix filled in with actual results — test 1's "zero impact" expectation didn't hold (status correctly reads `DEGRADED` while one node is down, by design); tests 2-5 confirmed as expected, including the memcached question (F-027, `haFullStack.md` §7 corrected to v1.5). Two real deploy bugs found and fixed along the way (F-025, F-026). New open item: a restart-reachability gap on this platform, distinct from ICMP/SSH readiness (F-028). |
+| v0.10 | 2026-09-10 | Paul Scott | F-028 corrected: not a CloudCore platform gap — confirmed via direct reproduction to be `mod_wsgi`'s own ~30s worker-startup latency, an application characteristic, not a bug. §3.3.1a and §3.7 updated to match; nothing to change in CloudCore for this. |
