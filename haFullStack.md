@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v1.5 | 10 September 2026 | Paul Scott
+v1.7 | 10 September 2026 | Paul Scott
 
 ---
 
@@ -544,10 +544,26 @@ with removal planned in a future release. Any new design should default to
 quorum queues, not mirrored queues — the previous draft had this backwards,
 leading with mirrored queues and mentioning quorum queues only as an aside.
 
+**Version-dependent — confirm before using either form** (F-029): a
+cluster-wide policy can force existing/future queues matching a pattern
+to `quorum` type only from **RabbitMQ 3.11 onward**:
+
 ```bash
 rabbitmqctl set_policy quorum-default "^" \
   '{"queue-type":"quorum","x-quorum-initial-group-size":3}' \
   --apply-to queues
+```
+
+On an older RabbitMQ (this project's own Lab build runs 3.9.27, Ubuntu
+22.04's distro-packaged version, and hit exactly this gap) the
+`queue-type` policy key doesn't exist — `set_policy` rejects it outright.
+Queue type must be set at **declaration time** instead, via the
+`x-queue-type` argument the client passes when creating the queue:
+
+```bash
+# Declaration-time form (RabbitMQ < 3.11, or any version):
+rabbitmqadmin declare queue name=my-queue durable=true \
+  arguments='{"x-queue-type":"quorum"}'
 ```
 
 ### 6.4 Classic Mirrored Queues (Legacy)
@@ -650,7 +666,7 @@ recovery time (RTO) / recovery point (RPO) implied by the design above.
 | Active NGINX node | Process crash / host failure | Keepalived VRRP advert timeout (~3x advert_int) | VIP migrates to standby node | ~3 s | 0 |
 | MySQL primary (1 of 3 nodes) | Process crash / host failure | Group Replication member-state change | 2 of 3 nodes retain majority; new primary auto-elected; ProxySQL retags write hostgroup | ~5-10 s | 0 |
 | RabbitMQ node (1 of 3) | Process crash / host failure | Cluster membership change; client TCP reset | 2 of 3 replicas retain majority; quorum re-elects leader per queue; client reconnects via VIP | ~seconds (client-dependent) | 0 for confirmed publishes |
-| **RabbitMQ — 2 nodes fail simultaneously** | Cluster membership change | **Below quorum — affected queues have no leader and stop accepting operations.** Requires manual intervention (`rabbitmqctl force_boot` on a surviving node) to restore service. | Manual, minutes | 0 for prior confirmed publishes; new publishes blocked until restored |
+| **RabbitMQ — 2 nodes fail simultaneously** | Cluster membership change | **Below quorum — affected queues genuinely stop accepting operations** (confirmed directly: publishes rejected outright, `haFullStack-Findings-Log.md` F-031 — unlike MySQL's Group Replication, F-021). Recovery is automatic once real majority returns — simply restarting the missing nodes is sufficient; `rabbitmqctl force_boot` is a different tool, only for the case where the missing nodes are never coming back and a permanent smaller cluster must be forced. | Automatic once nodes return; ~seconds | 0 for prior confirmed publishes; new publishes blocked until restored |
 | Keystone node | Process crash / host failure | NGINX passive health check | Traffic drains to surviving node; both share DB + memcached | ~10 s (fail_timeout) | 0 (stateless) |
 | Entire LB tier (both nodes) | Correlated failure (e.g. AZ outage) | External monitoring / synthetic checks | Manual: promote a DR-region pair, or restore from IaC — see §12 | Minutes (out of scope for VRRP alone) | 0 for data tiers; depends on DR region lag |
 
@@ -817,3 +833,5 @@ journalctl -u keepalived -f
 | v1.3 | 2026-09-10 | Paul Scott | Corrected §5.3's "two nodes fail simultaneously" row after actually building and testing it (`haFullStack-Findings-Log.md` F-021): Group Replication does **not** drop the survivor out of `ONLINE` or block writes by default — it expels unreachable members and continues as a legitimate, smaller group. Real split-brain protection needs an explicit fix (external enforcement or fencing), not assumed from the topology. |
 | v1.4 | 2026-09-10 | Paul Scott | F-021 fixed, not just documented: a local per-node `quorum-watchdog` enforces `super_read_only` below the original cluster's majority. Verified with the full below-quorum cycle run twice, including a real self-inflicted bug found and fixed along the way (`read_only` vs. `super_read_only`). §5.3 updated to reflect the real, working RTO/RPO. |
 | v1.5 | 2026-09-10 | Paul Scott | §7 corrected after Phase 3.A's failure-mode test 2 (`haFullStack-Findings-Log.md` F-027): shared Fernet key material, not memcached, is what enables cross-node token validation — memcached's real role is caching validation results and revocation state. Confirmed directly: a token issued by one Keystone node validated successfully on the other with that first node fully stopped, zero memcached involvement. |
+| v1.6 | 2026-09-10 | Paul Scott | §6.3 corrected (`haFullStack-Findings-Log.md` F-029): the documented `rabbitmqctl set_policy` quorum-queue command only works on RabbitMQ 3.11+ — the version actually available via Ubuntu 22.04's distro package (3.9.27) rejects `queue-type` as a policy key outright. Added the declaration-time `x-queue-type` form as the version-independent alternative, found building Phase 4.A. |
+| v1.7 | 2026-09-10 | Paul Scott | §10's RabbitMQ 2-node-failure row corrected after Phase 4.A's failure-mode test 2 (F-031): the below-quorum protection itself is real and works exactly as documented (unlike MySQL's F-021) — publishes are genuinely rejected, not silently accepted — but recovery is automatic once the missing nodes simply restart, not the manual `rabbitmqctl force_boot` procedure previously documented (that command is for a different, permanent-partition scenario). |

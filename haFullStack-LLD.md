@@ -23,7 +23,7 @@ slice below rather than repeated inline. Sections currently complete:
 | 1 | Load Balancer Tier — Client to Frontend (L7) | Lab/OpenTofu built and verified ([findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu)); On-Prem/AWS and Ansible still pending |
 | 2 | Database Tier — MySQL High Availability | Lab/OpenTofu built, failure-tested, and F-021 fixed ([findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier)); On-Prem/AWS and Ansible still pending |
 | 3 | Identity Tier — Keystone | Built and failure-tested (Lab) |
-| 4 | Message Broker Tier — RabbitMQ | Draft, under review |
+| 4 | Message Broker Tier — RabbitMQ | Built and failure-tested (Lab) |
 
 Per the session plan: every slice gets built and verified on Lab/OpenTofu
 first, as one growing stack (not independent per-slice templates) —
@@ -1203,17 +1203,19 @@ correction), exposed through the existing NGINX nodes' `stream{}` context
 (AMQP, same mechanism as §2's MySQL proxying), and a `rabbitmq-status.html`
 page on the frontend tier — same pattern as §2/§3's status pages.
 
-**A claim in `haFullStack.md` §10 to verify, not assume:** its failure-mode
-table says a 2-of-3 node loss leaves "affected queues have no leader and
-stop accepting operations," requiring manual `rabbitmqctl force_boot`
-recovery. Quorum queues are Raft-based, and Raft's majority-quorum
-requirement is the same theoretical mechanism Group Replication's Paxos
-implementation was assumed to enforce — which F-021 found didn't hold in
-practice for MySQL (the survivor reconfigured to a smaller legitimate
-group instead of refusing writes). RabbitMQ's Raft implementation may
-behave exactly as documented, or may not — this gets its own dedicated
-failure-mode test (§4.3.1a test 2) rather than being assumed either way,
-the same discipline that caught F-021 and F-027.
+**A claim in `haFullStack.md` §10, verified and partly corrected
+(F-031):** it said a 2-of-3 node loss leaves "affected queues have no
+leader and stop accepting operations," requiring manual `rabbitmqctl
+force_boot` recovery. Quorum queues are Raft-based, and Raft's
+majority-quorum requirement is the same theoretical mechanism Group
+Replication's Paxos implementation was assumed to enforce — which F-021
+found didn't hold in practice for MySQL. RabbitMQ's turned out different
+again: failure-mode test 2 confirmed the *protection itself* genuinely
+works as documented (a publish was cleanly rejected below quorum, unlike
+MySQL) — but the *recovery* half of the claim was wrong. Simply
+restarting the missing nodes recovered the tier automatically, with
+`force_boot` never run or needed; that command is for a different,
+permanent-partition scenario. `haFullStack.md` §10 corrected to v1.7.
 
 **Deliberately not a new VPC/subnet:** reuses the existing one, same
 growing-stack pattern as §2/§3.
@@ -1327,13 +1329,13 @@ Phase 4's own scope, not this slice's).
 
 #### 4.3.1a Failure-Mode Test Matrix
 
-| # | Test | What it proves | Expected result |
-|---|---|---|---|
-| 1 | Stop one RabbitMQ node | 3-node quorum survives losing 1, matching MySQL's own tolerance (§2's F-001 argument) | `DEGRADED`-equivalent (2/3 nodes), publish/consume keeps working — same "correctly reports reduced redundancy rather than papering over it" design as Keystone's test 1 (§3.3.1a), not literally "zero impact" |
-| 2 | Stop 2 of 3 RabbitMQ nodes | Whether Raft-based quorum queues actually refuse operations below majority (as `haFullStack.md` §10 claims) or reconfigure and continue (as Group Replication actually did, F-021) — resolves this rather than assuming either way | Not assumed — this is the test that answers it, the same standing 2A-13 had for the DB tier and 3A-11 had for Identity |
-| 3 | Publish/consume through test 1's single-node failure | Zero message loss for confirmed publishes on quorum queues (`haFullStack.md` §6.5's claim) | A message published before the stop, on a quorum queue, is still consumable after — no data loss for a tolerated failure |
-| 4 | Restart a stopped node | Whether a previously-clustered node auto-rejoins on its own (cluster membership is disk-persisted in RabbitMQ, unlike MySQL's `group_replication_start_on_boot=OFF` requiring an explicit restart command) or needs the same manual `join_cluster` step as first-time joining | Not assumed — RabbitMQ's docs suggest auto-rejoin, but this project's own experience (F-020) is that a node's *specific role* at cluster-formation time can create asymmetric gaps invisible from the general docs alone |
-| 5 | Stop all 3 RabbitMQ nodes | Genuine broker-tier outage — the one failure mode with no redundancy left to test | `rabbitmq-status.html` correctly shows `CRITICAL` |
+| # | Test | What it proves | Expected result | Actual result |
+|---|---|---|---|---|
+| 1 | Stop one RabbitMQ node | 3-node quorum survives losing 1, matching MySQL's own tolerance (§2's F-001 argument) | `DEGRADED`-equivalent (2/3 nodes), publish/consume keeps working — same "correctly reports reduced redundancy rather than papering over it" design as Keystone's test 1 (§3.3.1a), not literally "zero impact" | **Confirmed as expected.** Self-corrected to `DEGRADED` (2/3, dead node named, round-trip still succeeding) after a ~1min settling window (`stream{}`'s own `max_fails`/`fail_timeout`, not an application-level delay like F-028) |
+| 2 | Stop 2 of 3 RabbitMQ nodes | Whether Raft-based quorum queues actually refuse operations below majority (as `haFullStack.md` §10 claims) or reconfigure and continue (as Group Replication actually did, F-021) — resolves this rather than assuming either way | Not assumed — this is the test that answers it, the same standing 2A-13 had for the DB tier and 3A-11 had for Identity | **More nuanced than a simple confirm/deny.** Quorum protection itself is real (publish cleanly rejected, `400`, in well under a second) — genuinely different from MySQL's F-021. But `haFullStack.md` §10's specific recovery claim was wrong: simply restarting the two stopped nodes recovered the tier automatically in 0.04s, no `rabbitmqctl force_boot` needed at all (F-031) |
+| 3 | Publish/consume through test 1's single-node failure | Zero message loss for confirmed publishes on quorum queues (`haFullStack.md` §6.5's claim) | A message published before the stop, on a quorum queue, is still consumable after — no data loss for a tolerated failure | **Confirmed as expected.** Uniquely-marked message published before the stop, consumed intact after — identical payload |
+| 4 | Restart a stopped node | Whether a previously-clustered node auto-rejoins on its own (cluster membership is disk-persisted in RabbitMQ, unlike MySQL's `group_replication_start_on_boot=OFF` requiring an explicit restart command) or needs the same manual `join_cluster` step as first-time joining | Not assumed — RabbitMQ's docs suggest auto-rejoin, but this project's own experience (F-020) is that a node's *specific role* at cluster-formation time can create asymmetric gaps invisible from the general docs alone | **Confirmed as expected.** A restarted joiner auto-rejoined on its own — back in `Disk Nodes` and `Running Nodes` with zero manual `join_cluster` step, unlike MySQL's bootstrap-node gap (F-020) |
+| 5 | Stop all 3 RabbitMQ nodes | Genuine broker-tier outage — the one failure mode with no redundancy left to test | `rabbitmq-status.html` correctly shows `CRITICAL` | **Confirmed as expected.** Recovered cleanly to `OK` once all three were restarted, zero manual intervention |
 
 Test 2 carries the same weight 2A-13 and 3A-11 did for their tiers —
 `haFullStack.md` §10's specific manual-recovery claim (`rabbitmqctl
@@ -1436,15 +1438,13 @@ before committing, not assumed settled here.
 
 ### 4.7 Open Items Before Implementation
 
-- **The 2-node-loss recovery claim (`haFullStack.md` §10)** — resolve via
-  test 2, don't assume either the documented `force_boot` procedure or a
-  MySQL-like silent-continue outcome. Whichever it is, `haFullStack.md`
-  §10 gets corrected to match, the same way §5.3 was by F-021 and §7 was
-  by F-027.
-- **Node-restart auto-rejoin behavior** — resolve via test 4; RabbitMQ's
-  general documentation suggests this differs from MySQL's
-  `start_on_boot=OFF` default, but this project's own experience (F-020)
-  is reason enough not to assume it from general docs alone.
+- ~~The 2-node-loss recovery claim~~ — **resolved (F-031).** Protection
+  is real (publish rejected below quorum, unlike MySQL); recovery is
+  automatic once the missing nodes restart, `force_boot` never needed.
+  `haFullStack.md` §10 corrected to v1.7.
+- ~~Node-restart auto-rejoin behavior~~ — **resolved.** Confirmed
+  auto-rejoin with zero manual intervention, unlike MySQL's bootstrap
+  node (F-020).
 - **IP-based vs. DNS-based node naming** — deliberately deferred to a
   later slice per §4.1; revisit once guest DNS (F-022) has a second real
   load-bearing use case beyond this session's own introduction of it.
@@ -1472,3 +1472,4 @@ before committing, not assumed settled here.
 | v0.9 | 2026-09-10 | Paul Scott | §3 built and failure-tested for real. §3.3.1a's test matrix filled in with actual results — test 1's "zero impact" expectation didn't hold (status correctly reads `DEGRADED` while one node is down, by design); tests 2-5 confirmed as expected, including the memcached question (F-027, `haFullStack.md` §7 corrected to v1.5). Two real deploy bugs found and fixed along the way (F-025, F-026). New open item: a restart-reachability gap on this platform, distinct from ICMP/SSH readiness (F-028). |
 | v0.10 | 2026-09-10 | Paul Scott | F-028 corrected: not a CloudCore platform gap — confirmed via direct reproduction to be `mod_wsgi`'s own ~30s worker-startup latency, an application characteristic, not a bug. §3.3.1a and §3.7 updated to match; nothing to change in CloudCore for this. |
 | v0.11 | 2026-09-10 | Paul Scott | Fourth slice — §4, Message Broker Tier (RabbitMQ): 3-node quorum-queue cluster (seed + 2 joiners, mirroring MySQL's bootstrap/joiner split, not Keystone's homogeneous pair), shared Erlang cookie via the same pattern as Keystone's Fernet keys, IP-based node naming by deliberate choice over the newly-available guest DNS. Flagged `haFullStack.md` §10's 2-node-loss claim as unverified (likely to repeat F-021's pattern) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |
+| v0.12 | 2026-09-10 | Paul Scott | §4 built and failure-tested for real. Two real deploy bugs found and fixed (F-029, F-030) beyond the two already flagged before building. §4.3.1a's test matrix filled in with actual results — test 2 gave the most nuanced result of any tier's "verify, don't assume" test so far: RabbitMQ's below-quorum protection is genuinely real (unlike MySQL's F-021), but the specific recovery procedure `haFullStack.md` §10 documented was wrong — recovery is fully automatic (F-031). Both other open items (recovery claim, restart auto-rejoin) resolved. `haFullStack.md` §10 corrected to v1.7. |

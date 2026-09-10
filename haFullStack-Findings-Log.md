@@ -31,6 +31,7 @@ fixed — if a later slice hits a variant of an old problem, it gets a new
 | [Phase 2.A — Lab, OpenTofu (Database Tier)](#phase-2a--lab-opentofu-database-tier) | [F-015](#f-015--bridge-mode-security-groups-silently-block-all-general-internet-egress) – [F-021](#f-021--the-whole-point-of-test-3-didnt-hold-the-survivor-doesnt-refuse-writes-after-losing-quorum) |
 | [Platform Hardening (post-Phase 2.A review)](#platform-hardening-post-phase-2a-review) | [F-022](#f-022--cloudcores-dns-was-confirmed-working-but-guests-couldnt-reach-it) – [F-024](#f-024--help_articlesslug-uniqueness-didnt-account-for-soft-deletes) |
 | [Phase 3.A — Lab, OpenTofu (Identity Tier)](#phase-3a--lab-opentofu-identity-tier) | [F-025](#f-025--random_idb64_url-needs-padding-added-before-keystone-can-use-it-as-a-fernet-key) – [F-028](#f-028--apachemod_wsgis-own-worker-startup-takes-30s-after-the-process-itself-is-active--not-a-cloudcore-platform-gap) |
+| [Phase 4.A — Lab, OpenTofu (Message Broker Tier)](#phase-4a--lab-opentofu-message-broker-tier) | [F-029](#f-029--rabbitmqctl-set_policy-cant-set-queue-type-on-rabbitmq-39) – [F-031](#f-031--rabbitmqs-below-quorum-recovery-is-automatic-hafullstackmd-10s-requires-manual-intervention-claim-is-wrong-for-a-transient-outage) |
 
 ---
 
@@ -1022,6 +1023,76 @@ run that verified F-023.
 
 ---
 
+## Phase 4.A — Lab, OpenTofu (Message Broker Tier)
+
+### F-029 — `rabbitmqctl set_policy` can't set queue type on RabbitMQ 3.9
+
+**Where:** `haFullStack.md` §6.3 (Quorum Queues — Primary Recommendation); found building 4A-04.
+
+**Symptom:** Running the exact command §6.3 documents —
+`rabbitmqctl set_policy quorum-default "^" '{"queue-type":"quorum"}' --apply-to queues` —
+against a real install failed outright: `[{<<"queue-type">>,<<"quorum">>}]
+are not recognised policy settings`.
+
+**Root cause:** `queue-type` as a *policy* key (letting an operator
+retroactively force existing/future queues matching a pattern to a given
+type) was added in RabbitMQ 3.11. Ubuntu 22.04's `rabbitmq-server`
+package is 3.9.27 — the version actually available on this platform
+without adding a third-party repository. On 3.9.x, a queue's type can
+only be set at **declaration time**, via the `x-queue-type` argument the
+client passes when creating the queue — there is no cluster-wide policy
+mechanism to force it after the fact.
+
+**Fix:** No policy step in the deploy at all. `rabbitmq-status.py`
+declares its own status-check queue directly with
+`{"durable": true, "arguments": {"x-queue-type": "quorum"}}` via the
+management HTTP API's `PUT /api/queues/%2F/<name>` — confirmed creating
+a genuine quorum-type queue, verified via `GET` showing `"type":
+"quorum"` in the response.
+
+**Consequence for `haFullStack.md`:** §6.3's documented command needs
+correcting — not as "the wrong syntax" but as version-dependent guidance
+presented without qualification. A real deployment pinned to an older
+RabbitMQ (as this Lab platform necessarily is, using the distro package)
+needs the declaration-time approach; only 3.11+ can additionally use
+the policy-based override.
+
+**Verified by:** Direct reproduction of the failing command against a
+real install, then the working `x-queue-type` declaration confirmed to
+produce a genuine quorum queue via the management API's own type field.
+
+---
+
+### F-030 — `rabbitmq-status.py` never drained its own check queue, so one interrupted check broke every future one
+
+**Where:** `examples/ha-frontend-lb/files/frontend-cloud-init.yaml.tftpl`'s `rabbitmq-status.py`; found immediately after failure-mode test 2 (4A-11).
+
+**Symptom:** After test 2's below-quorum window closed and all 3 nodes were confirmed healthy again, `rabbitmq-status.html` stayed stuck on `CRITICAL` (`"consume failed or payload mismatch"`) indefinitely — not a transient blip, and not self-correcting on its own the way every other tier's status page did after its own equivalent test.
+
+**Root cause:** Every check published a new message, then called `get` for exactly one message and compared its payload to the one just published. During test 2, several publishes were correctly rejected by RabbitMQ (see F-031's confirmation this is genuinely correct quorum behavior) — but that only stops the *publish*, not any message from an *earlier*, successful check that a prior `get` had failed to consume. Once even one message was left sitting in the queue, every future check's `get` (FIFO) returned that stale message instead of the one it had just published, guaranteeing a permanent payload mismatch — a self-perpetuating false failure with no way to recover on its own.
+
+**Fix:** `DELETE /api/queues/%2F/status-heartbeat/contents` (purge) immediately before each check's publish, so every check starts from a guaranteed-empty queue and its own `get` can only ever return its own message.
+
+**Consequence:** Not a RabbitMQ bug or a CloudCore platform issue — a straightforward bug in this project's own monitoring script, the kind of thing worth remembering for any future status-check script that does a publish-then-consume round-trip against a queue that isn't guaranteed empty beforehand.
+
+**Verified by:** Applied the fix, re-ran failure-mode tests 1 and 5 again with the corrected script in place — `rabbitmq-status.html` recovered to `OK` cleanly and promptly both times, no lingering `CRITICAL` after either recovery.
+
+---
+
+### F-031 — RabbitMQ's below-quorum recovery is automatic; `haFullStack.md` §10's "requires manual intervention" claim is wrong for a transient outage
+
+**Where:** `haFullStack.md` §10 (Failure Mode Analysis), the "RabbitMQ — 2 nodes fail simultaneously" row; resolved by failure-mode test 2 (4A-11).
+
+**Symptom/question:** §10 claims a 2-of-3 node loss "requires manual intervention (`rabbitmqctl force_boot` on a surviving node) to restore service." Given F-021 found MySQL's equivalent claim backwards (assumed protection that didn't exist), this got its own dedicated test rather than being assumed correct or incorrect either way.
+
+**Result — a more nuanced finding than F-021, not a simple confirm/deny:** the *quorum protection itself* is real and works exactly as documented — with only 1 of 3 nodes reachable, a publish attempt was cleanly rejected (`400`, "Unable to publish message. Check queue limits.") in well under a second, not silently accepted the way MySQL's writes were. But the specific **recovery claim is wrong**: `rabbitmqctl force_boot` was never run, and was never needed — simply restarting the two stopped nodes (`cloudcore` instance `start`, nothing more) let the tier rejoin and resume accepting publishes automatically, confirmed in 0.04s once both nodes were reachable again. `force_boot` is a *different* tool, for forcing a node to boot standalone when peers are believed permanently unreachable (e.g. a genuine, un-recoverable network partition) — not something a transient, recoverable outage needs at all.
+
+**Fix:** `haFullStack.md` §10's RabbitMQ 2-node-failure row corrected: recovery is automatic once real majority returns; `force_boot` is reserved for the case where the missing nodes are never coming back.
+
+**Verified by:** Direct reproduction — stopped 2 of 3 nodes, confirmed the publish rejection, restarted both stopped nodes with no other command, confirmed a successful publish 0.04s after both were reachable again, with zero manual `rabbitmqctl` intervention of any kind.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -1035,3 +1106,5 @@ run that verified F-023.
 | v0.7 | 2026-09-10 | Paul Scott | Platform Hardening (post-Phase 2.A review): guest-visible DNS + `.local`→`.internal` zone rename (F-022, motivated by F-017's hostname-resolution gap); SQLite write-serialization fix for a real hang/`database is locked` failure mode under concurrent load, including a worse indefinite-hang bug caught and fixed in the first attempt before it shipped (F-023); `help_articles.slug` uniqueness corrected to exclude soft-deletes via a partial unique index (F-024). All three found and fixed outside any specific slice, ahead of starting Phase 3. |
 | v0.8 | 2026-09-10 | Paul Scott | Third phase built and failure-tested for real — Phase 3.A, Identity Tier (Keystone). Two real deploy bugs found and fixed (missing Fernet-key base64 padding, F-025; cloud-init `write_files` running before packages install plus a related missing-package gap, F-026). Failure test 2 (3A-11) resolved the memcached question definitively — shared Fernet keys, not memcached, enable cross-node validation, correcting `haFullStack.md` §7 (F-027). A platform-level TCP-reachability gap after instance restart, distinct from ICMP/SSH readiness, observed and documented rather than chased to a fix (F-028). |
 | v0.9 | 2026-09-10 | Paul Scott | F-028 corrected after being deliberately left open — not a CloudCore platform/networking gap at all. Reproduced with a clean isolated service (zero gap) and then with real Keystone/Apache on the same instance (exact symptom reproduced, ~30s gap measured precisely) — the cause is `mod_wsgi`'s own worker-process startup time, not bridge/ARP staleness. Nothing to change in CloudCore for this finding. |
+| v0.10 | 2026-09-10 | Paul Scott | Fourth phase, Message Broker Tier (RabbitMQ) — building 4A-01–4A-07. Found `haFullStack.md` §6.3's documented `set_policy` quorum-queue command doesn't work on the actual available RabbitMQ version (3.9.27, Ubuntu 22.04's distro package) — that policy key was only added in 3.11+ (F-029). Fixed by declaring quorum type at queue-declaration time instead. Cluster-join sequence (seed/joiner, IP-based node naming, remote-status checks) fully validated directly against real throwaway instances before writing the template. |
+| v0.11 | 2026-09-10 | Paul Scott | Phase 4.A built and failure-tested for real (4A-01–4A-14 done). Found and fixed two more bugs along the way: NGINX's `stream{}` block only proxied AMQP, not the management API the status script needs (plain oversight); the status script's own publish/consume check never drained its queue, so one interrupted check broke every future one until fixed (F-030). Failure test 2 (4A-11) gave the most nuanced result yet — unlike MySQL (F-021), RabbitMQ's quorum protection genuinely works as documented, but `haFullStack.md` §10's specific `force_boot` recovery claim is wrong: recovery from a transient below-quorum window is fully automatic once the missing nodes are simply restarted (F-031). `haFullStack.md` §10 corrected. |
