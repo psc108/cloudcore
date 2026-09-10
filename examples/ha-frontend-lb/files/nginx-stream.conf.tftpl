@@ -11,4 +11,41 @@ stream {
         proxy_timeout 3s;
         proxy_connect_timeout 2s;
     }
+
+    # stream{} can only appear once as a top-level context in nginx.conf —
+    # this second upstream/server pair lives in the same file as MySQL's
+    # above rather than a separate one (unlike Keystone's http{}-context
+    # server{} block, which could be concatenated from its own file — see
+    # haFullStack-LLD.md §4.3.1).
+    upstream rabbitmq_amqp {
+%{ for ip in rabbitmq_ips ~}
+        server ${ip}:5672 max_fails=3 fail_timeout=10s;
+%{ endfor ~}
+    }
+
+    server {
+        listen 5672;
+        proxy_pass rabbitmq_amqp;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
+
+    # Management HTTP API — rabbitmq-status.py connects here through the
+    # VIP, same as AMQP above. Genuinely missed on the first pass: AMQP is
+    # what a client application would use, but the status script needs
+    # this one too, and stream{} proxying it (rather than exposing it in
+    # NGINX's http{} context) matches how every other raw-TCP backend in
+    # this stack is fronted.
+    upstream rabbitmq_management {
+%{ for ip in rabbitmq_ips ~}
+        server ${ip}:15672 max_fails=3 fail_timeout=10s;
+%{ endfor ~}
+    }
+
+    server {
+        listen 15672;
+        proxy_pass rabbitmq_management;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
 }

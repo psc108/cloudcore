@@ -81,3 +81,9 @@ variable "memcached_flavor" {
   type        = string
   default     = "standard.nano"
 }
+
+variable "rabbitmq_flavor" {
+  description = "Compute flavor for the three RabbitMQ nodes."
+  type        = string
+  default     = "standard.small"
+}

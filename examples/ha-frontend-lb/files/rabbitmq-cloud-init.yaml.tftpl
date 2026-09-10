@@ -1,0 +1,98 @@
+#cloud-config
+# RabbitMQ node. Clustering is asymmetric, unlike Keystone's active-active
+# pair — a new node starts as its own single-node cluster by default;
+# joining an existing one is an explicit, one-directional operation run
+# on the JOINER against an already-running seed (haFullStack-LLD.md §4.1),
+# same bootstrap/joiner shape as MySQL Group Replication. Only the seed's
+# own IP is known to the joiners at apply time (modules/compute's per-key
+# user_data can't reference that same module call's own IP outputs — see
+# haFullStack-LLD.md §4.3.2/§2.3.2) — each node's own IP is detected at
+# runtime (bridged instances only know it after boot), same pattern as
+# MySQL's report_host / NGINX's Keepalived interface detection.
+package_update: true
+packages:
+  - rabbitmq-server
+
+write_files:
+  # Every node in an Erlang cluster needs an identical cookie file, or
+  # clustering is refused outright. Staged root-owned here, NOT written
+  # directly to /var/lib/rabbitmq/ with owner: rabbitmq:rabbitmq —
+  # cloud-init's write_files module runs before the packages stage, so
+  # the rabbitmq system user doesn't exist yet at this point (same
+  # F-026 lesson from Keystone's Fernet keys: an owner: on a not-yet-
+  # existent user silently aborts the whole write_files module). Moved
+  # into place with correct ownership in runcmd instead.
+  - path: /root/erlang-cookie
+    permissions: '0600'
+    content: ${erlang_cookie}
+
+  - path: /usr/local/sbin/setup-rabbitmq.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      systemctl stop rabbitmq-server
+
+      mv /root/erlang-cookie /var/lib/rabbitmq/.erlang.cookie
+      chown rabbitmq:rabbitmq /var/lib/rabbitmq/.erlang.cookie
+      chmod 400 /var/lib/rabbitmq/.erlang.cookie
+
+      # IP-based node identity, not the default hostname-based one —
+      # deliberate choice over CloudCore's now-fixed guest DNS (F-022),
+      # see haFullStack-LLD.md §4.1. RABBITMQ_USE_LONGNAME=true is
+      # required alongside a dotted NODENAME — Erlang's default "short
+      # name" mode rejects any name containing a dot, IP addresses
+      # included ({:error, {:node_name, :short}} otherwise), confirmed
+      # directly.
+      cat > /etc/rabbitmq/rabbitmq-env.conf <<EOF
+      NODENAME=rabbit@$LOCAL_IP
+      RABBITMQ_USE_LONGNAME=true
+      EOF
+
+      systemctl start rabbitmq-server
+
+      # rabbitmqctl needs the app fully up before any further commands —
+      # cloud-init's own service start above returns once the process is
+      # spawned, not once Mnesia/the rabbit application layer is ready.
+      for i in $(seq 1 30); do
+        rabbitmqctl status >/dev/null 2>&1 && break
+        sleep 2
+      done
+
+      rabbitmq-plugins enable rabbitmq_management
+
+      %{ if is_seed ~}
+      # admin:admin — a deliberate, explicit Lab-only credential (same
+      # convention as Keystone's admin:admin and every other credential
+      # in this stack). Only needs to run once, here — RabbitMQ's user
+      # database is shared cluster-wide via Mnesia once nodes join,
+      # confirmed directly: a user created on the seed before any joiner
+      # has clustered is still visible from the joiner immediately after
+      # it joins, no separate propagation step needed.
+      rabbitmqctl add_user admin admin
+      rabbitmqctl set_user_tags admin administrator
+      rabbitmqctl set_permissions -p / admin '.*' '.*' '.*'
+      rabbitmqctl set_cluster_name rabbitmq-cluster
+      %{ else ~}
+      # Wait for the seed to actually be up before attempting to join —
+      # cloud-init on all 3 nodes runs concurrently, so the seed's own
+      # setup above may not have finished yet (same risk MySQL's joiners
+      # already guard against — haFullStack-LLD.md §2.3.1). rabbitmqctl
+      # -n targets a remote node directly over Erlang distribution, which
+      # only needs the cookie (already in place) and network reachability
+      # (this SG's 4369/25672 rules) — confirmed working directly.
+      for i in $(seq 1 60); do
+        rabbitmqctl -n rabbit@${seed_ip} status >/dev/null 2>&1 && break
+        sleep 5
+      done
+
+      rabbitmqctl stop_app
+      rabbitmqctl join_cluster rabbit@${seed_ip}
+      rabbitmqctl start_app
+      %{ endif ~}
+
+runcmd:
+  - /usr/local/sbin/setup-rabbitmq.sh

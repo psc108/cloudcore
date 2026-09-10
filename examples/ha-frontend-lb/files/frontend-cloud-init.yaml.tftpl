@@ -19,6 +19,7 @@ write_files:
       <body><h1>Served by __HOSTNAME__</h1>
       <p><a href="/mysql-status.html">MySQL cluster status</a></p>
       <p><a href="/keystone-status.html">Keystone status</a></p>
+      <p><a href="/rabbitmq-status.html">RabbitMQ status</a></p>
       </body></html>
 
   - path: /usr/local/sbin/mysql-status.py
@@ -405,9 +406,195 @@ write_files:
       [Install]
       WantedBy=timers.target
 
+  # Connects to the management HTTP API through the VIP (proving the full
+  # real path — Keepalived + NGINX stream{} + RabbitMQ — same as the other
+  # two status scripts), and does a real publish+consume round-trip
+  # through a durable quorum queue on every check, not just a cluster-
+  # membership read — proving the tier actually moves messages, not just
+  # that the nodes are up.
+  - path: /usr/local/sbin/rabbitmq-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import json, datetime, base64, urllib.request, urllib.error
+
+      VIP = "${vip_address}"
+      ADMIN_USER = "admin"
+      ADMIN_PASSWORD = "admin"
+      QUEUE = "status-heartbeat"
+      EXPECTED_NODES = 3
+      HISTORY_FILE = "/var/log/rabbitmq-cluster-status-history.json"
+      MAX_HISTORY = 60
+
+      AUTH_HEADER = "Basic " + base64.b64encode(f"{ADMIN_USER}:{ADMIN_PASSWORD}".encode()).decode()
+
+      def api(path, method="GET", body=None, timeout=5):
+          url = f"http://{VIP}:15672/api{path}"
+          data = json.dumps(body).encode() if body is not None else None
+          req = urllib.request.Request(url, data=data, method=method,
+                                        headers={"Authorization": AUTH_HEADER})
+          if body is not None:
+              req.add_header("Content-Type", "application/json")
+          try:
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  raw = resp.read()
+                  return resp.status, (json.loads(raw) if raw else None), None
+          except urllib.error.HTTPError as e:
+              return e.code, None, e.read().decode(errors="replace")
+          except Exception as e:
+              return None, None, str(e)
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "error": None,
+                    "nodes": [], "roundtrip_ok": False}
+
+          code, nodes, err = api("/nodes")
+          if err:
+              status["error"] = f"cluster overview failed: {err}"
+              write_status(status)
+              return
+          for n in nodes or []:
+              status["nodes"].append({"name": n.get("name"), "running": n.get("running", False)})
+          running_count = sum(1 for n in status["nodes"] if n["running"])
+
+          # Idempotent — PUT on an already-existing queue with matching
+          # arguments is a no-op, confirmed directly.
+          code, _, err = api(f"/queues/%2F/{QUEUE}", method="PUT",
+                              body={"durable": True, "arguments": {"x-queue-type": "quorum"}})
+          if err:
+              status["error"] = f"queue declare failed: {err}"
+              write_status(status)
+              return
+
+          # Purge before publishing — a message from a check whose publish
+          # succeeded but whose own get() failed (or a publish that landed
+          # just as a below-quorum window closed) would otherwise sit
+          # ahead of every future check's own message in FIFO order,
+          # making every subsequent payload comparison mismatch forever.
+          # Confirmed directly: this is exactly what happened after
+          # failure-mode test 2 (haFullStack-Findings-Log.md F-030).
+          api(f"/queues/%2F/{QUEUE}/contents", method="DELETE")
+
+          payload = f"heartbeat-{now}"
+          code, pub, err = api("/exchanges/%2F/amq.default/publish", method="POST",
+                                body={"properties": {}, "routing_key": QUEUE,
+                                      "payload": payload, "payload_encoding": "string"})
+          if err or not (pub or {}).get("routed"):
+              status["error"] = f"publish failed: {err or 'not routed'}"
+              write_status(status)
+              return
+
+          code, got, err = api(f"/queues/%2F/{QUEUE}/get", method="POST",
+                                body={"count": 1, "ackmode": "ack_requeue_false", "encoding": "auto"})
+          if err or not got or got[0].get("payload") != payload:
+              status["error"] = f"consume failed or payload mismatch: {err}"
+              write_status(status)
+              return
+
+          status["roundtrip_ok"] = True
+          if running_count >= EXPECTED_NODES:
+              status["verdict"] = "OK"
+          else:
+              status["verdict"] = "DEGRADED"
+              status["error"] = f"only {running_count}/{EXPECTED_NODES} nodes running, but publish/consume still succeeded"
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          running_count = sum(1 for n in status["nodes"] if n["running"])
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "nodes_running": running_count,
+              "roundtrip_ok": status["roundtrip_ok"],
+              "error": status["error"],
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/rabbitmq-cluster-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+          nodes_html = "".join(
+              f"<li>{n['name']} — {'running' if n['running'] else 'DOWN'}</li>" for n in status["nodes"]
+          )
+          error_html = f"<p style='color:#c0392b'>{status['error']}</p>" if status["error"] else ""
+
+          history_rows = ""
+          for h in reversed(history):
+              c = colors.get(h["verdict"], "#666")
+              err = f" — {h['error']}" if h["error"] else ""
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{c}'>{h['verdict']}</td>"
+                  f"<td>{h['nodes_running']}/{EXPECTED_NODES}</td>"
+                  f"<td>{'OK' if h['roundtrip_ok'] else 'FAILED'}</td>"
+                  f"<td>{err}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>RabbitMQ Cluster Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+      </style></head>
+      <body>
+      <h1>RabbitMQ Cluster Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} — publish/consume round-trip via the VIP, real quorum queue</p>
+      {error_html}
+      <h2>Nodes</h2>
+      <ul>{nodes_html}</ul>
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Nodes Running</th><th>Round-trip</th><th>Error</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/rabbitmq-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/rabbitmq-status.service
+    content: |
+      [Unit]
+      Description=Refresh RabbitMQ cluster status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/rabbitmq-status.py
+
+  - path: /etc/systemd/system/rabbitmq-status.timer
+    content: |
+      [Unit]
+      Description=Run rabbitmq-status.service every 2s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
 runcmd:
   - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
   - systemctl restart nginx
   - systemctl daemon-reload
   - systemctl enable --now mysql-status.timer
   - systemctl enable --now keystone-status.timer
+  - systemctl enable --now rabbitmq-status.timer

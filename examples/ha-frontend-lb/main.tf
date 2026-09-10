@@ -104,6 +104,19 @@ module "security_groups" {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
       }
     }
+    "rabbitmq${local.sfx}" = {
+      description = "RabbitMQ tier — AMQP/management from nginx SG's subnet, Erlang clustering within the bridge subnet, plus SSH"
+      ingress_rules = {
+        amqp    = { ip_protocol = "tcp", from_port = 5672, to_port = 5672, cidr = local.bridge_cidr }
+        mgmt    = { ip_protocol = "tcp", from_port = 15672, to_port = 15672, cidr = local.bridge_cidr }
+        epmd    = { ip_protocol = "tcp", from_port = 4369, to_port = 4369, cidr = local.bridge_cidr }
+        erldist = { ip_protocol = "tcp", from_port = 25672, to_port = 25672, cidr = local.bridge_cidr }
+        ssh     = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+      }
+      egress_rules = {
+        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
+      }
+    }
   }
 }
 
@@ -118,6 +131,16 @@ module "security_groups" {
 # /etc/keystone/fernet-keys/, confirmed directly against a real install.
 resource "random_id" "fernet_key0" { byte_length = 32 }
 resource "random_id" "fernet_key1" { byte_length = 32 }
+
+# All 3 RabbitMQ nodes need an identical Erlang cookie — RabbitMQ refuses
+# to cluster nodes with mismatched cookies (haFullStack-LLD.md §4.1),
+# same reasoning as the Fernet keys above. 20 bytes matches
+# rabbitmq-server's own default cookie length (confirmed directly against
+# a real install: /var/lib/rabbitmq/.erlang.cookie is 56 base64 characters
+# — 20 raw bytes base64-encoded, no special padding requirement unlike
+# F-025's Fernet keys, since Erlang's cookie comparison is a plain string
+# match, not a base64-decode).
+resource "random_id" "erlang_cookie" { byte_length = 20 }
 
 module "frontend" {
   source = "../../modules/instance-group"
@@ -223,12 +246,38 @@ module "keystone" {
   user_data           = local.keystone_user_data
 }
 
+# Split into two module calls (seed, then joiners) — same reasoning as
+# mysql_bootstrap/mysql_replicas above: RabbitMQ clustering is
+# asymmetric (join_cluster runs on the joiner against an already-running
+# seed), and the joiners' user_data needs the seed's real IP, which a
+# single module call can't self-reference (haFullStack-LLD.md §4.1/§4.3.2).
+module "rabbitmq_seed" {
+  source = "../../modules/compute"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  instances = local.rabbitmq_seed_instance
+}
+
+module "rabbitmq_joiners" {
+  source = "../../modules/compute"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  instances = local.rabbitmq_joiner_instances
+}
+
 # Per-node (not instance-group) since the two NGINX nodes need different
 # Keepalived state/priority — modules/compute takes per-key user_data
 # natively via its instances map, so this is a single module call rather
 # than two separate resources. Now also depends on module.proxysql (for
-# the stream{} block's upstream) and module.keystone (for the :5000
-# server{} block's upstream) alongside module.frontend from §1.
+# the stream{} block's upstream), module.keystone (for the :5000
+# server{} block's upstream), and module.rabbitmq_seed/_joiners (for the
+# stream{} block's second upstream, :5672) alongside module.frontend from §1.
 module "nginx" {
   source = "../../modules/compute"
 

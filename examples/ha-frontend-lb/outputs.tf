@@ -82,3 +82,18 @@ output "keystone_status_url" {
   description = "Live Keystone status page — proves token issuance and cross-node validation through the full real path."
   value       = "http://${var.vip_address}/keystone-status.html"
 }
+
+output "rabbitmq_seed_ip" {
+  description = "The seed RabbitMQ node's private IP."
+  value       = module.rabbitmq_seed.private_ips_by_key
+}
+
+output "rabbitmq_joiner_ips" {
+  description = "The two joiner RabbitMQ nodes' private IPs, keyed by role."
+  value       = module.rabbitmq_joiners.private_ips_by_key
+}
+
+output "rabbitmq_status_url" {
+  description = "Live RabbitMQ cluster status page — proves cluster membership and a real publish/consume round-trip through the full real path."
+  value       = "http://${var.vip_address}/rabbitmq-status.html"
+}

@@ -32,6 +32,7 @@ locals {
 
   nginx_stream_conf = templatefile("${path.module}/files/nginx-stream.conf.tftpl", {
     proxysql_ips = values(module.proxysql.private_ips_by_key)
+    rabbitmq_ips = local.rabbitmq_all_ips
   })
 
   # http{}-context server{} block for Keystone, sibling to the frontend
@@ -180,4 +181,55 @@ locals {
     fernet_key0           = "${random_id.fernet_key0.b64_url}="
     fernet_key1           = "${random_id.fernet_key1.b64_url}="
   })
+
+  # Seed node only — modules/compute's per-key user_data can't reference
+  # that same module call's own private_ips_by_key output, so RabbitMQ
+  # (like MySQL) is split into two module calls, seed then joiners
+  # referencing its now-known IP — see haFullStack-LLD.md §4.1/§4.3.2.
+  # Unlike MySQL, no gossip protocol discovers membership after joining;
+  # each joiner explicitly targets the seed by IP, but that's still all
+  # any single joiner needs — RabbitMQ clustering syncs full membership
+  # to every node as each one joins.
+  rabbitmq_seed_instance = {
+    "rabbitmq-a${local.sfx}" = {
+      image_id           = "ubuntu-22.04"
+      flavor             = var.rabbitmq_flavor
+      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
+      user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
+        is_seed       = true
+        seed_ip       = ""
+        erlang_cookie = random_id.erlang_cookie.b64_url
+      })
+    }
+  }
+
+  rabbitmq_joiner_roles = {
+    b = {}
+    c = {}
+  }
+
+  rabbitmq_joiner_instances = {
+    for role, cfg in local.rabbitmq_joiner_roles : "rabbitmq-${role}${local.sfx}" => {
+      image_id           = "ubuntu-22.04"
+      flavor             = var.rabbitmq_flavor
+      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
+      user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
+        is_seed       = false
+        seed_ip       = values(module.rabbitmq_seed.private_ips_by_key)[0]
+        erlang_cookie = random_id.erlang_cookie.b64_url
+      })
+    }
+  }
+
+  # All 3 RabbitMQ nodes' IPs — nginx is created after both rabbitmq
+  # module calls, so both are already known real addresses by this point
+  # (same mechanism as mysql_all_ips above).
+  rabbitmq_all_ips = concat(
+    values(module.rabbitmq_seed.private_ips_by_key),
+    values(module.rabbitmq_joiners.private_ips_by_key),
+  )
 }
