@@ -111,6 +111,54 @@ Images must be present on disk before they appear in the dropdown. Run `bash api
 
 ---
 
+## USB Device Passthrough
+
+CloudCore can hand a physical USB device on the host straight through to a
+VM (used today by the WiFi Sniffer OpenTofu template to give a VM a real
+wireless adapter for monitor-mode capture). This is exposed at the API/
+Terraform level as an instance field, `usb_device_ids` — there's no
+standalone console page for it yet, and the manual **+ Launch Instance**
+form doesn't expose it; it's set via the API directly or, more commonly,
+through an OpenTofu template variable.
+
+### Discovery
+`GET /v1/usb-devices` lists every USB device currently attached to the
+CloudCore host, identified as `"vendor_id:product_id"` (e.g. `0bda:8812`).
+Each entry includes:
+
+| Field | Meaning |
+|---|---|
+| `blocked` / `block_reason` | `true` if the device is refused for safety (see below) |
+| `attached_to` | Instance ID currently holding this device, if any |
+| `likely_wifi_adapter` | Heuristic guess (description keywords) that this is a WiFi adapter, not just "safe to attach" |
+
+### Safety
+A device is refused (`blocked: true`) if it's a keyboard/mouse/similar
+(checked at the USB **interface** level, so a composite device that only
+declares HID on one interface is still caught), a USB hub, or matches a
+name-based denylist (`fingerprint`, etc.) for vendor-specific-class input
+or auth devices that can't be identified by class alone. This exists so a
+CloudCore host that's also someone's workstation can't be told to hand
+over its own keyboard, mouse, or fingerprint reader. Blocked devices still
+appear in the list (with a reason) rather than being hidden.
+
+### Attaching
+Set `usb_device_ids` on an instance (create or update) to a list of one or
+more `"vendor_id:product_id"` strings. The API re-validates at attach time
+— not found, blocked, or already attached to a different instance all
+return a `409` before anything happens to the VM. Attachment is
+**mutable in place**: updating `usb_device_ids` on a running instance
+hot-attaches/detaches the device via libvirt rather than requiring the
+instance to be recreated.
+
+### In OpenTofu
+The Go provider exposes `usb_device_ids` on `cloudcore_instance` and a
+`cloudcore_usb_devices` data source for discovery. The WiFi Sniffer
+template's `usb_device_id` variable is the primary consumer — see the
+**Builds — OpenTofu** section below.
+
+---
+
 ## Load Balancers
 
 HAProxy-backed load balancers. Each LB gets a dedicated HAProxy process and a host port in the range 8200–8299.
@@ -265,19 +313,33 @@ Click any template card. The **vars panel** opens with configurable variables ex
 | `cloudcore_api_url` | API endpoint |
 | `cloudcore_api_token` | Bearer token |
 
+Every template can also define its own variables (e.g. `vnc_password` for
+Ghidra, `usb_device_id` for WiFi Sniffer). A field marked with a red **\***
+has no default — the build is rejected (both in the browser and, as a
+backstop, by the API itself) if it's left blank. A `usb_device_id` field
+renders as a dropdown of USB devices currently attached to the CloudCore
+host, populated live from `GET /v1/usb-devices` (see [USB Device
+Passthrough](#usb-device-passthrough)) — grouped into "Likely WiFi
+adapters" and "Other detected devices", with a confirmation prompt before
+building if you pick something from the latter group.
+
 ### Run a Build
 Click **Run Apply**. A log panel streams live output from `tofu init` and `tofu apply`.
 
 ### Available Templates
 | Template | Creates |
 |---|---|
-| VPC Only | Single VPC |
-| Basic Compute | VPC + 1 instance |
-| Load-Balanced Web (L7 ALB) | VPC + 2 instances + application load balancer |
-| Network Load Balancer (L4) | VPC + 2 instances + internal network load balancer |
-| Full Stack | VPC + 3 instances + ALB |
-
-> **Note:** DNS and NFS templates are not yet available for OpenTofu — those provider resources are not yet implemented.
+| VPC Only | Single VPC + two logical subnets (web/db) |
+| Basic Compute | VPC + subnets + security groups + 1 instance |
+| DNS with Compute | VPC + instance + DNS zone + A record |
+| Load-Balanced Web (L7 ALB) | VPC + instance group + application load balancer |
+| Network Load Balancer (L4) | VPC + instance group + internal network load balancer |
+| Full Stack | VPC + instance group + application load balancer (uses all modules) |
+| NFS Shared Storage | VPC + NFS server with two exports + two app instances |
+| OpenStack Services Stack | VPC + 6 named instances (frontend, backend, mysql, keystone, rabbitmq, admin/NFS) + public frontend ALB + internal backend NLB |
+| Ghidra Workstation | VPC + 1 instance running Ghidra with a full XFCE desktop, browser-accessible via noVNC through a network load balancer — no client install needed |
+| Kiwix Library | VPC + 1 instance serving an offline Kiwix content library over HTTP through a load balancer |
+| WiFi Sniffer | VPC + 1 instance running Kismet + the aircrack-ng suite, driven by a physical USB WiFi adapter passed through from the host (see [USB Device Passthrough](#usb-device-passthrough)) |
 
 ### Prerequisites
 OpenTofu must be installed and `tofu` must be on `PATH`. Install from [opentofu.org](https://opentofu.org/docs/intro/install/).
@@ -452,6 +514,11 @@ Authorization: Bearer dev-token
 | PUT | `/v1/editor/file?root={name}&path={rel}` | Write a file |
 | POST | `/v1/editor/file?root={name}` | Create a new file at root |
 | DELETE | `/v1/editor/file?root={name}&path={rel}` | Delete a file |
+
+### USB Devices
+| Method | Path | Description |
+|---|---|---|
+| GET | `/v1/usb-devices` | List host USB devices, with safety/attachment status (see [USB Device Passthrough](#usb-device-passthrough)) |
 
 ### Misc
 | Method | Path | Description |
