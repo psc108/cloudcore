@@ -34,6 +34,7 @@ def _inst_from_row(row) -> Instance:
         http_host_port=row["http_host_port"] if "http_host_port" in keys else 0,
         ssh_user=row["ssh_user"],
         users=json.loads(row["users"]),
+        error_message=row["error_message"] if "error_message" in keys else "",
     )
     i.status = InstanceStatus(row["status"])
     return i
@@ -300,16 +301,17 @@ def find_instance_by_name(name: str) -> Optional[Instance]:
 def put_instance(instance: Instance) -> None:
     db.get_db().execute("""INSERT INTO instances
         (id,name,image_id,flavor,vpc_id,subnet_id,security_group_ids,usb_device_ids,user_data,
-         private_ip,public_ip,status,created_at,tags,domain_name,
+         private_ip,public_ip,status,error_message,created_at,tags,domain_name,
          ssh_host_port,http_host_port,ssh_user,users)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, image_id=excluded.image_id, flavor=excluded.flavor,
             vpc_id=excluded.vpc_id, subnet_id=excluded.subnet_id,
             security_group_ids=excluded.security_group_ids, usb_device_ids=excluded.usb_device_ids,
             user_data=excluded.user_data,
             private_ip=excluded.private_ip, public_ip=excluded.public_ip,
-            status=excluded.status, tags=excluded.tags, domain_name=excluded.domain_name,
+            status=excluded.status, error_message=excluded.error_message,
+            tags=excluded.tags, domain_name=excluded.domain_name,
             ssh_host_port=excluded.ssh_host_port, http_host_port=excluded.http_host_port,
             ssh_user=excluded.ssh_user, users=excluded.users""",
         (instance.id, instance.name, instance.image_id, instance.flavor,
@@ -317,6 +319,7 @@ def put_instance(instance: Instance) -> None:
          json.dumps(instance.security_group_ids), json.dumps(instance.usb_device_ids),
          instance.user_data,
          instance.private_ip, instance.public_ip, instance.status.value,
+         instance.error_message,
          instance.created_at, json.dumps(instance.tags), instance.domain_name,
          instance.ssh_host_port, instance.http_host_port,
          instance.ssh_user, json.dumps(instance.users)))

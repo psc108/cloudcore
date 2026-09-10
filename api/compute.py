@@ -657,21 +657,26 @@ def get_instance_ip(domain_name: str) -> str:
         state, _ = dom.state()
         if state != libvirt.VIR_DOMAIN_RUNNING:
             return ""
-        # Try bridge DHCP lease first
+        # Get MAC address from domain XML to tell bridge-mode instances
+        # (real DHCP-leased IP) apart from SLIRP-mode ones (fixed IP).
+        import xml.etree.ElementTree as ET
+        tree = ET.fromstring(dom.XMLDesc())
+        mac_el = tree.find(".//interface[@type='bridge']/mac")
+        if mac_el is None:
+            return "10.0.2.15"
+        mac = mac_el.get("address", "").lower()
         lease_file = Path("/var/lib/misc/cloudcore-dnsmasq.leases")
         if lease_file.exists():
-            # Get MAC address from domain XML
-            import xml.etree.ElementTree as ET
-            tree = ET.fromstring(dom.XMLDesc())
-            mac_el = tree.find(".//interface[@type='bridge']/mac")
-            if mac_el is not None:
-                mac = mac_el.get("address", "").lower()
-                for line in lease_file.read_text().splitlines():
-                    parts = line.split()
-                    # dnsmasq lease format: expiry mac ip hostname clientid
-                    if len(parts) >= 3 and parts[1].lower() == mac:
-                        return parts[2]
-        return "10.0.2.15"
+            for line in lease_file.read_text().splitlines():
+                parts = line.split()
+                # dnsmasq lease format: expiry mac ip hostname clientid
+                if len(parts) >= 3 and parts[1].lower() == mac:
+                    return parts[2]
+        # Bridge instance with no lease yet (called right after boot,
+        # before DHCP completes) — return falsy so callers checking
+        # `if not instance.private_ip` retry on a later poll instead of
+        # getting stuck on the SLIRP placeholder forever.
+        return ""
     except libvirt.libvirtError:
         return ""
     finally:

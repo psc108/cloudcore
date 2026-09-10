@@ -41,4 +41,7 @@ tests/results/
 api/lb/*.cfg
 api/lb/*.pid
 api/lb/*.sock
+
+# DNS server runtime (generated dnsmasq.conf/pid)
+api/dns/
 .amazonq/

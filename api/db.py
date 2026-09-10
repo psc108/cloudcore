@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS instances (
     private_ip          TEXT NOT NULL DEFAULT '',
     public_ip           TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'pending',
+    error_message       TEXT NOT NULL DEFAULT '',
     created_at          TEXT NOT NULL,
     tags                TEXT NOT NULL DEFAULT '{}',
     domain_name         TEXT NOT NULL DEFAULT '',
@@ -237,6 +238,8 @@ def _migrate_columns() -> None:
         _conn.execute("ALTER TABLE instances ADD COLUMN http_host_port INTEGER NOT NULL DEFAULT 0")
     if "usb_device_ids" not in existing:
         _conn.execute("ALTER TABLE instances ADD COLUMN usb_device_ids TEXT NOT NULL DEFAULT '[]'")
+    if "error_message" not in existing:
+        _conn.execute("ALTER TABLE instances ADD COLUMN error_message TEXT NOT NULL DEFAULT ''")
 
     lb_cols = {row[1] for row in _conn.execute("PRAGMA table_info(load_balancers)").fetchall()}
     if "sticky_sessions" not in lb_cols:

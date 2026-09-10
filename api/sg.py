@@ -35,7 +35,15 @@ _CHAIN_PREFIX = "CC-SG-"
 # ---------------------------------------------------------------------------
 
 def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    # Every caller of _run() is a host-level iptables/ip6tables invocation
+    # for bridge-mode SG enforcement — the API server runs unprivileged, so
+    # these always fail with "Permission denied (you must be root)" (exit 4)
+    # without this. "-n" (non-interactive) makes a missing sudoers grant
+    # fail fast with a clear stderr message instead of hanging a background
+    # thread waiting on a password prompt that can never arrive. Requires
+    # the NOPASSWD grant `api/setup-network.sh` sets up for exactly these
+    # two binaries.
+    return subprocess.run(["sudo", "-n"] + cmd, capture_output=True, text=True, check=check)
 
 
 def _instance_mac(domain_name: str) -> Optional[str]:

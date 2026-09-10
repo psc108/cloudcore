@@ -199,6 +199,7 @@ class Instance:
     private_ip: str = ""
     public_ip: str = ""
     status: InstanceStatus = InstanceStatus.PENDING
+    error_message: str = ""
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
     # internal: libvirt domain name and host port forwards (SLIRP mode)
@@ -232,6 +233,7 @@ class Instance:
             "ssh_endpoint": ssh_endpoint,
             "users": self.users,
             "status": self.status.value,
+            "error_message": self.error_message,
             "created_at": self.created_at,
             "tags": self.tags,
         }

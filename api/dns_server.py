@@ -94,8 +94,14 @@ def start() -> None:
         return
     _CONF_PATH.write_text(_generate_config())
     try:
+        # dnsmasq's argv parser rejects "--conf-file <path>" as two separate
+        # tokens ("dnsmasq: junk found in command line") — it only accepts
+        # the "=" form. Confirmed by direct reproduction: every start/reload
+        # since this module was written has been silently failing, meaning
+        # CloudCore's own DNS resolution (127.0.0.1:5353) has never actually
+        # been up.
         subprocess.run(
-            ["dnsmasq", "--conf-file", str(_CONF_PATH)],
+            ["dnsmasq", f"--conf-file={_CONF_PATH}"],
             check=True, capture_output=True, text=True,
         )
         log.info("dns_server: dnsmasq started on 127.0.0.1:%d", PORT)
@@ -106,16 +112,24 @@ def start() -> None:
 
 
 def reload() -> None:
-    """Regenerate config and reload dnsmasq. Starts it if not running."""
+    """Regenerate config and restart dnsmasq (stop + start, not SIGHUP).
+
+    SIGHUP-based reload was tried first (cheaper — no resolution gap) but
+    empirically, after enough reload cycles over a long-lived process's
+    uptime, dnsmasq starts REFUSING previously-working queries outright
+    (status REFUSED, EDNS extended error 14 "Not Ready") even though the
+    config on disk and a fresh process started against the exact same
+    config both work correctly — reproduced directly: the same conf file
+    that a long-lived, many-times-SIGHUP'd process refused to answer was
+    answered correctly instantly by a brand new process. Root cause inside
+    dnsmasq itself wasn't pinned down (some SIGHUP-reload-only internal
+    state, not config-related), but a full restart on every change avoids
+    the whole class of failure — dnsmasq starts in well under a second, so
+    the resolution gap this trades away is negligible against silently
+    going permanently unresponsive.
+    """
     _CONF_PATH.write_text(_generate_config())
-    pid = _current_pid()
-    if pid:
-        try:
-            os.kill(pid, signal.SIGHUP)
-            log.debug("dns_server: reloaded (SIGHUP pid %d)", pid)
-            return
-        except ProcessLookupError:
-            pass
+    stop()
     start()
 
 

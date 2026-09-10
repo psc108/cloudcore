@@ -422,6 +422,25 @@ def create_instance():
     def _launch():
         try:
             compute.create_instance(instance, vpc_cidr=vpc_cidr)
+        except Exception as e:
+            # The VM itself never came up — this is a genuine instance-level
+            # creation failure.
+            from models import InstanceStatus
+            instance.status = InstanceStatus.ERROR
+            instance.error_message = str(e)
+            app.logger.error("Failed to create instance %s: %s", instance.id, e)
+            store.put_instance(instance)
+            return
+
+        # From here the VM exists and is starting up — a failure in one of
+        # these steps degrades the instance (missing DNS record or security
+        # group enforcement) but shouldn't be reported as instance creation
+        # having failed outright: get_instance()'s live libvirt status check
+        # would silently overwrite an ERROR status here on the very next
+        # poll anyway (it trusts libvirt over the stored value), so setting
+        # it would just be misleading — error_message is what actually
+        # survives and is worth surfacing.
+        try:
             ip = compute.get_instance_ip(instance.domain_name)
             instance.private_ip = ip
             dns_store.upsert_record(
@@ -434,19 +453,18 @@ def create_instance():
                 ingress, egress = _merged_rules(instance.security_group_ids)
                 sg_enforce.apply(instance, ingress, egress)
         except Exception as e:
-            from models import InstanceStatus
-            instance.status = InstanceStatus.ERROR
-            app.logger.error("Failed to create instance %s: %s", instance.id, e)
-        finally:
-            store.put_instance(instance)
-            # Reload LBs after put_instance so http_host_port is in the DB
-            vpc_instances = store.list_instances_by_vpc(instance.vpc_id)
-            for lb in store.list_lbs():
-                if lb.vpc_id == instance.vpc_id:
-                    try:
-                        lb_backend.reload(lb, vpc_instances=vpc_instances)
-                    except Exception as lb_err:
-                        app.logger.warning("LB reload failed for %s: %s", lb.id, lb_err)
+            instance.error_message = f"Post-launch step failed (instance is otherwise up): {e}"
+            app.logger.error("Post-launch step failed for instance %s: %s", instance.id, e)
+
+        store.put_instance(instance)
+        # Reload LBs after put_instance so http_host_port is in the DB
+        vpc_instances = store.list_instances_by_vpc(instance.vpc_id)
+        for lb in store.list_lbs():
+            if lb.vpc_id == instance.vpc_id:
+                try:
+                    lb_backend.reload(lb, vpc_instances=vpc_instances)
+                except Exception as lb_err:
+                    app.logger.warning("LB reload failed for %s: %s", lb.id, lb_err)
 
     threading.Thread(target=_launch, daemon=True).start()
     return jsonify(instance.to_dict()), 202
@@ -466,6 +484,17 @@ def get_instance(instance_id):
             instance.status = live_status
         if not instance.private_ip and live_status == InstanceStatus.RUNNING:
             instance.private_ip = compute.get_instance_ip(instance.domain_name)
+            if instance.private_ip:
+                # The DNS A-record registered at launch time falls back to
+                # "127.0.0.1" when the real (bridged) IP isn't known yet
+                # (same DHCP-timing gap as private_ip itself) — but unlike
+                # private_ip, nothing else ever re-registers it. Piggyback
+                # on this same self-correcting refresh so the DNS record
+                # doesn't stay wrong for the instance's whole lifetime.
+                dns_store.upsert_record(
+                    "instances.cloudcore.local", instance.name, "A",
+                    instance.private_ip, resource_type="instance", resource_id=instance.id,
+                )
         store.put_instance(instance)
     return jsonify(instance.to_dict())
 

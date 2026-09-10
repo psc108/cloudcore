@@ -280,7 +280,11 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 			return
 		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-		if poll.Status == "running" {
+		// Bridged instances report status=running before their DHCP lease
+		// (and thus private_ip) is known — wait for both so this attribute
+		// is reliable for cross-resource references (e.g. an NGINX
+		// instance's user_data templating in a frontend instance's IP).
+		if poll.Status == "running" && poll.PrivateIP != "" {
 			return
 		}
 		if poll.Status == "error" {
