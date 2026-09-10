@@ -1,0 +1,232 @@
+#cloud-config
+# The MySQL status script connects through the full real path — the VIP,
+# not ProxySQL directly — so it exercises Keepalived + NGINX stream{} +
+# ProxySQL + Group Replication together, not just a direct DB connection.
+# It deliberately doesn't block frontend's own boot on the DB tier being
+# ready (no Terraform dependency on the mysql/proxysql modules) — it just
+# shows "unreachable" until the DB tier comes up, then self-corrects.
+package_update: true
+packages:
+  - nginx
+  - mysql-client
+  - python3
+
+write_files:
+  - path: /var/www/html/index.html
+    content: |
+      <!doctype html>
+      <html><head><title>Frontend</title></head>
+      <body><h1>Served by __HOSTNAME__</h1>
+      <p><a href="/mysql-status.html">MySQL cluster status</a></p>
+      </body></html>
+
+  - path: /usr/local/sbin/mysql-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import subprocess, json, datetime
+
+      VIP = "${vip_address}"
+      APP_USER = "appuser"
+      APP_PASSWORD = "${app_password}"
+      DB = "clusterdemo"
+      EXPECTED_MEMBERS = 3
+      HISTORY_FILE = "/var/log/mysql-cluster-status-history.json"
+      MAX_HISTORY = 60
+
+      def run_sql(sql, db=None, timeout=5):
+          cmd = ["mysql", "-h", VIP, "-P", "3306", "-u", APP_USER, f"-p{APP_PASSWORD}"]
+          if db:
+              cmd.append(db)
+          cmd += ["-N", "-B", "-e", sql]
+          try:
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+              if r.returncode != 0:
+                  return None, r.stderr.strip()
+              return r.stdout, None
+          except Exception as e:
+              return None, str(e)
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "error": None,
+                    "members": [], "heartbeat": None, "answered_by": None,
+                    "remediation": None}
+
+          _, err = run_sql(
+              "INSERT INTO heartbeat (id, counter, updated_at) VALUES (1,1,NOW()) "
+              "ON DUPLICATE KEY UPDATE counter=counter+1, updated_at=NOW();",
+              db=DB,
+          )
+          if err:
+              status["error"] = f"heartbeat write failed: {err}"
+              write_status(status)
+              return
+
+          out, _ = run_sql("SELECT counter, updated_at FROM heartbeat WHERE id=1;", db=DB)
+          if out:
+              parts = out.strip().split("\t")
+              if len(parts) == 2:
+                  status["heartbeat"] = {"counter": int(parts[0]), "updated_at": parts[1]}
+
+          out, _ = run_sql("SELECT @@hostname;")
+          if out:
+              status["answered_by"] = out.strip()
+
+          out, _ = run_sql(
+              "SELECT MEMBER_HOST, MEMBER_STATE, MEMBER_ROLE FROM "
+              "performance_schema.replication_group_members;"
+          )
+          online = []
+          if out:
+              for line in out.strip().splitlines():
+                  cols = line.split("\t")
+                  if len(cols) == 3:
+                      host, state, role = cols
+                      status["members"].append({"host": host, "state": state, "role": role})
+                      if state == "ONLINE":
+                          online.append((host, role))
+
+          online_count = len(online)
+          if online_count >= EXPECTED_MEMBERS:
+              status["verdict"] = "OK"
+          elif online_count * 2 > EXPECTED_MEMBERS:
+              status["verdict"] = "DEGRADED"
+          elif online_count >= 1:
+              status["verdict"] = "CRITICAL"
+              survivor_host = online[0][0]
+              status["remediation"] = (
+                  f"Below quorum ({online_count} of {EXPECTED_MEMBERS} nodes ONLINE). "
+                  f"On the survivor ({survivor_host}), run:\n"
+                  f"  SET GLOBAL group_replication_force_members = "
+                  f"'{survivor_host}:33061';\n"
+                  f"  START GROUP_REPLICATION;\n"
+                  f"This forces the group to reform on this node alone — confirm "
+                  f"the other nodes are genuinely gone before running it; it "
+                  f"discards any state they might still hold."
+              )
+          else:
+              status["verdict"] = "CRITICAL"
+              status["remediation"] = (
+                  "No nodes reachable — check the MySQL/ProxySQL/NGINX path "
+                  "itself, not just Group Replication."
+              )
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          primary = next((m["host"] for m in status["members"] if m["role"] == "PRIMARY"), None)
+          online_count = len([m for m in status["members"] if m["state"] == "ONLINE"])
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "online_count": online_count,
+              "primary": primary,
+              "heartbeat_counter": status["heartbeat"]["counter"] if status["heartbeat"] else None,
+              "error": status["error"],
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/mysql-cluster-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+          members_html = "".join(
+              f"<li>{m['host']} — {m['state']} ({m['role']})</li>" for m in status["members"]
+          )
+          heartbeat_html = ""
+          if status["heartbeat"]:
+              heartbeat_html = (
+                  f"<p>Heartbeat counter: {status['heartbeat']['counter']} "
+                  f"(last write: {status['heartbeat']['updated_at']})</p>"
+              )
+          remediation_html = ""
+          if status["remediation"]:
+              remediation_html = (
+                  "<pre style='background:#222;color:#eee;padding:1em;"
+                  f"white-space:pre-wrap'>{status['remediation']}</pre>"
+              )
+          error_html = f"<p style='color:#c0392b'>{status['error']}</p>" if status["error"] else ""
+
+          # Most recent first, so a blip is still visible without needing to
+          # be watching the page at the exact moment it happened — a single
+          # current-snapshot view (the old design) can silently miss a
+          # transition that self-corrects between two 5s/2s page loads.
+          history_rows = ""
+          for h in reversed(history):
+              c = colors.get(h["verdict"], "#666")
+              hb = h["heartbeat_counter"] if h["heartbeat_counter"] is not None else "-"
+              pri = h["primary"] or "-"
+              err = f" — {h['error']}" if h["error"] else ""
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{c}'>{h['verdict']}</td>"
+                  f"<td>{h['online_count']}/{EXPECTED_MEMBERS}</td>"
+                  f"<td>{pri}</td><td>{hb}</td><td>{err}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>MySQL Cluster Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+      </style></head>
+      <body>
+      <h1>MySQL Cluster Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} - answered by {status['answered_by'] or 'unknown'}</p>
+      {error_html}
+      {heartbeat_html}
+      <h2>Members</h2>
+      <ul>{members_html}</ul>
+      {remediation_html}
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Online</th><th>Primary</th><th>Heartbeat</th><th>Error</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/mysql-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/mysql-status.service
+    content: |
+      [Unit]
+      Description=Refresh MySQL cluster status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/mysql-status.py
+
+  - path: /etc/systemd/system/mysql-status.timer
+    content: |
+      [Unit]
+      Description=Run mysql-status.service every 2s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
+  - systemctl restart nginx
+  - systemctl daemon-reload
+  - systemctl enable --now mysql-status.timer

@@ -57,3 +57,15 @@ variable "frontend_count" {
   type        = number
   default     = 2
 }
+
+variable "mysql_flavor" {
+  description = "Compute flavor for the three MySQL Group Replication nodes."
+  type        = string
+  default     = "standard.medium"
+}
+
+variable "proxysql_flavor" {
+  description = "Compute flavor for the two ProxySQL nodes."
+  type        = string
+  default     = "standard.small"
+}

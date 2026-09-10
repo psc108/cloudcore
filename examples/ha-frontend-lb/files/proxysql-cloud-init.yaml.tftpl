@@ -1,0 +1,73 @@
+#cloud-config
+# ProxySQL: read/write splitting in front of the MySQL Group Replication
+# cluster. Uses ProxySQL's own mysql_group_replication_hostgroups
+# mechanism (auto-detects the live primary by polling each server's real
+# GR membership state) rather than a static write/read hostgroup split —
+# haFullStack.md §5.2's sketch hardcodes "mysql1 = primary," which would
+# be wrong the moment a failover happens, exactly the scenario this slice
+# exists to prove. Not available via stock apt (Ubuntu carries no
+# proxysql package at all) — installed from a pinned, checksum-verified
+# GitHub release .deb, same pattern as Ghidra's JDK download.
+package_update: true
+packages:
+  - curl
+  - ca-certificates
+  - mysql-client
+
+write_files:
+  - path: /usr/local/sbin/install-proxysql.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      DEB=/tmp/proxysql.deb
+      # --speed-limit/-C -: resume rather than restart on a stall, this
+      # platform's guest networking has been observed to occasionally
+      # stall completely mid-transfer on larger files (see the Ghidra
+      # template's cloud-init for the same pattern).
+      for i in $(seq 1 5); do
+        curl -fL --speed-limit 1024 --speed-time 30 -C - \
+          -o "$DEB" "${proxysql_deb_url}" && break
+        sleep 5
+      done
+
+      echo "${proxysql_deb_sha256}  $DEB" | sha256sum -c -
+      dpkg -i "$DEB" || apt-get install -f -y
+      systemctl enable --now proxysql
+
+      # Give the admin interface a moment to actually be listening.
+      for i in $(seq 1 30); do
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "SELECT 1" >/dev/null 2>&1 && break
+        sleep 2
+      done
+
+      mysql -h127.0.0.1 -P6032 -uadmin -padmin <<SQL
+%{ for ip in mysql_ips ~}
+      INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (20, '${ip}', 3306);
+%{ endfor ~}
+
+      INSERT INTO mysql_group_replication_hostgroups
+        (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind)
+      VALUES (10, 12, 20, 9999, 1, 1, 1, 100);
+
+      INSERT INTO mysql_query_rules (rule_id, match_pattern, destination_hostgroup, apply)
+      VALUES (1, '^SELECT.*', 20, 1);
+
+      UPDATE global_variables SET variable_value='proxysql_monitor' WHERE variable_name='mysql-monitor_username';
+      UPDATE global_variables SET variable_value='${monitor_password}' WHERE variable_name='mysql-monitor_password';
+
+      INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('appuser', '${app_password}', 10);
+
+      LOAD MYSQL VARIABLES TO RUNTIME;
+      LOAD MYSQL SERVERS TO RUNTIME;
+      LOAD MYSQL QUERY RULES TO RUNTIME;
+      LOAD MYSQL USERS TO RUNTIME;
+      SAVE MYSQL VARIABLES TO DISK;
+      SAVE MYSQL SERVERS TO DISK;
+      SAVE MYSQL QUERY RULES TO DISK;
+      SAVE MYSQL USERS TO DISK;
+      SQL
+
+runcmd:
+  - /usr/local/sbin/install-proxysql.sh

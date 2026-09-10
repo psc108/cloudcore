@@ -17,6 +17,9 @@ write_files:
   - path: /etc/nginx/sites-available/default
     content: |
       ${indent(6, nginx_conf)}
+  - path: /etc/nginx/stream.conf
+    content: |
+      ${indent(6, nginx_stream_conf)}
   - path: /etc/keepalived/keepalived.conf.template
     content: |
       vrrp_instance VI_1 {
@@ -48,5 +51,10 @@ write_files:
 
 runcmd:
   - /usr/local/sbin/render-keepalived-conf.sh
+  # stream{} is a top-level context, a sibling of http{} — it can't live
+  # in sites-available (http-context only), so it's included directly
+  # from nginx.conf's own top level (haFullStack.md §3.2).
+  - echo "include /etc/nginx/stream.conf;" >> /etc/nginx/nginx.conf
+  - nginx -t
   - systemctl restart nginx
   - systemctl enable --now keepalived

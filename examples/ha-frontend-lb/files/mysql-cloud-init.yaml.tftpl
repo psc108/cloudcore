@@ -1,0 +1,225 @@
+#cloud-config
+# MySQL Group Replication node. server_id / bootstrap-vs-join behaviour is
+# this node's own identity, baked in from Terraform; its own IP and the
+# interface name are detected at runtime (bridged instances only know
+# these after boot), same pattern as NGINX's Keepalived interface
+# detection in nginx-cloud-init.yaml.tftpl.
+#
+# Only the bootstrap node's own IP is known to the two joiner nodes at
+# apply time (modules/compute's per-key user_data can't reference that
+# same module call's own IP outputs — see haFullStack-LLD.md §2.3.2/§2.7)
+# — joiners seed off the bootstrap node alone. Group Replication's own
+# gossip protocol discovers full membership once joined; this is a known
+# simplification (not a full mesh seed list), flagged in haFullStack-LLD.md
+# §2.7.
+package_update: true
+packages:
+  - mysql-server
+
+write_files:
+  - path: /usr/local/sbin/setup-group-replication.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      # Named to sort after Ubuntu's own mysqld.cnf (alphabetically, in
+      # /etc/mysql/mysql.conf.d/*.cnf's load order) — mysqld.cnf ships
+      # with "bind-address = 127.0.0.1" and, loaded later, would
+      # otherwise silently override this file's "0.0.0.0" (found
+      # empirically: mysqld was listening on 127.0.0.1:3306 only, despite
+      # this file explicitly setting 0.0.0.0, blocking every other node's
+      # connection with a bare "Connection refused").
+      cat > /etc/mysql/mysql.conf.d/zz-group-replication.cnf <<EOF
+      [mysqld]
+      bind-address = 0.0.0.0
+      # Without this, other members refer to and connect to this node by
+      # its OS hostname (e.g. "example-dev-mysql-a") — which none of
+      # these guests can resolve (no /etc/hosts entries, no reachable
+      # DNS from inside a guest) — breaking distributed recovery with
+      # "Unknown MySQL server host" the moment a joiner tries to connect
+      # to its donor. report_host makes every member (including this
+      # one, for when it's the donor) report and connect via a real IP
+      # instead.
+      report_host = "$LOCAL_IP"
+      server-id = ${server_id}
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      binlog_format = ROW
+      log_bin = mysql-bin
+      log_slave_updates = ON
+
+      # group_replication_* below are plugin-defined variables, not core
+      # server variables — mysqld rejects them as "unknown variable" and
+      # refuses to start unless the plugin is already loaded. INSTALL
+      # PLUGIN can't run before mysqld has successfully started, so on a
+      # fresh install this needs plugin_load_add (loads it directly from
+      # the .so file at startup) rather than relying on INSTALL PLUGIN's
+      # normal "register for future restarts" behaviour.
+      plugin_load_add = group_replication.so
+      group_replication_group_name = "${group_name}"
+      group_replication_start_on_boot = OFF
+      group_replication_local_address = "$LOCAL_IP:33061"
+      group_replication_group_seeds = "${group_seeds}"
+      group_replication_single_primary_mode = ON
+      group_replication_enforce_update_everywhere_checks = OFF
+      group_replication_autorejoin_tries = 3
+      EOF
+
+      systemctl restart mysql
+
+      # The recovery channel needs this account to exist locally on every
+      # node (bootstrap or joiner) before that node starts group
+      # replication — every node runs this identical block, so donor and
+      # joiner always agree on the credential. SET SQL_LOG_BIN=0 keeps its
+      # creation out of the binlog Group Replication itself replicates.
+      mysql -u root <<SQL
+      SET SQL_LOG_BIN=0;
+      # mysql_native_password, not the 8.0 default caching_sha2_password:
+      # the recovery channel connection between nodes isn't over TLS here
+      # (no cert distribution set up for this Lab prototype), and
+      # caching_sha2_password refuses to authenticate at all without a
+      # secure connection ("Authentication requires secure connection",
+      # found empirically) — the standard simplification for a non-TLS
+      # lab setup, not appropriate for a production deployment.
+      CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY '${repl_password}';
+      GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
+      GRANT BACKUP_ADMIN ON *.* TO 'repl'@'%';
+      GRANT SELECT ON performance_schema.* TO 'repl'@'%';
+      SET SQL_LOG_BIN=1;
+      CHANGE REPLICATION SOURCE TO SOURCE_USER='repl', SOURCE_PASSWORD='${repl_password}' FOR CHANNEL 'group_replication_recovery';
+      SQL
+
+      %{ if is_bootstrap ~}
+      mysql -u root <<SQL
+      SET GLOBAL group_replication_bootstrap_group = ON;
+      START GROUP_REPLICATION;
+      SET GLOBAL group_replication_bootstrap_group = OFF;
+
+      # mysql_native_password: ProxySQL has historically had limited
+      # caching_sha2_password support for its own backend connections,
+      # and this environment has no TLS set up between nodes anyway —
+      # same reasoning as the repl user above.
+      CREATE USER IF NOT EXISTS 'proxysql_monitor'@'%' IDENTIFIED WITH mysql_native_password BY '${monitor_password}';
+      GRANT REPLICATION CLIENT ON *.* TO 'proxysql_monitor'@'%';
+      GRANT SELECT ON performance_schema.* TO 'proxysql_monitor'@'%';
+      CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED WITH mysql_native_password BY '${app_password}';
+      GRANT SELECT ON performance_schema.* TO 'appuser'@'%';
+
+      CREATE DATABASE IF NOT EXISTS clusterdemo;
+      GRANT ALL PRIVILEGES ON clusterdemo.* TO 'appuser'@'%';
+      CREATE TABLE IF NOT EXISTS clusterdemo.heartbeat (
+          id INT PRIMARY KEY,
+          counter BIGINT NOT NULL DEFAULT 0,
+          updated_at DATETIME NOT NULL
+      );
+      INSERT INTO clusterdemo.heartbeat (id, counter, updated_at) VALUES (1, 0, NOW())
+        ON DUPLICATE KEY UPDATE updated_at = NOW();
+      SQL
+      %{ else ~}
+      # Wait for the bootstrap node's group to actually be ONLINE before
+      # attempting to join — cloud-init on all 3 nodes runs concurrently,
+      # so the bootstrap node's own SQL sequence above may not have
+      # finished yet (haFullStack-LLD.md §2.3.1's flagged risk).
+      SEED_HOST=$(echo "${group_seeds}" | cut -d: -f1)
+      for i in $(seq 1 60); do
+        if mysql -h "$SEED_HOST" -u repl -p'${repl_password}' -N -e \
+             "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_STATE='ONLINE'" \
+             2>/dev/null | grep -q ONLINE; then
+          break
+        fi
+        sleep 5
+      done
+
+      mysql -u root -e "START GROUP_REPLICATION;"
+      %{ endif ~}
+
+  # Group Replication does not refuse writes below the ORIGINAL cluster's
+  # majority by default — it expels unreachable peers and continues as a
+  # legitimate, smaller group (haFullStack-Findings-Log.md F-021,
+  # haFullStack.md §5.3). This runs locally on every node (root via the
+  # Unix socket — no new remote-accessible privileged account) and
+  # enforces read-only if this node is PRIMARY of a group that's shrunk
+  # below majority, clearing it again once original membership returns.
+  # super_read_only=OFF does NOT auto-clear the separate read_only flag —
+  # both have to be cleared, in that order, or ProxySQL's own GR monitor
+  # never re-adds the node to the writer hostgroup (found empirically).
+  - path: /usr/local/sbin/quorum-watchdog.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import subprocess
+
+      EXPECTED_MEMBERS = 3
+      MAJORITY = EXPECTED_MEMBERS // 2 + 1
+
+
+      def run_sql(sql):
+          cmd = ["mysql", "-u", "root", "-N", "-B", "-e", sql]
+          try:
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+          except Exception:
+              return None
+          if r.returncode != 0:
+              return None
+          return r.stdout
+
+
+      def main():
+          out = run_sql(
+              "SELECT MEMBER_STATE, MEMBER_ROLE FROM "
+              "performance_schema.replication_group_members "
+              "WHERE MEMBER_ID = @@server_uuid;"
+          )
+          if not out:
+              return
+          parts = out.strip().split("\t")
+          if len(parts) != 2:
+              return
+          my_state, my_role = parts
+          if my_state != "ONLINE" or my_role != "PRIMARY":
+              return
+
+          out = run_sql(
+              "SELECT COUNT(*) FROM performance_schema.replication_group_members "
+              "WHERE MEMBER_STATE='ONLINE';"
+          )
+          online_count = int(out.strip()) if out and out.strip().isdigit() else 0
+
+          if online_count < MAJORITY:
+              run_sql("SET GLOBAL super_read_only = ON;")
+          else:
+              run_sql("SET GLOBAL super_read_only = OFF;")
+              run_sql("SET GLOBAL read_only = OFF;")
+
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/quorum-watchdog.service
+    content: |
+      [Unit]
+      Description=Enforce read-only below cluster majority
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/quorum-watchdog.py
+
+  - path: /etc/systemd/system/quorum-watchdog.timer
+    content: |
+      [Unit]
+      Description=Run quorum-watchdog.service every 3s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=3s
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - /usr/local/sbin/setup-group-replication.sh
+  - systemctl daemon-reload
+  - systemctl enable --now quorum-watchdog.timer

@@ -37,3 +37,28 @@ output "lb_url" {
   description = "Client-facing URL once the VIP is up. Reachable from the CloudCore host itself, matching this platform's loopback-first access model."
   value       = "http://${var.vip_address}/"
 }
+
+output "mysql_status_url" {
+  description = "Live MySQL cluster status page — proves the cluster is real through the full request path, not a direct DB connection."
+  value       = "http://${var.vip_address}/mysql-status.html"
+}
+
+output "mysql_bootstrap_ip" {
+  description = "The bootstrap MySQL node's private IP (server-id 1)."
+  value       = module.mysql_bootstrap.private_ips_by_key
+}
+
+output "mysql_replica_ips" {
+  description = "The two joiner MySQL nodes' private IPs (server-id 2 and 3), keyed by role."
+  value       = module.mysql_replicas.private_ips_by_key
+}
+
+output "proxysql_private_ips" {
+  description = "ProxySQL instance private IPs keyed by two-digit index."
+  value       = module.proxysql.private_ips_by_key
+}
+
+output "proxysql_ssh_commands" {
+  description = "SSH commands for the ProxySQL instances, keyed by two-digit index."
+  value       = module.proxysql.ssh_commands_by_key
+}
