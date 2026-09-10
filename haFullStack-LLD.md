@@ -21,6 +21,12 @@ slice below rather than repeated inline. Sections currently complete:
 | # | Slice | Status |
 |---|---|---|
 | 1 | Load Balancer Tier — Client to Frontend (L7) | Lab/OpenTofu built and verified ([findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu)); On-Prem/AWS and Ansible still pending |
+| 2 | Database Tier — MySQL High Availability | Lab/OpenTofu built, failure-tested, and F-021 fixed ([findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier)); On-Prem/AWS and Ansible still pending |
+
+Per the session plan: every slice gets built and verified on Lab/OpenTofu
+first, as one growing stack (not independent per-slice templates) —
+Ansible, On-Prem, and AWS for the whole set only start once all slices
+are proven on Lab/OpenTofu.
 
 ---
 
@@ -517,9 +523,387 @@ better capability AWS happens to provide natively here.
 
 ---
 
+## 2. Database Tier — MySQL High Availability
+
+### 2.1 Scope
+
+**In scope for this section:** the 3-node MySQL Group Replication cluster,
+ProxySQL's read/write splitting in front of it, and exposing that through
+the **same** NGINX nodes built in §1 (via a `stream{}` block, sibling to
+the `http{}` block already serving the frontend LB — `haFullStack.md`
+§3.2) — not a new/separate load balancer. This is one growing stack, not
+independent per-slice templates (`examples/ha-frontend-lb/` gets extended
+in place, not forked).
+
+**Deliberate scoping decision, not a permanent architecture call:** the
+HLD's own request flow (`haFullStack-HLD.md` §3.1/§3.2) has the *backend*
+tier as MySQL's actual client, not the frontend directly — but the
+backend tier is a later slice, not built yet. For this slice, the
+frontend instances connect to ProxySQL directly and prove the cluster is
+real and operational (cluster membership, current primary, a live query)
+purely as a Lab validation convenience, standing in for the not-yet-built
+backend. This should not be read as "frontend talks to the database" in
+the target architecture — flagged explicitly so it isn't misread later.
+
+**Explicitly out of scope, for later slices:** RabbitMQ, Keystone, and
+the real backend application tier itself (HLD §2 groups frontend/backend/
+Keystone as "the HTTP tier," but per this session's plan each becomes its
+own slice).
+
+### 2.2 Environment and Tooling Matrix
+
+| Environment | HA Mechanism | Why | IaC Tool(s) |
+|---|---|---|---|
+| **Lab** (this platform) | 3× MySQL Group Replication + 2× ProxySQL, exposed via the existing NGINX `stream{}` | Validates the actual HLD-designed architecture (§5 of `haFullStack.md`) against real infrastructure | OpenTofu or Ansible |
+| **On-Prem** | Same — 3× MySQL GR + 2× ProxySQL + NGINX `stream{}` | Same architecture as Lab — this is the environment the HLD design was actually written for | OpenTofu or Ansible |
+| **AWS** | RDS for MySQL, Multi-AZ (or Aurora MySQL) + RDS Proxy | AWS's managed Multi-AZ failover replaces hand-rolled Group Replication the same way ALB replaced Keepalived in §1 — RDS Proxy is the managed equivalent of ProxySQL (connection pooling, masks failover from clients) | OpenTofu or Ansible |
+
+Same pattern as §1.2: Lab and On-Prem are architecturally identical;
+AWS is a genuinely different, managed mechanism.
+
+---
+
+### 2.3 Lab Environment (CloudCore)
+
+#### 2.3.1 Design
+
+- Reuses the existing VPC/subnet from §1 — this is one growing stack, not
+  a new one.
+- Two new security groups: `mysql` (ingress 3306 + 33061 from the
+  `proxysql` SG and from other `mysql`-tagged instances for Group
+  Replication's own peer traffic; egress all) and `proxysql` (ingress
+  6033 from the `nginx` SG only; egress all).
+- 3× MySQL instances via `modules/compute` (map-based, per-key
+  `user_data`) — same pattern as the two NGINX nodes in §1, because each
+  node needs a genuinely different config: distinct `server-id`,
+  distinct `group_replication_local_address`, and only node 1 sets
+  `group_replication_bootstrap_group = ON` before starting. Also sets
+  `group_replication_autorejoin_tries` (not present in `haFullStack.md`
+  §5.1's config block — added here specifically for §2.3.1b's
+  self-healing boundary, so a transiently-expelled node reconnects on its
+  own rather than needing the same manual `START GROUP_REPLICATION` a
+  genuine restart does). Also installs `quorum-watchdog.py` (a systemd
+  timer, every 3s) — the real fix for F-021, enforcing `super_read_only`
+  locally on a node that's `ONLINE`/`PRIMARY` of a group below the
+  original cluster's majority.
+- 2× ProxySQL instances via `modules/instance-group` — identical config
+  is fine here (both just need the 3 MySQL nodes' addresses, known at
+  apply time the same way frontend's IPs were known to NGINX in §1).
+- NGINX's `user_data` template (from §1) gains a `stream{}` block
+  listening on `:3306`, proxying to the 2 ProxySQL nodes' `:6033` — this
+  means `module.nginx`'s `user_data` now depends on **both**
+  `module.frontend` (existing) and the new `module.proxysql`'s outputs.
+- Frontend's `user_data` (from §1) gains a systemd timer that queries
+  ProxySQL every few seconds and writes the live result into the page
+  NGINX already serves — the "proof it's real" requirement — needing only
+  a `mysql-client` package, not a full app server. Two things, not one:
+  - `performance_schema.replication_group_members` (node list, role,
+    `MEMBER_STATE`) and `@@hostname` — proves the query actually routed
+    through NGINX → ProxySQL → MySQL, not a hardcoded value.
+  - A **write** against a small heartbeat table
+    (`INSERT ... ON DUPLICATE KEY UPDATE counter = counter + 1,
+    updated_at = NOW()`), then read back and displayed alongside the
+    membership info. Metadata alone only proves the cluster's *state* is
+    healthy — it says nothing about whether the thing failover actually
+    protects (the ability to write) still works. The heartbeat's
+    `counter`/`updated_at` also makes staleness itself visible: if the
+    timer stops successfully writing, the page stops advancing, which is
+    its own failure signal.
+
+> **Open risk, to verify empirically before treating this as final** (see
+> §2.7) — Group Replication's bootstrap sequencing. `cloud-init` on all 3
+> MySQL nodes runs concurrently (same `for_each`-driven creation as
+> NGINX's MASTER/BACKUP pair in §1), but node 1 must finish
+> **bootstrapping** the group before nodes 2/3 can successfully **join**
+> it. Nodes 2/3's `runcmd` needs to poll node 1's MySQL port (and,
+> better, its actual group-membership state) and retry the join rather
+> than assume node 1 is ready — this is exactly the kind of
+> platform-timing assumption that broke twice already in §1 (`private_ip`
+> timing, F-007/F-008) and needs the same "verify for real, don't assume"
+> treatment before it's trusted.
+
+#### 2.3.1a Failure-Mode Test Matrix
+
+The actual point of a 3-node cluster is that losing one node doesn't
+cause total loss (§5.3/F-001) — that has to be demonstrated, not assumed
+from the topology being "correct." Five tests, all against the heartbeat
+write path above, not just cluster metadata:
+
+| # | Test | What it proves | Expected result |
+|---|---|---|---|
+| 1 | Stop a **secondary** node | Losing a non-primary is a non-event | Zero write impact; dead node drops out of the read hostgroup; frontend page keeps advancing without interruption |
+| 2 | Stop the **primary** node | Automatic failover actually works, with a real (not assumed) recovery time | Group Replication elects a new primary among the 2 survivors; ProxySQL re-tags the write hostgroup to it; a write-loop run through the failover window gives a measured RTO from actual consecutive-failure count, not the ~5-10s from `haFullStack.md` §5.3 taken on faith |
+| 3 | Stop **2 of 3** nodes simultaneously | Whether the quorum protection is actually real, not just a bigger node count | **Empirically found not to hold by default** (F-021) — Group Replication expels the unreachable peers and the survivor continues as a legitimate, smaller group, majority-of-1 trivially satisfied. It does not drop out of `ONLINE` and does not refuse writes. This is still the right test to run — it's what *disproved* an assumption the whole design was resting on, which is exactly what a negative test is for |
+| 4 | Restart a stopped node (full `mysqld`/VM restart) | Rejoin behaviour after a real restart is understood, not assumed | Confirm it does **not** auto-rejoin (`group_replication_start_on_boot = OFF` by design) and needs an explicit `START GROUP_REPLICATION`; confirm it then catches up via distributed recovery |
+| 5 | Transient network blip to one node (e.g. a brief `iptables DROP` on its GR port, `mysqld` never stops) | Self-healing actually works for the case it's supposed to — a node expelled from the group without ever crashing | Confirm the node is expelled, then confirm it **automatically rejoins** once connectivity returns, with no manual step — this is what `group_replication_autorejoin_tries` (§2.3.1b) is specifically for, and is the one failure class that should require zero intervention |
+
+Test 3 is the one most likely to be skipped in favour of "2 down would
+obviously be worse" — it shouldn't be, and this is exactly why: run for
+real, it overturned an assumption (§5.1/§5.3) the whole 3-node design
+had been resting on. **§5.1's fault-tolerance argument for 3 nodes over
+2 still holds** — an actual node death genuinely needs 2 survivors to
+keep working at all — but the specific *split-brain protection* §5.3
+claimed for a network-partition scenario does not exist by default; see
+F-021 and `haFullStack.md` §5.3 (corrected to v1.3) for the real
+behavior and what a genuine fix would need. Test 5 is the flip side —
+the evidence that *not everything* requires a human, so §2.3.1b's
+manual-only boundary is earned rather than lazy.
+
+#### 2.3.1b Self-Healing Boundary and Manual-Intervention Diagnostics
+
+Not every recoverable event should need a human, but not every event is
+safe to automate either — MySQL's own documentation treats forcing group
+membership on a survivor as a deliberate operator decision, not something
+to script blindly, since getting it wrong risks accepting a node's state
+without knowing whether it actually still agrees with the rest of the
+group. The line drawn here:
+
+| Event | Self-heals? | Mechanism |
+|---|---|---|
+| Secondary node lost | Yes | Group Replication membership change + ProxySQL monitor, both automatic |
+| Primary node lost | Yes | Group Replication auto-election + ProxySQL re-tag, both automatic |
+| Node transiently expelled, `mysqld` still running | Yes | `group_replication_autorejoin_tries` — confirmed empirically (test 5): expelled and auto-rejoined in ~4s, zero manual intervention |
+| `mysqld`/VM actually restarts | **No, deliberately** | `group_replication_start_on_boot = OFF` — a restarted node's data/state shouldn't be trusted back into the group without a human confirming it, matching MySQL's own recommended default |
+| 2 of 3 nodes lost (below quorum) | **Yes, but not by Group Replication itself** | **Revised after F-021.** The original plan here (`group_replication_force_members` as a considered operator action) assumed GR would actually *block* the survivor pending that decision — empirically, it doesn't: GR expels unreachable peers and the survivor keeps serving as a legitimate smaller group with no operator input needed or possible. The real fix is `quorum-watchdog.py` (§2.3.2), running locally on every node, enforcing `super_read_only` when the local node is primary of a group below the *original* majority, and clearing it again once membership returns — fully automatic, no `force_members`, no human in the loop |
+
+Only one row is still deliberately manual. Group Replication's own
+design intent for the below-quorum case — a human decides whether to
+force-reform the group — turned out not to reflect what GR actually
+does by default, so that automation gap is now closed differently than
+originally planned (§2.7, F-021), not left as a manual case. For the
+remaining manual row, the requirement isn't to automate it away — it's
+that the moment it's needed, the diagnosis has to be immediate and the
+remediation has to be concrete, not "go check the MySQL error log." The
+frontend status page (§2.3.1) already queries
+`performance_schema.replication_group_members` every cycle — it gets
+extended to interpret that, not just display it:
+
+- A clear **OK / DEGRADED / CRITICAL** verdict, not just a raw member
+  list — `DEGRADED` for "1 node down, already self-healed or healing,"
+  `CRITICAL` for "below quorum." As of the `quorum-watchdog` fix (F-021),
+  `CRITICAL` is no longer "needs a human" by default — the survivor
+  enforces its own read-only state automatically — but the verdict still
+  matters as visible confirmation that the automatic enforcement is
+  actually engaged, and as the trigger for a human to look if it somehow
+  isn't (the watchdog service failing, the survivor never reaching
+  `super_read_only=ON` within the expected window, etc.).
+- In `CRITICAL` state: which specific node(s) are missing, the last
+  known-good member list, and — as a manual override, not the expected
+  path — the **actual** `group_replication_force_members` value built
+  from the survivor's own view of the group (it already has every
+  member's UUID from the same query), not a generic placeholder command
+  someone has to fill in correctly under pressure.
+- The same status gets written as structured JSON to a local file on
+  each frontend instance (not only rendered as HTML) — so a real
+  incident has a machine-readable, timestamped record beyond whatever the
+  webpage happened to show at the moment someone looked, and so later
+  slices (monitoring/alerting, explicitly out of scope for §1.1) have
+  something to hook into rather than needing to scrape HTML.
+
+#### 2.3.2 OpenTofu Implementation
+
+Illustrative — to be proven and corrected against real infrastructure the
+same way §1.3.2 was (see its "As built" note for how much a real build
+can diverge from a first sketch):
+
+```hcl
+# examples/ha-frontend-lb/main.tf  (additions — illustrative)
+
+module "security_groups" {
+  # ...existing nginx/frontend groups from §1, plus:
+  security_groups = {
+    # ...
+    mysql = {
+      description = "MySQL Group Replication tier"
+      ingress_rules = {
+        mysql = { ip_protocol = "tcp", from_port = 3306, to_port = 3306, cidr = local.bridge_cidr }
+        gr    = { ip_protocol = "tcp", from_port = 33061, to_port = 33061, cidr = local.bridge_cidr }
+      }
+      egress_rules = { all = { ip_protocol = "-1", cidr = "0.0.0.0/0" } }
+    }
+    proxysql = {
+      description = "ProxySQL — MySQL nodes' subnet only"
+      ingress_rules = {
+        admin = { ip_protocol = "tcp", from_port = 6033, to_port = 6033, cidr = local.bridge_cidr }
+      }
+      egress_rules = { all = { ip_protocol = "-1", cidr = "0.0.0.0/0" } }
+    }
+  }
+}
+
+locals {
+  mysql_nodes = {
+    a = { server_id = 1, bootstrap = true }
+    b = { server_id = 2, bootstrap = false }
+    c = { server_id = 3, bootstrap = false }
+  }
+  mysql_instances = {
+    for role, cfg in local.mysql_nodes : "mysql-${role}" => {
+      image_id  = "ubuntu-22.04"
+      flavor    = var.mysql_flavor
+      vpc_id    = module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = [module.security_groups.security_group_ids_by_key["mysql${local.sfx}"]]
+      user_data = templatefile("${path.module}/files/mysql-cloud-init.yaml.tftpl", {
+        server_id            = cfg.server_id
+        bootstrap             = cfg.bootstrap
+        group_seeds           = join(",", [for ip in values(local.mysql_seed_ips) : "${ip}:33061"])
+      })
+    }
+  }
+}
+
+module "mysql" {
+  source    = "../../modules/compute"
+  project   = var.project
+  environment = var.environment
+  owner     = var.owner
+  instances = local.mysql_instances
+}
+
+module "proxysql" {
+  source              = "../../modules/instance-group"
+  project             = var.project
+  environment         = var.environment
+  owner               = var.owner
+  name                = "proxysql${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.proxysql_flavor
+  count_instances     = 2
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+  security_group_ids  = [module.security_groups.security_group_ids_by_key["proxysql${local.sfx}"]]
+  user_data           = local.proxysql_user_data   # references module.mysql.private_ips_by_key
+}
+```
+
+`local.mysql_seed_ips` needs `module.mysql`'s own `private_ips_by_key`
+output — a self-reference within the same module call, which Terraform
+doesn't allow. Real implementation likely needs a fixed/predictable
+addressing scheme decided before apply (e.g. static private IPs per
+node, if this platform supports assigning them) or a two-stage apply —
+flagged as an open item (§2.7), not resolved here.
+
+#### 2.3.3 Ansible Implementation
+
+Same provisioning shape as §1.3.3 — `security_group` ×2 new groups,
+`instance` ×3 for MySQL (three separate tasks or a per-item loop, since
+each needs different `server-id`/bootstrap `user_data`, same reasoning as
+the NGINX MASTER/BACKUP pair), `instance` ×2 for ProxySQL (identical
+`user_data`, a simple loop is fine), and the existing NGINX/frontend
+`instance` tasks from §1.3.3 gain updated `user_data` for the `stream{}`
+block and the proof-of-concept timer respectively.
+
+---
+
+### 2.4 On-Prem Environment
+
+Architecturally identical to Lab (real MySQL Group Replication, real
+ProxySQL) — same two real differences from Lab as §1.4 called out for
+Keepalived: no SLIRP-networking concern (real hosts, real network
+already), and the possibility that a managed/existing database platform
+already exists in a given on-prem estate, in which case this whole
+self-managed MySQL design may be unnecessary duplication — a real
+per-deployment decision, not something this LLD can resolve generically.
+
+### 2.5 AWS Environment
+
+RDS for MySQL (Multi-AZ) or Aurora MySQL, fronted by RDS Proxy —
+replaces Group Replication, ProxySQL, and the NGINX `stream{}` block
+entirely with managed equivalents, the same substitution pattern as ALB
+replacing Keepalived in §1.5. No Group Replication bootstrap-sequencing
+risk (§2.3.1's open risk) — AWS manages primary election internally.
+Illustrative shape only, not built this slice:
+
+```hcl
+# Illustrative shape — official hashicorp/aws provider.
+resource "aws_db_instance" "mysql" {
+  identifier             = "${var.project}-${var.environment}-mysql"
+  engine                 = "mysql"
+  multi_az               = true
+  instance_class         = "db.t3.medium"
+  allocated_storage      = 50
+  db_subnet_group_name   = aws_db_subnet_group.mysql.name
+  vpc_security_group_ids = [aws_security_group.mysql.id]
+  manage_master_user_password = true   # Secrets Manager, never a plain variable
+}
+
+resource "aws_db_proxy" "mysql" {
+  name                   = "${var.project}-${var.environment}-mysql-proxy"
+  engine_family          = "MYSQL"
+  vpc_subnet_ids         = data.aws_subnets.private.ids
+  role_arn               = aws_iam_role.rds_proxy.arn
+  auth {
+    auth_scheme = "SECRETS"
+    secret_arn  = aws_db_instance.mysql.master_user_secret[0].secret_arn
+  }
+}
+```
+
+### 2.6 Cross-Environment Consistency
+
+| Aspect | Lab | On-Prem | AWS |
+|---|---|---|---|
+| MySQL node count | 3 (Group Replication) | 3 (Group Replication) | 1 logical (Multi-AZ standby is not independently queryable) |
+| Read/write splitting | ProxySQL | ProxySQL | RDS Proxy (or app-level, if not using Proxy) |
+| Failover mechanism | Group Replication auto-election + ProxySQL re-tag | Same | AWS-managed, transparent via RDS Proxy |
+| Exposure to clients | NGINX `stream{}` (same nodes as HTTP LB) | Same | RDS Proxy endpoint directly (no NGINX stream needed) |
+| Failure tolerance | 1 of 3 (majority-quorum, see F-001) | 1 of 3 | AWS SLA-backed, no quorum concept exposed |
+
+### 2.7 Open Items Before Implementation
+
+- ~~**Group Replication bootstrap sequencing (Lab/On-Prem)**~~ —
+  **Resolved.** Confirmed via a clean, fully unattended `tofu apply`
+  (zero manual SSH intervention): the wait/retry loop in the joiner
+  nodes' own `runcmd` correctly handles node 1 not yet being ready.
+- ~~**MySQL seed-address self-reference (Lab OpenTofu)**~~ —
+  **Resolved.** Split into two `modules/compute` calls (bootstrap node,
+  then joiners referencing its now-known IP), the same pattern that
+  made frontend→NGINX work in §1.
+- ~~**ProxySQL monitor credentials**~~ — **Resolved.** A cloud-init-created
+  `proxysql_monitor` account, Lab-appropriate credential (see F-019 for
+  why it needs `mysql_native_password`, not the 8.0 default).
+- **On-prem hypervisor choice** — still open from §1.7, applies here too.
+- ~~**Status-script complexity (§2.3.1b)**~~ — **Resolved.** Built as a
+  Python script as anticipated, now also maintaining a rolling history
+  (not just current-snapshot) so a brief transition during a failure test
+  is visible even if no one is watching the page at the exact moment it
+  happens — added while running the failure-mode tests, not part of the
+  original 2A-07 scope, but a natural extension of it.
+- **Bootstrap node has no permanent seed for its own rejoin (Lab/On-Prem)**
+  — found during failure-mode testing (F-020): node "a" (the original
+  bootstrap node) has `group_replication_group_seeds = ""` for its entire
+  lifetime, not just its first boot — meaning after any restart, it can
+  only *bootstrap a new group*, never *rejoin the existing one*, unlike
+  joiner nodes (which always carry a real, permanent seed: node "a"'s own
+  IP). Fixed manually per-incident (`SET GLOBAL
+  group_replication_group_seeds = ...` before rejoining) but not
+  templated — a real fix needs either a remotely-accessible,
+  sufficiently-privileged account so joiners can update node "a"'s seed
+  list as they join, or an equivalent mechanism, with its own security
+  tradeoff worth a deliberate decision, not a silent addition.
+- ~~**No real split-brain protection for a network-partition scenario**~~
+  — **Resolved (F-021).** `quorum-watchdog.py` runs locally on every
+  MySQL node, forcing `super_read_only` on a local primary operating
+  below the original cluster's majority, clearing it again once
+  membership is restored — no `force_members`, no human in the loop, no
+  new remotely-accessible privileged account. Verified with the full
+  below-quorum cycle run twice, including a real bug found and fixed
+  building the fix itself (`super_read_only=OFF` doesn't clear the
+  separate `read_only` flag, which silently kept ProxySQL from ever
+  re-admitting a recovered node as a writer). Carries over unchanged to
+  On-Prem (same MySQL nodes, same local script); AWS replaces this
+  concern entirely with RDS Multi-AZ's own managed failover (§2.5).
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
 |---|---|---|---|
 | v0.1 | 2026-09-10 | Paul Scott | First slice — Load Balancer Tier, client-to-frontend, all three environments. |
 | v0.2 | 2026-09-10 | Paul Scott | Phase 1.A (Lab/OpenTofu) built and verified against real infrastructure; §1.3.1/§1.3.2 updated with as-built notes; §1.7 open items resolved for Lab; linked to new `haFullStack-Findings-Log.md`. |
+| v0.3 | 2026-09-10 | Paul Scott | Second slice — §2, Database Tier (MySQL High Availability): 3-node Group Replication + ProxySQL, exposed via the existing NGINX `stream{}`, extending `examples/ha-frontend-lb/` in place as one growing stack. Added §2.3.1a's failure-mode test matrix (secondary/primary/2-node loss, rejoin, transient-expulsion autorejoin) and a write-path heartbeat alongside the read-only cluster-membership check. Added §2.3.1b: the self-healing/manual-intervention boundary, `group_replication_autorejoin_tries`, and OK/DEGRADED/CRITICAL diagnostics with a concrete `force_members` remediation value. Draft, not yet built. |
+| v0.4 | 2026-09-10 | Paul Scott | Built and failure-tested for real. §2.7's first four open items resolved (bootstrap sequencing, seed self-reference, monitor credentials, status-script complexity, the last extended with a rolling history view). New open item: the bootstrap node has no permanent seed for its own rejoin after a restart (F-020) — fixed per-incident, not yet templated. |
+| v0.5 | 2026-09-10 | Paul Scott | §2.3.1a test 3's expected outcome corrected after actually running it — Group Replication does not provide split-brain protection by default (F-021); §5.1's fault-tolerance argument for 3 nodes still holds, but the network-partition protection §5.3 claimed does not exist without an explicit fix. Added as a new, significant open item in §2.7. |
+| v0.6 | 2026-09-10 | Paul Scott | F-021 fixed, not just flagged — `quorum-watchdog.py` added to §2.3.2's MySQL cloud-init, §2.3.1b's self-healing table and §2.7's open item both updated to reflect the real, verified fix (including a second bug found building it: `read_only` vs `super_read_only`). |

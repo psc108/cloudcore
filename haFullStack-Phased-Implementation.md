@@ -16,9 +16,18 @@ it, not to an entire tier end-to-end. Every non-obvious issue hit while
 building a phase is logged in `haFullStack-Findings-Log.md`, linked from
 that phase's row/section below rather than repeated inline.
 
+**Build order across phases:** every phase's `.A` (Lab/OpenTofu) sub-path
+gets built and verified, as one growing stack in
+`examples/ha-frontend-lb/` (not independent per-phase templates), before
+the next phase's `.A` starts. Only once every phase is proven on
+Lab/OpenTofu does the whole set move to Ansible (`.B`), then On-Prem
+(`.C`/`.D`), then AWS (`.E`/`.F`) — not phase-by-phase across every
+environment/tool combination as each phase completes.
+
 | # | Phase | LLD Ref | Status |
 |---|---|---|---|
 | 1 | Load Balancer Tier — Client to Frontend | LLD §1 | Phase 1.A (Lab/OpenTofu) done — see [findings](haFullStack-Findings-Log.md#phase-1a--lab-opentofu); 1.B–1.F pending |
+| 2 | Database Tier — MySQL High Availability | LLD §2 | Phase 2.A complete (2A-01–2A-17) — see [findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier); On-Prem/AWS and Ansible still pending |
 
 ---
 
@@ -105,16 +114,88 @@ getting here: [Findings Log — Phase
 
 ---
 
-## Cross-Cutting Notes for This Phase
+## Phase 2 — Database Tier: MySQL High Availability
 
-- Phases 1.A/1.B (Lab) are the only ones that can be built and verified for
-  real in this working session. Phases 1.C–1.F are written to the same
-  level of design detail but their task statuses can only move past
-  "Pending" once run against real on-prem/AWS infrastructure, which is
-  outside what this session has access to.
-- Do not start Phase 1.C–1.F's "Confirm" tasks (1C-01, 1E-01) speculatively
-  — they're blocking questions for whoever owns those environments, not
-  something to guess and build against.
+Extends `examples/ha-frontend-lb/` in place — one growing stack, not a
+new template. Per the build order above, only Phase 2.A is worked now;
+2.B–2.F wait until every phase's `.A` is done.
+
+### Phase 2.A — Lab, OpenTofu
+
+| ID | Task | Description | Status |
+|---|---|---|---|
+| 2A-01 | Security groups | `mysql` (3306 + 33061 GR peer traffic), `proxysql` (6033 from `nginx` SG only), per LLD §2.3.1 | Done |
+| 2A-02 | Resolve the seed-address self-reference | LLD §2.7's open item — `modules/compute`'s per-key `user_data` can't reference that same call's own `private_ips_by_key`; needs a real answer before the MySQL module call can be written for real | Done — split into two module calls (bootstrap node, then joiners referencing its known IP), matching the frontend→nginx pattern from §1 |
+| 2A-03 | MySQL cloud-init | 3-node Group Replication, per-node `server-id`/bootstrap `user_data`, plus `group_replication_autorejoin_tries` (LLD §2.3.1b — not in `haFullStack.md` §5.1's original config), per LLD §2.3.2 | Done — hit 4 real Group Replication bootstrapping bugs along the way, [F-016](haFullStack-Findings-Log.md#f-016--group-replication-config-variables-rejected-with-unknown-variable-on-a-fresh-install)–[F-019](haFullStack-Findings-Log.md#f-019--caching_sha2_password-refuses-authentication-without-a-secure-connection) |
+| 2A-04 | Verify GR bootstrap sequencing | LLD §2.3.1's flagged risk — confirm empirically whether nodes 2/3 need an explicit wait/retry against node 1's readiness | Done — confirmed via a clean `tofu destroy` + `tofu apply` with all 5 fixes (F-015–F-019) in place from the start: the wait-loop in mysql-b/c's own `runcmd` handled the real race with zero manual intervention, all 3 nodes reached `ONLINE` with exactly one `PRIMARY` fully unattended |
+| 2A-05 | ProxySQL cloud-init | Read/write hostgroup config against the 3 MySQL nodes, per `haFullStack.md` §5.2 | Done — used ProxySQL's `mysql_group_replication_hostgroups` (real GR-aware primary auto-detection) instead of §5.2's static write/read split, which would have been wrong the moment a failover happened |
+| 2A-06 | Extend NGINX cloud-init | Add the `stream{}` block (§1's NGINX nodes, not new ones) listening on `:3306`, proxying to ProxySQL | Done |
+| 2A-07 | Extend frontend cloud-init — status script | Not a raw query dump: heartbeat-table write+read, membership query, an OK/DEGRADED/CRITICAL verdict, and — in CRITICAL — a real `group_replication_force_members` value built from the survivor's own view of the group, per LLD §2.3.1b. Likely a small Python script, not a shell one-liner (flagged in LLD §2.7). Also writes the same status as structured JSON to a local file, not HTML-only | Done — OK/DEGRADED/CRITICAL verdict logic and JSON output built; CRITICAL's real `force_members` value not yet exercised against an actual below-quorum failure (that's 2A-13) |
+| 2A-08 | `tofu apply` | Stand up for real against this CloudCore instance | Done — a second, clean `tofu destroy` + `tofu apply` with all 5 fixes in the source template from the start reached the full working state (3-node cluster ONLINE, ProxySQL auto-routing, frontend page OK with an advancing heartbeat) with zero manual SSH intervention |
+| 2A-09 | Verify cluster membership | All 3 MySQL nodes show `ONLINE` in `performance_schema.replication_group_members`; exactly one `PRIMARY` | Done |
+| 2A-10 | Verify through the full path | Frontend page (via the VIP) shows live, correct cluster status and an advancing heartbeat counter — not just a direct MySQL connection | Done — verdict `OK`, heartbeat counter genuinely advancing, through VIP → NGINX `stream{}` → ProxySQL → MySQL |
+| 2A-11 | Failure test 1 — stop a secondary | LLD §2.3.1a test 1: zero write impact, dead node drops from the read hostgroup, page keeps advancing without interruption; status verdict stays OK or briefly DEGRADED | Done — heartbeat counter advanced with zero gap (37→50, no reset) across the whole test; ProxySQL auto-moved the stopped node to hostgroup 9999 (SHUNNED) with no manual re-tagging; frontend page correctly showed DEGRADED (2/3) throughout, captured in the history table |
+| 2A-12 | Failure test 2 — stop the primary | LLD §2.3.1a test 2: GR elects a new primary, ProxySQL re-tags the write hostgroup; run a write-loop against the heartbeat table through the failover window and measure the real RTO from actual consecutive-failure count, not the ~5-10s from `haFullStack.md` §5.3 taken on faith | Done — measured RTO ~3.5s (0.5s-interval write-loop: last OK 14:48:05.999Z, single FAIL 14:48:06.600Z, first recovered OK 14:48:10.127Z — only 1 failed write in 120 attempts), beating the assumed ~5-10s. mysql-c auto-elected PRIMARY, ProxySQL re-tagged hostgroup 10 to it and shunned mysql-a into 9999, entirely automatically. Frontend's own independent status check corroborated the same event (brief CRITICAL blip, self-corrected) |
+| 2A-13 | Failure test 3 — stop 2 of 3 nodes | LLD §2.3.1a test 3 (the negative test): confirm the survivor drops out of `ONLINE` and refuses writes rather than silently continuing — the actual evidence for why 2 nodes isn't enough (F-001). Also verify the diagnostic: status flips to CRITICAL, the missing nodes are named, and the displayed `force_members` value is the real, runnable command for the actual surviving member — not a placeholder | Done — **and the expected outcome was wrong.** The survivor does *not* refuse writes or drop out of `ONLINE` — it expels the unreachable peers and keeps accepting writes as a legitimate 1-node group ([F-021](haFullStack-Findings-Log.md#f-021--the-whole-point-of-test-3-didnt-hold-the-survivor-doesnt-refuse-writes-after-losing-quorum), `haFullStack.md` §5.3 corrected to v1.3). The frontend's own diagnostic *did* correctly flag CRITICAL throughout (validating §2.3.1b's design), even though MySQL itself didn't act on it — real split-brain protection is a new, undecided open item |
+| 2A-14 | Failure test 4 — restart a stopped node | LLD §2.3.1a test 4: confirm it does not auto-rejoin (`group_replication_start_on_boot = OFF`), needs an explicit `START GROUP_REPLICATION`, then catches up via distributed recovery | Done — `systemctl restart mysql` came back up with GR genuinely not running (empty `replication_group_members`/`group_replication_primary_member`); explicit `START GROUP_REPLICATION` rejoined and reached `ONLINE` in ~8s via distributed recovery; frontend page confirmed back to `OK` with all 3 members |
+| 2A-15 | Failure test 5 — transient network blip | LLD §2.3.1a test 5: briefly `iptables DROP` one node's GR port without stopping `mysqld`; confirm it's expelled and then **automatically rejoins** once connectivity returns, with no manual step — proves `group_replication_autorejoin_tries` (2A-03) actually works, not just that it's configured | Done — expelled at 15:03:16.937Z ("Member was expelled from the group due to network failures"), auto-rejoin attempt 1 of 3 started the same second, succeeded by 15:03:21.121Z (~4s), zero manual SQL run. Frontend page confirmed back to OK/3-3 |
+| 2A-16 | Fix F-021 — quorum watchdog | Not in the original task list — added after 2A-13 overturned the expected outcome. `quorum-watchdog.py`: a local, per-node systemd timer (3s) enforcing `super_read_only` on a node that's `ONLINE`/`PRIMARY` of a group below the original cluster's majority | Done — re-ran the full 2A-13 scenario twice. First run found a second bug (`read_only` vs `super_read_only` — see [F-021](haFullStack-Findings-Log.md#f-021--the-whole-point-of-test-3-didnt-hold-the-survivor-doesnt-refuse-writes-after-losing-quorum)); second run, after fixing it, self-healed completely with zero manual `SET GLOBAL`/`LOAD MYSQL SERVERS` commands — write correctly refused below quorum, ProxySQL independently pulled the node from the writer hostgroup, both automatically cleared and writer status automatically restored once membership returned |
+| 2A-17 | Teardown | `tofu destroy`; confirm no orphaned resources | Done — clean destroy, 15 resources, confirmed no orphaned instances/VPCs |
+
+**Verification for this phase (Lab/OpenTofu):** 2A-10 through 2A-16 are
+the real test — proof reachable through the actual request path, every
+failure mode in LLD §2.3.1a's test matrix demonstrated for real (not
+just a healthy-topology `tofu apply` that completes without error), and
+the manual-intervention diagnostics in LLD §2.3.1b actually accurate
+under a real below-quorum failure, not just present. 2A-13 is not
+optional — it's the actual evidence this design does what a 2-node
+cluster (F-001) can't, and it disproved an assumption the whole slice had
+been resting on. 2A-15 is one counterpart — the evidence that not
+everything needs a human. 2A-16 is the other — closing the gap 2A-13
+found rather than just documenting it, verified with the same rigor (the
+fix's own first attempt had a real bug, caught by re-running the test
+against it rather than trusting it worked).
+
+### Phase 2.B — Lab, Ansible
+
+Same shape as Phase 1.B, extending `ansible/examples/12-ha-frontend-lb.yml`
+(once it exists) rather than a new playbook — not started; waits for
+Phase 2.A plus every other phase's `.A` to be done first.
+
+### Phase 2.C — On-Prem, OpenTofu
+
+Not started — waits for the Lab/OpenTofu pass across every phase, per the
+build order above.
+
+### Phase 2.D — On-Prem, Ansible
+
+Not started — same as 2.C.
+
+### Phase 2.E — AWS, OpenTofu
+
+Not started — RDS Multi-AZ + RDS Proxy, per LLD §2.5.
+
+### Phase 2.F — AWS, Ansible
+
+Not started — same as 2.E, via `amazon.aws`.
+
+---
+
+## Cross-Cutting Notes
+
+- Every phase's `.A` (Lab) sub-path is the only one that can be built and
+  verified for real in this working session. `.B`–`.F` are written to the
+  same level of design detail but their task statuses can only move past
+  "Pending" once actually run — against a real Ansible pass, real on-prem
+  infrastructure, or a real AWS account, none of which are this session's
+  Lab/OpenTofu-only reach.
+- Do not start any phase's On-Prem/AWS "Confirm" tasks (e.g. 1C-01, 1E-01)
+  speculatively — they're blocking questions for whoever owns those
+  environments, not something to guess and build against.
+- Don't start a new phase's `.A` before the previous phase's `.A` is
+  proven — each one extends the same growing stack, so an unresolved
+  problem in an earlier phase (e.g. Phase 2.A's open seed-address
+  question) blocks the next one for real, not just on paper.
 
 ---
 
@@ -124,3 +205,9 @@ getting here: [Findings Log — Phase
 |---|---|---|---|
 | v0.1 | 2026-09-10 | Paul Scott | First slice — Phase 1, Load Balancer Tier client-to-frontend, all six environment/tool paths. |
 | v0.2 | 2026-09-10 | Paul Scott | Phase 1.A (Lab/OpenTofu) marked Done, all tasks verified against real infrastructure; linked to new `haFullStack-Findings-Log.md`. |
+| v0.3 | 2026-09-10 | Paul Scott | Second phase — Phase 2, Database Tier (MySQL High Availability), all six environment/tool paths; made the build-order sequencing (all phases' `.A` first, then `.B`–`.F` across the whole set) explicit. Expanded 2A's verification into LLD §2.3.1a's 5-test failure matrix (secondary/primary/2-node loss, rejoin, transient-expulsion autorejoin) plus a write-path heartbeat and LLD §2.3.1b's OK/DEGRADED/CRITICAL diagnostics with a real `force_members` remediation value. Draft, not yet built. |
+| v0.4 | 2026-09-10 | Paul Scott | First real build of Phase 2.A: 2A-01–2A-10 done and verified (3-node cluster ONLINE, ProxySQL auto-routing, frontend page showing a live advancing heartbeat through the real path) after fixing 5 real bugs found along the way (F-015–F-019). 2A-04/2A-08 marked only partially verified — reached working state via manual recovery, not yet proven via a clean unattended re-apply with the fixes in place from the start. 2A-11–2A-16 (failure-mode tests, teardown) still pending. |
+| v0.5 | 2026-09-10 | Paul Scott | Clean `tofu destroy` + `tofu apply` with all 5 fixes in place from the start, zero manual SSH intervention — 2A-04/2A-08 upgraded from partially verified to Done. A transient "unreachable" reading on the frontend page's very first check (NGINX's `stream{}` not up yet at that exact moment) self-corrected on the next 5s timer tick, exactly as §2.3.1's "don't block frontend's own boot on the DB tier" design intended — not a bug, confirmation the design choice was right. 2A-11–2A-16 (failure-mode tests, teardown) still pending. |
+| v0.6 | 2026-09-10 | Paul Scott | Failure-mode tests 2A-11, 2A-12, 2A-14 done and passed as expected. 2A-13 done but overturned the expected outcome (F-021) — the survivor doesn't refuse writes below quorum by default, correcting `haFullStack.md` §5.3. 2A-15 and teardown (2A-16) still pending. |
+| v0.7 | 2026-09-10 | Paul Scott | 2A-15 done — automatic rejoin confirmed in ~4s with zero manual intervention after a simulated network partition. All 5 failure-mode tests complete; only teardown (2A-16) remains. |
+| v0.8 | 2026-09-10 | Paul Scott | New task 2A-16 — fixed F-021 for real with `quorum-watchdog.py`, verified by re-running 2A-13's scenario twice (catching a second bug, `read_only` vs `super_read_only`, in the fix's own first attempt). Teardown renumbered to 2A-17. |

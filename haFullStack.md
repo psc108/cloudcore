@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v1.0 | 10 September 2026 | Paul Scott
+v1.4 | 10 September 2026 | Paul Scott
 
 ---
 
@@ -465,8 +465,52 @@ LOAD MYSQL QUERY RULES TO RUNTIME;
 |---|---|---|---|---|
 | Primary node fails | Group Replication member state change; ProxySQL monitor next poll | Remaining 2 of 3 nodes still hold majority; Group Replication auto-elects a new primary; ProxySQL retags write hostgroup | ~5-10 s | 0 (synchronous cert-based certification) |
 | One secondary fails | Group Replication member state change | Removed from read hostgroup automatically; primary unaffected — 2 of 3 nodes is still a majority | 0 (reads redistribute across the remaining secondary) | 0 |
-| **Two nodes fail simultaneously** | Group Replication member state change | **Below quorum — the surviving node cannot certify writes and drops out of `ONLINE` state.** Requires manual intervention (`group_replication_force_members`) to reform the group on the survivor. | Manual, minutes | 0 (no data loss, but a real outage until reformed) |
+| **Two nodes fail simultaneously** | Group Replication member state change + local `quorum-watchdog` (3s) | Group Replication does *not* drop the survivor out of `ONLINE` or refuse writes by default — a local watchdog on every node enforces `super_read_only` when it finds itself primary of a group below the original majority (see below) | ~15 s worst case (watchdog interval + GR expel timeout) | 0 (with the watchdog fix in place) |
 | ProxySQL node fails | NGINX `stream{}` passive health check | NGINX removes it from the stream upstream | ~10 s (fail_timeout) | 0 |
+
+> **This row was wrong as originally written, corrected after building and
+> testing the real thing** (`haFullStack-Findings-Log.md` F-021). Group
+> Replication's failure detector expels unreachable members from its own
+> view after `group_replication_member_expel_timeout` (default 5s) —
+> once expelled, the survivor reconfigures to a smaller group (in the
+> 2-of-3-lost case, a group of 1) and continues operating as a fully
+> legitimate primary of *that* group, majority-of-1 trivially satisfied.
+> It does not block, does not drop out of `ONLINE`, and does not need
+> `group_replication_force_members` — empirically confirmed: writes kept
+> succeeding in well under a second, indefinitely, after stopping 2 of 3
+> nodes. Setting `group_replication_unreachable_majority_timeout` (not
+> zero by default, and not set at all in the original config here) only
+> narrows the *window before expulsion* — it doesn't change what happens
+> after.
+>
+> This isn't a data-loss risk for a genuine node-death scenario (the
+> "lost" nodes aren't writing anywhere), but it removes the split-brain
+> protection this design assumed for a **network-partition** scenario:
+> if the 2 "unreachable" nodes are still alive and reachable to each
+> other on the other side of a partition, *they* also hold a majority of
+> the original 3 and could independently elect their own primary and
+> accept writes — two primaries, genuinely diverging, with nothing in
+> MySQL's own default behavior preventing it.
+>
+> **Fixed** — `quorum-watchdog.py`, a systemd-timer-driven script running
+> locally on every MySQL node (root via the Unix socket, no new
+> remote-accessible privileged account): if the local node is `ONLINE`
+> `PRIMARY` of a group whose member count has dropped below the
+> *original* cluster's majority, it forces `super_read_only = ON`,
+> clearing it again once original membership is restored. This directly
+> targets the minority-side gap described above without needing STONITH-
+> style fencing. Verified with the full below-quorum cycle run twice: a
+> direct write against the isolated survivor correctly failed with the
+> `super-read-only` error, ProxySQL's own Group Replication monitor
+> independently pulled the node from the writer hostgroup (defense in
+> depth — two layers both refusing writes), and recovery — writes
+> resuming once the original 3-node majority returned — happened with
+> zero manual intervention. One real bootstrapping bug was found and
+> fixed along the way: `super_read_only = OFF` does not automatically
+> clear the separate `read_only` flag, and leaving `read_only = ON` was
+> enough to keep ProxySQL from ever re-admitting the node as a writer
+> even after the cluster had fully recovered — see
+> `haFullStack-Findings-Log.md` F-021 for the full detail.
 
 ---
 
@@ -755,3 +799,5 @@ journalctl -u keepalived -f
 | v1.0 | 2026-09-10 | Paul Scott | Full rewrite replacing the original NGINX/HA draft — corrected LB topology (identical/interchangeable nodes, not one node per tier), separated `http{}` vs `stream{}` traffic classes, replaced naive MySQL round-robin with ProxySQL, made quorum queues the primary RabbitMQ recommendation, fixed the Keepalived and ufw examples, and added an explicit failure-mode/RTO/RPO analysis. |
 | v1.1 | 2026-09-10 | Paul Scott | Corrected MySQL from 2 to 3 Group Replication nodes — a 2-node group has zero fault tolerance under majority-quorum consensus (losing either node drops the survivor below quorum and it stops accepting writes too). Added §2.4 explaining the quorum math, updated the diagram, config, ProxySQL hostgroups, failover table, and rollout plan accordingly. |
 | v1.2 | 2026-09-10 | Paul Scott | Same fix applied to RabbitMQ — quorum queues are Raft-based and subject to the identical majority-quorum constraint (§6.2); bumped from 2 to 3 nodes, updated cluster formation, quorum policy group size, the stream{} upstream, failure-mode table, monitoring targets, and rollout plan accordingly. |
+| v1.3 | 2026-09-10 | Paul Scott | Corrected §5.3's "two nodes fail simultaneously" row after actually building and testing it (`haFullStack-Findings-Log.md` F-021): Group Replication does **not** drop the survivor out of `ONLINE` or block writes by default — it expels unreachable members and continues as a legitimate, smaller group. Real split-brain protection needs an explicit fix (external enforcement or fencing), not assumed from the topology. |
+| v1.4 | 2026-09-10 | Paul Scott | F-021 fixed, not just documented: a local per-node `quorum-watchdog` enforces `super_read_only` below the original cluster's majority. Verified with the full below-quorum cycle run twice, including a real self-inflicted bug found and fixed along the way (`read_only` vs. `super_read_only`). §5.3 updated to reflect the real, working RTO/RPO. |
