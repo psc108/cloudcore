@@ -248,8 +248,11 @@ Each share is a named export. The `clients` field controls access:
 
 | Value | Access |
 |---|---|
-| `vpc` | Entire VPC CIDR (e.g. `10.10.0.0/16`) |
+| `vpc` | The VPC's declared CIDR — or, when bridge networking is in use, the real `ccbr0` DHCP subnet those instances actually get their address from, if that differs from the VPC's own CIDR |
 | `["ip1","ip2"]` | Specific IP addresses only |
+
+### Update a Share
+`PATCH /v1/nfs-servers/{id}/shares/{name}` changes an existing share's `clients` value in place — no need to delete and recreate it. Applies live if the server is already `running`.
 
 ### Mount Config
 Call `GET /v1/nfs-servers/{id}/shares/{name}/mount-config` to get the exact `mount` command and `/etc/fstab` entry for any share.
@@ -480,6 +483,7 @@ Authorization: Bearer dev-token
 | GET | `/v1/nfs-servers/{id}` | Get NFS server |
 | DELETE | `/v1/nfs-servers/{id}` | Delete NFS server |
 | POST | `/v1/nfs-servers/{id}/shares` | Add share |
+| PATCH | `/v1/nfs-servers/{id}/shares/{name}` | Update a share's `clients` value in place |
 | DELETE | `/v1/nfs-servers/{id}/shares/{name}` | Remove share |
 | GET | `/v1/nfs-servers/{id}/shares/{name}/mount-config` | Get mount command and fstab entry |
 
@@ -537,7 +541,36 @@ Instances prefer bridge networking via `ccbr0` (`192.168.100.1/24`) when availab
 If the bridge is absent, instances fall back to SLIRP networking (no root required). The private IP inside every SLIRP instance is `10.0.2.15`. NFS servers are not reachable from SLIRP instances.
 
 To set up or repair the bridge: `sudo bash api/setup-network.sh`  
-To check bridge status: `ip link show ccbr0`
+To check bridge status: `ip link show ccbr0`  
+To tear it down: `bash api/teardown-network.sh` — refuses while the package repo (below) is active unless run with `--force`, since deleting the bridge silently cuts every guest off from it.
+
+---
+
+## Package Repo
+
+A host-level, always-available local apt repo + artifact cache, served over plain HTTP from the bridge gateway address (`http://192.168.100.1:8090/`) so every project and every example template can install packages from it without hitting the public internet on every build. Not a CloudCore-managed resource — no VPC, no instance, nothing in the API — so it's unaffected by any project's `tofu destroy` or build teardown.
+
+Installed empty by `scripts/install.sh` (or standalone: `sudo bash api/setup-package-repo.sh`) as the `cloudcore-repo` systemd service — survives a host reboot on its own. Populate it once per clone, and again whenever the target Ubuntu release changes or a cached package needs a security update:
+
+```bash
+CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \
+  bash api/build-package-repo.sh jammy
+```
+
+This launches a throwaway CloudCore instance to build the repo (`apt-get install --download-only` across every example template's package set, including the third-party Adoptium and Kismet apt repos `ghidra-workstation` and `wifi-sniffer` need), pulls the result back, and tears the builder down again — takes 15-20+ minutes and several GB of real downloads.
+
+```bash
+# Status
+systemctl status cloudcore-repo
+
+# Logs
+journalctl -u cloudcore-repo -f
+```
+
+A guest consumes it with a plain apt source, no NFS mount required:
+```
+deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+```
 
 ---
 
