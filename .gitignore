@@ -26,7 +26,8 @@ api/cloudcore.db-shm
 api/images/
 api/instances/
 api/volumes/
-api/package-repo/
+api/package-repo/*
+!api/package-repo/README.md
 api/keys/cloudcore_ed25519
 api/keys/cloudcore_ed25519.pub
 *.migrated
