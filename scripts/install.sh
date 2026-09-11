@@ -41,10 +41,11 @@ sudo apt-get install -y \
     git curl
 
 # Add current user to libvirt group (takes effect on next login / newgrp)
+NEWLY_ADDED_LIBVIRT=0
 if ! groups "$CURRENT_USER" | grep -q libvirt; then
     echo "==> Adding $CURRENT_USER to libvirt group..."
     sudo usermod -aG libvirt "$CURRENT_USER"
-    echo "    NOTE: log out and back in (or run 'newgrp libvirt') for group to take effect"
+    NEWLY_ADDED_LIBVIRT=1
 fi
 
 # ---------------------------------------------------------------------------
@@ -187,8 +188,27 @@ for SVC in cloudcore-api cloudcore-terminal; do
 done
 
 systemctl --user daemon-reload
-systemctl --user enable --now cloudcore-api.service
+systemctl --user enable cloudcore-api.service
 systemctl --user enable --now cloudcore-terminal.service
+
+# cloudcore-api.service talks to libvirt on the platform's behalf. A group
+# membership change made earlier in THIS run (usermod -aG libvirt) doesn't
+# apply to this already-running login session or anything started under
+# it — including systemctl --user itself — until a fresh login. Starting
+# the service now would leave it silently missing the libvirt group,
+# which doesn't fail loudly: instances appear to create, then every
+# subsequent libvirt lookup for them fails with "Domain not found",
+# because the domain was never actually created in the first place.
+if [[ "$NEWLY_ADDED_LIBVIRT" -eq 1 ]]; then
+    echo ""
+    echo "==> Skipping cloudcore-api start — you were just added to the libvirt group."
+    echo "    Log out and back in (or start a fresh SSH session, or reboot), then run:"
+    echo "      bash scripts/install.sh"
+    echo "    again — it's idempotent, everything above is already done and will be"
+    echo "    skipped; it'll just start the API correctly this time."
+    exit 0
+fi
+systemctl --user start cloudcore-api.service
 
 # ---------------------------------------------------------------------------
 # 11. Verify
