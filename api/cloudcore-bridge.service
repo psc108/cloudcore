@@ -6,7 +6,7 @@ After=network.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/bash /home/scottp/IdeaProjects/CloudProject/api/setup-network.sh
-ExecStop=/bin/bash /home/scottp/IdeaProjects/CloudProject/api/teardown-network.sh
+ExecStop=/bin/bash /home/scottp/IdeaProjects/CloudProject/api/teardown-network.sh --force
 
 [Install]
 WantedBy=multi-user.target

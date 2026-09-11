@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/IdeaProjects/CloudProject/api
+WorkingDirectory=/home/scottp/IdeaProjects/CloudProject/api
 Environment=CLOUDCORE_API_TOKEN=dev-token
-ExecStart=/usr/bin/python3 %h/IdeaProjects/CloudProject/api/server.py
+ExecStart=/usr/bin/python3 /home/scottp/IdeaProjects/CloudProject/api/server.py
 Restart=on-failure
 RestartSec=5
 

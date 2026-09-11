@@ -27,12 +27,30 @@ The script is idempotent — safe to re-run. It will:
 4. Download the Ubuntu 22.04 cloud image into `api/images/`
 5. Generate the CloudCore SSH keypair in `api/keys/`
 6. Install and start the `ccbr0` bridge network (system service, requires sudo)
-7. Install and start the API and terminal as systemd user services
+7. Install and start the host-level package repo (`cloudcore-repo`, system service, requires sudo) — installed empty, see below
+8. Install and start the API and terminal as systemd user services
 
 After the script completes, open **http://127.0.0.1:8080** in your browser.
 
 > **Note:** If this is the first time your user has been added to the `libvirt` group,
 > log out and back in (or run `newgrp libvirt`) before creating VM instances.
+
+### Populate the package repo
+
+The install script sets up the `cloudcore-repo` service (an always-available
+local apt repo + artifact cache, served over HTTP from the bridge gateway
+address) but deliberately leaves it empty — populating it needs a throwaway
+builder VM and several GB of real downloads, so it isn't something a one-time
+install script should do unattended on your behalf. Before building anything
+that installs packages (most of `examples/`), run it once:
+
+```bash
+CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \
+  bash api/build-package-repo.sh jammy
+```
+
+Takes 15-20+ minutes. Only needs re-running when the target Ubuntu release
+changes or a cached package needs a security update — not on every build.
 
 ### Default credentials
 

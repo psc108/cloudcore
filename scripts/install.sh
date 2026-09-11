@@ -73,12 +73,29 @@ fi
 # 6. Bridge network (system-level service)
 # ---------------------------------------------------------------------------
 echo "==> Installing bridge service (cloudcore-bridge)..."
-sudo cp "$REPO_DIR/api/cloudcore-bridge.service" /etc/systemd/system/cloudcore-bridge.service
+# cloudcore-bridge.service (unlike the two user services below) is a static
+# committed file with a hardcoded example path baked in — substitute it the
+# same way, rather than a plain copy, so this works from any clone location.
+sed "s|/home/scottp/IdeaProjects/CloudProject|$REPO_DIR|g" \
+    "$REPO_DIR/api/cloudcore-bridge.service" | sudo tee /etc/systemd/system/cloudcore-bridge.service > /dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now cloudcore-bridge.service
 
 # ---------------------------------------------------------------------------
-# 7. Systemd user services (API + terminal)
+# 7. Host-level package repo (system-level service, always-available)
+# ---------------------------------------------------------------------------
+# Only installs and starts the *serving* side (cloudcore-repo.service) —
+# generates its own unit file with the correct path baked in at install
+# time, no substitution needed here. Deliberately does NOT populate it
+# (api/build-package-repo.sh) — that needs a throwaway builder VM and
+# real bandwidth (several GB), and has to be re-run by every user who
+# clones this repo; not something a one-time install script should do
+# on someone's behalf.
+echo "==> Installing package-repo service (cloudcore-repo)..."
+sudo bash "$REPO_DIR/api/setup-package-repo.sh"
+
+# ---------------------------------------------------------------------------
+# 8. Systemd user services (API + terminal)
 # ---------------------------------------------------------------------------
 echo "==> Installing user services..."
 SERVICE_DIR="$HOME/.config/systemd/user"
@@ -95,7 +112,7 @@ systemctl --user enable --now cloudcore-api.service
 systemctl --user enable --now cloudcore-terminal.service
 
 # ---------------------------------------------------------------------------
-# 8. Verify
+# 9. Verify
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Waiting for API to start..."
@@ -123,3 +140,10 @@ echo ""
 echo "    Service logs:"
 echo "      journalctl --user -u cloudcore-api -f"
 echo "      journalctl --user -u cloudcore-terminal -f"
+echo ""
+echo "    Package repo (cloudcore-repo.service) is running but empty —"
+echo "    populate it before building anything that needs packages:"
+echo "      CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \\"
+echo "        bash api/build-package-repo.sh jammy"
+echo "    Takes 15-20+ minutes and several GB of real downloads — one-time"
+echo "    per clone, not run automatically by this script."
