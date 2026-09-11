@@ -14,21 +14,44 @@
 # still needs a same-release guest for correctness, same as every other
 # CloudCore VM this platform creates.
 #
+# Covers every current example template's package/artifact needs, not
+# just ha-frontend-lb (haFullStack-Findings-Log.md F-039-041 cleanup led
+# to this repo going host-level/always-on; this pass extends its
+# coverage to ghidra-workstation, kiwix-library, wifi-sniffer, full-stack
+# and load-balanced-web too, since none of those have any bandwidth-
+# saving mechanism of their own).
+#
 # Usage: api/build-package-repo.sh [codename] [package...]
 #   codename   Ubuntu release codename — must match a CloudCore image_id
 #              of "ubuntu-<version>" (default: jammy -> ubuntu-22.04)
 #   package... top-level packages to include (their own dependencies are
-#              resolved automatically) — default: the set every current
-#              example template installs
+#              resolved automatically) — default: the union of every
+#              current example template's package list
 set -euo pipefail
 
 CODENAME="${1:-jammy}"
 shift || true
 PACKAGES=("$@")
 if [ ${#PACKAGES[@]} -eq 0 ]; then
-  PACKAGES=(curl ca-certificates dpkg-dev mysql-server mysql-client nginx keepalived \
-            keystone python3-pymysql python3-memcache python3 rabbitmq-server)
+  PACKAGES=(
+    # ha-frontend-lb
+    curl ca-certificates dpkg-dev mysql-server mysql-client nginx keepalived \
+    keystone python3-pymysql python3-memcache python3 rabbitmq-server \
+    # full-stack, load-balanced-web (nginx already listed above)
+    # ghidra-workstation
+    xfce4 xfce4-terminal tigervnc-standalone-server tigervnc-common novnc websockify unzip gnupg \
+    # kiwix-library (curl/ca-certificates already listed above)
+    # wifi-sniffer
+    build-essential dkms bc libelf-dev git aircrack-ng hcxtools hcxdumptool tcpdump tshark
+  )
 fi
+
+# Packages that only exist in a third-party apt repo, not Ubuntu's own
+# archive — the builder adds both repos unconditionally before the
+# install step below (harmless on a throwaway instance even for a build
+# that doesn't strictly need them) rather than threading a per-template
+# opt-in through this script.
+THIRDPARTY_PACKAGES=(temurin-21-jdk kismet)
 
 case "$CODENAME" in
   jammy) IMAGE_ID="ubuntu-22.04" ;;
@@ -65,19 +88,49 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== Fetching pinned artifacts directly (no VM needed, OS-version-agnostic) ==="
+# Exact values transcribed from each template's own variables.tf — keep
+# these in sync by hand when a template bumps its pinned version; each
+# guest's own cloud-init still verifies its checksum independently at
+# boot, this cache is purely a bandwidth shortcut, not a trust boundary.
 declare -A ARTIFACT_URLS=(
   [step-ca.deb]="https://github.com/smallstep/certificates/releases/download/v0.30.2/step-ca_0.30.2-1_amd64.deb"
   [step-cli.deb]="https://github.com/smallstep/cli/releases/download/v0.30.6/step-cli_0.30.6-1_amd64.deb"
   [proxysql.deb]="https://github.com/sysown/proxysql/releases/download/v3.0.11/proxysql_3.0.11-ubuntu22_amd64.deb"
+  # ghidra-workstation
+  [ghidra.zip]="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip"
+  # kiwix-library
+  [kiwix-tools.tar.gz]="https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.2.tar.gz"
+  # kiwix-library — the 2.2GB "top articles, no pictures" ZIM (variables.tf
+  # notes the full-image variant is 8+GB and deliberately not used here).
+  # This one dwarfs every other artifact in this list; skip it with
+  # SKIP_ZIM=1 if disk space is a concern — everything else still builds.
+  [wikipedia_en_top_nopic_2026-06.zim]="https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_nopic_2026-06.zim"
 )
+if [ "${SKIP_ZIM:-0}" = "1" ]; then
+  unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"
+fi
 for name in "${!ARTIFACT_URLS[@]}"; do
   curl -fL --speed-limit 1024 --speed-time 30 -C - -o "$REPO_DIR/artifacts/$name" "${ARTIFACT_URLS[$name]}"
 done
+
+# wifi-sniffer's RTL8812AU driver is built from source via DKMS on the
+# guest itself (kernel-specific, not pre-buildable as a binary), but the
+# GitHub source clone it starts from can still be pre-cached — avoids a
+# live git fetch from GitHub at every guest boot.
+RTL8812AU_REF="v5.6.4.2"
+if [ ! -f "$REPO_DIR/artifacts/rtl8812au-$RTL8812AU_REF.tar.gz" ]; then
+  RTL_TMP="$(mktemp -d)"
+  git clone -b "$RTL8812AU_REF" --depth 1 https://github.com/aircrack-ng/rtl8812au.git "$RTL_TMP/rtl8812au"
+  tar -C "$RTL_TMP" -czf "$REPO_DIR/artifacts/rtl8812au-$RTL8812AU_REF.tar.gz" rtl8812au
+  rm -rf "$RTL_TMP"
+fi
+
 {
   echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for name in "${!ARTIFACT_URLS[@]}"; do
     echo "$name  sha256=$(sha256sum "$REPO_DIR/artifacts/$name" | cut -d' ' -f1)  source=${ARTIFACT_URLS[$name]}"
   done
+  echo "rtl8812au-$RTL8812AU_REF.tar.gz  sha256=$(sha256sum "$REPO_DIR/artifacts/rtl8812au-$RTL8812AU_REF.tar.gz" | cut -d' ' -f1)  source=https://github.com/aircrack-ng/rtl8812au.git@$RTL8812AU_REF"
 } > "$REPO_DIR/artifacts/MANIFEST.txt"
 touch "$REPO_DIR/artifacts/.build-complete"
 
@@ -113,11 +166,30 @@ for i in $(seq 1 30); do
   sleep 5
 done
 
+# linux-headers-$(uname -r)/linux-modules-extra-$(uname -r) are cached
+# under whatever kernel version this builder boots with — valid as long
+# as guests boot the same $IMAGE_ID at roughly the same time as this
+# build ran. A guest that picks up a kernel bump via unattended-upgrades
+# before this repo is next rebuilt will fall back to wifi-sniffer's own
+# live apt-get for just those two packages (same as it always has).
 echo "=== Building the repo on the throwaway instance ==="
 ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
+  set -e
+  # Third-party apt repos — ghidra-workstation needs temurin-21-jdk
+  # (Adoptium), wifi-sniffer needs kismet (kismetwireless.net). Neither
+  # package exists in Ubuntu's own archive, so these repos have to be
+  # trusted before the download step below can see them at all.
+  sudo mkdir -p /etc/apt/keyrings
+  curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | sudo gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
+  echo \"deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb \$(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/adoptium.list
+  wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet | sudo gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null
+  echo \"deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/\$(lsb_release -cs) \$(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/kismet.list >/dev/null
+
   sudo apt-get update
   sudo apt-get install -y dpkg-dev
-  sudo apt-get install --download-only --reinstall -y ${PACKAGES[*]}
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install --download-only --reinstall -y \
+    ${PACKAGES[*]} ${THIRDPARTY_PACKAGES[*]} \
+    linux-headers-\$(uname -r) linux-modules-extra-\$(uname -r)
   mkdir -p /tmp/repo-build
   cp /var/cache/apt/archives/*.deb /tmp/repo-build/
   cd /tmp/repo-build
@@ -126,7 +198,7 @@ ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
   cat > MANIFEST.txt <<MANIFEST
 Built: \$(date -u +%Y-%m-%dT%H:%M:%SZ)
 Ubuntu release: \$(lsb_release -cs)
-Source packages requested: ${PACKAGES[*]}
+Source packages requested: ${PACKAGES[*]} ${THIRDPARTY_PACKAGES[*]} linux-headers-\$(uname -r) linux-modules-extra-\$(uname -r)
 Package count (including transitive deps): \$(ls /tmp/repo-build/*.deb | wc -l)
 MANIFEST
 "
