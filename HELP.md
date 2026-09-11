@@ -49,7 +49,7 @@ Virtual Private Clouds are the network containers for instances and load balance
 4. Click **Create VPC**.
 
 ### Delete a VPC
-Click **Delete** on the row. Instances and load balancers referencing the VPC are not automatically removed.
+Click **Delete** on the row. Refused with a 409 if the VPC still has any active instance, load balancer, security group, or subnet — delete those first (see **Subnets** below for the one of those with no create/list view of its own elsewhere in the console).
 
 ### Bulk Delete
 Tick one or more checkboxes and click **Delete Selected**. Deletions run in parallel.
@@ -63,6 +63,37 @@ Tick one or more checkboxes and click **Delete Selected**. Deletions run in para
 | DNS | Whether DNS resolution is enabled |
 | Status | `active` or `deleted` |
 | Created | Local date/time of creation |
+
+---
+
+## Subnets
+
+Subnets belong to a VPC and are what instances actually launch into (see the **VPC** field on the **Instances** create form). Mainly useful here for cleaning up after a failed or partially-destroyed build — a VPC refuses to delete while any of its subnets still exist, and until this page existed there was no way to see or remove a subnet directly.
+
+### Create a Subnet
+1. Click **+ Create Subnet**.
+2. Fill in **Name**, **VPC** (must already exist), **CIDR Block** (must fall within the VPC's own CIDR), **Zone**, and **Public**.
+3. Click **Create Subnet**.
+
+### Delete a Subnet
+Click **Delete** on the row — no dependency checks (a subnet doesn't track which instances launched into it), so this always succeeds.
+
+### Orphaned subnets
+A subnet whose `vpc_id` no longer matches any real VPC (left behind by a failed build, or a VPC deleted through some path that didn't clean up correctly) shows its **VPC** column in red as **orphaned**, with the dangling ID shown alongside — delete it the same way as any other subnet.
+
+### Bulk Delete
+Tick one or more checkboxes and click **Delete Selected**.
+
+### Columns
+| Column | Description |
+|---|---|
+| Name | Human-readable label |
+| ID | Truncated UUID |
+| VPC | Parent VPC's name, or **orphaned** if it no longer exists |
+| CIDR | IP address range (subset of the parent VPC's CIDR) |
+| Zone | Availability zone label |
+| Public | Whether this subnet is marked public |
+| Status | `active` or `deleted` |
 
 ---
 
@@ -464,6 +495,11 @@ Authorization: Bearer dev-token
 | GET | `/v1/vpcs/{id}` | Get VPC |
 | PUT | `/v1/vpcs/{id}` | Update VPC |
 | DELETE | `/v1/vpcs/{id}` | Delete VPC |
+| GET | `/v1/subnets?vpc_id={id}` | List subnets, optionally filtered by VPC |
+| POST | `/v1/subnets` | Create subnet |
+| GET | `/v1/subnets/{id}` | Get subnet |
+| PUT | `/v1/subnets/{id}` | Update subnet |
+| DELETE | `/v1/subnets/{id}` | Delete subnet |
 | GET | `/v1/instances` | List instances |
 | POST | `/v1/instances` | Launch instance (async, returns 202) |
 | GET | `/v1/instances/{id}` | Get instance |

@@ -14,6 +14,7 @@
       <button class="nav-group-btn" id="nav-grp-infrastructure">Infrastructure <span class="caret">▼</span></button>
       <div class="nav-dropdown">
         <button id="nav-vpcs" onclick="showSection('vpcs', this)">VPCs</button>
+        <button id="nav-subnets" onclick="showSection('subnets', this)">Subnets</button>
         <button id="nav-instances" onclick="showSection('instances', this)">Instances</button>
         <button id="nav-lbs" onclick="showSection('lbs', this)">Load Balancers</button>
         <button id="nav-sgs" onclick="showSection('sgs', this)">Security Groups</button>
@@ -168,6 +169,79 @@
           </thead>
           <tbody id="vpc-tbody">
             <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ Subnets ═══════════════════════════ -->
+  <div id="section-subnets" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Subnets</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="subnet-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('subnet')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadSubnets()">↻</button>
+          <button class="btn btn-primary" onclick="_populateSubnetVpcSelect();toggleForm('subnet-form')">+ Create Subnet</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        A subnet whose VPC no longer exists (left behind by a failed or partial build) shows as <strong style="color:var(--danger)">orphaned</strong> below — delete it directly here, then its former VPC will be free to delete too.
+      </p>
+
+      <!-- Create form -->
+      <div id="subnet-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="subnet-name" type="text" placeholder="my-subnet">
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="subnet-vpc"></select>
+          </div>
+          <div class="field">
+            <label>CIDR Block *</label>
+            <input id="subnet-cidr" type="text" placeholder="10.0.1.0/24">
+          </div>
+          <div class="field">
+            <label>Zone</label>
+            <input id="subnet-zone" type="text" placeholder="a" value="a">
+          </div>
+          <div class="field">
+            <label>Public</label>
+            <select id="subnet-public">
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleForm('subnet-form')">Cancel</button>
+          <button class="btn btn-primary" onclick="createSubnet()">Create Subnet</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="subnet-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="subnet-sel-all" onchange="toggleSelectAll('subnet',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>VPC</th>
+              <th>CIDR</th>
+              <th>Zone</th>
+              <th>Public</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="subnet-tbody">
+            <tr class="empty-row"><td colspan="9">Loading…</td></tr>
           </tbody>
         </table>
       </div>

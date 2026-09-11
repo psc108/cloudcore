@@ -741,6 +741,7 @@
       <button class="nav-group-btn" id="nav-grp-infrastructure">Infrastructure <span class="caret">▼</span></button>
       <div class="nav-dropdown">
         <button id="nav-vpcs" onclick="showSection('vpcs', this)">VPCs</button>
+        <button id="nav-subnets" onclick="showSection('subnets', this)">Subnets</button>
         <button id="nav-instances" onclick="showSection('instances', this)">Instances</button>
         <button id="nav-lbs" onclick="showSection('lbs', this)">Load Balancers</button>
         <button id="nav-sgs" onclick="showSection('sgs', this)">Security Groups</button>
@@ -895,6 +896,79 @@
           </thead>
           <tbody id="vpc-tbody">
             <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════ Subnets ═══════════════════════════ -->
+  <div id="section-subnets" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Subnets</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="subnet-delete-sel" class="btn btn-danger" style="display:none" onclick="deleteSelected('subnet')">Delete Selected</button>
+          <button class="refresh-btn" title="Refresh" onclick="loadSubnets()">↻</button>
+          <button class="btn btn-primary" onclick="_populateSubnetVpcSelect();toggleForm('subnet-form')">+ Create Subnet</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        A subnet whose VPC no longer exists (left behind by a failed or partial build) shows as <strong style="color:var(--danger)">orphaned</strong> below — delete it directly here, then its former VPC will be free to delete too.
+      </p>
+
+      <!-- Create form -->
+      <div id="subnet-form" style="display:none; margin-bottom:24px; padding:20px; background:var(--surface2); border-radius:var(--radius); border:1px solid var(--border);">
+        <div class="form-grid">
+          <div class="field">
+            <label>Name *</label>
+            <input id="subnet-name" type="text" placeholder="my-subnet">
+          </div>
+          <div class="field">
+            <label>VPC *</label>
+            <select id="subnet-vpc"></select>
+          </div>
+          <div class="field">
+            <label>CIDR Block *</label>
+            <input id="subnet-cidr" type="text" placeholder="10.0.1.0/24">
+          </div>
+          <div class="field">
+            <label>Zone</label>
+            <input id="subnet-zone" type="text" placeholder="a" value="a">
+          </div>
+          <div class="field">
+            <label>Public</label>
+            <select id="subnet-public">
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-ghost" onclick="toggleForm('subnet-form')">Cancel</button>
+          <button class="btn btn-primary" onclick="createSubnet()">Create Subnet</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="subnet-table">
+          <thead>
+            <tr>
+              <th class="cb-col"><input type="checkbox" id="subnet-sel-all" onchange="toggleSelectAll('subnet',this)"></th>
+              <th>Name</th>
+              <th>ID</th>
+              <th>VPC</th>
+              <th>CIDR</th>
+              <th>Zone</th>
+              <th>Public</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="subnet-tbody">
+            <tr class="empty-row"><td colspan="9">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -1587,7 +1661,7 @@ function toast(msg, type = 'info') {
 const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
-  sgs: 'infrastructure',
+  sgs: 'infrastructure',  subnets: 'infrastructure',
   dns: 'networking',
   nfs: 'storage',
   builds: 'builds', tofu: 'builds',
@@ -1617,6 +1691,7 @@ function showSection(name, btn) {
   if (name !== 'dashboard') stopDashPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
+  if (name === 'subnets')       loadSubnets();
   if (name === 'instances')     { loadInstances(); startInstancePoll(); }
   if (name === 'lbs')           loadLBs();
   if (name === 'sgs')           loadSecurityGroups();
@@ -3086,9 +3161,10 @@ function _esc(s) {
 // ── Bulk delete ───────────────────────────────────────────────────────────────
 
 const _bulkMeta = {
-  vpc:      { btn: 'vpc-delete-sel',  selAll: 'vpc-sel-all',  path: id => `/v1/vpcs/${id}`,           reload: loadVPCs },
-  instance: { btn: 'inst-delete-sel', selAll: 'inst-sel-all', path: id => `/v1/instances/${id}`,      reload: loadInstances },
-  lb:       { btn: 'lb-delete-sel',   selAll: 'lb-sel-all',   path: id => `/v1/load-balancers/${id}`, reload: loadLBs },
+  vpc:      { btn: 'vpc-delete-sel',    selAll: 'vpc-sel-all',    path: id => `/v1/vpcs/${id}`,           reload: loadVPCs },
+  subnet:   { btn: 'subnet-delete-sel', selAll: 'subnet-sel-all', path: id => `/v1/subnets/${id}`,        reload: loadSubnets },
+  instance: { btn: 'inst-delete-sel',   selAll: 'inst-sel-all',   path: id => `/v1/instances/${id}`,      reload: loadInstances },
+  lb:       { btn: 'lb-delete-sel',     selAll: 'lb-sel-all',     path: id => `/v1/load-balancers/${id}`, reload: loadLBs },
 };
 
 function _checkedRows(type) {
@@ -3114,7 +3190,7 @@ async function deleteSelected(type) {
   const rows = _checkedRows(type);
   if (!rows.length) return;
   const names = rows.map(r => r.dataset.name).join(', ');
-  const label = type === 'instance' ? 'instance' : type === 'lb' ? 'load balancer' : 'VPC';
+  const label = type === 'instance' ? 'instance' : type === 'lb' ? 'load balancer' : type === 'subnet' ? 'subnet' : 'VPC';
   if (!confirm(`Delete ${rows.length} ${label}${rows.length > 1 ? 's' : ''}?\n\n${names}`)) return;
 
   const m = _bulkMeta[type];
@@ -4407,6 +4483,87 @@ function saveSettings() {
     document.getElementById('settings-tofu-parallelism').value = s.parallelism ?? '';
     toast('Settings saved', 'success');
   }).catch(e => toast(`Failed to save settings: ${e.message}`, 'error'));
+}
+
+// ── Subnets ──────────────────────────────────────────────────────────────────
+async function loadSubnets() {
+  const tbody = document.getElementById('subnet-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="9">Loading…</td></tr>';
+  try {
+    const [subnetData, vpcData] = await Promise.all([
+      api('GET', '/v1/subnets'),
+      api('GET', '/v1/vpcs'),
+    ]);
+    const vpcById = {};
+    vpcData.items.forEach(v => vpcById[v.id] = v);
+
+    const items = subnetData.items.filter(s => s.status !== 'deleted');
+    if (!items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No subnets found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(s => {
+      const vpc = vpcById[s.vpc_id];
+      const vpcCell = vpc
+        ? `${vpc.name} <span class="text-muted">(${shortId(vpc.id)})</span>`
+        : `<span style="color:var(--danger)" title="No VPC with this ID exists — this subnet is orphaned, left behind by a failed or partial build">orphaned <span class="mono">(${s.vpc_id})</span></span>`;
+      return `
+      <tr>
+        <td class="cb-col"><input type="checkbox" class="row-cb" data-type="subnet" data-id="${s.id}" data-name="${s.name}" onchange="_onRowCbChange('subnet')"></td>
+        <td><strong>${s.name}</strong></td>
+        <td>${shortId(s.id)}</td>
+        <td>${vpcCell}</td>
+        <td class="mono">${s.cidr_block}</td>
+        <td>${s.zone}</td>
+        <td>${s.public ? '✓' : '—'}</td>
+        <td>${badge(s.status)}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteSubnet('${s.id}','${s.name}')">Delete</button></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function _populateSubnetVpcSelect() {
+  const sel = document.getElementById('subnet-vpc');
+  try {
+    const data = await api('GET', '/v1/vpcs');
+    const items = data.items.filter(v => v.status !== 'deleted');
+    sel.innerHTML = items.length
+      ? items.map(v => `<option value="${v.id}">${v.name} (${v.cidr_block})</option>`).join('')
+      : '<option value="">No VPCs available — create one first</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load VPCs</option>';
+  }
+}
+
+async function createSubnet() {
+  const name = document.getElementById('subnet-name').value.trim();
+  const vpc_id = document.getElementById('subnet-vpc').value;
+  const cidr_block = document.getElementById('subnet-cidr').value.trim();
+  if (!name || !vpc_id || !cidr_block) { toast('Name, VPC, and CIDR are required', 'error'); return; }
+  try {
+    await api('POST', '/v1/subnets', {
+      name, vpc_id, cidr_block,
+      zone:   document.getElementById('subnet-zone').value.trim() || 'a',
+      public: document.getElementById('subnet-public').value === 'true',
+    });
+    toast(`Subnet "${name}" created`, 'success');
+    toggleForm('subnet-form');
+    document.getElementById('subnet-name').value = '';
+    document.getElementById('subnet-cidr').value = '';
+    loadSubnets();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function deleteSubnet(id, name) {
+  if (!confirm(`Delete subnet "${name}"?`)) return;
+  try {
+    await api('DELETE', `/v1/subnets/${id}`);
+    toast(`Subnet "${name}" deleted`, 'success');
+    loadSubnets();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
 }
 
 </script>

@@ -2,7 +2,7 @@
 const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
-  sgs: 'infrastructure',
+  sgs: 'infrastructure',  subnets: 'infrastructure',
   dns: 'networking',
   nfs: 'storage',
   builds: 'builds', tofu: 'builds',
@@ -32,6 +32,7 @@ function showSection(name, btn) {
   if (name !== 'dashboard') stopDashPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
+  if (name === 'subnets')       loadSubnets();
   if (name === 'instances')     { loadInstances(); startInstancePoll(); }
   if (name === 'lbs')           loadLBs();
   if (name === 'sgs')           loadSecurityGroups();
