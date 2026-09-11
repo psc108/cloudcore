@@ -21,14 +21,16 @@ bash scripts/install.sh
 
 The script is idempotent — safe to re-run. It will:
 
-1. Install system packages (`qemu-kvm`, `libvirt`, `haproxy`, `dnsmasq`, `lvm2`, `nfs-common`)
-2. Install Python dependencies (`pip3 install --user -r requirements.txt`)
-3. Build and install the Ansible collection
-4. Download the Ubuntu 22.04 cloud image into `api/images/`
-5. Generate the CloudCore SSH keypair in `api/keys/`
-6. Install and start the `ccbr0` bridge network (system service, requires sudo)
-7. Install and start the host-level package repo (`cloudcore-repo`, system service, requires sudo) — installed empty, see below
-8. Install and start the API and terminal as systemd user services
+1. Install system packages (`qemu-kvm`, `libvirt`, `haproxy`, `dnsmasq`, `lvm2`, `nfs-common`, `golang-go`)
+2. Install OpenTofu (official installer, `deb` method — skipped if `tofu` is already on `PATH`)
+3. Build the CloudCore OpenTofu provider from source and register it via `dev_overrides` in `~/.tofurc` — it's built locally, not published to any registry, so this is the only way OpenTofu can find it (skipped if `~/.tofurc` already has an entry for it)
+4. Install Python dependencies (`pip3 install --user -r requirements.txt`)
+5. Build and install the Ansible collection
+6. Download the Ubuntu 22.04 cloud image into `api/images/`
+7. Generate the CloudCore SSH keypair in `api/keys/`
+8. Install and start the `ccbr0` bridge network (system service, requires sudo)
+9. Install and start the host-level package repo (`cloudcore-repo`, system service, requires sudo) — installed empty, see below
+10. Install and start the API and terminal as systemd user services
 
 After the script completes, open **http://127.0.0.1:8080** in your browser.
 
@@ -104,8 +106,8 @@ systemctl --user restart cloudcore-api
 | Ubuntu | `22.04+` | Yes |
 | Python | `>= 3.10` | Yes |
 | Ansible | `>= 2.15` | Yes (installed by `scripts/install.sh`) |
-| OpenTofu | `>= 1.8.0` | Optional — needed to run OpenTofu builds |
-| Go | `>= 1.25` | Optional — only needed to rebuild the provider binary |
+| OpenTofu | `>= 1.8.0` | Yes, if using `examples/` — installed by `scripts/install.sh` |
+| Go | `>= 1.22` | Yes — installed by `scripts/install.sh`; builds the provider binary, which isn't published anywhere and isn't committed to this repo |
 
 ## OpenTofu
 
