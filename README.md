@@ -21,7 +21,7 @@ bash scripts/install.sh
 
 The script is idempotent — safe to re-run. It will:
 
-1. Install system packages (`qemu-kvm`, `libvirt`, `haproxy`, `dnsmasq`, `lvm2`, `nfs-common`, `golang-go`)
+1. Install system packages (`qemu-system-x86`, `qemu-utils`, `libvirt`, `haproxy`, `dnsmasq`, `lvm2`, `nfs-common`, `golang-go`)
 2. Install OpenTofu (official installer, `deb` method — skipped if `tofu` is already on `PATH`)
 3. Build the CloudCore OpenTofu provider from source and register it via `dev_overrides` in `~/.tofurc` — it's built locally, not published to any registry, so this is the only way OpenTofu can find it (skipped if `~/.tofurc` already has an entry for it)
 4. Install Python dependencies (`pip3 install --user -r requirements.txt`)

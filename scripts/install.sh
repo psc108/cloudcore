@@ -16,6 +16,13 @@ echo ""
 # 1. System packages
 # ---------------------------------------------------------------------------
 echo "==> Installing system packages..."
+# qemu-kvm doesn't exist as an installable package on jammy or noble (not
+# removed between releases — confirmed it isn't in either archive at all;
+# apt just reports "no install candidate"). qemu-system-x86 + qemu-utils
+# (qemu-img, needed directly by api/compute.py and api/nfs.py) is the real,
+# current dependency set — verified directly against this platform's own
+# working KVM host, which has never had a qemu-kvm package installed.
+#
 # golang-go on Ubuntu 22.04 (1.22) is older than provider/go.mod's declared
 # "go 1.25.8" — that's fine, Go's own toolchain auto-switch (GOTOOLCHAIN=auto,
 # the default since 1.21) transparently downloads and uses 1.25.8 the first
@@ -24,7 +31,7 @@ echo "==> Installing system packages..."
 sudo apt-get update -qq
 sudo apt-get install -y \
     python3 python3-pip python3-venv \
-    qemu-kvm libvirt-daemon-system libvirt-clients virtinst \
+    qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst \
     cloud-image-utils \
     haproxy \
     dnsmasq \
