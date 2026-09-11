@@ -140,6 +140,39 @@ def add_share(nfs_id):
     return jsonify(share), 201
 
 
+@nfs_bp.patch("/v1/nfs-servers/<nfs_id>/shares/<share_name>")
+def update_share(nfs_id, share_name):
+    """Update an existing share's mutable fields (currently: clients).
+
+    Added for F-041/F-040 (haFullStack-Findings-Log.md) — previously the
+    only way to change an already-created share's client CIDR was to
+    delete and re-add it (losing the export briefly) or replace the
+    whole NFS server, since `add_share` 409s on an existing name with no
+    update equivalent.
+    """
+    nfs = nfs_store.get(nfs_id)
+    if not nfs:
+        return _problem(404, "Not Found", f"NFS server '{nfs_id}' not found")
+    share = next((s for s in nfs.shares if s["name"] == share_name), None)
+    if not share:
+        return _problem(404, "Not Found", f"Share '{share_name}' not found")
+    body = request.get_json(force=True) or {}
+    if "clients" in body:
+        share["clients"] = body["clients"]
+    nfs_store.put(nfs)
+
+    if nfs.status.value == "running":
+        def _reload():
+            try:
+                nfs_compute.reload_exports(nfs)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error("exportfs reload failed %s: %s", nfs_id, e)
+        threading.Thread(target=_reload, daemon=True).start()
+
+    return jsonify(share)
+
+
 @nfs_bp.delete("/v1/nfs-servers/<nfs_id>/shares/<share_name>")
 def remove_share(nfs_id, share_name):
     nfs = nfs_store.get(nfs_id)

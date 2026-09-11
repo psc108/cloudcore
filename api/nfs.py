@@ -51,14 +51,24 @@ packages:
   - lvm2
 
 write_files:
+  # No `owner:` here deliberately — same lesson as compute.py's own
+  # _build_write_files_block (and F-026, haFullStack-Findings-Log.md):
+  # the write_files module runs before the base image's own default-user
+  # creation is guaranteed to have completed, and an `owner:` on a
+  # not-yet-existing user aborts the *entire* write_files module with
+  # "Unknown user or group", silently skipping every other entry too —
+  # not just this one. Confirmed directly: this NFS-server cloud-config
+  # had exactly that `owner:` set (unlike compute.py's own generator,
+  # which already avoids it) and reproduced the failure on 2 of 2
+  # consecutive fresh builds. runcmd below already does the equivalent
+  # chown *after* the user is guaranteed to exist — that step was simply
+  # unreachable dead code until write_files stopped aborting first.
   - path: /home/ubuntu/.ssh/cloudcore_ed25519
     permissions: '0600'
-    owner: 'ubuntu:ubuntu'
     content: |
 {priv_indented}
   - path: /home/ubuntu/.ssh/cloudcore_ed25519.pub
     permissions: '0644'
-    owner: 'ubuntu:ubuntu'
     content: |
       {cc_pubkey}
 
@@ -104,7 +114,16 @@ def _export_line_raw(share: dict, vpc_cidr: str) -> str:
     """Single /etc/exports line with no indentation, safe for shell echo."""
     clients = share.get("clients", "vpc")
     if clients == "vpc":
-        host_spec = vpc_cidr
+        # Bridged instances get their real address from the bridge's own
+        # DHCP pool, not the VPC/subnet objects' declared CIDR — using
+        # vpc_cidr here scoped the export to a subnet no real bridged
+        # client ever actually connects from (F-041,
+        # haFullStack-Findings-Log.md), confirmed directly via
+        # "access denied by server" on every mount attempt. SLIRP
+        # instances have no real L2 peer connectivity between guests
+        # regardless, so vpc_cidr is left as the (largely moot) fallback
+        # there rather than guessing at a more "correct" value.
+        host_spec = compute.BRIDGE_CIDR if compute._bridge_usable() else vpc_cidr
     elif isinstance(clients, list):
         host_spec = " ".join(clients)
     else:

@@ -95,8 +95,16 @@ def _allocate_slirp_ip(vpc_id: str, vpc_cidr: str) -> str:
     host_ip = net.network_address + offset
     return str(host_ip)
 
-# Bridge name for persistent networking (created by setup-network.sh)
+# Bridge name and subnet for persistent networking (created by
+# setup-network.sh, which is the single source of truth for both — keep
+# in sync with that script's own BRIDGE/SUBNET values if either changes).
+# Every bridged instance gets its real address from this subnet's DHCP
+# pool regardless of any VPC/subnet object's own declared CIDR — callers
+# needing "the CIDR real bridged instances are actually reachable on"
+# (e.g. nfs.py's "vpc" share-client shorthand, F-041) should use this,
+# not a VPC's cidr_block.
 BRIDGE_NAME = "ccbr0"
+BRIDGE_CIDR = "192.168.100.0/24"
 
 # Image catalogue — entries exist regardless of whether the file is downloaded.
 # 'available' is computed at runtime from disk presence.
