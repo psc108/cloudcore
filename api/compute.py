@@ -387,14 +387,27 @@ def _domain_xml_slirp(
 ) -> str:
     # seclabel type='none': disk/ISO images live under this repo's own
     # api/images|instances/ tree, not the standard /var/lib/libvirt/images/
-    # libvirt's default AppArmor abstraction expects — dynamic per-domain
-    # profile generation doesn't reliably cover it (confirmed directly: a
-    # fresh Ubuntu 24.04 install hit "Domain not found" errors traced to
-    # AppArmor DENIED entries in dmesg for qemu reading the disk file).
-    # Explicit, not a host-wide AppArmor change — scoped to CloudCore's own
-    # guests only, appropriate for a single-user lab/dev platform, not a
-    # multi-tenant one; flagging loudly rather than a silent host policy
-    # edit some future install would need to remember to reapply.
+    # libvirt's default AppArmor abstraction expects. A fresh Ubuntu 24.04
+    # install hit one real AppArmor DENIED entry (dmesg) for qemu reading
+    # the disk file during this same debugging session — not conclusively
+    # pinned as the cause of every "Domain not found" error seen along the
+    # way (the actual, confirmed cause of most of them turned out to be
+    # the machine type below), but a real denial was observed at least
+    # once, and disabling per-domain confinement for CloudCore's own
+    # guests is a pure relaxation that can't newly break anything. Not a
+    # host-wide AppArmor change — scoped to these guests only, appropriate
+    # for a single-user lab/dev platform, not a multi-tenant one.
+    #
+    # machine='pc' (a version-less alias qemu resolves to whichever i440fx
+    # machine type it actually ships) instead of a hardcoded
+    # 'pc-i440fx-2.9': confirmed directly as the real root cause of the
+    # "Domain not found" errors above — libvirtd rejected domain creation
+    # outright with "unsupported configuration: Emulator ... does not
+    # support machine type 'pc-i440fx-2.9'" on a fresh Ubuntu 24.04/qemu
+    # 8.2.2 install, even though the identical qemu-system-x86 package
+    # version still supports it on another host. Not worth chasing why
+    # that specific old version string is unsupported on one build and not
+    # another — 'pc' sidesteps the whole class of problem.
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
     log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
@@ -404,7 +417,7 @@ def _domain_xml_slirp(
           <memory unit='KiB'>{memory_kib}</memory>
           <vcpu>{vcpus}</vcpu>
           <os>
-            <type arch='x86_64' machine='pc-i440fx-2.9'>hvm</type>
+            <type arch='x86_64' machine='pc'>hvm</type>
             <boot dev='hd'/>
           </os>
           <features><acpi/><apic/></features>
@@ -455,7 +468,7 @@ def _domain_xml_bridge(
           <memory unit='KiB'>{memory_kib}</memory>
           <vcpu>{vcpus}</vcpu>
           <os>
-            <type arch='x86_64' machine='pc-i440fx-2.9'>hvm</type>
+            <type arch='x86_64' machine='pc'>hvm</type>
             <boot dev='hd'/>
           </os>
           <features><acpi/><apic/></features>

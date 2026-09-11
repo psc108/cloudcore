@@ -177,7 +177,7 @@ def _domain_xml(nfs: NfsServer, disk_path: Path, data_disk_path: Path,
           <memory unit='KiB'>{memory_kib}</memory>
           <vcpu>{vcpus}</vcpu>
           <os>
-            <type arch='x86_64' machine='pc-i440fx-2.9'>hvm</type>
+            <type arch='x86_64' machine='pc'>hvm</type>
             <boot dev='hd'/>
           </os>
           <features><acpi/><apic/></features>
