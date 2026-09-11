@@ -385,6 +385,16 @@ def _domain_xml_slirp(
     instance_id: str = "",
     usb_hostdev_xml: str = "",
 ) -> str:
+    # seclabel type='none': disk/ISO images live under this repo's own
+    # api/images|instances/ tree, not the standard /var/lib/libvirt/images/
+    # libvirt's default AppArmor abstraction expects — dynamic per-domain
+    # profile generation doesn't reliably cover it (confirmed directly: a
+    # fresh Ubuntu 24.04 install hit "Domain not found" errors traced to
+    # AppArmor DENIED entries in dmesg for qemu reading the disk file).
+    # Explicit, not a host-wide AppArmor change — scoped to CloudCore's own
+    # guests only, appropriate for a single-user lab/dev platform, not a
+    # multi-tenant one; flagging loudly rather than a silent host policy
+    # edit some future install would need to remember to reapply.
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
     log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
@@ -399,6 +409,7 @@ def _domain_xml_slirp(
           </os>
           <features><acpi/><apic/></features>
           <cpu mode='host-passthrough'/>
+          <seclabel type='none'/>
           <devices>
             <disk type='file' device='disk'>
               <driver name='qemu' type='qcow2'/>
@@ -434,6 +445,7 @@ def _domain_xml_bridge(
     instance_id: str = "",
     usb_hostdev_xml: str = "",
 ) -> str:
+    # seclabel type='none' — see _domain_xml_slirp's comment above.
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
     log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
@@ -448,6 +460,7 @@ def _domain_xml_bridge(
           </os>
           <features><acpi/><apic/></features>
           <cpu mode='host-passthrough'/>
+          <seclabel type='none'/>
           <devices>
             <disk type='file' device='disk'>
               <driver name='qemu' type='qcow2'/>

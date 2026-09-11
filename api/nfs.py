@@ -147,6 +147,9 @@ def _mkdir_cmds(shares: list) -> str:
 def _domain_xml(nfs: NfsServer, disk_path: Path, data_disk_path: Path,
                 iso_path: Path, vcpus: int, memory_mb: int,
                 ssh_host_port: int = 0) -> str:
+    # seclabel type='none' — see compute.py's _domain_xml_slirp comment;
+    # same reasoning, same non-standard image path (api/images|instances/,
+    # not /var/lib/libvirt/images/).
     memory_kib = memory_mb * 1024
     use_bridge = compute._bridge_usable()
 
@@ -179,6 +182,7 @@ def _domain_xml(nfs: NfsServer, disk_path: Path, data_disk_path: Path,
           </os>
           <features><acpi/><apic/></features>
           <cpu mode='host-passthrough'/>
+          <seclabel type='none'/>
           <devices>
             <disk type='file' device='disk'>
               <driver name='qemu' type='qcow2'/>
