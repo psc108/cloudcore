@@ -48,4 +48,39 @@ stream {
         proxy_timeout 3s;
         proxy_connect_timeout 2s;
     }
+
+    # TLS passthroughs (haFullStack-LLD.md §5.3.1). Both RabbitMQ (5671,
+    # TLS from the first byte) and Keystone (5443, a NEW port alongside
+    # the existing plain :5000 http{} vhost) are raw transparent
+    # forwards, not proxy_ssl_*-based re-encryption — the TLS handshake
+    # negotiates end-to-end between the actual client and the actual
+    # backend regardless of this hop, same as MySQL/ProxySQL's in-band
+    # upgrade above needing zero NGINX-side TLS awareness. Reuses
+    # rabbitmq_ips (same nodes as the plain :5672 upstream) rather than a
+    # separate variable.
+    upstream rabbitmq_amqp_tls {
+%{ for ip in rabbitmq_ips ~}
+        server ${ip}:5671 max_fails=3 fail_timeout=10s;
+%{ endfor ~}
+    }
+
+    server {
+        listen 5671;
+        proxy_pass rabbitmq_amqp_tls;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
+
+    upstream keystone_tls {
+%{ for ip in keystone_tls_ips ~}
+        server ${ip}:5443 max_fails=3 fail_timeout=10s;
+%{ endfor ~}
+    }
+
+    server {
+        listen 5443;
+        proxy_pass keystone_tls;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
 }

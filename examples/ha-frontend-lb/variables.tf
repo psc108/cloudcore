@@ -35,15 +35,9 @@ variable "admin_cidr" {
 }
 
 variable "vip_address" {
-  description = "Virtual IP that Keepalived floats between the two NGINX nodes. Must be a free address in the Lab bridge's real subnet (192.168.100.0/24, set up by api/setup-network.sh) and outside its DHCP range (192.168.100.10-254) — the default was the address used to empirically validate multicast VRRP over ccbr0 before this template was written."
+  description = "Virtual IP that Keepalived floats between the two ProxySQL/NGINX nodes. Must be a free address in the Lab bridge's real subnet (192.168.100.0/24, set up by api/setup-network.sh) and outside its DHCP range (192.168.100.10-254) — the default was the address used to empirically validate multicast VRRP over ccbr0 before this template was written."
   type        = string
   default     = "192.168.100.5"
-}
-
-variable "nginx_flavor" {
-  description = "Compute flavor for the two NGINX/Keepalived nodes."
-  type        = string
-  default     = "standard.small"
 }
 
 variable "frontend_flavor" {
@@ -65,7 +59,7 @@ variable "mysql_flavor" {
 }
 
 variable "proxysql_flavor" {
-  description = "Compute flavor for the two ProxySQL nodes."
+  description = "Compute flavor for the two ProxySQL nodes, which also run NGINX/Keepalived (haFullStack-LLD.md §1/§2 — merged tiers)."
   type        = string
   default     = "standard.small"
 }
@@ -86,4 +80,34 @@ variable "rabbitmq_flavor" {
   description = "Compute flavor for the three RabbitMQ nodes."
   type        = string
   default     = "standard.small"
+}
+
+variable "ca_flavor" {
+  description = "Compute flavor for the single step-ca node."
+  type        = string
+  default     = "standard.nano"
+}
+
+variable "nfs_flavor" {
+  description = "Compute flavor for the NFS server hosting the local apt repo and pinned-artifact cache (haFullStack-LLD.md §6)."
+  type        = string
+  default     = "standard.small"
+}
+
+variable "nfs_disk_gb" {
+  description = "Data disk size for the NFS server. The apt repo snapshot (full package closure across every tier) plus the pinned .deb artifacts fit comfortably well under this default."
+  type        = number
+  default     = 20
+}
+
+variable "build_repo_now" {
+  description = "Create the one-shot repo-builder instance this apply. Build once (leave true), confirm the NFS shares are populated, then set false on a later apply to tear the builder down while keeping the NFS server and its already-built shares — matches the 'download once, refresh only on OS bump or security patch' policy (haFullStack-LLD.md §6), not a continuously-reconciled resource."
+  type        = bool
+  default     = true
+}
+
+variable "repo_builder_flavor" {
+  description = "Compute flavor for the one-shot repo-builder instance. Needs enough disk/memory headroom to apt-get download the full package closure before copying it to the NFS mount."
+  type        = string
+  default     = "standard.medium"
 }

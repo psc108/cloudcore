@@ -1,4 +1,11 @@
 #cloud-config
+# ProxySQL + NGINX/Keepalived, co-located (haFullStack-LLD.md §1/§2 —
+# merged from two separate tiers to cut node count: the LB/VIP layer was
+# otherwise sitting on its own idle pair of nodes, and pairs naturally
+# with ProxySQL since only the node actively holding the VIP ever serves
+# real traffic anyway — see the mysql_servers "127.0.0.1" note below for
+# why that specifically simplifies (not complicates) the stream{} config.
+#
 # ProxySQL: read/write splitting in front of the MySQL Group Replication
 # cluster. Uses ProxySQL's own mysql_group_replication_hostgroups
 # mechanism (auto-detects the live primary by polling each server's real
@@ -8,11 +15,63 @@
 # exists to prove. Not available via stock apt (Ubuntu carries no
 # proxysql package at all) — installed from a pinned, checksum-verified
 # GitHub release .deb, same pattern as Ghidra's JDK download.
+#
+# NGINX reverse-proxies to the frontend tier's real bridged IPs, baked in
+# at apply time via modules.frontend.private_ips_by_key — the OpenTofu
+# provider's Create() blocks until an instance's private_ip is populated
+# for exactly this reason (see provider/internal/resources/instance.go),
+# so those addresses are already known and stable by the time this
+# cloud-init runs. Keepalived's interface can't be known at apply time
+# (bridged instances get "ens2", assigned at guest boot — SLIRP
+# instances get "ens5") so it's detected at runtime and substituted into
+# the config below rather than hardcoded.
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list right after
+# bootcmd runs, silently overwriting the NFS-repo rewrite below with
+# zero error (confirmed directly). bootcmd (haFullStack-LLD.md §6)
+# points apt at the NFS-hosted local repo before the packages: module
+# runs; see ca-cloud-init.yaml.tftpl for the full rationale (F-037,
+# haFullStack-Findings-Log.md).
+apt_preserve_sources_list: true
+bootcmd:
+  # Scoped to "jammy main" only (nfs-common lives there), not the full
+  # default sources.list (main+universe+multiverse+backports+security,
+  # ~40MB of index files) — confirmed directly this was still enough to
+  # reproduce F-037's mirror congestion across 15 concurrently-booting
+  # nodes, even for "just installing one small bootstrap package."
+  - |
+    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
+  - mkdir -p /mnt/apt-repo /mnt/artifacts
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 180); do
+      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
+      sleep 10
+    done
+  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    EOF
+
 package_update: true
 packages:
   - curl
   - ca-certificates
   - mysql-client
+  - nginx
+  - keepalived
 
 write_files:
   - path: /usr/local/sbin/install-proxysql.sh
@@ -22,16 +81,7 @@ write_files:
       set -euo pipefail
 
       DEB=/tmp/proxysql.deb
-      # --speed-limit/-C -: resume rather than restart on a stall, this
-      # platform's guest networking has been observed to occasionally
-      # stall completely mid-transfer on larger files (see the Ghidra
-      # template's cloud-init for the same pattern).
-      for i in $(seq 1 5); do
-        curl -fL --speed-limit 1024 --speed-time 30 -C - \
-          -o "$DEB" "${proxysql_deb_url}" && break
-        sleep 5
-      done
-
+      cp /mnt/artifacts/proxysql.deb "$DEB"
       echo "${proxysql_deb_sha256}  $DEB" | sha256sum -c -
       dpkg -i "$DEB" || apt-get install -f -y
       systemctl enable --now proxysql
@@ -44,7 +94,7 @@ write_files:
 
       mysql -h127.0.0.1 -P6032 -uadmin -padmin <<SQL
 %{ for ip in mysql_ips ~}
-      INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (20, '${ip}', 3306);
+      INSERT INTO mysql_servers (hostgroup_id, hostname, port, use_ssl) VALUES (20, '${ip}', 3306, 1);
 %{ endfor ~}
 
       INSERT INTO mysql_group_replication_hostgroups
@@ -70,5 +120,175 @@ write_files:
       SAVE MYSQL USERS TO DISK;
       SQL
 
+  # TLS/mTLS (haFullStack-LLD.md §5.3.1). Two distinct TLS roles, both
+  # using the same CA-issued cert: client-facing (replacing ProxySQL's
+  # own auto-generated self-signed cert — confirmed directly there's no
+  # config variable for this, it expects the cert files at a fixed
+  # datadir path instead) and proxy-to-server (mysql-ssl_p2s_*, enabled
+  # per-backend via mysql_servers.use_ssl, set above — now that MySQL's
+  # own accounts REQUIRE X509, per §5.3.1's mysql-cloud-init.yaml.tftpl
+  # changes, ProxySQL's own connections need a client cert to reach them
+  # at all).
+  - path: /usr/local/sbin/setup-proxysql-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 60); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/proxysql/ssl
+      step ca certificate "$LOCAL_IP" /etc/proxysql/ssl/cert.pem /etc/proxysql/ssl/key.pem \
+        --san "$LOCAL_IP" --san "${vip_address}" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cp /tmp/root_ca.crt /etc/proxysql/ssl/ca.pem
+      cp /tmp/root_ca.crt /etc/proxysql/ssl/root_ca.pem
+      chown -R proxysql:proxysql /etc/proxysql/ssl
+      chmod 600 /etc/proxysql/ssl/key.pem
+
+      systemctl stop proxysql
+      cp /etc/proxysql/ssl/cert.pem /var/lib/proxysql/proxysql-cert.pem
+      cp /etc/proxysql/ssl/key.pem /var/lib/proxysql/proxysql-key.pem
+      cp /etc/proxysql/ssl/ca.pem /var/lib/proxysql/proxysql-ca.pem
+      chown proxysql:proxysql /var/lib/proxysql/proxysql-*.pem
+      systemctl start proxysql
+
+      for i in $(seq 1 30); do
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "SELECT 1" >/dev/null 2>&1 && break
+        sleep 2
+      done
+
+      mysql -h127.0.0.1 -P6032 -uadmin -padmin <<SQL
+      UPDATE global_variables SET variable_value='/etc/proxysql/ssl/ca.pem' WHERE variable_name='mysql-ssl_p2s_ca';
+      UPDATE global_variables SET variable_value='/etc/proxysql/ssl/cert.pem' WHERE variable_name='mysql-ssl_p2s_cert';
+      UPDATE global_variables SET variable_value='/etc/proxysql/ssl/key.pem' WHERE variable_name='mysql-ssl_p2s_key';
+      LOAD MYSQL VARIABLES TO RUNTIME;
+      SAVE MYSQL VARIABLES TO DISK;
+      SQL
+
+      # Positional <crt> <key> must come immediately after the subcommand,
+      # before any flags — confirmed directly: flags-then-positional
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run here, so --ca-url/--root are
+      # passed explicitly, same as the issuance call above. Named
+      # step-renew-proxysql (not plain step-renew) because this node also
+      # runs NGINX's own separate renewal daemon below — two distinct
+      # certs, two distinct systemd units.
+      cat > /etc/systemd/system/step-renew-proxysql.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon (ProxySQL)
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/proxysql/ssl/cert.pem /etc/proxysql/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/proxysql/ssl/root_ca.pem --exec "cp /etc/proxysql/ssl/cert.pem /var/lib/proxysql/proxysql-cert.pem && cp /etc/proxysql/ssl/key.pem /var/lib/proxysql/proxysql-key.pem && chown proxysql:proxysql /var/lib/proxysql/proxysql-cert.pem /var/lib/proxysql/proxysql-key.pem && systemctl restart proxysql"
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew-proxysql
+
+  - path: /etc/nginx/sites-available/default
+    content: |
+      ${indent(6, nginx_conf)}
+  - path: /etc/nginx/stream.conf
+    content: |
+      ${indent(6, nginx_stream_conf)}
+  - path: /etc/keepalived/keepalived.conf.template
+    content: |
+      vrrp_instance VI_1 {
+          state ${keepalived_state}
+          interface __IFACE__
+          virtual_router_id ${vrrp_router_id}
+          priority ${keepalived_priority}
+          advert_int 1
+          authentication {
+              auth_type PASS
+              auth_pass ${vrrp_auth_pass}
+          }
+          virtual_ipaddress {
+              ${vip_address}/24
+          }
+      }
+  # Kept as its own script (rather than inline runcmd shell) so the awk/sed
+  # quoting lives in a plain literal block scalar, not a YAML plain scalar
+  # list item — a runcmd one-liner with "-F': '" and "{...}" in it breaks
+  # cloud-config's YAML parsing (colon-space and flow-indicator characters
+  # aren't safe in an unquoted scalar).
+  - path: /usr/local/sbin/render-keepalived-conf.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      IFACE=$(ip -o link show up | awk -F': ' '$2!="lo"{print $2; exit}')
+      sed "s/__IFACE__/$IFACE/" /etc/keepalived/keepalived.conf.template > /etc/keepalived/keepalived.conf
+
+  # TLS (haFullStack-LLD.md §5.3.1). Client-facing :443 termination on
+  # NGINX itself — this is the one cert identity that IS the VIP (every
+  # other tier's cert carries [own IP, VIP] as SAN because clients reach
+  # them via transparent stream{} passthrough; NGINX is the actual TLS
+  # endpoint clients connect to, so its own cert only needs the VIP).
+  - path: /usr/local/sbin/setup-nginx-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 60); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/nginx/ssl
+      step ca certificate "${vip_address}" /etc/nginx/ssl/cert.pem /etc/nginx/ssl/key.pem \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/nginx/ssl/ca.pem
+      cp /tmp/root_ca.crt /etc/nginx/ssl/root_ca.pem
+      chmod 600 /etc/nginx/ssl/key.pem
+
+      # Positional <crt> <key> must come immediately after the subcommand,
+      # before any flags — confirmed directly: flags-then-positional
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run here, so --ca-url/--root are
+      # passed explicitly, same as the issuance call above. Named
+      # step-renew-nginx (not plain step-renew) — see the ProxySQL
+      # renewal unit above, same reasoning.
+      cat > /etc/systemd/system/step-renew-nginx.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon (NGINX)
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/nginx/ssl/cert.pem /etc/nginx/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/nginx/ssl/root_ca.pem --exec "systemctl reload nginx"
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew-nginx
+
 runcmd:
   - /usr/local/sbin/install-proxysql.sh
+  - /usr/local/sbin/setup-proxysql-tls.sh
+  - /usr/local/sbin/render-keepalived-conf.sh
+  - /usr/local/sbin/setup-nginx-tls.sh
+  # stream{} is a top-level context, a sibling of http{} — it can't live
+  # in sites-available (http-context only), so it's included directly
+  # from nginx.conf's own top level (haFullStack.md §3.2).
+  - echo "include /etc/nginx/stream.conf;" >> /etc/nginx/nginx.conf
+  - nginx -t
+  - systemctl restart nginx
+  - systemctl enable --now keepalived

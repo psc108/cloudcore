@@ -9,9 +9,51 @@
 # haFullStack-LLD.md §4.3.2/§2.3.2) — each node's own IP is detected at
 # runtime (bridged instances only know it after boot), same pattern as
 # MySQL's report_host / NGINX's Keepalived interface detection.
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list right after
+# bootcmd runs, silently overwriting the NFS-repo rewrite below with
+# zero error (confirmed directly). bootcmd (haFullStack-LLD.md §6)
+# points apt at the NFS-hosted local repo before the packages: module
+# runs; see ca-cloud-init.yaml.tftpl for the full rationale (F-037,
+# haFullStack-Findings-Log.md).
+apt_preserve_sources_list: true
+bootcmd:
+  # Scoped to "jammy main" only (nfs-common lives there), not the full
+  # default sources.list (main+universe+multiverse+backports+security,
+  # ~40MB of index files) — confirmed directly this was still enough to
+  # reproduce F-037's mirror congestion across 15 concurrently-booting
+  # nodes, even for "just installing one small bootstrap package."
+  - |
+    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
+  - mkdir -p /mnt/apt-repo /mnt/artifacts
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 180); do
+      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
+      sleep 10
+    done
+  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    EOF
+
 package_update: true
 packages:
   - rabbitmq-server
+  - curl
+  - ca-certificates
 
 write_files:
   # Every node in an Erlang cluster needs an identical cookie file, or
@@ -94,5 +136,76 @@ write_files:
       rabbitmqctl start_app
       %{ endif ~}
 
+  # TLS/mTLS (haFullStack-LLD.md §5.3.1). A dedicated port (5671) that's
+  # TLS from the first byte, unlike MySQL's in-band STARTTLS-style
+  # upgrade — routed through NGINX's stream{} as a raw passthrough,
+  # reusing the same rabbitmq_ips list as the existing plain :5672 entry.
+  # cacertfile MUST be the root+intermediate chain concatenated, not just
+  # the root — confirmed directly: Erlang's SSL stack rejects the client
+  # cert with an "unknown ca" alert if only the root is present locally,
+  # even though the client itself presents the intermediate (see
+  # haFullStack-Findings-Log.md).
+  - path: /usr/local/sbin/setup-rabbitmq-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 60); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/rabbitmq/ssl
+      step ca certificate "$LOCAL_IP" /etc/rabbitmq/ssl/cert.pem /etc/rabbitmq/ssl/key.pem \
+        --san "$LOCAL_IP" --san "${vip_address}" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/rabbitmq/ssl/ca.crt
+      cp /tmp/root_ca.crt /etc/rabbitmq/ssl/root_ca.crt
+      chown -R rabbitmq:rabbitmq /etc/rabbitmq/ssl
+      chmod 600 /etc/rabbitmq/ssl/key.pem
+
+      cat > /etc/rabbitmq/rabbitmq.conf <<EOF
+      listeners.ssl.default = 5671
+      ssl_options.cacertfile = /etc/rabbitmq/ssl/ca.crt
+      ssl_options.certfile = /etc/rabbitmq/ssl/cert.pem
+      ssl_options.keyfile = /etc/rabbitmq/ssl/key.pem
+      ssl_options.verify = verify_peer
+      ssl_options.fail_if_no_peer_cert = true
+      EOF
+
+      systemctl restart rabbitmq-server
+
+      for i in $(seq 1 30); do
+        rabbitmqctl status >/dev/null 2>&1 && break
+        sleep 2
+      done
+
+      # Positional <crt> <key> must come immediately after the subcommand,
+      # before any flags — confirmed directly: flags-then-positional
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run here, so --ca-url/--root are
+      # passed explicitly, same as the issuance call above.
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/rabbitmq/ssl/cert.pem /etc/rabbitmq/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/rabbitmq/ssl/root_ca.crt --exec "systemctl restart rabbitmq-server"
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
+
 runcmd:
   - /usr/local/sbin/setup-rabbitmq.sh
+  - /usr/local/sbin/setup-rabbitmq-tls.sh

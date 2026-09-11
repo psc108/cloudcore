@@ -9,12 +9,54 @@
 # already ships Apache + mod_wsgi wired up to listen on :5000 out of the
 # box (confirmed directly) — no separate systemd unit or reverse-proxy
 # config of our own is needed for the daemon itself.
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list right after
+# bootcmd runs, silently overwriting the NFS-repo rewrite below with
+# zero error (confirmed directly). bootcmd (haFullStack-LLD.md §6)
+# points apt at the NFS-hosted local repo before the packages: module
+# runs; see ca-cloud-init.yaml.tftpl for the full rationale (F-037,
+# haFullStack-Findings-Log.md).
+apt_preserve_sources_list: true
+bootcmd:
+  # Scoped to "jammy main" only (nfs-common lives there), not the full
+  # default sources.list (main+universe+multiverse+backports+security,
+  # ~40MB of index files) — confirmed directly this was still enough to
+  # reproduce F-037's mirror congestion across 15 concurrently-booting
+  # nodes, even for "just installing one small bootstrap package."
+  - |
+    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
+  - mkdir -p /mnt/apt-repo /mnt/artifacts
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 180); do
+      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
+      sleep 10
+    done
+  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    EOF
+
 package_update: true
 packages:
   - keystone
   - python3-pymysql
   - python3-memcache
   - mysql-client
+  - curl
+  - ca-certificates
 
 write_files:
   # Identical Fernet key material on both nodes, generated once in
@@ -97,6 +139,98 @@ write_files:
         --bootstrap-public-url "http://${vip_address}:5000/v3" \
         --bootstrap-internal-url "http://${vip_address}:5000/v3"
 
+  # TLS/mTLS (haFullStack-LLD.md §5.3.1). A NEW port (5443) alongside the
+  # existing plain :5000 vhost, which stays as-is for the Lab's own
+  # convenience — routed through NGINX's stream{} as a raw TCP
+  # passthrough (not http{} + proxy_ssl_*), keeping Keystone consistent
+  # with how MySQL/ProxySQL/RabbitMQ's TLS ports are fronted. SSLCACertificateFile
+  # is the root+intermediate chain concatenated, not just the root —
+  # confirmed necessary the same way RabbitMQ's Erlang SSL stack needed
+  # it (see haFullStack-Findings-Log.md); Apache/OpenSSL's own chain
+  # verification of the client cert needs the intermediate available
+  # locally too, mirroring that finding rather than assuming mod_ssl is
+  # exempt from it.
+  - path: /usr/local/sbin/setup-keystone-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 60); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/keystone/ssl
+      step ca certificate "$LOCAL_IP" /etc/keystone/ssl/cert.pem /etc/keystone/ssl/key.pem \
+        --san "$LOCAL_IP" --san "${vip_address}" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/keystone/ssl/ca.pem
+      cp /tmp/root_ca.crt /etc/keystone/ssl/root_ca.pem
+      chown -R keystone:keystone /etc/keystone/ssl
+      chmod 600 /etc/keystone/ssl/key.pem
+
+      a2enmod ssl
+
+      # Quoted heredoc (<<'EOF') so bash performs no expansion of its own —
+      # the doubled-up escapes below are for templatefile()'s own
+      # interpolation syntax (this file is rendered by Terraform before
+      # cloud-init ever sees it), so Apache's APACHE_LOG_DIR and
+      # mod_wsgi's GLOBAL group reach the actual config file intact.
+      cat > /etc/apache2/sites-available/keystone-tls.conf <<'EOF'
+      Listen 5443
+
+      <VirtualHost *:5443>
+        SSLEngine on
+        SSLCertificateFile /etc/keystone/ssl/cert.pem
+        SSLCertificateKeyFile /etc/keystone/ssl/key.pem
+        SSLCACertificateFile /etc/keystone/ssl/ca.pem
+        SSLVerifyClient require
+        SSLVerifyDepth 2
+        SSLProtocol -all +TLSv1.2 +TLSv1.3
+
+        WSGIDaemonProcess keystone-tls processes=3 threads=1 user=keystone group=keystone display-name=keystone-tls
+        WSGIProcessGroup keystone-tls
+        WSGIScriptAlias / /usr/bin/keystone-wsgi-public
+        WSGIApplicationGroup %%{GLOBAL}
+
+        <Directory /usr/bin>
+          Require all granted
+        </Directory>
+
+        ErrorLog $${APACHE_LOG_DIR}/keystone-tls-error.log
+        LogLevel warn
+        CustomLog $${APACHE_LOG_DIR}/keystone-tls-access.log combined
+      </VirtualHost>
+      EOF
+      a2ensite keystone-tls
+
+      # Positional <crt> <key> must come immediately after the subcommand,
+      # before any flags — confirmed directly: flags-then-positional
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run here, so --ca-url/--root are
+      # passed explicitly, same as the issuance call above.
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/keystone/ssl/cert.pem /etc/keystone/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/keystone/ssl/root_ca.pem --exec "systemctl restart apache2"
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
+
 runcmd:
   - /usr/local/sbin/setup-keystone.sh
+  - /usr/local/sbin/setup-keystone-tls.sh
   - systemctl restart apache2

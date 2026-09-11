@@ -12,11 +12,170 @@
 # gossip protocol discovers full membership once joined; this is a known
 # simplification (not a full mesh seed list), flagged in haFullStack-LLD.md
 # §2.7.
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list from its own
+# default-mirror template right after bootcmd runs, silently
+# overwriting the NFS-repo rewrite below with zero error (confirmed
+# directly). bootcmd (haFullStack-LLD.md §6) points apt at the
+# NFS-hosted local repo before the packages: module runs, instead of
+# hitting the real Ubuntu mirror; see ca-cloud-init.yaml.tftpl for the
+# full rationale (F-037, haFullStack-Findings-Log.md).
+apt_preserve_sources_list: true
+bootcmd:
+  # Scoped to "jammy main" only (nfs-common lives there), not the full
+  # default sources.list (main+universe+multiverse+backports+security,
+  # ~40MB of index files) — confirmed directly this was still enough to
+  # reproduce F-037's mirror congestion across 15 concurrently-booting
+  # nodes, even for "just installing one small bootstrap package."
+  - |
+    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
+  - mkdir -p /mnt/apt-repo /mnt/artifacts
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 180); do
+      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
+      sleep 10
+    done
+  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    EOF
+
 package_update: true
 packages:
   - mysql-server
+  - curl
 
 write_files:
+  # TLS/mTLS (haFullStack-LLD.md §5.3.1) — this node's own server cert
+  # from the CA, and REQUIRE X509 on client-facing accounts. Deliberately
+  # NOT applied to the 'repl' user / recovery channel — Group
+  # Replication's own recovery-channel TLS is a separate mechanism
+  # (group_replication_recovery_use_ssl), out of scope for this slice.
+  # SAN includes both this node's own IP (direct connections, e.g. this
+  # script's own verification) and the VIP (the path real clients — via
+  # ProxySQL — actually use for VERIFY_IDENTITY-strict verification).
+  #
+  # Split into two scripts and run either side of setup-group-replication.sh
+  # (see runcmd below), not one script after it — confirmed directly:
+  # running this file's own `systemctl restart mysql` AFTER Group
+  # Replication has already started kills the mysqld process GR is
+  # running in, and nothing re-issues START GROUP_REPLICATION afterward,
+  # leaving every node permanently OFFLINE. The cert/TLS-config half (this
+  # script) has to land BEFORE mysqld is asked to start group_replication
+  # at all, so the one restart it needs happens on a not-yet-clustered
+  # server; the REQUIRE X509 half (setup-mysql-tls-accounts.sh below) has
+  # to land AFTER, since it needs accounts setup-group-replication.sh's
+  # bootstrap block creates — and it does no restart of its own, so it's
+  # safe to run post-GR.
+  - path: /usr/local/sbin/setup-mysql-tls-certs.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 60); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/mysql/ssl
+      step ca certificate "$LOCAL_IP" /etc/mysql/ssl/server-cert.pem /etc/mysql/ssl/server-key.pem \
+        --san "$LOCAL_IP" --san "${vip_address}" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cp /tmp/root_ca.crt /etc/mysql/ssl/ca.crt
+      # Dedicated, persisted copy for step-renew's own --root below —
+      # /tmp isn't guaranteed to survive this cert's ~24h validity
+      # window, unlike the running service's own config directory.
+      cp /tmp/root_ca.crt /etc/mysql/ssl/root_ca.crt
+      chown -R mysql:mysql /etc/mysql/ssl
+      chmod 600 /etc/mysql/ssl/server-key.pem
+
+      # Deliberately NOT setting require_secure_transport=ON here —
+      # confirmed directly: it's a transport-level gate applied before
+      # authentication even begins, rejecting every plaintext TCP
+      # connection regardless of account. That includes Group
+      # Replication's own internal recovery channel (the 'repl' user),
+      # which is deliberately plaintext (out of scope, see comment
+      # above) — with the flag ON, a joiner's very first donor connection
+      # is refused with "Connections using insecure transport are
+      # prohibited" (MY-003159), the node exhausts its recovery retries,
+      # and self-evicts ("This member has left the group"). Per-account
+      # REQUIRE X509 below (and on keystone/proxysql_monitor) already
+      # enforces TLS for the client-facing accounts entirely independently
+      # of this global flag, so client-facing mTLS is unaffected by
+      # leaving it off.
+      cat > /etc/mysql/mysql.conf.d/zz-tls.cnf <<EOF
+      [mysqld]
+      ssl-ca   = /etc/mysql/ssl/ca.crt
+      ssl-cert = /etc/mysql/ssl/server-cert.pem
+      ssl-key  = /etc/mysql/ssl/server-key.pem
+      EOF
+      systemctl restart mysql
+
+      # step ca renew's positional <crt-file> <key-file> args must come
+      # immediately after the subcommand, before any flags — confirmed
+      # directly: `step ca renew --daemon --force <crt> <key> --exec ...`
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run on this node (its $STEPPATH has
+      # no CA trust config), so --ca-url/--root have to be passed
+      # explicitly here too, same as the issuance call above. The --exec
+      # hook uses ALTER INSTANCE RELOAD TLS, not a restart — reloads the
+      # renewed cert/key files mysqld already has paths to configured,
+      # without tearing down this node's Group Replication membership the
+      # way a second `systemctl restart mysql` would.
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/mysql/ssl/server-cert.pem /etc/mysql/ssl/server-key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/mysql/ssl/root_ca.crt --exec "mysql -u root -e 'ALTER INSTANCE RELOAD TLS;'"
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
+
+  - path: /usr/local/sbin/setup-mysql-tls-accounts.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      %{ if is_bootstrap ~}
+      # Client-facing accounts only — the recovery channel above is
+      # deliberately untouched (out of scope, see comment above). Runs
+      # after setup-group-replication.sh, once these accounts actually
+      # exist (created in its bootstrap block) — no mysqld restart here,
+      # so it's safe to run post-GR.
+      mysql -u root <<SQL
+      ALTER USER 'appuser'@'%' REQUIRE X509;
+      ALTER USER 'keystone'@'%' REQUIRE X509;
+      ALTER USER 'proxysql_monitor'@'%' REQUIRE X509;
+      SQL
+      %{ endif ~}
+
+
   - path: /usr/local/sbin/setup-group-replication.sh
     permissions: '0755'
     content: |
@@ -230,6 +389,8 @@ write_files:
       WantedBy=timers.target
 
 runcmd:
+  - /usr/local/sbin/setup-mysql-tls-certs.sh
   - /usr/local/sbin/setup-group-replication.sh
+  - /usr/local/sbin/setup-mysql-tls-accounts.sh
   - systemctl daemon-reload
   - systemctl enable --now quorum-watchdog.timer

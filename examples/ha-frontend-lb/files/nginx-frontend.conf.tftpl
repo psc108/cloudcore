@@ -14,3 +14,26 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
+
+# Client-facing TLS termination (haFullStack-LLD.md §5.3.1) — genuine
+# termination here, not a stream{} passthrough, since this is the one
+# tier where NGINX itself is the real endpoint clients connect to; cert
+# identity is the VIP (${vip_address}) alone, issued by
+# setup-nginx-tls.sh in nginx-cloud-init.yaml.tftpl.
+server {
+    listen 443 ssl;
+
+    ssl_certificate /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}

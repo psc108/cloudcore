@@ -5,11 +5,53 @@
 # It deliberately doesn't block frontend's own boot on the DB tier being
 # ready (no Terraform dependency on the mysql/proxysql modules) — it just
 # shows "unreachable" until the DB tier comes up, then self-corrects.
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list right after
+# bootcmd runs, silently overwriting the NFS-repo rewrite below with
+# zero error (confirmed directly). bootcmd (haFullStack-LLD.md §6)
+# points apt at the NFS-hosted local repo before the packages: module
+# runs; see ca-cloud-init.yaml.tftpl for the full rationale (F-037,
+# haFullStack-Findings-Log.md).
+apt_preserve_sources_list: true
+bootcmd:
+  # Scoped to "jammy main" only (nfs-common lives there), not the full
+  # default sources.list (main+universe+multiverse+backports+security,
+  # ~40MB of index files) — confirmed directly this was still enough to
+  # reproduce F-037's mirror congestion across 15 concurrently-booting
+  # nodes, even for "just installing one small bootstrap package."
+  - |
+    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
+  - mkdir -p /mnt/apt-repo /mnt/artifacts
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 180); do
+      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
+      sleep 10
+    done
+  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    EOF
+
 package_update: true
 packages:
   - nginx
   - mysql-client
   - python3
+  - curl
+  - ca-certificates
 
 write_files:
   - path: /var/www/html/index.html
@@ -20,7 +62,62 @@ write_files:
       <p><a href="/mysql-status.html">MySQL cluster status</a></p>
       <p><a href="/keystone-status.html">Keystone status</a></p>
       <p><a href="/rabbitmq-status.html">RabbitMQ status</a></p>
+      <p><a href="/tls-status.html">TLS/mTLS trust status</a></p>
       </body></html>
+
+  # Frontend's own CA-issued identity, used only as an OUTBOUND client
+  # cert for tls-status.py's probes below — not served to anyone (unlike
+  # every other tier's cert, which is also a server identity). SAN is
+  # just this node's own IP; it never needs to be presented as a server
+  # cert to a VIP-connecting client. ca.pem is root+intermediate
+  # concatenated, matching the fix every other tier needed (see
+  # haFullStack-Findings-Log.md) — the client side of a handshake needs
+  # the full chain locally to validate the server's cert just as much as
+  # the server side needs it to validate the client's.
+  - path: /usr/local/sbin/setup-frontend-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 60); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/frontend/tls
+      step ca certificate "$LOCAL_IP" /etc/frontend/tls/cert.pem /etc/frontend/tls/key.pem \
+        --san "$LOCAL_IP" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/frontend/tls/ca.pem
+      cp /tmp/root_ca.crt /etc/frontend/tls/root_ca.pem
+      chmod 644 /etc/frontend/tls/cert.pem /etc/frontend/tls/ca.pem
+      chmod 600 /etc/frontend/tls/key.pem
+
+      # Positional <crt> <key> must come immediately after the subcommand,
+      # before any flags — confirmed directly: flags-then-positional
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run here, so --ca-url/--root are
+      # passed explicitly, same as the issuance call above.
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/frontend/tls/cert.pem /etc/frontend/tls/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/frontend/tls/root_ca.pem
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
 
   - path: /usr/local/sbin/mysql-status.py
     permissions: '0755'
@@ -591,10 +688,197 @@ write_files:
       [Install]
       WantedBy=timers.target
 
+  # TLS/mTLS trust status (haFullStack-LLD.md §5.3.1a), explicitly
+  # requested alongside the other three status pages. Unlike those three,
+  # this isn't proving application-level behavior (a DB write, a token
+  # validation, a queue round-trip) — it's proving the TLS layer itself:
+  # a real handshake against the VIP, presenting this node's own
+  # CA-issued client cert, verifying the peer's cert chains to the same
+  # CA root, and (for RabbitMQ/Keystone, both configured with
+  # SSLVerifyClient/verify_peer + fail_if_no_peer_cert) that mTLS is
+  # actually being enforced rather than merely offered. MySQL/ProxySQL's
+  # :3306 is checked via the mysql CLI rather than a raw TLS socket — its
+  # TLS is negotiated in-band via the wire protocol's own STARTTLS-style
+  # upgrade, which a bare ssl.wrap_socket() doesn't speak (see
+  # haFullStack-Findings-Log.md).
+  - path: /usr/local/sbin/tls-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import json, datetime, socket, ssl, subprocess
+
+      VIP = "${vip_address}"
+      APP_PASSWORD = "${app_password}"
+      CA_PEM = "/etc/frontend/tls/ca.pem"
+      CLIENT_CERT = "/etc/frontend/tls/cert.pem"
+      CLIENT_KEY = "/etc/frontend/tls/key.pem"
+      HISTORY_FILE = "/var/log/tls-status-history.json"
+      MAX_HISTORY = 60
+
+      SOCKET_TARGETS = [
+          {"name": "NGINX (client-facing :443)", "port": 443},
+          {"name": "RabbitMQ (:5671, mTLS)", "port": 5671},
+          {"name": "Keystone (:5443, mTLS)", "port": 5443},
+      ]
+
+      def check_tls_socket(port, timeout=5):
+          ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+          ctx.load_verify_locations(cafile=CA_PEM)
+          ctx.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+          try:
+              with socket.create_connection((VIP, port), timeout=timeout) as sock:
+                  with ctx.wrap_socket(sock, server_hostname=VIP) as tls:
+                      cert = tls.getpeercert()
+                      subject = dict(x[0] for x in cert.get("subject", []))
+                      proto = tls.version()
+                      cipher = tls.cipher()[0] if tls.cipher() else None
+                      return True, {
+                          "subject_cn": subject.get("commonName"),
+                          "protocol": proto,
+                          "cipher": cipher,
+                      }, None
+          except Exception as e:
+              return False, None, str(e)
+
+      def check_mysql_tls(timeout=8):
+          cmd = [
+              "mysql", "-h", VIP, "-P", "3306", "-u", "appuser", f"-p{APP_PASSWORD}",
+              "--ssl-mode=VERIFY_IDENTITY", f"--ssl-ca={CA_PEM}",
+              f"--ssl-cert={CLIENT_CERT}", f"--ssl-key={CLIENT_KEY}",
+              "-N", "-B", "-e",
+              "SELECT VARIABLE_VALUE FROM performance_schema.session_status "
+              "WHERE VARIABLE_NAME='Ssl_cipher';",
+          ]
+          try:
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+              if r.returncode != 0:
+                  return False, None, r.stderr.strip()
+              cipher = r.stdout.strip()
+              if not cipher:
+                  return False, None, "connected but no TLS cipher negotiated"
+              return True, {"cipher": cipher}, None
+          except Exception as e:
+              return False, None, str(e)
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "checks": []}
+
+          for target in SOCKET_TARGETS:
+              ok, detail, err = check_tls_socket(target["port"])
+              status["checks"].append({"name": target["name"], "trusted": ok,
+                                        "detail": detail, "error": err})
+
+          ok, detail, err = check_mysql_tls()
+          status["checks"].append({"name": "MySQL/ProxySQL (:3306, mTLS, in-band)",
+                                    "trusted": ok, "detail": detail, "error": err})
+
+          trusted_count = sum(1 for c in status["checks"] if c["trusted"])
+          total = len(status["checks"])
+          if trusted_count == total:
+              status["verdict"] = "OK"
+          elif trusted_count > 0:
+              status["verdict"] = "DEGRADED"
+          else:
+              status["verdict"] = "CRITICAL"
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "trusted_count": sum(1 for c in status["checks"] if c["trusted"]),
+              "total": len(status["checks"]),
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/tls-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+
+          checks_html = ""
+          for c in status["checks"]:
+              if c["trusted"]:
+                  d = c["detail"] or {}
+                  detail_str = ", ".join(f"{k}={v}" for k, v in d.items() if v)
+                  checks_html += f"<li style='color:#1e7145'>{c['name']} — TRUSTED ({detail_str})</li>"
+              else:
+                  checks_html += f"<li style='color:#c0392b'>{c['name']} — UNTRUSTED: {c['error']}</li>"
+
+          history_rows = ""
+          for h in reversed(history):
+              hc = colors.get(h["verdict"], "#666")
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{hc}'>{h['verdict']}</td>"
+                  f"<td>{h['trusted_count']}/{h['total']}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>TLS/mTLS Trust Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+      </style></head>
+      <body>
+      <h1>TLS/mTLS Trust Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} — real handshake against every TLS-enabled listener via the VIP, presenting this node's own CA-issued client cert</p>
+      <h2>Checks</h2>
+      <ul>{checks_html}</ul>
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Trusted</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/tls-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/tls-status.service
+    content: |
+      [Unit]
+      Description=Refresh TLS/mTLS trust status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/tls-status.py
+
+  - path: /etc/systemd/system/tls-status.timer
+    content: |
+      [Unit]
+      Description=Run tls-status.service every 2s
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
 runcmd:
   - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
+  - /usr/local/sbin/setup-frontend-tls.sh
   - systemctl restart nginx
   - systemctl daemon-reload
   - systemctl enable --now mysql-status.timer
   - systemctl enable --now keystone-status.timer
   - systemctl enable --now rabbitmq-status.timer
+  - systemctl enable --now tls-status.timer

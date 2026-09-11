@@ -1,0 +1,169 @@
+#cloud-config
+# Single-node step-ca — deliberately not HA (haFullStack-LLD.md §5.1).
+# step-ca/step-cli aren't in Ubuntu's default repos, installed from the
+# pinned, checksum-verified .debs the NFS repo-builder already fetched
+# once (haFullStack-LLD.md §6) — every certificate-requesting node used
+# to curl these individually from GitHub (12+ redundant fetches of the
+# same files, F-037's network-congestion finding). Every other tier's
+# own cloud-init waits for this node to be reachable before requesting
+# its own certificate — the same explicit-wait pattern every prior tier
+# used for its own bootstrap dependency, not relying on Terraform apply
+# order.
+#
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list right after
+# bootcmd runs, silently overwriting the NFS-repo rewrite below with
+# zero error (confirmed directly).
+#
+# bootcmd (not runcmd/write_files) — cloud-init's earliest hook, the
+# only one guaranteed to run before the packages: module below. nfs-
+# common itself still has to come from the real Ubuntu mirror — nothing
+# can mount the repo before an NFS client exists to mount it with — a
+# small, deliberate, acknowledged exception to "no mirror traffic," not
+# an oversight.
+apt_preserve_sources_list: true
+bootcmd:
+  # Scoped to "jammy main" only (nfs-common lives there), not the full
+  # default sources.list (main+universe+multiverse+backports+security,
+  # ~40MB of index files) — confirmed directly this was still enough to
+  # reproduce F-037's mirror congestion across 15 concurrently-booting
+  # nodes, even for "just installing one small bootstrap package."
+  - |
+    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
+  - mkdir -p /mnt/apt-repo /mnt/artifacts
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 60); do
+      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
+      sleep 5
+    done
+  - |
+    for i in $(seq 1 180); do
+      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
+      sleep 10
+    done
+  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    EOF
+
+package_update: true
+packages:
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /usr/local/sbin/setup-ca.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cp /mnt/artifacts/step-ca.deb /tmp/step-ca.deb
+      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      echo "${step_ca_deb_sha256}  /tmp/step-ca.deb" | sha256sum -c -
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-ca.deb /tmp/step-cli.deb || apt-get install -f -y
+
+      export STEPPATH=/etc/step-ca
+      mkdir -p "$STEPPATH"
+      step ca init \
+        --name "CloudCore Lab CA" \
+        --dns "$LOCAL_IP" \
+        --address ":8443" \
+        --provisioner admin \
+        --password-file <(echo -n "${provisioner_password}") \
+        --deployment-type standalone
+
+      echo -n "${provisioner_password}" > /etc/step-ca/password.txt
+      chmod 600 /etc/step-ca/password.txt
+
+      # step ca init leaves authority.claims unset, which step-ca defaults
+      # to a 24h max/default leaf-cert duration internally — confirmed
+      # directly (haFullStack-LLD.md §5.1 originally assumed 90 days,
+      # corrected once this was found). That default is fine for a quick
+      # Lab smoke test but drifts from what a real On-Prem/AWS PKI would
+      # actually run — deliberately set to 365 days (8760h) here instead,
+      # so the Lab's own cert lifetime realistically mirrors what those
+      # later environments will use, not just what's convenient to test
+      # with. Edited before step-ca's first start (below, in runcmd), so
+      # no restart is needed for this to take effect — every node's own
+      # first `step ca certificate` issuance already gets the new value.
+      python3 - <<'PYEOF'
+      import json
+      with open('/etc/step-ca/config/ca.json') as f:
+          cfg = json.load(f)
+      cfg['authority']['claims'] = {
+          'minTLSCertDuration': '5m',
+          'maxTLSCertDuration': '8760h',
+          'defaultTLSCertDuration': '8760h',
+      }
+      with open('/etc/step-ca/config/ca.json', 'w') as f:
+          json.dump(cfg, f, indent='\t')
+      PYEOF
+
+      # Readable copies for other nodes to fetch (the root cert itself
+      # isn't secret — only the CA's private key is, and that never
+      # leaves /etc/step-ca/secrets) — confirmed directly: step-ca's own
+      # default permissions on root_ca.crt are too restrictive for a
+      # remote curl fetch to read.
+      chmod 644 /etc/step-ca/certs/root_ca.crt /etc/step-ca/certs/intermediate_ca.crt
+
+  - path: /etc/systemd/system/step-ca.service
+    content: |
+      [Unit]
+      Description=step-ca internal CA
+      After=network.target
+
+      [Service]
+      Environment=STEPPATH=/etc/step-ca
+      ExecStart=/usr/bin/step-ca /etc/step-ca/config/ca.json --password-file /etc/step-ca/password.txt
+      Restart=always
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Serves the root+intermediate certs and a tiny health check over
+  # plain HTTP on :8080 — every other node's wait-loop and cert-fetch
+  # step uses this rather than curl -k'ing the CA's own HTTPS API before
+  # it can be trusted, avoiding a chicken-and-egg TLS bootstrap problem.
+  - path: /usr/local/sbin/serve-ca-certs.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import http.server
+
+      class Handler(http.server.SimpleHTTPRequestHandler):
+          def __init__(self, *args, **kwargs):
+              super().__init__(*args, directory="/etc/step-ca/certs", **kwargs)
+
+      http.server.HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+
+  - path: /etc/systemd/system/ca-certs-server.service
+    content: |
+      [Unit]
+      Description=Serve step-ca root/intermediate certs over plain HTTP
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/sbin/serve-ca-certs.py
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - /usr/local/sbin/setup-ca.sh
+  - systemctl daemon-reload
+  - systemctl enable --now step-ca
+  - systemctl enable --now ca-certs-server

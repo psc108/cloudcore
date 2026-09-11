@@ -14,7 +14,7 @@ output "security_group_ids" {
 }
 
 output "frontend_private_ips" {
-  description = "Frontend instance private IPs keyed by two-digit index — these are the addresses baked into each NGINX node's upstream block."
+  description = "Frontend instance private IPs keyed by two-digit index — these are the addresses baked into the ProxySQL/NGINX nodes' upstream block."
   value       = module.frontend.private_ips_by_key
 }
 
@@ -23,13 +23,8 @@ output "frontend_ssh_commands" {
   value       = module.frontend.ssh_commands_by_key
 }
 
-output "nginx_private_ips" {
-  description = "NGINX/Keepalived node private IPs keyed by role name (nginx-a = MASTER, nginx-b = BACKUP)."
-  value       = module.nginx.private_ips_by_key
-}
-
 output "vip_address" {
-  description = "The floating VIP Keepalived moves between the two NGINX nodes."
+  description = "The floating VIP Keepalived moves between the two ProxySQL/NGINX nodes."
   value       = var.vip_address
 }
 
@@ -54,13 +49,8 @@ output "mysql_replica_ips" {
 }
 
 output "proxysql_private_ips" {
-  description = "ProxySQL instance private IPs keyed by two-digit index."
+  description = "ProxySQL/NGINX node private IPs keyed by role name (proxysql-a = Keepalived MASTER, proxysql-b = BACKUP). No ssh_commands output exists for this tier — modules/compute (used here, same as mysql_bootstrap/ca) doesn't expose ssh_endpoint, matching the existing convention for those tiers."
   value       = module.proxysql.private_ips_by_key
-}
-
-output "proxysql_ssh_commands" {
-  description = "SSH commands for the ProxySQL instances, keyed by two-digit index."
-  value       = module.proxysql.ssh_commands_by_key
 }
 
 output "keystone_private_ips" {
@@ -96,4 +86,19 @@ output "rabbitmq_joiner_ips" {
 output "rabbitmq_status_url" {
   description = "Live RabbitMQ cluster status page — proves cluster membership and a real publish/consume round-trip through the full real path."
   value       = "http://${var.vip_address}/rabbitmq-status.html"
+}
+
+output "ca_private_ip" {
+  description = "The single step-ca node's private IP (haFullStack-LLD.md §5 — deliberately not HA, a Lab simplification). No ssh_commands output exists for this tier — modules/compute (used here, same as mysql_bootstrap/proxysql) doesn't expose ssh_endpoint, matching the existing convention for those tiers."
+  value       = module.ca.private_ips_by_key
+}
+
+output "tls_lb_url" {
+  description = "Client-facing HTTPS URL, terminated on NGINX itself with a CA-issued cert (haFullStack-LLD.md §5.3.1)."
+  value       = "https://${var.vip_address}/"
+}
+
+output "tls_status_url" {
+  description = "Live TLS/mTLS trust status page — a real handshake against every TLS-enabled listener via the VIP, proving cert-chain trust and mTLS enforcement across the board, not just that a port is open."
+  value       = "http://${var.vip_address}/tls-status.html"
 }
