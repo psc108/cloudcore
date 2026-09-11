@@ -125,8 +125,8 @@ export PATH="$HOME/.local/bin:$PATH"
 echo "==> Installing Ansible collection..."
 (
     cd "$REPO_DIR/ansible/collections/cloudcore"
-    ansible-galaxy collection build --force -q
-    ansible-galaxy collection install cloudcore-cloudcore-*.tar.gz --force -q
+    ansible-galaxy collection build --force
+    ansible-galaxy collection install cloudcore-cloudcore-*.tar.gz --force
     rm -f cloudcore-cloudcore-*.tar.gz
 )
 
