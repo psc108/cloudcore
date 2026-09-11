@@ -34,12 +34,12 @@ bootcmd:
     apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
   - mkdir -p /mnt/apt-repo /mnt/artifacts
   - |
-    for i in $(seq 1 60); do
+    for i in $(seq 1 180); do
       mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
       sleep 5
     done
   - |
-    for i in $(seq 1 60); do
+    for i in $(seq 1 180); do
       mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
       sleep 5
     done

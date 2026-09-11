@@ -29,12 +29,12 @@ bootcmd:
     apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
   - mkdir -p /mnt/apt-repo /mnt/artifacts
   - |
-    for i in $(seq 1 60); do
+    for i in $(seq 1 180); do
       mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
       sleep 5
     done
   - |
-    for i in $(seq 1 60); do
+    for i in $(seq 1 180); do
       mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
       sleep 5
     done
@@ -103,7 +103,7 @@ write_files:
       # own wait loop) of an explicit retry rather than relying on
       # Terraform apply order, which doesn't wait for cloud-init to finish
       # on any other node either.
-      for i in $(seq 1 60); do
+      for i in $(seq 1 180); do
         mysql -h "${vip_address}" -P 3306 -u keystone -p'${keystone_password}' \
           -e "SELECT 1" >/dev/null 2>&1 && break
         sleep 5
@@ -162,7 +162,7 @@ write_files:
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 
-      for i in $(seq 1 60); do
+      for i in $(seq 1 180); do
         curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
           && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
           && break

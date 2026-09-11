@@ -33,12 +33,12 @@ bootcmd:
     apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
   - mkdir -p /mnt/apt-repo /mnt/artifacts
   - |
-    for i in $(seq 1 60); do
+    for i in $(seq 1 180); do
       mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
       sleep 5
     done
   - |
-    for i in $(seq 1 60); do
+    for i in $(seq 1 180); do
       mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
       sleep 5
     done
@@ -92,7 +92,7 @@ write_files:
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 
-      for i in $(seq 1 60); do
+      for i in $(seq 1 180); do
         curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
           && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
           && break
@@ -293,7 +293,7 @@ write_files:
       # so the bootstrap node's own SQL sequence above may not have
       # finished yet (haFullStack-LLD.md §2.3.1's flagged risk).
       SEED_HOST=$(echo "${group_seeds}" | cut -d: -f1)
-      for i in $(seq 1 60); do
+      for i in $(seq 1 180); do
         if mysql -h "$SEED_HOST" -u repl -p'${repl_password}' -N -e \
              "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_STATE='ONLINE'" \
              2>/dev/null | grep -q ONLINE; then
