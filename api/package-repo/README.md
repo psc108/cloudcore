@@ -19,7 +19,7 @@ Rebuild with:
     CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \
       bash api/build-package-repo.sh jammy
 
-Served by the `cloudcore-package-repo` systemd service
+Served by the `cloudcore-repo` systemd service
 (`api/setup-package-repo.sh` installs it) at `http://192.168.100.1:8090/`.
 Do not run `api/teardown-network.sh` while this service is active without
 `--force` — it will silently cut every guest off from the repo.

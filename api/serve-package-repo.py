@@ -13,7 +13,7 @@ guest OS versions can coexist without clobbering each other:
     api/package-repo/<codename>/apt-repo/    (dpkg-scanpackages index)
     api/package-repo/<codename>/artifacts/   (pinned .debs)
 
-Run via the cloudcore-package-repo systemd service (setup-package-repo.sh
+Run via the cloudcore-repo systemd service (setup-package-repo.sh
 installs it) — not meant to be started by hand except for debugging.
 """
 import http.server

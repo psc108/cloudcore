@@ -21,7 +21,7 @@ fi
 mkdir -p "$SCRIPT_DIR/package-repo"
 chown "$SERVICE_USER":"$SERVICE_USER" "$SCRIPT_DIR/package-repo"
 
-cat > /etc/systemd/system/cloudcore-package-repo.service <<EOF
+cat > /etc/systemd/system/cloudcore-repo.service <<EOF
 [Unit]
 Description=CloudCore host-level package repo + artifact cache (always-available, not per-project)
 After=network.target
@@ -37,8 +37,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now cloudcore-package-repo
+systemctl enable --now cloudcore-repo
 
-echo "cloudcore-package-repo.service running, serving http://192.168.100.1:8090/"
+echo "cloudcore-repo.service running, serving http://192.168.100.1:8090/"
 echo "Populate it with: bash api/build-package-repo.sh [codename]"
-echo "Remove with: sudo systemctl disable --now cloudcore-package-repo && sudo rm /etc/systemd/system/cloudcore-package-repo.service"
+echo "Remove with: sudo systemctl disable --now cloudcore-repo && sudo rm /etc/systemd/system/cloudcore-repo.service"

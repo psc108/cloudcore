@@ -68,7 +68,7 @@ REPO_DIR="$SCRIPT_DIR/package-repo/$CODENAME"
 API="$CLOUDCORE_API_URL"
 AUTH=(-H "Authorization: Bearer $CLOUDCORE_API_TOKEN")
 SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$KEY")
-SUFFIX="repobuild-$(date +%s)"
+SUFFIX="cloudcore-repo-builder-$(date +%s)"
 
 mkdir -p "$REPO_DIR/apt-repo" "$REPO_DIR/artifacts"
 
