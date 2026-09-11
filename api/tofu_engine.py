@@ -13,8 +13,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import db
+import settings_store
 
 _running: dict[str, dict] = {}
+
+
+def _parallelism_args() -> list[str]:
+    """['-parallelism=N'] if the user has set one via Settings, else []
+    (OpenTofu's own default, currently 10, applies unchanged)."""
+    val = settings_store.get("tofu.parallelism")
+    return [f"-parallelism={val}"] if val else []
+
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 PROVIDER_DIR = Path(__file__).parent.parent / "provider"
@@ -377,9 +386,10 @@ def run_tofu_destroy(build_id: str) -> tuple[bool, list[str]]:
         ts2 = datetime.now(timezone.utc).strftime("%H:%M:%S")
         logs.append(f"[{ts2}] {line}")
 
-    _emit(f"$ {tofu} destroy -auto-approve -no-color")
+    destroy_cmd = [tofu, "destroy", "-auto-approve", "-no-color", *_parallelism_args()]
+    _emit(f"$ {' '.join(destroy_cmd)}")
     _emit("─" * 60)
-    rc = _stream_cmd([tofu, "destroy", "-auto-approve", "-no-color"], env, str(work_dir), _emit)
+    rc = _stream_cmd(destroy_cmd, env, str(work_dir), _emit)
     _emit("─" * 60)
     _emit(f"Finished with exit code {rc}")
 
@@ -412,7 +422,7 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
             state_data = json.loads(state_file.read_text())
             if state_data.get("resources"):
                 _log(build, "Existing state with resources detected — running tofu destroy before apply...")
-                rc = _run_cmd([tofu, "destroy", "-auto-approve", "-no-color"])
+                rc = _run_cmd([tofu, "destroy", "-auto-approve", "-no-color", *_parallelism_args()])
                 if rc != 0:
                     _log(build, f"WARNING: pre-apply destroy exited {rc} — continuing anyway")
         except Exception as ex:
@@ -454,7 +464,7 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
                 return
 
     # tofu apply
-    rc = _run_cmd([tofu, "apply", "-auto-approve", "-no-color"])
+    rc = _run_cmd([tofu, "apply", "-auto-approve", "-no-color", *_parallelism_args()])
     build["exit_code"] = rc
     build["status"] = "success" if rc == 0 else "failed"
     _log(build, f"Finished with exit code {rc}")

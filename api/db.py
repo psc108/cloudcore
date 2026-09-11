@@ -301,6 +301,14 @@ CREATE TABLE IF NOT EXISTS help_articles (
 CREATE UNIQUE INDEX IF NOT EXISTS help_articles_slug_active_uq
     ON help_articles(slug) WHERE status != 'deleted';
 
+-- Generic key/value settings store. Values are stored as JSON text so any
+-- setting type (int, bool, string, null-to-unset) round-trips without a
+-- schema change; api/settings_store.py owns interpreting each key.
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
     content='help_articles', content_rowid='rowid'

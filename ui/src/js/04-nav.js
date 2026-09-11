@@ -41,6 +41,7 @@ function showSection(name, btn) {
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
   if (name === 'editor')         loadEditor();
+  if (name === 'settings')       loadSettings();
   if (name === 'about')          loadAbout();
   if (name === 'help')           loadHelpManager();
 }

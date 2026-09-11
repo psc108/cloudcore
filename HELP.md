@@ -419,6 +419,18 @@ Click any filename in the left-hand tree. The file loads into the editor with sy
 
 ---
 
+## Settings
+
+Go to **Settings** for platform-wide options. Changes apply to every build going forward — builds already running or already applied are unaffected.
+
+### OpenTofu
+
+| Setting | Default | Effect |
+|---|---|---|
+| Parallelism | OpenTofu's own default (10) if left blank | Passed as `-parallelism=N` to every `tofu apply`/`destroy` this platform runs. Lower it on a host with limited CPU/RAM running a large template with many instances — a high default can let OpenTofu boot more VMs at once than the host can actually service, starving slower nodes (e.g. a database node) past what dependent nodes' own readiness-wait loops allow for. |
+
+---
+
 ## About
 
 Go to **About** to see live version information for every software component:
@@ -523,6 +535,12 @@ Authorization: Bearer dev-token
 | Method | Path | Description |
 |---|---|---|
 | GET | `/v1/usb-devices` | List host USB devices, with safety/attachment status (see [USB Device Passthrough](#usb-device-passthrough)) |
+
+### Settings
+| Method | Path | Description |
+|---|---|---|
+| GET | `/v1/settings/tofu` | Get current OpenTofu settings (`{"parallelism": N}` or `{}` if unset) |
+| PUT | `/v1/settings/tofu` | Update OpenTofu settings — `{"parallelism": N}` (integer >= 1) or `{"parallelism": null}` to clear and fall back to OpenTofu's own default |
 
 ### Misc
 | Method | Path | Description |

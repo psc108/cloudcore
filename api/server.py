@@ -26,6 +26,7 @@ from about_routes import about_bp
 from tofu_routes import tofu_bp
 from usb_routes import usb_bp
 from help_routes import help_bp
+from settings_routes import settings_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -37,6 +38,7 @@ app.register_blueprint(about_bp)
 app.register_blueprint(tofu_bp)
 app.register_blueprint(usb_bp)
 app.register_blueprint(help_bp)
+app.register_blueprint(settings_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 

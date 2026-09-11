@@ -40,6 +40,7 @@
       </div>
     </div>
     <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
+    <button id="nav-settings" onclick="showSection('settings', this)">Settings</button>
     <button id="nav-about" onclick="showSection('about', this)">About</button>
     <button id="nav-help" onclick="showSection('help', this)">Help</button>
   </nav>
@@ -601,6 +602,31 @@
       <div class="ed-layout">
         <div id="ed-tree" class="ed-tree">Loading&hellip;</div>
         <div id="ed-cm-host" class="ed-cm-host"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ Settings ═══════════════════════════ -->
+  <div id="section-settings" class="section">
+    <div class="card" style="max-width:680px">
+      <div class="card-header">
+        <h2>Settings</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadSettings()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Platform-wide settings, applied to every build going forward — existing builds are unaffected.
+      </p>
+
+      <h3 class="about-heading">OpenTofu</h3>
+      <div class="form-grid">
+        <div class="field full">
+          <label for="settings-tofu-parallelism">Parallelism</label>
+          <input type="number" id="settings-tofu-parallelism" min="1" placeholder="10 (OpenTofu's own default)">
+          <span class="bm-field-hint">Max concurrent resource operations per <code>tofu apply</code>/<code>destroy</code>. Lower this on a host with limited CPU/RAM running a large template with many instances — a high default can starve slower-booting nodes' own dependency waits (e.g. a database node's own dependents timing out waiting for it). Leave blank for OpenTofu's own default (10).</span>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="saveSettings()">Save</button>
       </div>
     </div>
   </div>
