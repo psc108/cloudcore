@@ -135,3 +135,7 @@ func (c *Client) Put(ctx context.Context, path string, body, out any) error {
 func (c *Client) Delete(ctx context.Context, path string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
+
+func (c *Client) Patch(ctx context.Context, path string, body, out any) error {
+	return c.do(ctx, http.MethodPatch, path, body, out)
+}

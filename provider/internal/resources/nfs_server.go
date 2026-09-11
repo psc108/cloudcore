@@ -345,9 +345,9 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 	var stateShares []nfsShareModel
 	resp.Diagnostics.Append(state.Shares.ElementsAs(ctx, &stateShares, false)...)
 
-	stateNames := map[string]bool{}
+	stateSharesByName := map[string]nfsShareModel{}
 	for _, s := range stateShares {
-		stateNames[s.Name.ValueString()] = true
+		stateSharesByName[s.Name.ValueString()] = s
 	}
 	planNames := map[string]bool{}
 	for _, s := range planShares {
@@ -357,10 +357,23 @@ func (r *NFSServerResource) Update(ctx context.Context, req resource.UpdateReque
 	nfsID := state.ID.ValueString()
 
 	for _, s := range planShares {
-		if !stateNames[s.Name.ValueString()] {
+		existing, inState := stateSharesByName[s.Name.ValueString()]
+		if !inState {
 			body := map[string]string{"name": s.Name.ValueString(), "clients": s.Clients.ValueString()}
 			if err := r.client.Post(ctx, "/v1/nfs-servers/"+nfsID+"/shares", body, nil); err != nil {
 				resp.Diagnostics.AddError("Add NFS share failed", err.Error())
+			}
+			continue
+		}
+		// Present in both, but a mutable field (currently just
+		// `clients`) changed — F-040 (haFullStack-Findings-Log.md):
+		// there used to be no path for this at all, forcing a full
+		// server replace for something as small as a CIDR change.
+		if existing.Clients.ValueString() != s.Clients.ValueString() {
+			body := map[string]string{"clients": s.Clients.ValueString()}
+			path := fmt.Sprintf("/v1/nfs-servers/%s/shares/%s", nfsID, s.Name.ValueString())
+			if err := r.client.Patch(ctx, path, body, nil); err != nil {
+				resp.Diagnostics.AddError("Update NFS share failed", err.Error())
 			}
 		}
 	}
