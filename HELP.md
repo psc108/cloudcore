@@ -31,6 +31,8 @@ Four panels show live rows for each resource type. Click any row to open a **det
 ### Detail Modal
 Shows all key fields for the selected resource. Click **Open in full view →** to navigate to the full section for that resource type.
 
+Opening an **instance's** detail modal also shows a live-updating **Console** panel — the last 300 lines of its serial console output (boot messages, cloud-init package installs, systemd unit start/stop lines), refreshed every 3 seconds while the modal is open. Useful for watching install progress on a newly-created instance in real time, or for seeing exactly where a stuck/failed boot got to. Uncheck **Auto-scroll** to read back through earlier output without it jumping to the bottom on every refresh. Not available until the instance has written at least one line of console output.
+
 ### Refresh
 Click **↻ Refresh** to reload immediately. The last refresh time is shown below the heading.
 
@@ -465,6 +467,7 @@ Authorization: Bearer dev-token
 | GET | `/v1/instances` | List instances |
 | POST | `/v1/instances` | Launch instance (async, returns 202) |
 | GET | `/v1/instances/{id}` | Get instance |
+| GET | `/v1/instances/{id}/console?lines=N` | Get the last N lines (default 200) of serial console output — 404 if none written yet |
 | PUT | `/v1/instances/{id}` | Update instance |
 | DELETE | `/v1/instances/{id}` | Terminate instance |
 | POST | `/v1/instances/{id}/users` | Add user |

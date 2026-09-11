@@ -771,6 +771,15 @@
     <button class="close-btn" onclick="closeDetailModal()">&#x2715;</button>
     <h2 id="detail-title"></h2>
     <div class="detail-kv" id="detail-kv"></div>
+    <div id="detail-console-panel" style="display:none;margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h3 style="font-size:13px;color:var(--text-muted);font-weight:600">Console (live)</h3>
+        <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="detail-console-autoscroll" checked style="cursor:pointer"> Auto-scroll
+        </label>
+      </div>
+      <pre id="detail-console-pre" class="bm-log-pre" style="max-height:320px">Loading&hellip;</pre>
+    </div>
     <div class="detail-goto">
       <button class="btn btn-primary" id="detail-goto-btn">Open in full view &rarr;</button>
     </div>
