@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v1.7 | 10 September 2026 | Paul Scott
+v1.8 | 11 September 2026 | Paul Scott
 
 ---
 
@@ -348,11 +348,18 @@ against a single trusted root, and — critically — enables automated
 short-lived certificate issuance and rotation instead of manual, easily-
 forgotten renewal.
 
-> **Rotation —** target a maximum certificate lifetime of 90 days for
-> internal service certificates, issued and renewed automatically (step-ca's
-> ACME support, or a scheduled job calling the CA API). Manually generated
-> 365-day certs, as in the previous draft, have no forcing function to ever
-> get rotated or revoked.
+> **Rotation — corrected against a real install** (`haFullStack-LLD.md`
+> §5.1): internal service certificates should be short-lived and
+> continuously auto-renewed, not rotated on a long fixed schedule.
+> Confirmed directly against `step-ca`: its own default provisioner caps
+> certificate duration at **24 hours**, not the 90 days this section
+> previously specified — that's the tool's actual design philosophy, not
+> an arbitrary limit to configure around. `step-cli` ships a built-in
+> `step ca renew --daemon` mode that handles continuous renewal on its
+> own; no custom rotation script or scheduled job is needed. Manually
+> generated 365-day certs, as in the original draft, have no forcing
+> function to ever get rotated or revoked — the 24h default is the
+> opposite failure mode, deliberately so.
 
 ### 4.2 NGINX SSL Termination
 
@@ -835,3 +842,4 @@ journalctl -u keepalived -f
 | v1.5 | 2026-09-10 | Paul Scott | §7 corrected after Phase 3.A's failure-mode test 2 (`haFullStack-Findings-Log.md` F-027): shared Fernet key material, not memcached, is what enables cross-node token validation — memcached's real role is caching validation results and revocation state. Confirmed directly: a token issued by one Keystone node validated successfully on the other with that first node fully stopped, zero memcached involvement. |
 | v1.6 | 2026-09-10 | Paul Scott | §6.3 corrected (`haFullStack-Findings-Log.md` F-029): the documented `rabbitmqctl set_policy` quorum-queue command only works on RabbitMQ 3.11+ — the version actually available via Ubuntu 22.04's distro package (3.9.27) rejects `queue-type` as a policy key outright. Added the declaration-time `x-queue-type` form as the version-independent alternative, found building Phase 4.A. |
 | v1.7 | 2026-09-10 | Paul Scott | §10's RabbitMQ 2-node-failure row corrected after Phase 4.A's failure-mode test 2 (F-031): the below-quorum protection itself is real and works exactly as documented (unlike MySQL's F-021) — publishes are genuinely rejected, not silently accepted — but recovery is automatic once the missing nodes simply restart, not the manual `rabbitmqctl force_boot` procedure previously documented (that command is for a different, permanent-partition scenario). |
+| v1.8 | 2026-09-11 | Paul Scott | §4.1's rotation guidance corrected before Phase 5 (TLS/mTLS) was built, not after — confirmed directly against a real `step-ca` install that its actual default certificate lifetime is 24h with built-in continuous auto-renewal (`step ca renew --daemon`), not the 90-day scheduled-rotation model previously documented. |

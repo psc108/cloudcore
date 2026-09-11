@@ -30,6 +30,7 @@ environment/tool combination as each phase completes.
 | 2 | Database Tier — MySQL High Availability | LLD §2 | Phase 2.A complete (2A-01–2A-17) — see [findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier); On-Prem/AWS and Ansible still pending |
 | 3 | Identity Tier — Keystone | LLD §3 | Phase 3.A complete (3A-01–3A-15) — see [findings](haFullStack-Findings-Log.md#phase-3a--lab-opentofu-identity-tier); On-Prem/AWS and Ansible still pending |
 | 4 | Message Broker Tier — RabbitMQ | LLD §4 | Phase 4.A complete (4A-01–4A-15) — see [findings](haFullStack-Findings-Log.md#phase-4a--lab-opentofu-message-broker-tier); On-Prem/AWS and Ansible still pending |
+| 5 | TLS and Mutual TLS — Cross-Cutting | LLD §5 | Draft, under review |
 
 ---
 
@@ -296,6 +297,67 @@ Not started — same as 4.E.
 
 ---
 
+## Phase 5 — TLS and Mutual TLS (Cross-Cutting)
+
+Extends `examples/ha-frontend-lb/` further in place — same growing
+stack, but touching every existing tier's cloud-init rather than adding
+one new tier of its own. Per the build order above, only Phase 5.A is
+worked now.
+
+### Phase 5.A — Lab, OpenTofu
+
+| ID | Task | Description | Status |
+|---|---|---|---|
+| 5A-01 | Security group | `ca` (8443 from the bridge subnet, plus SSH), per LLD §5.3.1 | Pending |
+| 5A-02 | CA provisioner password generation | `random_id` (24 bytes) in Terraform, reusing the `hashicorp/random` provider dependency already added for Keystone/RabbitMQ — identical password injected into the CA node and every certificate-requesting node's `user_data` | Pending |
+| 5A-03 | CA node cloud-init | `step-ca`/`step-cli` from pinned GitHub-release `.deb`s, `step ca init` non-interactively, systemd service, per LLD §5.3.1 | Pending |
+| 5A-04 | MySQL TLS + mTLS | `require_secure_transport = ON`, `REQUIRE X509` on every client account, server cert from the CA, per LLD §5.3.1 | Pending |
+| 5A-05 | ProxySQL TLS | Client-facing (`mysql-have_ssl`) and backend (`mysql-ssl_p2s`) TLS, per LLD §5.3.1 | Pending |
+| 5A-06 | Keystone TLS + mTLS | Apache `mod_ssl` termination plus `SSLVerifyClient require` for NGINX's own client cert, per LLD §5.3.1 | Pending |
+| 5A-07 | RabbitMQ TLS + mTLS | New `5671` TLS listener (`verify_peer`, `fail_if_no_peer_cert`), alongside the existing plain `5672`, per LLD §5.3.1 | Pending |
+| 5A-08 | NGINX TLS termination + mTLS client | Client-facing `443` (`http{}`) using a CA-issued VIP cert; `stream{}`'s `proxy_ssl on` making NGINX an mTLS client to MySQL/ProxySQL/RabbitMQ, per LLD §5.3.1 | Pending |
+| 5A-09 | `tofu apply` | Stand up for real against this CloudCore instance | Pending |
+| 5A-10 | Verify CA + cert issuance | Every tier holds a valid, CA-issued certificate; `step ca renew --daemon` running on each | Pending |
+| 5A-11 | Verification test 1 — plain connections rejected | LLD §5.3.1a test 1: a non-TLS connection attempt to each service is cleanly rejected | Pending |
+| 5A-12 | Verification test 2 — TLS without client cert rejected | LLD §5.3.1a test 2: mTLS, not just server-side TLS, is actually enforced | Pending |
+| 5A-13 | Verification test 3 — valid mTLS succeeds | LLD §5.3.1a test 3: the full mesh of trust works end-to-end with a real CA-issued client certificate | Pending |
+| 5A-14 | Verification test 4 — stop the CA node | LLD §5.3.1a test 4: resolves the claimed blast radius — new issuance/renewal fails, but already-established TLS connections using already-issued certs keep working | Pending |
+| 5A-15 | Verification test 5 — auto-renewal | LLD §5.3.1a test 5: a certificate close to its 24h expiry is replaced by `step ca renew --daemon` before it would have lapsed, no connection-rejecting gap | Pending |
+| 5A-16 | Teardown | `tofu destroy`; confirm no orphaned resources | Pending |
+
+**Verification for this phase (Lab/OpenTofu):** 5A-10 through 5A-15 are
+the real test. Unlike every prior tier, this phase's verification isn't
+about node failure/quorum — it's about proving TLS/mTLS is actually
+*enforced*, not just configured, and that the CA's own claimed blast
+radius (issuance/renewal only, not already-established connections)
+holds up in practice.
+
+### Phase 5.B — Lab, Ansible
+
+Not started — waits for every phase's `.A` to be done first, per the
+build order above.
+
+### Phase 5.C — On-Prem, OpenTofu
+
+Not started — architecturally identical to Lab, or an existing
+enterprise CA if the estate has one, per LLD §5.4.
+
+### Phase 5.D — On-Prem, Ansible
+
+Not started — same as 5.C, via Ansible.
+
+### Phase 5.E — AWS, OpenTofu
+
+Not started — split across ACM (public, client-facing) and ACM Private
+CA (internal mTLS, if adopted) per LLD §5.5, not a single drop-in the
+way RabbitMQ's Amazon MQ was.
+
+### Phase 5.F — AWS, Ansible
+
+Not started — same as 5.E.
+
+---
+
 ## Cross-Cutting Notes
 
 - Every phase's `.A` (Lab) sub-path is the only one that can be built and
@@ -332,3 +394,4 @@ Not started — same as 4.E.
 | v0.12 | 2026-09-10 | Paul Scott | F-028 corrected — not a CloudCore platform gap. Direct follow-up investigation (a clean isolated service showing zero restart gap, then real Keystone/Apache reproducing the exact symptom with precise timing) traced it to `mod_wsgi`'s own ~30s worker-startup latency. Nothing to change in CloudCore. |
 | v0.13 | 2026-09-10 | Paul Scott | Fourth phase — Phase 4, Message Broker Tier (RabbitMQ), all six environment/tool paths. Test 4A-11 carries the same weight 2A-13/3A-11 did — it's what actually resolves whether `haFullStack.md` §10's 2-node-loss recovery claim is correct. Draft, not yet built. |
 | v0.14 | 2026-09-10 | Paul Scott | Phase 4.A built and failure-tested for real (4A-01–4A-15 done). Two real bugs found and fixed beyond the two flagged before building: NGINX's `stream{}` missing the management-API proxy entry (F-029-adjacent oversight), and the status script's own unfixed queue backlog after test 2 (F-030). Test 4A-11 gave this project's most nuanced quorum-behavior result yet — real protection (unlike MySQL, F-021) but a wrong documented recovery procedure (F-031), `haFullStack.md` §10 corrected. Clean teardown, 28 resources, no orphans. Phase 4.A fully complete. |
+| v0.15 | 2026-09-11 | Paul Scott | Fifth phase — Phase 5, TLS and Mutual TLS (cross-cutting across every existing tier, not a new tier of its own), all six environment/tool paths. `haFullStack.md` §4.1's 90-day certificate claim corrected before building, based on a real `step-ca` install (24h default, built-in auto-renewal) — and MySQL's own TLS/mTLS enforcement verified directly before drafting this phase. Draft, not yet built. |

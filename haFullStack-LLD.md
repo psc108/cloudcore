@@ -24,6 +24,7 @@ slice below rather than repeated inline. Sections currently complete:
 | 2 | Database Tier — MySQL High Availability | Lab/OpenTofu built, failure-tested, and F-021 fixed ([findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier)); On-Prem/AWS and Ansible still pending |
 | 3 | Identity Tier — Keystone | Built and failure-tested (Lab) |
 | 4 | Message Broker Tier — RabbitMQ | Built and failure-tested (Lab) |
+| 5 | TLS and Mutual TLS — Cross-Cutting | Draft, under review |
 
 Per the session plan: every slice gets built and verified on Lab/OpenTofu
 first, as one growing stack (not independent per-slice templates) —
@@ -1457,6 +1458,265 @@ before committing, not assumed settled here.
 
 ---
 
+## 5. TLS and Mutual TLS — Cross-Cutting
+
+### 5.1 Scope
+
+**In scope for this section:** a private CA (`step-ca`), TLS termination
+on NGINX for client-facing traffic, and TLS + mutual TLS on **every
+east-west path that already exists** across the four tiers already
+built: NGINX↔MySQL/ProxySQL, NGINX↔Keystone, NGINX↔RabbitMQ.
+
+**Genuinely broader than `haFullStack.md` §4.3 currently documents, by
+design:** §4.3 is written backend-centric (backend→Keystone,
+backend→ProxySQL, backend→RabbitMQ) — but the backend tier doesn't exist
+yet (deferred in every slice's own scope note so far, §1.1/§2/§3/§4).
+Rather than wait for a tier that isn't built, this slice covers the
+*mesh of trust* the user actually asked for — every service that already
+exists trusting every other service it talks to — and specifies
+backend's own mTLS requirements precisely enough to build against once
+that tier arrives, without needing this section revisited then.
+
+**A claim in `haFullStack.md` §4.1 to correct before building, not
+carry forward:** it specifies 90-day certificate lifetimes. Confirmed
+directly against a real `step-ca` install: its default provisioner caps
+certificate duration at **24 hours**, not 90 days — and this isn't an
+arbitrary limitation to work around, it's the tool's own design
+philosophy (short-lived certs, continuously auto-renewed, rather than
+infrequent manual/scripted rotation). `step-cli` ships a built-in
+`step ca renew --daemon` mode for exactly this. §4.1 gets corrected to
+match rather than configuring the CA to fight its own design.
+
+**A deliberate Lab simplification, flagged as an open item, not silently
+assumed:** the CA runs as a **single node**, not HA — matching this
+project's existing "flag it explicitly" convention for Lab-only
+simplifications (static Fernet/Erlang-cookie secrets with no rotation,
+`admin:admin` credentials). Worth being precise about the actual blast
+radius: a CA outage blocks new certificate *issuance and renewal* —
+confirmed directly, this gets its own failure-mode test (§5.3.1a test 4)
+— but does **not** break TLS connections already using already-issued,
+still-valid certificates, since certificate validation is purely
+cryptographic (chain-of-trust against the root, which every node already
+holds a copy of) and needs no live connection back to the CA at
+handshake time.
+
+**Explicitly out of scope, deferred to later work:** RabbitMQ's own
+inter-node Erlang distribution TLS (`inet_tls_dist`) — a materially
+different, lower-level mechanism than the AMQP-protocol TLS this slice
+covers, protecting RabbitMQ's own clustering traffic rather than client
+connections to it; MySQL Group Replication's own recovery-channel TLS
+(`group_replication_recovery_use_ssl`) — same reasoning, inter-MySQL-node
+traffic rather than client connections; full backend↔X mTLS build-out,
+which needs the backend tier to exist first (§1.1) — this section
+specifies its requirements precisely so building it later doesn't need
+this slice revisited.
+
+### 5.2 Environment and Tooling Matrix
+
+| Environment | Mechanism | Why | IaC Tool(s) |
+|---|---|---|---|
+| **Lab** (this platform) | Self-hosted `step-ca`, one node | Validates the actual mesh-of-trust architecture against real infrastructure; `step-ca`/`step-cli` aren't in Ubuntu's default repos, installed via pinned GitHub-release `.deb`s, same pattern as ProxySQL | OpenTofu or Ansible |
+| **On-Prem** | Same `step-ca`, **or** an existing enterprise PKI/CA if the estate already has one | Same open question as every other tier — confirm before assuming this design is needed wholesale (§5.7) | OpenTofu or Ansible |
+| **AWS** | **Split, not a single substitute** — ACM for the client-facing VIP certificate (ALB/NLB integration is native and free); ACM Private CA for internal mTLS issuance is the closer analog to `step-ca`, but is a distinct, metered AWS service, not a drop-in — confirm before assuming it's the right call over self-hosting `step-ca` on EC2 too | OpenTofu against `aws_acm_certificate` (public) and, if adopted, `aws_acmpca_certificate_authority` (private) |
+
+### 5.3 Lab Environment (CloudCore)
+
+#### 5.3.1 Design
+
+- Reuses the existing VPC/subnet — one growing stack, not a new one.
+- New security group `ca`: ingress `8443` (the CA's own HTTPS API, both
+  for issuance/renewal calls and for `roots.pem` bootstrap fetches) from
+  the bridge subnet (every tier needs to reach it), plus SSH.
+- One new instance (`ca-a`) via `modules/compute` — genuinely a single
+  node this time, not a bootstrap/joiner or active-active pair, per
+  §5.1's flagged simplification.
+- `step-ca`/`step-cli` installed from pinned, checksum-verified GitHub
+  release `.deb`s (`smallstep/certificates` and `smallstep/cli`), same
+  pattern as ProxySQL's own install script.
+- `step ca init` run non-interactively at boot (`--dns`, `--address
+  :8443`, `--provisioner admin`, `--password-file`, `--deployment-type
+  standalone`) — confirmed directly to produce a working root+intermediate
+  chain and a running CA server in well under a minute.
+- **A second shared-secret problem, same pattern as Keystone's Fernet
+  keys and RabbitMQ's Erlang cookie:** every node that needs to request
+  or renew a certificate needs the CA's **provisioner password** to
+  authenticate to it. Generated once via Terraform's `random` provider,
+  injected identically into the CA node's own `user_data` (to init the
+  provisioner) and every certificate-requesting node's `user_data` (to
+  use it) — no runtime coordination needed, same mechanism as before.
+- Every other node's cloud-init: wait/retry loop for the CA to become
+  reachable (same explicit-wait pattern as every prior tier's bootstrap
+  dependency, not relying on Terraform apply order) — `step ca health`
+  against the CA's known IP — then `step ca certificate <SAN>
+  <cert-path> <key-path> --ca-url https://<ca-ip>:8443 --root
+  <fetched-root> --provisioner admin --provisioner-password-file
+  <path>`, requesting a cert with **both** the node's CloudCore-DNS
+  hostname (`instances.cloudcore.internal`, now genuinely load-bearing
+  for the first time since F-022 — the second use case §4.7's open item
+  was waiting for) and its own private IP as SANs, since existing
+  inter-tier connections in this stack are IP-based (Terraform bakes
+  `private_ips_by_key` into upstream configs directly) while `VERIFY_IDENTITY`-level
+  client verification needs the SAN to match however the client actually
+  connects — to be proven and corrected against real infrastructure like
+  every other illustrative design in this document.
+- `step ca renew --daemon` runs as a systemd service on every
+  certificate-holding node, handling the 24h renewal cycle automatically
+  — no custom renewal script needed, this is a real, built-in `step-cli`
+  mode.
+- **NGINX**: TLS termination for client-facing traffic (443, `http{}`
+  context) using a CA-issued cert for the VIP's own identity, replacing
+  §1's plain-HTTP `:80` listener (kept alongside, not removed, for the
+  Lab's own `mysql-status.html`/`keystone-status.html`/
+  `rabbitmq-status.html` pages, which don't need TLS for their own
+  purpose). Separately, `stream{}`'s `proxy_ssl on` (plus
+  `proxy_ssl_certificate`/`proxy_ssl_certificate_key`/
+  `proxy_ssl_trusted_certificate`) makes NGINX itself an mTLS **client**
+  to MySQL/ProxySQL/RabbitMQ's TLS listeners — to be proven against real
+  infrastructure, since `stream{}`'s TLS-client directives haven't been
+  exercised in this project before.
+- **MySQL**: `require_secure_transport = ON` plus `REQUIRE X509` on
+  every client account (`appuser`, `keystone`, `proxysql_monitor`),
+  server cert from the CA — confirmed directly end-to-end on a real
+  install: a plain-TCP connection is cleanly rejected
+  (`ERROR 3159`), a TLS connection without a client cert is rejected
+  (`Access denied`), a TLS connection with a CA-issued client cert
+  succeeds.
+- **ProxySQL**: TLS on its own client-facing listener
+  (`mysql-have_ssl`) and TLS to its MySQL backends
+  (`mysql-ssl_p2s`) — illustrative, to be proven against real
+  infrastructure like every other tier's first real build.
+- **Keystone**: Apache `mod_ssl` termination (`SSLEngine on`,
+  `SSLCertificateFile`/`SSLCertificateKeyFile` from the CA-issued cert),
+  plus `SSLVerifyClient require`/`SSLCACertificateFile` to require NGINX's
+  own client certificate on the mTLS path — illustrative, to be proven.
+- **RabbitMQ**: a TLS listener (`5671`, alongside the existing plain
+  `5672`) via `ssl_options` in `rabbitmq.conf`
+  (`verify = verify_peer`, `fail_if_no_peer_cert = true`,
+  `cacertfile`/`certfile`/`keyfile` from the CA) — illustrative, to be
+  proven.
+- Frontend's three status scripts keep using plain HTTP to their own
+  tiers for now (deliberately not switched to mTLS in this pass) —
+  switching them is a mechanical follow-up once the core mesh is proven,
+  not bundled into this already-large slice.
+
+#### 5.3.1a Verification Matrix
+
+Different shape from every prior tier's test — this isn't about node
+failure/quorum, it's about certificate issuance, enforcement, and
+lifecycle:
+
+| # | Test | What it proves | Expected result |
+|---|---|---|---|
+| 1 | Attempt a plain (non-TLS) connection to each service | TLS is actually enforced, not just available | Cleanly rejected — `require_secure_transport`-equivalent error, not a silent plaintext fallback |
+| 2 | Attempt a TLS connection with no client certificate | mTLS (not just server-side TLS) is actually enforced | Cleanly rejected — `REQUIRE X509`-equivalent error |
+| 3 | Attempt a TLS connection with a valid, CA-issued client certificate | The full mesh of trust actually works end-to-end | Succeeds, with the expected cipher/protocol reported |
+| 4 | Stop the CA node, attempt a fresh certificate request; separately, confirm an already-open TLS connection using an already-issued cert keeps working | §5.1's claimed blast radius — CA is a SPOF for issuance/renewal only, not for using already-issued certs — resolved rather than assumed | New issuance fails; existing, already-issued certs keep authenticating successfully until they naturally expire |
+| 5 | Force a short-lived test certificate close to expiry, confirm `step ca renew --daemon` actually replaces it before the service starts rejecting connections | The 24h auto-renewal claim (§5.1) works in practice, not just in theory | Certificate file's own expiry timestamp advances well before the old one would have lapsed, with no connection-rejecting gap |
+
+### 5.3.2 OpenTofu Implementation
+
+Illustrative — to be proven and corrected against real infrastructure,
+same process as every prior slice:
+
+```hcl
+# examples/ha-frontend-lb/main.tf  (additions — illustrative)
+
+resource "random_id" "ca_provisioner_password" { byte_length = 24 }
+
+module "security_groups" {
+  # ...existing groups, plus:
+  security_groups = {
+    # ...
+    ca = {
+      description = "step-ca — issuance/renewal API from the bridge subnet, plus SSH"
+      ingress_rules = {
+        api = { ip_protocol = "tcp", from_port = 8443, to_port = 8443, cidr = local.bridge_cidr }
+        ssh = { ip_protocol = "tcp", from_port = 22,   to_port = 22,   cidr = var.admin_cidr }
+      }
+      egress_rules = { all = { ip_protocol = "-1", cidr = "0.0.0.0/0" } }
+    }
+  }
+}
+
+module "ca" {
+  source    = "../../modules/compute"
+  project   = var.project
+  environment = var.environment
+  owner     = var.owner
+  instances = local.ca_instance
+}
+```
+
+Every other tier's `user_data` gains the CA's known IP
+(`module.ca.private_ips_by_key`) and the shared provisioner password —
+the same "one new dependency threaded through every existing template"
+shape as the Erlang cookie was for RabbitMQ, just wider (every tier this
+time, not just one).
+
+### 5.3.3 Ansible Implementation
+
+Same provisioning shape as every prior slice — `security_group` ×1,
+`instance` ×1 for the CA via the existing `instance` module. The CA
+provisioner password has no direct Ansible-native equivalent to
+Terraform's `random_id`, same substitution used for Keystone's Fernet
+keys and RabbitMQ's Erlang cookie — `openssl rand -base64 24` run once
+via a local task, passed to every relevant `instance` task.
+
+---
+
+### 5.4 On-Prem Environment
+
+Architecturally identical to Lab — same single `step-ca` node (or,
+per §5.2, an existing enterprise CA if the estate has one — a real
+decision, not assumed either way here) — with real DNS available for
+SANs rather than Lab's `.internal` guest-DNS substitute.
+
+### 5.5 AWS Environment
+
+**Split across two services, not one substitute** — ACM for the
+client-facing VIP/ALB certificate (native, free, auto-renewing — a
+strictly better fit than self-hosting `step-ca` for this one piece);
+ACM Private CA for internal mTLS issuance if adopted (the closer analog
+to `step-ca`, but a distinct, metered, per-certificate-billed service —
+confirm the cost model before assuming it over self-hosting `step-ca`
+on EC2 too, which remains a legitimate option here unlike RabbitMQ's
+AWS story where a managed drop-in clearly wins).
+
+### 5.6 Cross-Environment Consistency
+
+| Aspect | Lab | On-Prem | AWS |
+|---|---|---|---|
+| CA | Self-hosted `step-ca`, single node | Same, or existing enterprise CA | ACM (public) + ACM Private CA (internal, if adopted) or self-hosted `step-ca` |
+| Certificate lifetime | 24h, auto-renewed (`step ca renew --daemon`) | Same, or the enterprise CA's own policy | ACM-managed (public); policy-dependent (private) |
+| Certificate SAN identity | CloudCore DNS hostname + private IP, both | Real DNS hostname | AWS-internal DNS / IP, service-dependent |
+| Client routing | Direct TLS/mTLS to each tier's own listener | Same | Same, or ALB-terminated for the public edge |
+
+### 5.7 Open Items Before Implementation
+
+- **CA high availability** — deliberately single-node for Lab (§5.1);
+  a real deployment needs to decide between a clustered `step-ca` (needs
+  a shared DB backend, real added complexity) or accepting the
+  issuance/renewal SPOF with a generous certificate lifetime as
+  mitigation. Not resolved generically here.
+- **RabbitMQ inter-node and MySQL GR recovery-channel TLS** —
+  deliberately deferred (§5.1); both are real, separate mechanisms worth
+  a future pass, not bundled into this already-broad slice.
+- **Backend↔X mTLS** — fully specified by this section's design (every
+  tier already requires client certs; a backend service would request
+  its own from the same CA using the same mechanism) but can't be built
+  or tested for real until the backend tier itself exists (§1.1).
+- **On-prem/AWS existing PKI** — as with every other tier, confirm
+  whether a given estate already has a trusted internal CA before
+  assuming this design is needed wholesale.
+- **ProxySQL and Keystone TLS specifics** — marked illustrative in
+  §5.3.1 pending their first real build; ProxySQL's `mysql-ssl_p2s`/
+  frontend TLS variables and Apache's `mod_ssl`/`SSLVerifyClient`
+  directives haven't been exercised in this project before, unlike
+  MySQL's TLS support, which was verified directly before this section
+  was written.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -1473,3 +1733,4 @@ before committing, not assumed settled here.
 | v0.10 | 2026-09-10 | Paul Scott | F-028 corrected: not a CloudCore platform gap — confirmed via direct reproduction to be `mod_wsgi`'s own ~30s worker-startup latency, an application characteristic, not a bug. §3.3.1a and §3.7 updated to match; nothing to change in CloudCore for this. |
 | v0.11 | 2026-09-10 | Paul Scott | Fourth slice — §4, Message Broker Tier (RabbitMQ): 3-node quorum-queue cluster (seed + 2 joiners, mirroring MySQL's bootstrap/joiner split, not Keystone's homogeneous pair), shared Erlang cookie via the same pattern as Keystone's Fernet keys, IP-based node naming by deliberate choice over the newly-available guest DNS. Flagged `haFullStack.md` §10's 2-node-loss claim as unverified (likely to repeat F-021's pattern) rather than carrying it forward — gets its own failure-mode test. Draft, not yet built. |
 | v0.12 | 2026-09-10 | Paul Scott | §4 built and failure-tested for real. Two real deploy bugs found and fixed (F-029, F-030) beyond the two already flagged before building. §4.3.1a's test matrix filled in with actual results — test 2 gave the most nuanced result of any tier's "verify, don't assume" test so far: RabbitMQ's below-quorum protection is genuinely real (unlike MySQL's F-021), but the specific recovery procedure `haFullStack.md` §10 documented was wrong — recovery is fully automatic (F-031). Both other open items (recovery claim, restart auto-rejoin) resolved. `haFullStack.md` §10 corrected to v1.7. |
+| v0.13 | 2026-09-11 | Paul Scott | Fifth slice — §5, TLS and Mutual TLS (cross-cutting, not a new tier): a single-node `step-ca`, TLS/mTLS across every east-west path already built (NGINX↔MySQL/ProxySQL/Keystone/RabbitMQ), client-facing TLS termination on NGINX, backend↔X mTLS fully specified but deferred until that tier exists. Corrected `haFullStack.md` §4.1's 90-day certificate claim before building, not after — confirmed directly against a real `step-ca` install that its actual default is 24h with built-in auto-renewal, not a limitation to work around. Full MySQL TLS + mTLS enforcement (reject-without-cert, accept-with-cert) verified directly before drafting this section. Draft, not yet built. |
