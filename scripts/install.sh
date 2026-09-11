@@ -110,6 +110,15 @@ if [[ -f "$(python3 -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')/
 fi
 pip3 "${PIP_ARGS[@]}"
 
+# pip --user installs console scripts (ansible-galaxy, ansible-playbook,
+# etc. — this project has no apt-installed ansible of its own, only the
+# pip one from requirements.txt) into ~/.local/bin. A login shell picks
+# this up automatically via .profile on the *next* login, but this
+# script's own currently-running shell won't see it without this —
+# needed immediately below, or "ansible-galaxy: command not found" on a
+# machine where ~/.local/bin has never existed before now.
+export PATH="$HOME/.local/bin:$PATH"
+
 # ---------------------------------------------------------------------------
 # 5. Ansible collection
 # ---------------------------------------------------------------------------
