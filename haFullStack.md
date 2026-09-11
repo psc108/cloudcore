@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v1.8 | 11 September 2026 | Paul Scott
+v2.1 | 11 September 2026 | Paul Scott
 
 ---
 
@@ -352,14 +352,30 @@ forgotten renewal.
 > §5.1): internal service certificates should be short-lived and
 > continuously auto-renewed, not rotated on a long fixed schedule.
 > Confirmed directly against `step-ca`: its own default provisioner caps
-> certificate duration at **24 hours**, not the 90 days this section
-> previously specified — that's the tool's actual design philosophy, not
-> an arbitrary limit to configure around. `step-cli` ships a built-in
-> `step ca renew --daemon` mode that handles continuous renewal on its
-> own; no custom rotation script or scheduled job is needed. Manually
-> generated 365-day certs, as in the original draft, have no forcing
-> function to ever get rotated or revoked — the 24h default is the
-> opposite failure mode, deliberately so.
+> certificate duration at **24 hours** when `authority.claims` is left
+> unset — that's an unconfigured default, not a hard ceiling; the claim
+> is a plain config value (`maxTLSCertDuration`/`defaultTLSCertDuration`
+> in `ca.json`). `step-cli` ships a built-in `step ca renew --daemon`
+> mode that handles continuous renewal on its own regardless of what the
+> duration is set to; no custom rotation script or scheduled job is
+> needed either way.
+>
+> **Lab lifetime — deliberately set to 365 days, not left at the 24h
+> default** (`haFullStack-LLD.md` §5.1): the original concern with a
+> long fixed lifetime was certs with genuinely no forcing function to
+> ever renew or get revoked (`step ca sign`-once, by hand, then
+> forgotten) — that concern doesn't apply here, since `step ca renew
+> --daemon` still runs continuously on every node regardless of the
+> configured duration; it renews at a fixed *fraction* of whatever
+> validity window the CA hands out (2/3 by default), not a fixed
+> absolute interval, so the auto-renewal safety net is identical at 365
+> days to what it was at 24h — only the window itself is longer. 365
+> days was chosen specifically to mirror what a real On-Prem/AWS PKI
+> would realistically issue (enterprise/ACM-style 1-year service certs
+> are the norm, not 24h ones) — the Lab's own CA now reflects that
+> instead of an artifact of `step-ca`'s unconfigured default, so results
+> from this slice carry forward to those environments without a lifetime
+> mismatch to account for.
 
 ### 4.2 NGINX SSL Termination
 
@@ -773,9 +789,139 @@ phase is independently verifiable before moving to the next.
 
 ---
 
-## 13. Troubleshooting Guide
+## 13. Local Package Repository
 
-### 13.1 Common Issues
+Rebuilding this stack's ~15-17 nodes concurrently repeatedly exhausted
+the path to the public Ubuntu mirror — no IPv6 route on the network
+these nodes ran on, plus ordinary mirror-side congestion under that much
+simultaneous load, producing multi-tens-of-minutes stalls that looked
+like real application bugs until traced back to network congestion
+(`haFullStack-Findings-Log.md` F-037). A real, indexed local apt
+repository — not a caching proxy — plus a pinned-artifact cache, both
+served over NFS, removes that dependency entirely: every node installs
+from local infrastructure, and a genuinely bandwidth-constrained or
+air-gapped on-prem estate has no live mirror to fall back to anyway, so
+a caching proxy (which still needs to reach the real mirror on every
+cache miss) isn't an equivalent substitute.
+
+**Deliberately a "download once" cache, refreshed on a deliberate
+cadence** — only when the base OS release increments (a new snapshot
+from scratch, not a patch to the existing one) or when a specific
+security patch is needed for a package this stack actually installs —
+not a continuously-reconciled mirror. This matches how a real
+bandwidth-constrained on-prem environment would actually be operated.
+
+```bash
+# Repo build (run once, on a throwaway builder host with real internet
+# access — not part of the steady-state stack):
+apt-get install --download-only --reinstall -y <every package this
+  stack's tiers install, transitive dependencies resolved automatically>
+dpkg-scanpackages . /dev/null > Packages
+gzip -9c Packages > Packages.gz
+# Flat-repo layout — no dists/ hierarchy needed for a small custom repo.
+
+# Every consuming node, early in boot (before any package install):
+mount -t nfs <nfs-server-ip>:/exports/apt-repo /mnt/apt-repo
+echo "deb [trusted=yes] file:///mnt/apt-repo/ ./" > /etc/apt/sources.list
+```
+
+Two non-obvious things worth knowing before relying on this pattern —
+both found building it for real, not assumed (`haFullStack-Findings-Log.md`
+F-042/F-043):
+
+- Cloud-init's own `apt_configure` module silently **regenerates**
+  `/etc/apt/sources.list` from its own default-mirror template partway
+  through boot, discarding any earlier rewrite with no error anywhere —
+  `apt_preserve_sources_list: true` (a cloud-config key) is required to
+  stop it.
+- Even the small bootstrap step needed to install an NFS client in the
+  first place (nothing can mount the repo before an NFS client exists to
+  mount it with) has to be scoped to a minimal source list (just the
+  one component the bootstrap package lives in), not a plain
+  `apt-get update` against the full default sources — the full index
+  set is tens of megabytes per node, enough on its own to reproduce the
+  same mirror congestion this whole pattern exists to eliminate.
+
+---
+
+## 14. Host-Level Package Repository (Platform Capability)
+
+§13's NFS-served repo is real and works, but it's per-project (built and
+torn down with `ha-frontend-lb` itself) and needs a `bootcmd`-time NFS
+mount plus two cloud-init workarounds (`apt_preserve_sources_list`, a
+minimal-sourcelist bootstrap step) just to survive cloud-init's own
+`apt_configure` module. Reflecting on that after the slice shipped, the
+same "download once, rebuild on a deliberate cadence" idea generalizes
+better as a **host-level, always-available** service: one repo, served
+over plain HTTP from the CloudCore host's own bridge gateway address
+(`192.168.100.1:8090` — reachable from every guest on `ccbr0` regardless
+of VPC/subnet, the same address every bridged instance already uses as
+its default gateway), populated once and shared by every project and
+every example template, not rebuilt per-project.
+
+Served by a systemd-managed process (`cloudcore-repo.service`,
+`Restart=always`, `WantedBy=multi-user.target` — survives a host reboot
+without anyone re-running anything, unlike a manually-relaunched
+background process such as `dnsmasq`'s), not tracked as a CloudCore
+resource at all — no VPC, no instance, nothing in the API or database —
+so no project's `tofu destroy` can ever touch it. A guest consumes it
+with a plain `sources.list.d` drop-in:
+
+```
+deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+```
+
+No mount, no `bootcmd`, no fighting `apt_configure` — the whole class of
+problem §13's F-042/F-043 needed workarounds for doesn't exist here,
+since nothing is rewriting `/etc/apt/sources.list` itself.
+
+**Coverage extended beyond `ha-frontend-lb`** to every example template
+that installs packages: `ghidra-workstation` (temurin-21-jdk, from
+Adoptium's own third-party apt repo — trusted and mirrored alongside
+Ubuntu's own archive, not just Ubuntu-archive packages), `wifi-sniffer`
+(the full `kismet` metapackage plus its ~20 `kismet-capture-*`
+sub-packages, from kismetwireless.net's own third-party repo, same
+treatment), and `full-stack`/`kiwix-library`/`load-balanced-web`'s
+simpler needs. Pinned, checksum-verified release artifacts are cached
+alongside the apt repo, fetched directly on the host with no builder VM
+needed (`step-ca`, `step-cli`, `proxysql`, the Ghidra release zip, the
+`kiwix-tools` tarball, and — since a `kiwix-library` build "normally
+requires" it every time and re-fetching 2.2GB per build is exactly the
+bandwidth cost this exists to eliminate — the Wikipedia ZIM dataset
+itself). `wifi-sniffer`'s RTL8812AU driver is compiled from source via
+DKMS on the guest, per-kernel, so it isn't pre-buildable as a binary —
+but its GitHub source clone is still pre-cached as a tarball, removing
+the live `git clone` from every guest's boot.
+
+Built by `api/build-package-repo.sh`, run by hand on the same cadence as
+§13 (an OS release bump, or a security patch to an installed package) —
+never automatically. It uses CloudCore's own REST API directly (not
+Terraform — a one-shot, non-declarative operation outside any project's
+lifecycle) to launch a throwaway builder instance matching the target
+release, install everything with `apt-get install --download-only`,
+index it with `dpkg-scanpackages`, pull the result back over `scp`, and
+tear the builder down again.
+
+**Protected from accidental removal**: `api/teardown-network.sh` refuses
+to delete the `ccbr0` bridge while `cloudcore-repo.service` is active
+(deleting the bridge doesn't stop the service, it just silently cuts
+every guest off from it) unless run with `--force`. `api/package-repo/`
+itself is host-local, gitignored build output — expensive to regenerate
+(15-20+ minutes, several GB of real downloads) — with one file,
+`api/package-repo/README.md`, deliberately carved out as a tracked
+exception so a `git clean -xfd` leaves a marker behind explaining what
+used to be there, instead of silently emptying the directory.
+
+**Not yet consumed by `ha-frontend-lb` itself** — the Lab stack described
+in §13 still builds and uses its own per-project NFS repo; retrofitting
+it onto this host-level service instead (retiring `module.nfs` and
+`module.repo_builder` entirely) is a real, available next step, not yet
+done. New templates going forward should prefer this host-level service
+over building another per-project NFS repo from scratch.
+
+## 15. Troubleshooting Guide
+
+### 15.1 Common Issues
 
 | Issue | Possible Cause | Solution |
 |---|---|---|
@@ -785,7 +931,7 @@ phase is independently verifiable before moving to the next.
 | Quorum queue has no leader | Fewer than (N/2)+1 RabbitMQ nodes reachable | `rabbitmqctl cluster_status`; restore quorum |
 | mTLS handshake failure | Client cert not signed by the trusted internal CA, or expired | Verify chain with `openssl verify -CAfile ca.crt client.crt` |
 
-### 13.2 Debugging Commands
+### 15.2 Debugging Commands
 
 ```bash
 nginx -t                                   # validate NGINX config
@@ -807,9 +953,9 @@ journalctl -u keepalived -f
 
 ---
 
-## 14. Appendix
+## 16. Appendix
 
-### 14.1 Glossary
+### 16.1 Glossary
 
 | Term | Definition |
 |---|---|
@@ -822,7 +968,7 @@ journalctl -u keepalived -f
 | AMQP | Advanced Message Queuing Protocol |
 | Quorum queue | RabbitMQ's Raft-based replicated queue type; the modern HA default |
 
-### 14.2 References
+### 16.2 References
 
 - NGINX stream module documentation — nginx.org/en/docs/stream/ngx_stream_core_module.html
 - MySQL Group Replication — dev.mysql.com/doc/refman/8.0/en/group-replication.html
@@ -830,7 +976,7 @@ journalctl -u keepalived -f
 - RabbitMQ Quorum Queues — rabbitmq.com/quorum-queues.html
 - Keepalived unicast configuration — keepalived.readthedocs.io
 
-### 14.3 Document History
+### 16.3 Document History
 
 | Version | Date | Author | Change Summary |
 |---|---|---|---|
@@ -843,3 +989,6 @@ journalctl -u keepalived -f
 | v1.6 | 2026-09-10 | Paul Scott | §6.3 corrected (`haFullStack-Findings-Log.md` F-029): the documented `rabbitmqctl set_policy` quorum-queue command only works on RabbitMQ 3.11+ — the version actually available via Ubuntu 22.04's distro package (3.9.27) rejects `queue-type` as a policy key outright. Added the declaration-time `x-queue-type` form as the version-independent alternative, found building Phase 4.A. |
 | v1.7 | 2026-09-10 | Paul Scott | §10's RabbitMQ 2-node-failure row corrected after Phase 4.A's failure-mode test 2 (F-031): the below-quorum protection itself is real and works exactly as documented (unlike MySQL's F-021) — publishes are genuinely rejected, not silently accepted — but recovery is automatic once the missing nodes simply restart, not the manual `rabbitmqctl force_boot` procedure previously documented (that command is for a different, permanent-partition scenario). |
 | v1.8 | 2026-09-11 | Paul Scott | §4.1's rotation guidance corrected before Phase 5 (TLS/mTLS) was built, not after — confirmed directly against a real `step-ca` install that its actual default certificate lifetime is 24h with built-in continuous auto-renewal (`step ca renew --daemon`), not the 90-day scheduled-rotation model previously documented. |
+| v1.9 | 2026-09-11 | Paul Scott | §4.1 updated: the Lab's CA now deliberately issues 365-day certificates instead of `step-ca`'s unconfigured 24h default, to mirror the lifetimes a real On-Prem/AWS PKI would realistically use ahead of building those slices — `authority.claims` in `ca.json` set explicitly rather than left unconfigured. `step ca renew --daemon` still runs unchanged on every node (it renews at a fixed fraction of validity, not a fixed interval), so the auto-renewal safety net that motivated the original 24h correction is unaffected. Also fixed a `step ca renew` positional-argument-order bug and a `require_secure_transport=ON` / Group Replication recovery-channel interaction found rebuilding the stack (haFullStack-Findings-Log.md). |
+| v2.0 | 2026-09-11 | Paul Scott | New §13, Local Package Repository — a real local apt repo + pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion first observed as F-037. Built and verified for real directly (not drafted first): confirmed a rebuilt tier went from 22+ minutes stuck on a single bootstrap step to under 6 minutes for its entire package-install phase. Sections renumbered: old §13 Troubleshooting Guide → §14, old §14 Appendix → §15 (no other section in this document referenced either by number, confirmed before renumbering). |
+| v2.1 | 2026-09-11 | Paul Scott | New §14, Host-Level Package Repository (Platform Capability) — §13's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, extended to cover every example template's package/artifact needs (not just `ha-frontend-lb`), including two third-party apt repos (Adoptium, Kismet) and pinned release artifacts. Protected against accidental removal: `teardown-network.sh` now refuses to delete the bridge it's bound to without `--force`, and its build output survives a `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself — §13's NFS repo remains that stack's actual mechanism until a retrofit is done. Sections renumbered: old §14 Troubleshooting Guide → §15, old §15 Appendix → §16. |

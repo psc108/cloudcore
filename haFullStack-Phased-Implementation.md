@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.1 (in progress — built section by section) | Paul Scott
+v0.18 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -308,29 +308,33 @@ worked now.
 
 | ID | Task | Description | Status |
 |---|---|---|---|
-| 5A-01 | Security group | `ca` (8443 from the bridge subnet, plus SSH), per LLD §5.3.1 | Pending |
-| 5A-02 | CA provisioner password generation | `random_id` (24 bytes) in Terraform, reusing the `hashicorp/random` provider dependency already added for Keystone/RabbitMQ — identical password injected into the CA node and every certificate-requesting node's `user_data` | Pending |
-| 5A-03 | CA node cloud-init | `step-ca`/`step-cli` from pinned GitHub-release `.deb`s, `step ca init` non-interactively, systemd service, per LLD §5.3.1 | Pending |
-| 5A-04 | MySQL TLS + mTLS | `require_secure_transport = ON`, `REQUIRE X509` on every client account, server cert from the CA, per LLD §5.3.1 | Pending |
-| 5A-05 | ProxySQL TLS | Client-facing (`mysql-have_ssl`) and backend (`mysql-ssl_p2s`) TLS, per LLD §5.3.1 | Pending |
-| 5A-06 | Keystone TLS + mTLS | Apache `mod_ssl` termination plus `SSLVerifyClient require` for NGINX's own client cert, per LLD §5.3.1 | Pending |
-| 5A-07 | RabbitMQ TLS + mTLS | New `5671` TLS listener (`verify_peer`, `fail_if_no_peer_cert`), alongside the existing plain `5672`, per LLD §5.3.1 | Pending |
-| 5A-08 | NGINX TLS termination + mTLS client | Client-facing `443` (`http{}`) using a CA-issued VIP cert; `stream{}`'s `proxy_ssl on` making NGINX an mTLS client to MySQL/ProxySQL/RabbitMQ, per LLD §5.3.1 | Pending |
-| 5A-09 | `tofu apply` | Stand up for real against this CloudCore instance | Pending |
-| 5A-10 | Verify CA + cert issuance | Every tier holds a valid, CA-issued certificate; `step ca renew --daemon` running on each | Pending |
-| 5A-11 | Verification test 1 — plain connections rejected | LLD §5.3.1a test 1: a non-TLS connection attempt to each service is cleanly rejected | Pending |
-| 5A-12 | Verification test 2 — TLS without client cert rejected | LLD §5.3.1a test 2: mTLS, not just server-side TLS, is actually enforced | Pending |
-| 5A-13 | Verification test 3 — valid mTLS succeeds | LLD §5.3.1a test 3: the full mesh of trust works end-to-end with a real CA-issued client certificate | Pending |
+| 5A-01 | Security group | `ca` (8443 + 8080 from the bridge subnet, plus SSH), per LLD §5.3.1 | Done |
+| 5A-02 | CA provisioner password generation | `random_id` (24 bytes) in Terraform, reusing the `hashicorp/random` provider dependency already added for Keystone/RabbitMQ — identical password injected into the CA node and every certificate-requesting node's `user_data` | Done |
+| 5A-03 | CA node cloud-init | `step-ca`/`step-cli` from pinned GitHub-release `.deb`s, `step ca init` non-interactively, systemd service, per LLD §5.3.1 | Done |
+| 5A-04 | MySQL TLS + mTLS | `REQUIRE X509` on every client account, server cert from the CA — **not** `require_secure_transport = ON` as originally planned, found to break Group Replication's own internal recovery channel (F-034/F-035) | Done |
+| 5A-05 | ProxySQL TLS | Client-facing (fixed datadir paths, no config variable — F-032) and backend (`mysql-ssl_p2s_*`, per-row `use_ssl`) TLS | Done |
+| 5A-06 | Keystone TLS + mTLS | Apache `mod_ssl` termination on new port `5443` (plain `:5000` kept alongside) plus `SSLVerifyClient require` for a client cert, full-chain `SSLCACertificateFile` | Done |
+| 5A-07 | RabbitMQ TLS + mTLS | New `5671` TLS listener (`verify_peer`, `fail_if_no_peer_cert`), alongside the existing plain `5672`; full-chain `cacertfile` required (F-033) | Done |
+| 5A-08 | NGINX TLS termination | Client-facing `443` (`http{}`) using a CA-issued VIP cert — **no** `proxy_ssl_*` needed anywhere, `stream{}` stays a transparent passthrough for MySQL/ProxySQL/RabbitMQ/Keystone alike (corrected from the original design) | Done |
+| 5A-09 | `tofu apply` | Stand up for real against this CloudCore instance | Done |
+| 5A-10 | Verify CA + cert issuance | Every tier holds a valid, CA-issued certificate; `step ca renew --daemon` running on each | Done |
+| 5A-11 | Verification test 1 — plain connections rejected | LLD §5.3.1a test 1: a non-TLS connection attempt to each service is cleanly rejected | Done |
+| 5A-12 | Verification test 2 — TLS without client cert rejected | LLD §5.3.1a test 2: mTLS, not just server-side TLS, is actually enforced | Done |
+| 5A-13 | Verification test 3 — valid mTLS succeeds | LLD §5.3.1a test 3: the full mesh of trust works end-to-end with a real CA-issued client certificate — proven continuously via the new `tls-status.html` dashboard page, not just a one-off manual check | Done |
 | 5A-14 | Verification test 4 — stop the CA node | LLD §5.3.1a test 4: resolves the claimed blast radius — new issuance/renewal fails, but already-established TLS connections using already-issued certs keep working | Pending |
-| 5A-15 | Verification test 5 — auto-renewal | LLD §5.3.1a test 5: a certificate close to its 24h expiry is replaced by `step ca renew --daemon` before it would have lapsed, no connection-rejecting gap | Pending |
+| 5A-15 | Verification test 5 — auto-renewal | LLD §5.3.1a test 5: a certificate close to expiry is replaced by `step ca renew --daemon` before it would have lapsed, no connection-rejecting gap | Pending |
 | 5A-16 | Teardown | `tofu destroy`; confirm no orphaned resources | Pending |
+| 5A-17 | CA certificate lifetime — 365 days | `authority.claims` set explicitly in `ca.json` to `8760h` (not left at `step-ca`'s unconfigured 24h default), to mirror realistic On-Prem/AWS PKI lifetimes ahead of building those slices. Found `step ca renew` doesn't adopt a changed CA default on its own (F-038) — every already-issued cert force-reissued, not renewed, to pick it up | Done |
+| 5A-18 | Frontend TLS trust status page | New `tls-status.py`, 4th status script — its own CA-issued client identity, real TLS/mTLS handshakes against NGINX/RabbitMQ/Keystone (raw socket) and MySQL/ProxySQL (in-band, via the `mysql` CLI), continuously proving the mesh of trust rather than just configuring it | Done |
+| 5A-19 | Merge NGINX/Keepalived into the ProxySQL tier | Retired the standalone `nginx` module/SG; co-located on the ProxySQL nodes instead — two fewer nodes, resolved the resulting `stream{}` self-reference via `127.0.0.1` (more correct than the pre-merge 2-node list, not just simpler — see LLD §5.1). Frontend deliberately left as its own tier (it's the mesh's independent observer) | Done |
 
 **Verification for this phase (Lab/OpenTofu):** 5A-10 through 5A-15 are
 the real test. Unlike every prior tier, this phase's verification isn't
 about node failure/quorum — it's about proving TLS/mTLS is actually
 *enforced*, not just configured, and that the CA's own claimed blast
 radius (issuance/renewal only, not already-established connections)
-holds up in practice.
+holds up in practice. Tests 1-3 done; tests 4-5 (5A-14/5A-15) and
+teardown (5A-16) remain open.
 
 ### Phase 5.B — Lab, Ansible
 
@@ -355,6 +359,65 @@ way RabbitMQ's Amazon MQ was.
 ### Phase 5.F — AWS, Ansible
 
 Not started — same as 5.E.
+
+---
+
+## Phase 6 — Local Package Repository (Cross-Cutting)
+
+Extends `examples/ha-frontend-lb/` once more — a local apt repo +
+pinned-artifact cache served over NFS, so a full rebuild installs from
+local infrastructure instead of hammering the real Ubuntu mirror
+(motivated directly by F-037). Built directly rather than drafted first
+this time — small and mechanical enough that correcting the design
+against real findings was faster than an illustrative pass ahead of it.
+Per the build order above, only Phase 6.A is worked now.
+
+### Phase 6.A — Lab, OpenTofu
+
+| ID | Task | Description | Status |
+|---|---|---|---|
+| 6A-01 | NFS server | `cloudcore_nfs_server` with two exports (`apt-repo`, `artifacts`), `clients` set explicitly to the bridge CIDR — the module's own `"vpc"` default resolves to the wrong subnet for this Lab (F-041), per LLD §6.3 | Done |
+| 6A-02 | Provider fix — NFS server `private_ip` race | `cloudcore_nfs_server`'s `Create()` only waited for `status == "running"`, not also a populated `private_ip`, unlike the `Instance` resource (F-039) — fixed in `provider/internal/resources/nfs_server.go`, rebuilt, redeployed | Done |
+| 6A-03 | One-shot repo-builder instance | `modules/compute`, gated behind `var.build_repo_now` (default `true`) — not a permanent tier, per LLD §6.1/§6.3 | Done |
+| 6A-04 | Repo build | `apt-get install --download-only` for the full package closure (11 top-level packages, 260 with transitive deps) + `dpkg-scanpackages` flat-repo index + `MANIFEST.txt` | Done |
+| 6A-05 | Artifact cache build | `step-ca`/`step-cli`/`proxysql` `.deb`s fetched once (was 12+ redundant per-node fetches), checksum-verified, `MANIFEST.txt` | Done |
+| 6A-06 | Retrofit all six tiers' cloud-init | `bootcmd` mounts both NFS exports, waits for `.build-complete`, rewrites `sources.list` to the local repo; `apt_preserve_sources_list: true` required — cloud-init's own apt module otherwise silently discards the rewrite with no error (F-042) | Done |
+| 6A-07 | Scope the bootstrap `nfs-common` install | A plain `apt-get update` before the repo is even mounted still refreshed the *full* default index set (~40MB), reproducing F-037's congestion at an earlier boot step (F-043) — scoped to a minimal `jammy main`-only source instead | Done |
+| 6A-08 | `tofu apply` | Stand up for real against this CloudCore instance — full 15-17 node rebuild | Done |
+| 6A-09 | Verify repo correctness | `apt-get install --simulate` against the finished repo resolves every package this stack needs, including Keystone's full OpenStack dependency chain, entirely from `file:///mnt/apt-repo` | Done |
+| 6A-10 | Verify speed improvement | Same tier (Keystone), before/after comparison: 22+ minutes stuck on the bootstrap step alone before the fix, under 6 minutes for the *entire* package-install phase after | Done |
+| 6A-11 | Verify application-level health | All four dashboard checks (`mysql-status`, `keystone-status`, `rabbitmq-status`, `tls-status`) confirmed `OK`, twice in a row, on the finished rebuild | Done |
+| 6A-12 | Teardown | `tofu destroy`; confirm no orphaned resources | Pending |
+
+**Verification for this phase (Lab/OpenTofu):** 6A-09 through 6A-11 are
+the real test — not node failure/quorum like most tiers, but "does the
+repo actually work, and does it actually solve the problem it was built
+for." Both confirmed directly rather than assumed.
+
+### Phase 6.B — Lab, Ansible
+
+Not started — waits for every phase's `.A` to be done first, per the
+build order above.
+
+### Phase 6.C — On-Prem, OpenTofu
+
+Not started — same overall pattern, but the repo-build process itself
+needs to use whatever mirror tooling (`aptly`, `apt-mirror`, or an
+existing internal mirror) is actually available in that estate, not a
+port of the Lab's own `dpkg-scanpackages` approach, per LLD §6.4.
+
+### Phase 6.D — On-Prem, Ansible
+
+Not started — same as 6.C, via Ansible.
+
+### Phase 6.E — AWS, OpenTofu
+
+Not started — an S3-backed apt mirror (e.g. via `aptly`) or a VPC-local
+mirror instance, per LLD §6.2.
+
+### Phase 6.F — AWS, Ansible
+
+Not started — same as 6.E.
 
 ---
 
@@ -395,3 +458,6 @@ Not started — same as 5.E.
 | v0.13 | 2026-09-10 | Paul Scott | Fourth phase — Phase 4, Message Broker Tier (RabbitMQ), all six environment/tool paths. Test 4A-11 carries the same weight 2A-13/3A-11 did — it's what actually resolves whether `haFullStack.md` §10's 2-node-loss recovery claim is correct. Draft, not yet built. |
 | v0.14 | 2026-09-10 | Paul Scott | Phase 4.A built and failure-tested for real (4A-01–4A-15 done). Two real bugs found and fixed beyond the two flagged before building: NGINX's `stream{}` missing the management-API proxy entry (F-029-adjacent oversight), and the status script's own unfixed queue backlog after test 2 (F-030). Test 4A-11 gave this project's most nuanced quorum-behavior result yet — real protection (unlike MySQL, F-021) but a wrong documented recovery procedure (F-031), `haFullStack.md` §10 corrected. Clean teardown, 28 resources, no orphans. Phase 4.A fully complete. |
 | v0.15 | 2026-09-11 | Paul Scott | Fifth phase — Phase 5, TLS and Mutual TLS (cross-cutting across every existing tier, not a new tier of its own), all six environment/tool paths. `haFullStack.md` §4.1's 90-day certificate claim corrected before building, based on a real `step-ca` install (24h default, built-in auto-renewal) — and MySQL's own TLS/mTLS enforcement verified directly before drafting this phase. Draft, not yet built. |
+| v0.16 | 2026-09-11 | Paul Scott | Phase 5.A built and verified for real (5A-01–5A-13, 5A-17, 5A-18 done; 5A-14/5A-15/5A-16 remain open). Two design corrections found building rather than assumed from the draft: `require_secure_transport=ON` broke Group Replication's own recovery channel, replaced with per-account `REQUIRE X509` only (F-034/F-035); NGINX's `stream{}` needed no `proxy_ssl_*` directives at all, every one of its TLS backends stays a transparent passthrough (corrects the original design). Two pre-build research findings (ProxySQL's fixed cert paths, F-032; RabbitMQ's full-chain `cacertfile` requirement, F-033) and a `step ca renew` argument-order bug across all six TLS tiers (F-036) also found and fixed. New `tls-status.py` (5A-18) continuously proves the mesh of trust on the frontend dashboard. Separately: CA leaf-cert lifetime deliberately raised to 365 days (5A-17) to mirror realistic On-Prem/AWS PKI, with `step ca renew`'s renewal-doesn't-adopt-a-changed-default behavior found and worked around (F-038); and the standalone `nginx` tier retired, merged into ProxySQL (5A-19) for two fewer nodes. |
+| v0.17 | 2026-09-11 | Paul Scott | Sixth phase — Phase 6, Local Package Repository (cross-cutting), built directly and verified for real rather than drafted first (6A-01–6A-11 done, 6A-12 teardown remains open). A local `dpkg-scanpackages`-indexed apt repo (260 packages) plus a pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion behind F-037. Six real findings along the way — a genuine provider bug (`cloudcore_nfs_server`'s `Create()` never waited for a populated `private_ip`, F-039, fixed and redeployed), the NFS module's `"vpc"` share default resolving to the wrong CIDR for this Lab (F-041), cloud-init's own apt module silently discarding the NFS-repo `sources.list` rewrite (F-042), the bootstrap `nfs-common` install itself still hammering the full mirror (F-043), a `-target`-scoped apply leaving stale baked-in IPs on a dependent tier (F-044), and a recurring `nginx`+`keepalived` dpkg quirk unrelated to any of the above (F-045). Verified directly: the same tier (Keystone) went from 22+ minutes stuck on the bootstrap step alone to under 6 minutes for its entire package-install phase after the fix. All four dashboard checks confirmed `OK` twice in a row on the finished rebuild. |
+| v0.18 | 2026-09-11 | Paul Scott | Platform Hardening review (post-Phase 6.A), same pattern as the reviews after Phase 1.A/2.A: reflecting on Phase 6.A surfaced a better generalization than fixing it in place — the per-project NFS repo became a host-level, always-available `cloudcore-repo` service (`haFullStack.md` §14, `haFullStack-LLD.md` §7), not tracked as a CloudCore resource so no project's `tofu destroy` can reach it, and extended to cover every example template's package/artifact needs rather than just `ha-frontend-lb`'s. F-040 resolved for real with a generic backend `PATCH` endpoint plus provider support. Two new findings from live verification, `write_files`/`owner:` in `api/nfs.py` (F-046, same class as F-026) and a genuinely stalled apt-mirror connection recovered by killing the stuck apt worker (F-047). Protected against accidental removal (`teardown-network.sh` requires `--force` while active; build output survives `git clean -xfd`). Not yet consumed by `ha-frontend-lb` itself — Phase 6.A's own NFS repo remains that stack's actual mechanism; no Phase 6 task-table changes, matching how Platform Hardening reviews are tracked (Findings Log + Document History only, not phase/task rows). |

@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.3 | Paul Scott
+v0.15 | Paul Scott
 
 ---
 
@@ -1093,6 +1093,238 @@ produce a genuine quorum queue via the management API's own type field.
 
 ---
 
+## Phase 5.A — Lab, OpenTofu (TLS and Mutual TLS)
+
+### F-032 — ProxySQL's client-facing TLS certs have no config variable — fixed datadir paths instead
+
+**Where:** `proxysql-cloud-init.yaml.tftpl`'s `setup-proxysql-tls.sh`, researched directly against a real ProxySQL install before writing the template.
+
+**Symptom/question:** `haFullStack-LLD.md` §5.3.1's original draft assumed a config variable would exist for ProxySQL's own client-facing certificate (mirroring `mysql-ssl_p2s_ca`/`_cert`/`_key`, the *backend* proxy-to-server TLS variables, which do exist and were confirmed working). `SHOW VARIABLES LIKE 'mysql-ssl%'` against a real install showed only the `_p2s_*` set — nothing for the client-facing side.
+
+**Root cause:** ProxySQL auto-generates a self-signed client-facing cert at first start and expects any replacement to simply overwrite the files at fixed paths: `/var/lib/proxysql/proxysql-{ca,cert,key}.pem`. There's no config-driven way to point it elsewhere.
+
+**Fix:** `setup-proxysql-tls.sh` stops ProxySQL, copies the CA-issued cert/key/ca files directly to those fixed paths, `chown proxysql:proxysql`, restarts. Confirmed via `mysql --ssl-mode=REQUIRED` against ProxySQL's client port showing the new (not the auto-generated) cipher/cert.
+
+**Verified by:** Direct reproduction against a real ProxySQL install before the template was written, then reconfirmed against the actual deployed Lab stack.
+
+---
+
+### F-033 — RabbitMQ's TLS `cacertfile` must be the full chain, not just the root
+
+**Where:** `rabbitmq-cloud-init.yaml.tftpl`'s `setup-rabbitmq-tls.sh`.
+
+**Symptom:** A client presenting a CA-issued cert (intermediate-signed) to RabbitMQ's TLS listener (5671, `ssl_options.verify = verify_peer`) was rejected with an "unknown ca" TLS alert (`openssl s_client ... SSL alert number 48`), even though the client itself sent its own certificate correctly and OpenSSL-style chain-building normally lets a server verify against just the root.
+
+**Root cause:** Confirmed directly — Erlang's SSL stack (which RabbitMQ's TLS listener runs on) doesn't reconstruct the chain from what the client presents the way OpenSSL does; it needs the full chain (root + intermediate) available locally in `ssl_options.cacertfile`. With only the root cert in that file, verification failed even though the client's own certificate chain was valid and complete.
+
+**Fix:** `setup-rabbitmq-tls.sh` concatenates root + intermediate into a single `ca.crt` (`cat root_ca.crt intermediate_ca.crt > ca.crt`) and points `ssl_options.cacertfile` at that, not the root alone. The same full-chain requirement was applied to Keystone's `SSLCACertificateFile` proactively once this was found, rather than waiting to hit the identical symptom there too.
+
+**Verified by:** Direct reproduction — probed with `openssl s_client` presenting a client cert, reproduced the "unknown ca" rejection with a root-only `cacertfile`, then confirmed a clean handshake (`Verify return code: 0 (ok)`) after switching to the concatenated chain.
+
+---
+
+### F-034 — Restarting mysqld to apply TLS config after Group Replication has already started kills GR, with nothing to restart it
+
+**Where:** `mysql-cloud-init.yaml.tftpl`'s `runcmd` ordering — `setup-group-replication.sh` then `setup-mysql-tls.sh` (the ordering the earlier ALTER-USER-needs-existing-accounts fix had settled on).
+
+**Symptom:** All three MySQL nodes showed `MEMBER_STATE: OFFLINE` shortly after a fresh apply, despite `setup-group-replication.sh`'s own log showing the bootstrap node successfully starting Group Replication, self-electing primary, and running normally — for about 24 seconds.
+
+**Root cause:** `setup-mysql-tls.sh` (the *next* script in `runcmd`) writes `zz-tls.cnf` and calls `systemctl restart mysql` to apply it — which kills the mysqld process Group Replication is running inside, exactly like stopping the server. Nothing in the boot sequence re-issues `START GROUP_REPLICATION` after that restart, so every node — bootstrap and joiners alike, since all three run both scripts in the same order — ends up permanently `OFFLINE`. MySQL error log confirmed it precisely: `'Group membership changed: This member has left the group.'` at almost exactly the timestamp `setup-mysql-tls.sh` would have run.
+
+**Fix:** Split the TLS script into two: `setup-mysql-tls-certs.sh` (cert issuance, `zz-tls.cnf`, the one `systemctl restart mysql` this needs) now runs **before** `setup-group-replication.sh`, so the one restart happens on a not-yet-clustered server; `setup-mysql-tls-accounts.sh` (the bootstrap-only `ALTER USER ... REQUIRE X509` block, no restart) runs **after**, once those accounts exist. `runcmd` order is now: certs → group-replication → accounts.
+
+**Verified by:** Direct reproduction against the real Lab stack (all three nodes stuck `OFFLINE`), then a full rebuild with the corrected ordering — all three nodes reached `ONLINE` with the correct `PRIMARY`/`SECONDARY` roles and stayed there.
+
+---
+
+### F-035 — `require_secure_transport=ON` also blocks Group Replication's own internal recovery channel, which was deliberately left plaintext
+
+**Where:** `mysql-cloud-init.yaml.tftpl`'s `zz-tls.cnf`. Found immediately after fixing F-034 — the restart-ordering fix alone wasn't sufficient; joiners still failed to reach `ONLINE`.
+
+**Symptom:** After F-034's fix, the bootstrap node reached `ONLINE`/`PRIMARY` correctly, but joiners failed to complete distributed recovery: `Replica I/O for channel 'group_replication_recovery': ... Connections using insecure transport are prohibited while --require_secure_transport=ON. Error_code: MY-003159`, followed by `'Fatal error during the incremental recovery process... The server will leave the group.'`
+
+**Root cause:** `require_secure_transport=ON` is a transport-level gate applied before authentication even begins — it rejects *every* plaintext TCP connection to the server, regardless of which account is connecting. That includes Group Replication's own internal recovery/donor channel (the `repl` user), which `haFullStack-LLD.md` §5.1 already scoped as deliberately out of this slice (no cert issued to it, plaintext by design, same reasoning as RabbitMQ's inter-node Erlang distribution TLS). Setting the flag server-wide broke that channel as an unintended side effect of securing the client-facing accounts.
+
+**Fix:** Removed `require_secure_transport = ON` from `zz-tls.cnf` entirely. Client-facing TLS enforcement is unaffected by this — `ALTER USER ... REQUIRE X509` on `appuser`/`keystone`/`proxysql_monitor` (already in place) enforces TLS **per-account**, completely independently of the server-wide flag; a plain connection using any of those three accounts is still cleanly rejected. Only the *unscoped, every-account* enforcement the global flag provided is gone — and that scope was never actually intended to cover `repl` in the first place.
+
+**Verified by:** Direct reproduction (joiners stuck failing recovery with `MY-003159` in the error log), then confirmed all three nodes reach `ONLINE` with the flag removed, and separately reconfirmed `appuser`'s own `REQUIRE X509` still rejects a plain connection and still enforces mTLS on a TLS one.
+
+---
+
+### F-036 — `step ca renew`'s positional arguments must come immediately after the subcommand, and needs `--ca-url`/`--root` explicitly on every non-bootstrapped node
+
+**Where:** Every TLS-enabled tier's `step-renew*.service` unit (`mysql-`, `proxysql-`, `keystone-`, `rabbitmq-`, `nginx-`, `frontend-cloud-init.yaml.tftpl`) — the same bug, copy-pasted across all six.
+
+**Symptom:** `step-renew.service` crash-looping (`systemctl status` showing repeated restarts) with `too many positional arguments were provided in 'step ca renew <crt-file> <key-file>'` in the journal, on every node that had it.
+
+**Root cause:** Two compounding issues, both confirmed directly. First, the unit's `ExecStart` was written as `step ca renew --daemon --force <crt> <key> --exec "..."` — flags before the positional cert/key arguments — but `step ca renew` requires the positional arguments to come immediately after the subcommand, before any flags; reordering to `step ca renew <crt> <key> --daemon --force ...` resolved the parse error. Second, none of these nodes had ever run `step ca bootstrap` (no local `$STEPPATH` trust config), so `step ca renew` had no way to know the CA's own address — it also needs `--ca-url`/`--root` passed explicitly, the same flags the original `step ca certificate` issuance call already used.
+
+**Fix:** All six `step-renew*.service` units corrected to the right argument order, with `--ca-url "https://${ca_ip}:8443"` and `--root <persisted-root-cert-path>` added. A dedicated `root_ca.crt`/`root_ca.pem` copy is now saved alongside each service's own `ca.crt`/`ca.pem` specifically for this — some of those files are the full chain (RabbitMQ, Keystone), and step's own docs don't guarantee `--root` accepts a chain file the same way `cacertfile` does, so a root-only copy is kept separately rather than assumed interchangeable.
+
+**Verified by:** Direct reproduction (`systemctl status step-renew` crash-looping, journal showing the exact parse error) on a real node, then confirmed `systemctl is-active` reports `active` (not crash-looping) after the fix, across all six tiers.
+
+---
+
+### F-037 — Concurrent Lab rebuilds can exhaust the Ubuntu mirror path (no IPv6 route + a flaky mirror IP), and cloud-init marks the boot "done" even when a module genuinely failed
+
+**Where:** Observed rebuilding the full 17-node stack for this slice — not a CloudCore bug, a Lab-environment characteristic worth knowing for any future large concurrent rebuild.
+
+**Symptom:** Several nodes (`frontend-01/02`, `nginx-a/b`, `keystone-02`) silently failed their package installs mid-boot (`cloud-init status` → `error`, `package_update_upgrade_install` failed with apt exit code 100), while `/var/lib/cloud/instance/boot-finished` was still written — meaning a naive `test -f boot-finished` health check (used earlier in this same session to poll rebuild progress) reports a node as done even when it never actually finished setting up.
+
+**Root cause:** This Lab's bridged network (`ccbr0`) has no IPv6 route, but `archive.ubuntu.com` resolves to both IPv6 and IPv4 addresses — every apt attempt burns several seconds failing each unreachable IPv6 candidate before falling through to IPv4, and with ~14 nodes reinstalling concurrently, one or more of the IPv4 mirror addresses itself became temporarily unresponsive, compounding into an outright package-install timeout on the affected nodes. Confirmed directly: `ping 8.8.8.8` succeeded throughout (general connectivity was fine), `curl http://archive.ubuntu.com/` eventually succeeded after trying several addresses, and a plain retry of `apt-get update` a few minutes later succeeded cleanly once the burst of concurrent installs had eased.
+
+**Second trap found recovering from it:** a plain `sudo reboot` does **not** make cloud-init retry a failed module — the "already processed this instance" semaphore in `/var/lib/cloud/instance/` survives a reboot untouched, so a rebooted node just replays the same (failed) outcome instantly rather than reprocessing anything. `sudo cloud-init clean --logs --reboot` is required to actually force a fresh run.
+
+**Not a CloudCore bug** — nothing to fix at the platform or template level; documented as an operational characteristic of this specific Lab network topology (no IPv6 route) combined with concurrent-rebuild load, and as a reminder that `boot-finished` alone isn't sufficient evidence a node's cloud-init actually succeeded — `cloud-init status` (or checking the specific service/file the boot was supposed to produce) is needed too.
+
+---
+
+### F-038 — `step ca renew` preserves the original certificate's requested duration; it does not adopt a changed CA default
+
+**Where:** Found deliberately changing the Lab CA's leaf-cert duration from `step-ca`'s unconfigured 24h default to 365 days (`haFullStack-LLD.md` §5.1, `haFullStack.md` §4.1).
+
+**Symptom/question:** After updating the CA's `authority.claims` (`maxTLSCertDuration`/`defaultTLSCertDuration` to `8760h`) and confirming a **fresh** `step ca certificate` issuance correctly picked up the new 365-day validity, running `step ca renew` against an already-issued (24h-window) certificate produced a renewed cert still only ~24h from expiry — not 365 days out.
+
+**Root cause:** `step ca renew` re-requests a certificate for the *same duration the original certificate had*, not the CA's current default duration, unless `--expires-in` is passed explicitly to override it. A CA-side policy change doesn't propagate to already-issued certificates on their next scheduled renewal — only to certificates issued fresh after the change.
+
+**Fix/consequence:** No template fix needed (this is `step-ca`'s intended renewal semantics, not a bug) — but every node in the running Lab stack needed its certificate **reissued** (`step ca certificate ... --force`, the same command each node's own setup script already uses), not merely renewed, to actually pick up the new 365-day window. Done across all 12 certificate-holding nodes (MySQL ×3, the merged ProxySQL+NGINX pair ×2 — two certs each — Keystone ×2, RabbitMQ ×3, frontend ×2) and confirmed each one's new expiry landed exactly 365 days out.
+
+**Verified by:** Direct reproduction — renewed a cert and observed its expiry stayed at the original ~24h window, then reissued the same cert and observed the new 365-day expiry, isolating the difference to renew-vs-reissue rather than any propagation delay on the CA side.
+
+---
+
+## Phase 6.A — Lab, OpenTofu (Local Package Repository)
+
+### F-039 — `cloudcore_nfs_server`'s Create() only waited for `status == "running"`, not also a populated `private_ip`
+
+**Where:** `provider/internal/resources/nfs_server.go`'s `Create()` polling loop.
+
+**Symptom:** `module.nfs.private_ips_by_key` came back as an empty string in Terraform state after a clean `tofu apply` with no errors — every downstream node depending on it (`local.nfs_ip`) would have tried to `mount -t nfs :/exports/apt-repo`, an obviously-broken empty host.
+
+**Root cause:** For a bridge-mode instance, the backend (`api/nfs.py`'s `create_nfs_server`) marks `status = RUNNING` immediately after the libvirt domain launches — before the guest has actually booted and picked up its DHCP-leased IP. The NFS server resource's own `Create()` polling loop only checked `poll.Status == "running"` before returning; it never also checked `poll.PrivateIP != ""`, unlike the `Instance` resource's own polling loop, which already guards against exactly this same race (confirmed by reading `instance.go` directly: `if poll.Status == "running" && poll.PrivateIP != ""`).
+
+**Fix:** Added the same `&& poll.PrivateIP != ""` condition to `NFSServerResource.Create()`'s polling loop. Rebuilt the provider binary, redeployed it to the dev-override path, and confirmed a fresh `tofu apply` now returns a real IP on the first attempt (previously empty; confirmed correct after the fix without any retry needed).
+
+**Verified by:** Direct reproduction (empty `private_ip` in state after a clean apply), then confirmed the fix by rebuilding the provider and re-creating the resource — real IP populated immediately.
+
+---
+
+### F-040 — No update path exists for an existing NFS share's `clients` field
+
+**Where:** `provider/internal/resources/nfs_server.go`'s `Update()`, and `api/nfs_routes.py`'s `add_share` endpoint.
+
+**Symptom:** Changing an existing share's `clients` value (from `"vpc"` to an explicit CIDR) and re-applying produced `Error: Provider produced inconsistent result after apply` — `.shares[0].clients: was cty.StringVal("192.168.100.0/24"), but now cty.StringVal("vpc")`, i.e. the change silently didn't take.
+
+**Root cause:** The provider's `Update()` only handles shares that are new (present in the plan but not by name in the prior state) or removed (present in state but not the plan) — it has no code path for "a share with this name already exists, but one of its fields changed." The backend's own `POST /v1/nfs-servers/<id>/shares` endpoint matches this: it returns `409 Conflict` if a share with that name already exists at all, with no equivalent `PATCH`/update endpoint.
+
+**Fix/workaround (original):** Not fixed generically at the time — the NFS server had no real data on it yet, so the pragmatic fix was to `-replace` the resource, recreating it with the correct `clients` value baked in from creation (which already threads the field through correctly).
+
+**Fix (generic, added later):** A new `PATCH /v1/nfs-servers/<id>/shares/<name>` backend endpoint (`api/nfs_routes.py`) plus a matching provider `Update()` change — comparing each planned share against the *existing* share by name (not just detecting adds/removes) and calling the new endpoint when a field like `clients` differs — closes this properly. No `-replace` needed any more, including against a server already holding real files.
+
+**Verified by:** Direct reproduction of the inconsistent-result error and the original `-replace` workaround; the generic fix verified separately, live, against a real NFS server with an existing share, confirming an in-place `clients` change now applies and persists correctly.
+
+---
+
+### F-041 — NFS export `clients = "vpc"` resolves to the CloudCore VPC's declared CIDR, not the Lab bridge's real DHCP subnet
+
+**Where:** `main.tf`'s `module "nfs"` share definitions.
+
+**Symptom:** Every node's `mount -t nfs <nfs-ip>:/exports/apt-repo ...` failed with `mount.nfs: access denied by server`, despite the NFS server itself being up and its `/exports` correctly configured according to its own `shares` list.
+
+**Root cause:** The default `clients = "vpc"` share option resolves (per `api/nfs.py`'s `_export_line_raw`) to `vpc.cidr_block` — the CloudCore VPC object's own declared CIDR (`var.cidr_block`, e.g. `10.20.0.0/16`). But every bridged instance in this Lab gets its real address from the bridge's own DHCP pool (`192.168.100.0/24`, `local.bridge_cidr`) instead, regardless of the VPC/subnet CIDR objects — the same mismatch already worked around everywhere else in this stack's security-group rules. The `/etc/exports` ACL was therefore scoped to a subnet no real client ever actually connects from.
+
+**Fix:** Set `clients = local.bridge_cidr` explicitly on both shares instead of leaving the `"vpc"` default. Required recreating the NFS server (see F-040 — this field can't be updated in place once shares already exist) to take effect.
+
+**Verified by:** Direct reproduction of `access denied by server`, then confirmed a clean, working mount immediately after recreating the NFS server with the corrected `clients` value.
+
+---
+
+### F-042 — cloud-init's own `apt_configure` module silently overwrites a `bootcmd`-written `/etc/apt/sources.list`
+
+**Where:** Every TLS-enabled tier's cloud-init template (all six) — the `bootcmd` block added to point apt at the NFS-hosted local repo.
+
+**Symptom:** Every node still installed its packages from the real `archive.ubuntu.com` mirror despite `bootcmd` successfully mounting the NFS repo share and rewriting `/etc/apt/sources.list` to `deb [trusted=yes] file:///mnt/apt-repo/ ./` — confirmed directly: `cat /etc/apt/sources.list` on a running node showed the stock default mirror content, not the rewritten line, with no error anywhere in the log.
+
+**Root cause:** cloud-init ships its own `cc_apt_configure` module, which regenerates `/etc/apt/sources.list` from its own default-mirror template as part of the normal boot sequence — running *after* `bootcmd` but *before* the `packages:` module — silently discarding whatever `bootcmd` had written, with zero indication of the overwrite in any log.
+
+**Fix:** Added `apt_preserve_sources_list: true` as a top-level cloud-config key on all six templates, which stops cloud-init's own apt module from touching `/etc/apt/sources.list` at all, so the `bootcmd` rewrite survives into the `packages:` stage. (Cloud-init's own schema validator flags this key as deprecated as of 22.1, scheduled for removal in 27.1 — but it's still fully functional on this Ubuntu 22.04 image and is the only mechanism available for this cloud-init version.)
+
+**Verified by:** Direct reproduction (`sources.list` showing the stock mirror despite a successful `bootcmd` rewrite), then confirmed `sources.list` correctly showed the NFS-repo line — and a real package install actually sourced from it — after adding the directive.
+
+---
+
+### F-043 — The bootstrap `apt-get update` needed just to install `nfs-common` still pulled the *entire* default sources.list, reproducing F-037's mirror congestion at an earlier point in boot
+
+**Where:** Every tier's `bootcmd` block, the step before mounting the NFS repo (`nfs-common` has to come from the real mirror — nothing can mount the repo before an NFS client exists to mount it with).
+
+**Symptom:** With 15 nodes booting concurrently, several took 20+ minutes (one measured at 27+ minutes and still not finished) on what should have been a near-instant `apt-get update && apt-get install -y nfs-common` — the console log showed it slowly working through the full index set (`main`, `universe`, `multiverse`, `backports`, `security` — ~40MB combined) with multi-minute gaps between individual file fetches.
+
+**Root cause:** A plain `apt-get update` refreshes the index for *every* repo currently in `/etc/apt/sources.list` (still the full stock default at this point in boot, before the NFS-repo rewrite happens later in the same `bootcmd` block) — not just the one component (`main`) that `nfs-common` actually lives in. Fetching ~40MB of index data per node, times 15 concurrent nodes, reproduced the exact same real-mirror congestion this whole slice was built to eliminate (F-037) — just relocated to a step that runs *before* the NFS repo is even mounted, so the repo itself couldn't help.
+
+**Fix:** Scoped the bootstrap `apt-get update`/`install` calls to a minimal, temporary sources file containing only `deb http://archive.ubuntu.com/ubuntu jammy main` (via `-o Dir::Etc::sourcelist=... -o Dir::Etc::sourceparts=-`), rather than the full default list. Confirmed directly: a node recreated with this fix reached the same point in its own boot log (past the entire package-install phase, including Keystone's full OpenStack dependency chain) in under 6 minutes total, versus 22+ minutes stuck on the bootstrap step alone before the fix.
+
+**Verified by:** Direct before/after comparison of console-log timestamps for the same boot stage on two different nodes (one un-fixed, one recreated with the fix) — roughly a 4x-or-greater speedup, and the un-fixed node's own congestion pattern (multi-minute gaps between individual `Get:` lines) disappeared entirely on the fixed node.
+
+---
+
+### F-044 — A `-target`-scoped `tofu apply` left dependent nodes holding stale baked-in IPs from before the targeted resource was replaced
+
+**Where:** The ProxySQL+NGINX tier's own `nginx_keystone_conf`/`nginx_stream_conf` — computed once and baked into that tier's `user_data` at its own apply time, referencing `module.keystone.private_ips_by_key`.
+
+**Symptom:** After replacing just the Keystone tier (`tofu apply -target=module.keystone`) to pick up a template fix, the frontend's `tls-status.html`/`keystone-status.html` pages started failing with `no live upstreams` / `connect() failed (113)` in NGINX's own error log — pointing at Keystone IPs that no longer existed (the *previous* Keystone nodes' addresses, from before the targeted replace).
+
+**Root cause:** `-target` intentionally limits an apply to the named resource (and its dependencies), not resources that merely *depend on* it. ProxySQL+NGINX's own `nginx_keystone_conf` local depends on `module.keystone`'s output, but that tier's `user_data` had already been computed and applied in an *earlier*, separate apply — a later targeted replace of Keystone alone doesn't retroactively recompute or push updated config to nodes that already baked in the old value. This is standard, documented `-target` behavior, not a bug — but an easy trap when a fix is scoped narrowly under time pressure.
+
+**Fix:** A full (non-targeted) `tofu plan`/`apply` correctly recomputed `nginx_keystone_conf` with the current Keystone IPs and force-replaced the ProxySQL+NGINX nodes to pick it up (a `user_data` change is always a forced replacement for this platform's compute instances).
+
+**Verified by:** Direct reproduction of the stale-IP `connect() failed` errors in NGINX's log, then confirmed clean, live upstream IPs and a working `keystone-status`/`tls-status` round-trip after the full reconciliation apply.
+
+---
+
+### F-045 — `nginx`+`keepalived`'s combined package set intermittently leaves `nginx-core` dpkg-unconfigured, unrelated to network congestion
+
+**Where:** The merged ProxySQL+NGINX tier's package install — reproduced three separate times across this slice's rebuilds, including on freshly-recreated nodes with a fully populated, reachable local repo (ruling out F-037/F-043's mirror-congestion explanation).
+
+**Symptom:** `cloud-init status` reports `error`, with `dpkg -l` showing `nginx-core` as `iF` (install-failed, half-configured) and `nginx` as `iU` (unpacked, not configured) — despite every *other* tier (including ones with much larger package sets, like Keystone's full OpenStack dependency chain) completing cleanly every time.
+
+**Root cause:** Not fully root-caused — confirmed this is *not* the earlier network-congestion or conffile-corruption explanations found in F-037 (the local repo is fast and reliable, and `/etc/apt/nginx.conf` was intact each time, not truncated). Appears to be a dpkg trigger-processing quirk specific to this particular package combination (`nginx` + `keepalived` + their shared/overlapping trigger set), independent of install source speed.
+
+**Fix/workaround:** Not eliminated at the template level — but reliably and quickly resolved every time via `apt-get install -f -y -o Dpkg::Options::="--force-confold"`, which cleanly finishes configuring the half-installed packages with no data loss or corruption. Worth a template-level investigation in a future pass (e.g. splitting the `packages:` list into two separate installs, or adding an automatic self-healing `apt-get install -f` to `runcmd`) if it keeps recurring, but not chased further for this slice given the reliable one-line fix.
+
+**Verified by:** Reproduced identically three times (twice on the same original nodes across rebuilds, once more on nodes recreated fresh afterward with the network-congestion fix already in place) — same specific packages (`nginx-core`, `nginx`) every time, same one-line fix working cleanly every time.
+
+---
+
+## Platform Hardening (post-Phase 6.A review) — Host-Level Package Repository
+
+### F-046 — `nfs.py`'s cloud-init `write_files` used `owner: 'ubuntu:ubuntu'` on entries that run before that user is guaranteed to exist, aborting the whole module silently
+
+**Where:** `api/nfs.py`'s `_cloud_init_iso()` — the two `write_files` entries for `/home/ubuntu/.ssh/cloudcore_ed25519` and `.../cloudcore_ed25519.pub`.
+
+**Symptom:** Two consecutive fresh NFS-server builds (during F-039/F-040/F-041's live verification) failed cloud-init with `Unknown user or group: ubuntu` and no SSH key material present on the instance at all — not just the two SSH-key files, since `write_files` aborts the entire module on the first entry that fails, not just that one entry.
+
+**Root cause:** The same class of bug as F-026 — `write_files` runs before the base image's default-user creation is guaranteed complete, so an `owner:` referencing a not-yet-existing user aborts silently. `api/compute.py`'s own `_build_write_files_block` already has an explicit comment establishing "no `owner:` on `write_files`" as house rule for exactly this reason; `api/nfs.py`'s own cloud-init generator was written separately and didn't follow it. A `runcmd` chown step for both files was already present in the same generator — it had simply been unreachable dead code since `write_files` failed first, every time.
+
+**Fix:** Removed `owner: 'ubuntu:ubuntu'` from both `write_files` entries; the pre-existing `runcmd` chown step now actually runs and is reachable.
+
+**Verified by:** Direct reproduction (`Unknown user or group: ubuntu`, no key material present) on 2 of 2 consecutive builds before the fix; confirmed clean on the next build after removing `owner:`.
+
+---
+
+### F-047 — A genuinely stalled (not merely slow) apt-mirror TCP connection during a live `cloudcore-repo` builder run, requiring a manual kill to unstick
+
+**Where:** `api/build-package-repo.sh`'s throwaway builder instance, mid `apt-get update` against `archive.ubuntu.com`.
+
+**Symptom:** The build log stopped advancing entirely for 10+ minutes partway through `apt-get update`'s index fetch, despite an `ESTAB` TCP connection to the mirror IP the whole time — distinct from F-037/F-043's "slow due to real congestion" pattern, where `Get:` lines kept advancing, just slowly. Confirmed genuinely stalled, not just slow, via `/proc/<pid>/io`'s `read_bytes` on the apt `http` method worker process staying byte-for-byte identical across a 20-second window.
+
+**Root cause:** Not root-caused beyond "a real-world mirror-side or path-side TCP stall" — the connection was fully established (no SYN retransmits, no connection-refused) but delivered zero bytes indefinitely. Killing the stuck `apt` method worker process (`sudo kill -9 <pid>`) made `apt-get update` itself error out (`Method http has died unexpectedly!`), which correctly tripped the script's own `set -e` and tore the throwaway build down cleanly via its `cleanup()` trap — no orphaned resources — rather than hanging indefinitely.
+
+**Fix/workaround:** Not something to fix in the script itself (a genuinely external, transient mirror condition) — simply re-running `build-package-repo.sh` from scratch worked on the next attempt, with all previously-completed artifact downloads already skipped via `curl -C -` resume/completion checks, so only the VM-provisioning and apt-install phases had to repeat.
+
+**Verified by:** Direct reproduction (zero `read_bytes` growth over 20s on an `ESTAB` connection), confirmed the kill correctly triggered the existing `cleanup()` trap with no orphaned VPC/SG/subnet left behind, and confirmed a full clean re-run completed successfully (652 packages indexed) immediately after.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -1108,3 +1340,7 @@ produce a genuine quorum queue via the management API's own type field.
 | v0.9 | 2026-09-10 | Paul Scott | F-028 corrected after being deliberately left open — not a CloudCore platform/networking gap at all. Reproduced with a clean isolated service (zero gap) and then with real Keystone/Apache on the same instance (exact symptom reproduced, ~30s gap measured precisely) — the cause is `mod_wsgi`'s own worker-process startup time, not bridge/ARP staleness. Nothing to change in CloudCore for this finding. |
 | v0.10 | 2026-09-10 | Paul Scott | Fourth phase, Message Broker Tier (RabbitMQ) — building 4A-01–4A-07. Found `haFullStack.md` §6.3's documented `set_policy` quorum-queue command doesn't work on the actual available RabbitMQ version (3.9.27, Ubuntu 22.04's distro package) — that policy key was only added in 3.11+ (F-029). Fixed by declaring quorum type at queue-declaration time instead. Cluster-join sequence (seed/joiner, IP-based node naming, remote-status checks) fully validated directly against real throwaway instances before writing the template. |
 | v0.11 | 2026-09-10 | Paul Scott | Phase 4.A built and failure-tested for real (4A-01–4A-14 done). Found and fixed two more bugs along the way: NGINX's `stream{}` block only proxied AMQP, not the management API the status script needs (plain oversight); the status script's own publish/consume check never drained its queue, so one interrupted check broke every future one until fixed (F-030). Failure test 2 (4A-11) gave the most nuanced result yet — unlike MySQL (F-021), RabbitMQ's quorum protection genuinely works as documented, but `haFullStack.md` §10's specific `force_boot` recovery claim is wrong: recovery from a transient below-quorum window is fully automatic once the missing nodes are simply restarted (F-031). `haFullStack.md` §10 corrected. |
+| v0.12 | 2026-09-11 | Paul Scott | Fifth phase, TLS and Mutual TLS, built and verified for real across all four existing tiers (MySQL/ProxySQL, Keystone, RabbitMQ, NGINX) plus a new TLS/mTLS status page on the frontend dashboard. Two gotchas found during pre-build research (ProxySQL's fixed-datadir client cert paths, F-032; RabbitMQ's `cacertfile` needing the full chain not just the root, F-033). Two real, compounding bugs found rebuilding MySQL with TLS — a runcmd-ordering bug where restarting mysqld to apply TLS config after Group Replication had already started killed GR outright with nothing to restart it (F-034), and once fixed, a deeper one underneath it: `require_secure_transport=ON` also blocked GR's own internal recovery channel, which was deliberately left plaintext (F-035). A `step ca renew` argument-order bug crash-looping the renewal daemon on all six TLS-enabled tiers (F-036). A Lab-environment characteristic, not a CloudCore bug, cost real troubleshooting time: concurrent rebuilds exhausting the Ubuntu mirror path (no IPv6 route in this Lab), with cloud-init marking the boot "done" even when a module had failed, and a plain reboot not being sufficient to force cloud-init to retry (F-037). |
+| v0.13 | 2026-09-11 | Paul Scott | The Lab's NGINX/Keepalived LB tier merged into the ProxySQL tier (two fewer nodes; only the node actively holding the VIP ever serves real traffic anyway, so co-locating with ProxySQL cost nothing functionally) — resolved a genuine self-reference (the merged node's own `stream{}` config needing to know its own address) by pointing the MySQL upstream at `127.0.0.1` instead of a 2-node list, which turned out to be more correct than the pre-merge design, not just simpler. `haFullStack.md`/`haFullStack-LLD.md` updated to the new topology. Separately, the Lab CA's leaf-cert lifetime changed from `step-ca`'s unconfigured 24h default to a deliberate 365 days, to mirror realistic On-Prem/AWS PKI lifetimes ahead of building those slices — found along the way that `step ca renew` preserves a certificate's original requested duration rather than adopting a changed CA default, so every already-issued certificate needed reissuing, not just renewing, to actually pick up the new window (F-038). |
+| v0.14 | 2026-09-11 | Paul Scott | Sixth slice — Phase 6.A, a local apt repo + pinned-artifact cache served over NFS, so a full stack rebuild no longer hammers the real Ubuntu mirror (F-037). Built and verified for real, not draft: a real `dpkg-scanpackages`-indexed repo (260 packages, the full closure across every tier) plus the pinned `step-ca`/`step-cli`/`proxysql` `.deb`s, populated once by a gated one-shot builder node. Found and fixed a real provider bug along the way — `cloudcore_nfs_server`'s `Create()` never waited for a populated `private_ip`, only `status == "running"`, the same race the `Instance` resource already guarded against (F-039) — plus five more real findings hit building this for real: no update path for an existing NFS share's `clients` field (F-040), the `"vpc"` share default resolving to the wrong CIDR for this Lab's bridge network (F-041), cloud-init's own apt module silently overwriting the NFS-repo `sources.list` rewrite (F-042), the bootstrap `apt-get update` itself still hammering the full mirror even after the main fix (F-043), a `-target`-scoped apply leaving stale baked-in IPs on a dependent tier (F-044), and a recurring, network-independent `nginx`+`keepalived` dpkg quirk (F-045). All four dashboard checks (MySQL, Keystone, RabbitMQ, TLS) confirmed `OK` twice in a row on the finished rebuild. |
+| v0.15 | 2026-09-11 | Paul Scott | New Platform Hardening review (post-Phase 6.A) — the per-project NFS repo generalized into a host-level, always-available `cloudcore-repo` service, extended to cover every example template (not just `ha-frontend-lb`), including two third-party apt repos (Adoptium, Kismet) and several pinned release artifacts. F-040 resolved for real (a generic backend `PATCH` endpoint plus provider support, replacing the original `-replace`-only workaround). Two new findings from live verification: a `write_files`/`owner:` race in `api/nfs.py`, the same class as F-026 (F-046), and a genuinely stalled — not merely slow — apt-mirror TCP connection hit during a live builder run, recovered by killing the stuck apt method worker (F-047). |
