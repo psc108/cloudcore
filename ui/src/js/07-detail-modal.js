@@ -63,6 +63,11 @@ function _pollDetailConsole() {
   });
 }
 
+function _copyDetailConsole(btn) {
+  const lines = document.getElementById('detail-console-pre').textContent.split('\n');
+  copyText(lines.slice(-100).join('\n'), btn);
+}
+
 function _stopDetailConsolePoll() {
   clearInterval(_detailConsoleTimer);
   _detailConsoleTimer = null;

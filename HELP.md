@@ -31,7 +31,7 @@ Four panels show live rows for each resource type. Click any row to open a **det
 ### Detail Modal
 Shows all key fields for the selected resource. Click **Open in full view →** to navigate to the full section for that resource type.
 
-Opening an **instance's** detail modal also shows a live-updating **Console** panel — the last 300 lines of its serial console output (boot messages, cloud-init package installs, systemd unit start/stop lines), refreshed every 3 seconds while the modal is open. Useful for watching install progress on a newly-created instance in real time, or for seeing exactly where a stuck/failed boot got to. Uncheck **Auto-scroll** to read back through earlier output without it jumping to the bottom on every refresh. Not available until the instance has written at least one line of console output.
+Opening an **instance's** detail modal also shows a live-updating **Console** panel — the last 300 lines of its serial console output (boot messages, cloud-init package installs, systemd unit start/stop lines), refreshed every 3 seconds while the modal is open. Useful for watching install progress on a newly-created instance in real time, or for seeing exactly where a stuck/failed boot got to. Uncheck **Auto-scroll** to read back through earlier output without it jumping to the bottom on every refresh. Drag the panel's bottom-right corner to resize it. Click **Copy last 100 lines** to copy that much of the currently-displayed output to the clipboard. Not available until the instance has written at least one line of console output.
 
 ### Refresh
 Click **↻ Refresh** to reload immediately. The last refresh time is shown below the heading.
