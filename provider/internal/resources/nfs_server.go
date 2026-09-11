@@ -287,7 +287,17 @@ func (r *NFSServerResource) Create(ctx context.Context, req resource.CreateReque
 			return
 		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-		if poll.Status == "running" {
+		// Also require a non-empty PrivateIP, not just "running" — for a
+		// bridge-mode instance the backend marks status running as soon
+		// as the libvirt domain launches, before the guest has actually
+		// booted and picked up its DHCP-leased IP (confirmed directly:
+		// api/nfs.py's create path sets status=RUNNING immediately, and
+		// only backfills private_ip lazily on a later GET once DHCP has
+		// completed). Without this, Create() can return with an
+		// unpopulated private_ip baked into state permanently — the
+		// same race the Instance resource's own poll loop already
+		// guards against.
+		if poll.Status == "running" && poll.PrivateIP != "" {
 			return
 		}
 		if poll.Status == "error" {
