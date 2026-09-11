@@ -95,7 +95,20 @@ fi
 # 4. Python dependencies
 # ---------------------------------------------------------------------------
 echo "==> Installing Python dependencies..."
-pip3 install --user -r "$REPO_DIR/requirements.txt"
+# PEP 668: Ubuntu 23.10+ (confirmed on this host's own noble install,
+# /usr/lib/python3.12/EXTERNALLY-MANAGED) refuses any pip install without
+# --break-system-packages, even with --user. Still fully scoped to --user
+# (~/.local/lib/python3.x/site-packages), not touching any apt/dpkg-owned
+# system package — --break-system-packages is pip's own documented escape
+# hatch for exactly that case. Detected via the marker file itself rather
+# than an Ubuntu-version check: jammy's pip (22.0.2) predates this flag
+# entirely and errors on it as an unrecognized option, so it must only be
+# passed where the marker is actually present.
+PIP_ARGS=(install --user -r "$REPO_DIR/requirements.txt")
+if [[ -f "$(python3 -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')/EXTERNALLY-MANAGED" ]]; then
+    PIP_ARGS=(install --user --break-system-packages -r "$REPO_DIR/requirements.txt")
+fi
+pip3 "${PIP_ARGS[@]}"
 
 # ---------------------------------------------------------------------------
 # 5. Ansible collection
