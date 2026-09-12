@@ -208,7 +208,17 @@ def _build_users_block(users: list, cc_pubkey: str) -> str:
     """Build the cloud-config users: block for additional users."""
     if not users:
         return ""
-    lines = ["users:"]
+    # "- default" is required here: cloud-init's users module normally
+    # creates the image's own default user (ubuntu) implicitly, but a
+    # cloud-config that defines its own users: list REPLACES that implicit
+    # behavior entirely unless the literal string "default" is included as
+    # one of the list's own entries — confirmed directly, the hard way:
+    # without this, adding any extra_users silently broke SSH access to
+    # the ubuntu account on every affected instance (sshd rejected the
+    # CloudCore keypair outright, "Permission denied (publickey)", despite
+    # the same top-level ssh_authorized_keys: block that works fine when
+    # extra_users is empty).
+    lines = ["users:", "  - default"]
     for u in users:
         uname = u["username"]
         lines.append(f"  - name: {uname}")

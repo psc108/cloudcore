@@ -397,6 +397,25 @@ def create_instance():
     # the LB listener/target-group code earlier this session.
     usb_device_ids = body.get("usb_device_ids") or []
 
+    # `compute.create_instance()`/`_cloud_init_iso()` have always supported
+    # baking extra users (with NOPASSWD sudo and the CloudCore keypair) into
+    # an instance's cloud-init at boot via `instance.users` — but this
+    # create endpoint never read a "users" key from the request body, so
+    # the only way to populate it was POST /v1/instances/{id}/users, which
+    # is too late (the cloud-init ISO is already built) and only applies
+    # live via SSH in SLIRP mode anyway. Wire it through here so it's usable
+    # at create time for bridge-mode instances too.
+    users = body.get("users") or []
+    for u in users:
+        if not isinstance(u, dict) or not u.get("username", "").strip():
+            return problem(400, "Bad Request", "each entry in users requires a non-empty username")
+    users = [{
+        "username": u["username"].strip(),
+        "sudo": bool(u.get("sudo", False)),
+        "ssh_keys": u.get("ssh_keys") or [],
+        "password_hash": u.get("password_hash", ""),
+    } for u in users]
+
     with usb._usb_lock:
         for usb_id in usb_device_ids:
             err = usb.validate_attachable(usb_id, None)
@@ -414,6 +433,7 @@ def create_instance():
             user_data=body.get("user_data"),
             ssh_user=compute.ssh_user_for_image(body["image_id"]),
             tags=body.get("tags", {}),
+            users=users,
         )
         store.put_instance(instance)
 
