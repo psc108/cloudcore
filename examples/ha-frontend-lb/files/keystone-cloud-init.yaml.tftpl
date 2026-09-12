@@ -108,16 +108,88 @@ write_files:
 
       # admin:admin — a deliberate, explicit Lab-only credential (see
       # haFullStack-LLD.md §3.3.1), same convention as vrrp_auth_pass and
-      # the MySQL passwords. Endpoint URLs all point at the VIP:5000 —
-      # this Lab has no distinct admin/internal network to separate them
-      # onto, unlike a real deployment.
+      # the MySQL passwords. Public/internal stay on the VIP:5000 vhost
+      # the keystone package ships out of the box; admin uses the classic
+      # OpenStack :35357 convention instead (setup-keystone-admin-port.sh
+      # below adds that listener) — this Lab has no distinct admin/
+      # internal network to separate them onto otherwise.
       keystone-manage bootstrap \
         --bootstrap-username admin --bootstrap-password admin \
         --bootstrap-project-name admin --bootstrap-role-name admin \
         --bootstrap-service-name keystone \
-        --bootstrap-admin-url "http://${vip_address}:5000/v3" \
+        --bootstrap-admin-url "http://${vip_address}:35357/v3" \
         --bootstrap-public-url "http://${vip_address}:5000/v3" \
         --bootstrap-internal-url "http://${vip_address}:5000/v3"
+
+  # Classic OpenStack admin-API port (35357), alongside the package's own
+  # :5000 vhost — same unified keystone-wsgi-public WSGI app as :5000 and
+  # the :5443 mTLS vhost below (modern Keystone has no separate admin WSGI
+  # script), so this is just a second plain-HTTP listener, not a
+  # functionally different API. Routed to clients through the shared
+  # VIP's NGINX (nginx-keystone.conf.tftpl), same as :5000.
+  - path: /usr/local/sbin/setup-keystone-admin-port.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      # No WSGIDaemonProcess of its own — reuses the :5000 vhost's existing
+      # "keystone-public" pool (processes=5, from the keystone package's
+      # own wsgi-keystone.conf) by name instead of spawning a new one.
+      # A first attempt gave this port its own 3-process pool, on top of
+      # :5000's 5 and :5443's 3 — 11 mod_wsgi worker processes total OOM-
+      # killed apache2 outright on this tier's standard.small flavor
+      # (957MB RAM), confirmed directly (systemctl status showed "Result:
+      # oom-kill", found chasing what looked like a security-group/DNS
+      # connectivity failure but was neither). Sharing the pool costs zero
+      # extra memory — it's the same already-running workers now also
+      # bound to a second port.
+      cat > /etc/apache2/sites-available/keystone-admin.conf <<'EOF'
+      Listen 35357
+
+      <VirtualHost *:35357>
+        WSGIProcessGroup keystone-public
+        WSGIScriptAlias / /usr/bin/keystone-wsgi-public
+        WSGIApplicationGroup %%{GLOBAL}
+
+        <Directory /usr/bin>
+          Require all granted
+        </Directory>
+
+        ErrorLog $${APACHE_LOG_DIR}/keystone-admin-error.log
+        LogLevel warn
+        CustomLog $${APACHE_LOG_DIR}/keystone-admin-access.log combined
+      </VirtualHost>
+      EOF
+      a2ensite keystone-admin
+
+  # env.sh — OpenStack CLI client environment, sourced by root/ecs/ubuntu
+  # (runcmd below symlinks it into each user's home directory). Lives
+  # under /etc/openstack/, NOT /etc/keystone/ — the latter is
+  # keystone:keystone 0750 (package default), so non-keystone-group users
+  # like ecs can't even traverse into it to reach a 0644 file inside,
+  # confirmed directly ("Permission denied" sourcing the symlink as ecs).
+  # OS_AUTH_URL points at the VIP's :35357 admin listener, not any one
+  # keystone node's own IP — the VIP is already a static value known at
+  # Terraform-render time (var.vip_address), so no runtime IP-discovery
+  # step (e.g. a systemd oneshot) is needed here; a fixed per-node IP
+  # would also break this file on failover, defeating the point of the HA
+  # VIP. admin:admin matches the bootstrap credential above — this Lab's
+  # deliberate, documented placeholder, not a new secret. No OS_CACERT/
+  # https — :35357 is plain HTTP like :5000, not the separate :5443 mTLS
+  # listener, which needs a client cert+key to authenticate, not just a
+  # CA cert.
+  - path: /etc/openstack/env.sh
+    permissions: '0644'
+    content: |
+      export OS_USERNAME=admin
+      export OS_PASSWORD='admin'
+      export OS_PROJECT_NAME=admin
+      export OS_USER_DOMAIN_NAME=Default
+      export OS_PROJECT_DOMAIN_NAME=Default
+      export OS_AUTH_URL=http://${vip_address}:35357/v3
+      export OS_IDENTITY_API_VERSION=3
+      export no_proxy=${vip_address}
 
   # TLS/mTLS (haFullStack-LLD.md §5.3.1). A NEW port (5443) alongside the
   # existing plain :5000 vhost, which stays as-is for the Lab's own
@@ -213,4 +285,11 @@ write_files:
 runcmd:
   - /usr/local/sbin/setup-keystone.sh
   - /usr/local/sbin/setup-keystone-tls.sh
+  - /usr/local/sbin/setup-keystone-admin-port.sh
   - systemctl restart apache2
+  - |
+    for u in root ecs ubuntu; do
+      home=$(getent passwd "$u" | cut -d: -f6)
+      [ -d "$home" ] || continue
+      ln -sf /etc/openstack/env.sh "$home/env.sh"
+    done

@@ -14,3 +14,27 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
+
+# Classic OpenStack admin-API port, alongside :5000 above — Keystone's
+# own bootstrap registers this as the catalog "admin" endpoint (see
+# keystone-cloud-init.yaml.tftpl), and CLI tooling (env.sh) authenticates
+# against it directly through the VIP. Same unified keystone-wsgi-public
+# WSGI app on the node side as :5000 — modern Keystone has no separate
+# admin WSGI script — so this is just a second listener/upstream pair,
+# not a functionally different API.
+upstream keystone_admin {
+%{ for ip in keystone_ips ~}
+    server ${ip}:35357;
+%{ endfor ~}
+}
+
+server {
+    listen 35357;
+
+    location / {
+        proxy_pass http://keystone_admin;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}

@@ -93,9 +93,10 @@ module "security_groups" {
     "keystone${local.sfx}" = {
       description = "Keystone identity tier — API (plain + TLS) from the NGINX nodes' subnet only, plus SSH"
       ingress_rules = {
-        api     = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = local.bridge_cidr }
-        api_tls = { ip_protocol = "tcp", from_port = 5443, to_port = 5443, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS — haFullStack-LLD.md §5.3.1" }
-        ssh     = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+        api       = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = local.bridge_cidr }
+        api_tls   = { ip_protocol = "tcp", from_port = 5443, to_port = 5443, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS — haFullStack-LLD.md §5.3.1" }
+        api_admin = { ip_protocol = "tcp", from_port = 35357, to_port = 35357, cidr = local.bridge_cidr, description = "Classic OpenStack admin-API port, used by env.sh CLI clients" }
+        ssh       = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
