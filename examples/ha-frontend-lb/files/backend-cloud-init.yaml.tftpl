@@ -30,8 +30,38 @@ packages:
   - nginx
   - curl
   - ca-certificates
+  - unzip
+  - temurin-21-jdk
 
 write_files:
+  # jasypt (CLI dist — its own bin/*.sh scripts, not just the library
+  # jar) + Bouncy Castle's core JCE provider, dropped into jasypt's own
+  # lib/ so its scripts pick it up on their classpath automatically. Both
+  # cached in the host-level repo's artifacts store, not fetched live —
+  # same pattern as step-cli above. jasypt's own project archived
+  # Nov 2025; 1.9.3 is its last release, still installed as requested.
+  - path: /usr/local/sbin/setup-jasypt.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/jasypt-dist.zip -o /tmp/jasypt-dist.zip
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/bcprov.jar -o /tmp/bcprov.jar
+
+      unzip -q -o /tmp/jasypt-dist.zip -d /opt
+      JASYPT_DIR=$(find /opt -maxdepth 1 -type d -name 'jasypt-*' | head -1)
+      cp /tmp/bcprov.jar "$JASYPT_DIR/lib/"
+
+      # Explicit chmod u+x on every .sh file jasypt installs, not just
+      # its top-level bin/ scripts — per direct instruction, and because
+      # zip archives don't reliably preserve the executable bit on
+      # extraction regardless of what the archive itself was built with.
+      find "$JASYPT_DIR" -name '*.sh' -exec chmod u+x {} \;
+
+      ln -sfn "$JASYPT_DIR" /opt/jasypt
+
+
   # step-ca client-cert provisioning, adapted from keystone's own
   # setup-keystone-tls.sh: same `step ca certificate` invocation (the
   # provisioner's default X.509 leaf template grants both serverAuth and
@@ -85,4 +115,5 @@ write_files:
 
 runcmd:
   - /usr/local/sbin/setup-backend-tls.sh
+  - /usr/local/sbin/setup-jasypt.sh
   - systemctl enable --now nginx

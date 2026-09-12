@@ -47,11 +47,14 @@ if [ ${#PACKAGES[@]} -eq 0 ]; then
 fi
 
 # Packages that only exist in a third-party apt repo, not Ubuntu's own
-# archive — the builder adds both repos unconditionally before the
+# archive — the builder adds all three unconditionally before the
 # install step below (harmless on a throwaway instance even for a build
 # that doesn't strictly need them) rather than threading a per-template
-# opt-in through this script.
-THIRDPARTY_PACKAGES=(temurin-21-jdk kismet)
+# opt-in through this script. nodejs: Ubuntu 22.04's own archive ships a
+# years-old 12.x, nowhere near ha-frontend-lb's frontend tier's stated
+# "18.x minimum, prefer latest" — NodeSource's repo is the standard
+# current-version source, same pattern as Adoptium/Kismet below.
+THIRDPARTY_PACKAGES=(temurin-21-jdk kismet nodejs)
 
 case "$CODENAME" in
   jammy) IMAGE_ID="ubuntu-22.04" ;;
@@ -102,6 +105,15 @@ declare -A ARTIFACT_URLS=(
   [proxysql.deb]="https://github.com/sysown/proxysql/releases/download/v3.0.11/proxysql_3.0.11-ubuntu22_amd64.deb"
   # ghidra-workstation
   [ghidra.zip]="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip"
+  # ha-frontend-lb — frontend/backend: jasypt (CLI dist with its own
+  # bin/*.sh scripts, not just a plain jar — Maven Central only has the
+  # bare jasypt.jar, this is the project's own GitHub release asset) and
+  # Bouncy Castle's core JCE provider jar, for use as an extra crypto
+  # provider alongside it. Both verified as real, current, working URLs
+  # directly (jasypt's project archived Nov 2025 — 1.9.3 is its last and
+  # latest release; Bouncy Castle 1.80 confirmed latest on Maven Central).
+  [jasypt-dist.zip]="https://github.com/jasypt/jasypt/releases/download/jasypt-1.9.3/jasypt-1.9.3-dist.zip"
+  [bcprov.jar]="https://repo1.maven.org/maven2/org/bouncycastle/bcprov-jdk18on/1.80/bcprov-jdk18on-1.80.jar"
   # kiwix-library
   [kiwix-tools.tar.gz]="https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.2.tar.gz"
   # kiwix-library — the 2.2GB "top articles, no pictures" ZIM (variables.tf
@@ -180,14 +192,18 @@ echo "=== Building the repo on the throwaway instance ==="
 ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
   set -e
   # Third-party apt repos — ghidra-workstation needs temurin-21-jdk
-  # (Adoptium), wifi-sniffer needs kismet (kismetwireless.net). Neither
-  # package exists in Ubuntu's own archive, so these repos have to be
-  # trusted before the download step below can see them at all.
+  # (Adoptium), wifi-sniffer needs kismet (kismetwireless.net), the
+  # frontend tier needs a current nodejs (NodeSource — Ubuntu 22.04's
+  # own archive only has an ancient 12.x). None of the three exist in
+  # Ubuntu's own archive, so these repos have to be trusted before the
+  # download step below can see them at all.
   sudo mkdir -p /etc/apt/keyrings
   curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | sudo gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
   echo \"deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb \$(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/adoptium.list
   wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet | sudo gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null
   echo \"deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/\$(lsb_release -cs) \$(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/kismet.list >/dev/null
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo \"deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main\" | sudo tee /etc/apt/sources.list.d/nodesource.list
 
   sudo apt-get update
   sudo apt-get install -y dpkg-dev

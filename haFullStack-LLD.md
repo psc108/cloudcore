@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.18 (in progress — built section by section) | Paul Scott
+v0.19 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -68,6 +68,20 @@ environment axis is not just an infrastructure substrate swap.
 ---
 
 ### 1.3 Lab Environment (CloudCore)
+
+> **Frontend runtime additions (2026-09-12):** Node.js (18.x minimum,
+> latest preferred — NodeSource's repo, cached in the host-level
+> `cloudcore-repo`, since Ubuntu 22.04's own archive only ships an
+> ancient 12.x), Temurin 21 JDK (jasypt needs a JVM to run its own CLI
+> scripts — a stock Ubuntu image ships no Java at all, despite it being
+> easy to assume otherwise), and jasypt 1.9.3 + Bouncy Castle's
+> `bcprov-jdk18on` 1.80 (dropped into jasypt's own `lib/` so its scripts
+> pick it up automatically). All four cached as host-level repo
+> packages/artifacts, not fetched live. Verified for real on a throwaway
+> instance: `node --version` → v20.20.2, `java -version` → Temurin
+> 21.0.12.1, and jasypt's own `encrypt.sh` actually ran and produced
+> real encrypted output using that JVM. Backend gets the same JDK +
+> jasypt + Bouncy Castle treatment — see §8.3.
 
 #### 1.3.1 Design
 
@@ -2124,6 +2138,16 @@ build order.
 
 ### 8.3 Lab Environment (CloudCore)
 
+- **Runtime additions (2026-09-12)** — Temurin 21 JDK (17.x minimum,
+  latest preferred, per direct instruction) plus jasypt 1.9.3 + Bouncy
+  Castle's `bcprov-jdk18on` 1.80, same treatment as frontend's own §1.3
+  note — cached in the host-level repo, verified for real on a
+  throwaway instance (`java -version`, jasypt's own `encrypt.sh`
+  actually running and producing output). `chmod u+x` applied
+  explicitly to every `.sh` file jasypt installs, per direct
+  instruction — not `chmod +x`/`a+x`, so only whichever user actually
+  extracts/owns the files (root, via `runcmd`, same as everything else
+  this template installs) can execute them.
 - **Sizing** — `standard.medium` (2 vCPU, 2048MB RAM, 20GB disk).
   Driven directly by the user's own stated requirement: the application
   is 2.5GB compressed, needs roughly the same again decompressed, then
@@ -2235,3 +2259,4 @@ destroy` afterward — 31 resources, 0 instances remaining.
 | v0.16 | 2026-09-11 | Paul Scott | New §7, Host-Level Package Repository — §6's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, not tracked as a CloudCore resource so no `tofu destroy` can reach it. Extended to cover every example template's package/artifact needs, including two third-party apt repos (Adoptium, Kismet) mirrored on the throwaway builder and pinned release artifacts (Ghidra, kiwix-tools, the Wikipedia ZIM, RTL8812AU driver source) cached alongside the existing `step-ca`/`step-cli`/`proxysql` set. F-040 resolved (§6.4 updated) — a real backend `PATCH` endpoint plus provider `Update()` support now handle in-place share-client changes. F-041's platform-level fix noted in §6.3. New F-046 (a `write_files`/`owner:` race in `api/nfs.py`, same class as F-026) and F-047 (a genuinely stalled, not merely slow, apt-mirror connection) logged in `haFullStack-Findings-Log.md`. Protected against accidental removal: `teardown-network.sh` requires `--force` while the service is active; its build output survives `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself. |
 | v0.17 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §7's host-level `cloudcore-repo` — §6's own NFS design marked superseded for this stack (kept as a design reference only). `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed, 15 nodes instead of 17. Verified with a real `tofu apply`/dashboard-check/`tofu destroy` cycle from a clean slate — see §7.4. |
 | v0.18 | 2026-09-12 | Paul Scott | New §8, Backend Tier — the last tier this document's own diagram always described but every prior slice deferred, now built: 2 nodes, `standard.medium` (20GB disk, sized against the user's own stated 2.5GB-compressed/decompressed/running-footprint requirement), local NGINX installed but deliberately unconfigured (the not-yet-installed application configures itself), mTLS client identity from the same CA every other tier uses. §5's "Backend↔X mTLS... can't be built until the backend tier exists" open item resolved — real handshakes confirmed accepted against ProxySQL/Keystone/RabbitMQ. `haFullStack.md` §3.1/§3.3/§3.4's stale `:8080` upstream examples corrected to `:80` to match backend's own real NGINX port. One finding (F-048): no new security-group rules were needed on proxysql/keystone/rabbitmq at all — their existing ingress was already scoped to the whole bridge subnet, not narrowed per-source-SG. |
+| v0.19 | 2026-09-12 | Paul Scott | Runtime software added to frontend (§1.3) and backend (§8.3): Node.js (frontend only, NodeSource, 18.x minimum), Temurin 21 JDK, jasypt 1.9.3, and Bouncy Castle's `bcprov-jdk18on` 1.80 (both tiers) — jasypt needs a JVM to run its own CLI scripts, which a stock Ubuntu image doesn't provide, correcting an initial assumption that frontend/backend already had Java. All four cached in the host-level repo rather than fetched live; `build-package-repo.sh` extended to trust NodeSource's repo (same pattern as Adoptium/Kismet) and cache jasypt's dist zip + Bouncy Castle's provider jar as pinned artifacts, both verified as real, current, working URLs directly before use. Verified for real on a throwaway instance: correct versions installed, and jasypt's own `encrypt.sh` actually ran successfully against the newly-installed JVM. `chmod u+x` (not `+x`/`a+x`) applied to every `.sh` file jasypt installs, per direct instruction. |
