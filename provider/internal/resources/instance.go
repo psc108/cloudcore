@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -26,6 +27,13 @@ type InstanceResource struct {
 	client *client.Client
 }
 
+type instanceUserModel struct {
+	Username     types.String `tfsdk:"username"`
+	Sudo         types.Bool   `tfsdk:"sudo"`
+	SSHKeys      types.List   `tfsdk:"ssh_keys"`
+	PasswordHash types.String `tfsdk:"password_hash"`
+}
+
 type InstanceResourceModel struct {
 	ID               types.String   `tfsdk:"id"`
 	Name             types.String   `tfsdk:"name"`
@@ -36,6 +44,7 @@ type InstanceResourceModel struct {
 	SecurityGroupIDs types.List     `tfsdk:"security_group_ids"`
 	UsbDeviceIDs     types.List     `tfsdk:"usb_device_ids"`
 	UserData         types.String   `tfsdk:"user_data"`
+	Users            types.List     `tfsdk:"users"`
 	PrivateIP        types.String   `tfsdk:"private_ip"`
 	PublicIP         types.String   `tfsdk:"public_ip"`
 	SSHPort          types.Int64    `tfsdk:"ssh_port"`
@@ -47,24 +56,32 @@ type InstanceResourceModel struct {
 	Timeouts         timeouts.Value `tfsdk:"timeouts"`
 }
 
+type instanceUserAPIModel struct {
+	Username     string   `json:"username"`
+	Sudo         bool     `json:"sudo"`
+	SSHKeys      []string `json:"ssh_keys"`
+	PasswordHash string   `json:"password_hash,omitempty"`
+}
+
 type instanceAPIModel struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	ImageID          string            `json:"image_id"`
-	Flavor           string            `json:"flavor"`
-	VPCID            string            `json:"vpc_id"`
-	SubnetID         string            `json:"subnet_id"`
-	SecurityGroupIDs []string          `json:"security_group_ids"`
-	UsbDeviceIDs     []string          `json:"usb_device_ids"`
-	UserData         string            `json:"user_data,omitempty"`
-	PrivateIP        string            `json:"private_ip"`
-	PublicIP         string            `json:"public_ip"`
-	SSHPort          int64             `json:"ssh_port"`
-	SSHUser          string            `json:"ssh_user"`
-	SSHEndpoint      string            `json:"ssh_endpoint"`
-	Status           string            `json:"status"`
-	CreatedAt        string            `json:"created_at"`
-	Tags             map[string]string `json:"tags"`
+	ID               string                 `json:"id"`
+	Name             string                 `json:"name"`
+	ImageID          string                 `json:"image_id"`
+	Flavor           string                 `json:"flavor"`
+	VPCID            string                 `json:"vpc_id"`
+	SubnetID         string                 `json:"subnet_id"`
+	SecurityGroupIDs []string               `json:"security_group_ids"`
+	UsbDeviceIDs     []string               `json:"usb_device_ids"`
+	UserData         string                 `json:"user_data,omitempty"`
+	Users            []instanceUserAPIModel `json:"users,omitempty"`
+	PrivateIP        string                 `json:"private_ip"`
+	PublicIP         string                 `json:"public_ip"`
+	SSHPort          int64                  `json:"ssh_port"`
+	SSHUser          string                 `json:"ssh_user"`
+	SSHEndpoint      string                 `json:"ssh_endpoint"`
+	Status           string                 `json:"status"`
+	CreatedAt        string                 `json:"created_at"`
+	Tags             map[string]string      `json:"tags"`
 }
 
 func NewInstanceResource() resource.Resource { return &InstanceResource{} }
@@ -125,6 +142,32 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
+			"users": schema.ListNestedAttribute{
+				Optional:    true,
+				Description: "Extra users to create at boot via cloud-init, each with optional NOPASSWD sudo. The CloudCore inter-instance keypair is automatically added to every extra user's authorized_keys and installed in their ~/.ssh/ for outbound use, the same as the default image user. Baked into the initial cloud-init document, so forces replacement on change.",
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.RequiresReplace(),
+				},
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"username": schema.StringAttribute{Required: true, Description: "Username to create."},
+						"sudo": schema.BoolAttribute{
+							Optional:    true,
+							Description: "Grant passwordless (NOPASSWD) sudo. Defaults to false.",
+						},
+						"ssh_keys": schema.ListAttribute{
+							Optional:    true,
+							ElementType: types.StringType,
+							Description: "Additional SSH public keys to authorize for this user, alongside the CloudCore keypair which is always added.",
+						},
+						"password_hash": schema.StringAttribute{
+							Optional:    true,
+							Sensitive:   true,
+							Description: "Pre-hashed password (crypt format) for console/local login. Leave unset to lock password login.",
+						},
+					},
+				},
+			},
 			"private_ip": schema.StringAttribute{Computed: true, Description: "Private IP address assigned by the API."},
 			"public_ip":  schema.StringAttribute{Computed: true, Description: "Public IP address (127.0.0.1 for SLIRP instances)."},
 			"ssh_port": schema.Int64Attribute{
@@ -145,7 +188,7 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				Computed:    true,
 				Description: "Ready-to-use SSH connection string, e.g. 'ubuntu@127.0.0.1 -p 22100'. Empty for bridge-networked instances.",
 			},
-			"status":     schema.StringAttribute{Computed: true, Description: "Current instance status (API-assigned)."},
+			"status": schema.StringAttribute{Computed: true, Description: "Current instance status (API-assigned)."},
 			"created_at": schema.StringAttribute{
 				Computed:    true,
 				Description: "ISO 8601 timestamp when the instance was created (API-assigned).",
@@ -176,6 +219,32 @@ func (r *InstanceResource) Configure(_ context.Context, req resource.ConfigureRe
 		return
 	}
 	r.client = c
+}
+
+func instanceUsersToAPI(ctx context.Context, list types.List) ([]instanceUserAPIModel, error) {
+	if list.IsNull() || list.IsUnknown() {
+		return nil, nil
+	}
+	var models []instanceUserModel
+	if diags := list.ElementsAs(ctx, &models, false); diags.HasError() {
+		return nil, fmt.Errorf("parsing users")
+	}
+	out := make([]instanceUserAPIModel, len(models))
+	for i, m := range models {
+		keys := []string{}
+		if !m.SSHKeys.IsNull() && !m.SSHKeys.IsUnknown() {
+			if diags := m.SSHKeys.ElementsAs(ctx, &keys, false); diags.HasError() {
+				return nil, fmt.Errorf("parsing ssh_keys for user %q", m.Username.ValueString())
+			}
+		}
+		out[i] = instanceUserAPIModel{
+			Username:     m.Username.ValueString(),
+			Sudo:         m.Sudo.ValueBool(),
+			SSHKeys:      keys,
+			PasswordHash: m.PasswordHash.ValueString(),
+		}
+	}
+	return out, nil
 }
 
 func instanceMapToState(ctx context.Context, result instanceAPIModel, state *InstanceResourceModel) error {
@@ -231,6 +300,11 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 	resp.Diagnostics.Append(plan.UsbDeviceIDs.ElementsAs(ctx, &usbIDs, false)...)
 	tags := map[string]string{}
 	resp.Diagnostics.Append(plan.Tags.ElementsAs(ctx, &tags, false)...)
+	users, err := instanceUsersToAPI(ctx, plan.Users)
+	if err != nil {
+		resp.Diagnostics.AddError("Parse users failed", err.Error())
+		return
+	}
 
 	body := instanceAPIModel{
 		Name:             plan.Name.ValueString(),
@@ -241,6 +315,7 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 		SecurityGroupIDs: sgIDs,
 		UsbDeviceIDs:     usbIDs,
 		UserData:         plan.UserData.ValueString(),
+		Users:            users,
 		Tags:             tags,
 	}
 
