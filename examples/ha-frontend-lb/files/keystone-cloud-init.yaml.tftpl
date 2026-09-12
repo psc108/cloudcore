@@ -11,42 +11,22 @@
 # config of our own is needed for the daemon itself.
 # apt_preserve_sources_list — without this, cloud-init's own apt-
 # configure module regenerates /etc/apt/sources.list right after
-# bootcmd runs, silently overwriting the NFS-repo rewrite below with
-# zero error (confirmed directly). bootcmd (haFullStack-LLD.md §6)
-# points apt at the NFS-hosted local repo before the packages: module
-# runs; see ca-cloud-init.yaml.tftpl for the full rationale (F-037,
-# haFullStack-Findings-Log.md).
+# bootcmd runs, silently overwriting the cloudcore-repo rewrite below
+# with zero error (confirmed directly, F-042, haFullStack-Findings-Log.md).
+# bootcmd points apt at the host-level cloudcore-repo service
+# (192.168.100.1:8090, haFullStack.md §14) instead of the real Ubuntu
+# mirror; see ca-cloud-init.yaml.tftpl for the full rationale.
 apt_preserve_sources_list: true
 bootcmd:
-  # Scoped to "jammy main" only (nfs-common lives there), not the full
-  # default sources.list (main+universe+multiverse+backports+security,
-  # ~40MB of index files) — confirmed directly this was still enough to
-  # reproduce F-037's mirror congestion across 15 concurrently-booting
-  # nodes, even for "just installing one small bootstrap package."
-  - |
-    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
-    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
-    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
-  - mkdir -p /mnt/apt-repo /mnt/artifacts
-  - |
-    for i in $(seq 1 180); do
-      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
-      sleep 5
-    done
-  - |
-    for i in $(seq 1 180); do
-      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
-      sleep 5
-    done
-  - |
-    for i in $(seq 1 180); do
-      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
-      sleep 10
-    done
-  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  # cloudcore-repo is a host-level, always-on systemd service (not
+  # per-project, no build-completion race to wait on like the old
+  # NFS-based repo needed) — a plain HTTP GET, no client package to
+  # install first the way NFS needed nfs-common, so the old
+  # archive.ubuntu.com bootstrap fetch this block used to need is gone
+  # entirely, not just relocated.
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -158,7 +138,7 @@ write_files:
 
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 

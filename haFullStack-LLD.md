@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.16 (in progress — built section by section) | Paul Scott
+v0.17 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -1810,7 +1810,13 @@ AWS story where a managed drop-in clearly wins).
 
 ---
 
-## 6. Local Package Repository — Cross-Cutting
+## 6. Local Package Repository — Cross-Cutting (superseded by §7 for this stack)
+
+**`ha-frontend-lb` no longer builds the NFS-based design this section
+describes** — it was retrofitted onto §7's host-level `cloudcore-repo`
+service instead. This section remains accurate as a design reference
+(the same shape a genuinely air-gapped On-Prem estate would still need,
+§6.4) but is no longer what the Lab config actually does.
 
 ### 6.1 Scope
 
@@ -2062,14 +2068,25 @@ deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
   live (disable/remove old unit, run `setup-package-repo.sh` again) with
   zero data loss — same bind address, same `api/package-repo/` contents,
   confirmed serving all 652 packages immediately after.
+- **`ha-frontend-lb` retrofitted onto this service** (2026-09-12) —
+  `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd`
+  block removed, replaced with a single `cat > /etc/apt/sources.list`
+  write (no wait loop needed — unlike the per-project NFS repo, this
+  service has no build-completion race to wait on, it's already running
+  before any guest even starts booting). `apt_preserve_sources_list:
+  true` kept, not dropped — confirmed directly it's still needed (cloud-
+  init's own apt module still overwrites a plain `sources.list.d`-style
+  rewrite exactly as it did for the NFS design, F-042). A real `tofu
+  apply` from empty state: 28 resources instead of the old 31 (15 nodes,
+  not 17), all four dashboard checks `OK`, confirmed via cloud-init logs
+  that the CA node had zero `archive.ubuntu.com` references and the
+  MySQL bootstrap node had 44 references to the host-level repo and
+  zero to the real mirror, clean `tofu destroy` afterward. One
+  already-documented, unrelated issue recurred along the way (F-045's
+  `nginx`/`keepalived` dpkg race) and got its usual one-line fix.
 
 ### 7.5 Open Items
 
-- **Not yet consumed by `ha-frontend-lb`** — §6's per-project NFS repo
-  remains that stack's actual mechanism. Retrofitting it onto this
-  service (retiring `module.nfs` and `module.repo_builder` entirely)
-  would remove an entire tier of complexity from that stack but hasn't
-  been done.
 - **Kernel-header drift** — `linux-headers-$(uname -r)`/
   `linux-modules-extra-$(uname -r)` are cached under whatever kernel the
   builder happened to boot with; a guest that picks up a kernel bump via
@@ -2103,3 +2120,4 @@ deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
 | v0.14 | 2026-09-11 | Paul Scott | §5.1 updated: the Lab's CA now deliberately issues 365-day certs instead of `step-ca`'s unconfigured 24h default, to mirror realistic On-Prem/AWS PKI lifetimes ahead of building those slices — `authority.claims` set explicitly in `ca.json` before `step-ca`'s first start. Found and documented directly that `step ca renew` (unlike a fresh `step ca certificate` issuance) does **not** pick up a changed CA default on its own — it preserves the original cert's own requested duration unless `--expires-in` is passed — so a CA policy change needs every already-issued cert force-*reissued*, not just renewed, to actually take effect; every running node's certs were reissued this way and confirmed at their new 365-day expiry. §5.3.1a test 5 and §5.6's environment table updated to match. |
 | v0.15 | 2026-09-11 | Paul Scott | New §6, Local Package Repository (cross-cutting) — built and verified for real directly, not drafted first: a real `dpkg-scanpackages`-indexed local apt repo plus a pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion behind F-037. Six real findings along the way (F-039–F-045, `haFullStack-Findings-Log.md`) — most notably a genuine provider bug (`cloudcore_nfs_server`'s `Create()` never waited for a populated `private_ip`, F-039, fixed and rebuilt) and cloud-init's own apt module silently discarding the NFS-repo `sources.list` rewrite (F-042). A node rebuilt with the full fix finished its entire package-install phase in under 6 minutes versus 22+ minutes stuck on the bootstrap step alone beforehand. All four dashboard checks confirmed `OK` twice in a row on the finished rebuild. |
 | v0.16 | 2026-09-11 | Paul Scott | New §7, Host-Level Package Repository — §6's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, not tracked as a CloudCore resource so no `tofu destroy` can reach it. Extended to cover every example template's package/artifact needs, including two third-party apt repos (Adoptium, Kismet) mirrored on the throwaway builder and pinned release artifacts (Ghidra, kiwix-tools, the Wikipedia ZIM, RTL8812AU driver source) cached alongside the existing `step-ca`/`step-cli`/`proxysql` set. F-040 resolved (§6.4 updated) — a real backend `PATCH` endpoint plus provider `Update()` support now handle in-place share-client changes. F-041's platform-level fix noted in §6.3. New F-046 (a `write_files`/`owner:` race in `api/nfs.py`, same class as F-026) and F-047 (a genuinely stalled, not merely slow, apt-mirror connection) logged in `haFullStack-Findings-Log.md`. Protected against accidental removal: `teardown-network.sh` requires `--force` while the service is active; its build output survives `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself. |
+| v0.17 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §7's host-level `cloudcore-repo` — §6's own NFS design marked superseded for this stack (kept as a design reference only). `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed, 15 nodes instead of 17. Verified with a real `tofu apply`/dashboard-check/`tofu destroy` cycle from a clean slate — see §7.4. |

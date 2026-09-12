@@ -88,26 +88,3 @@ variable "ca_flavor" {
   default     = "standard.nano"
 }
 
-variable "nfs_flavor" {
-  description = "Compute flavor for the NFS server hosting the local apt repo and pinned-artifact cache (haFullStack-LLD.md §6)."
-  type        = string
-  default     = "standard.small"
-}
-
-variable "nfs_disk_gb" {
-  description = "Data disk size for the NFS server. The apt repo snapshot (full package closure across every tier) plus the pinned .deb artifacts fit comfortably well under this default."
-  type        = number
-  default     = 20
-}
-
-variable "build_repo_now" {
-  description = "Create the one-shot repo-builder instance this apply. Build once (leave true), confirm the NFS shares are populated, then set false on a later apply to tear the builder down while keeping the NFS server and its already-built shares — matches the 'download once, refresh only on OS bump or security patch' policy (haFullStack-LLD.md §6), not a continuously-reconciled resource."
-  type        = bool
-  default     = true
-}
-
-variable "repo_builder_flavor" {
-  description = "Compute flavor for the one-shot repo-builder instance. Needs enough disk/memory headroom to apt-get download the full package closure before copying it to the NFS mount."
-  type        = string
-  default     = "standard.medium"
-}

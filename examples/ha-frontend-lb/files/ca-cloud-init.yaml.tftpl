@@ -1,57 +1,39 @@
 #cloud-config
 # Single-node step-ca — deliberately not HA (haFullStack-LLD.md §5.1).
 # step-ca/step-cli aren't in Ubuntu's default repos, installed from the
-# pinned, checksum-verified .debs the NFS repo-builder already fetched
-# once (haFullStack-LLD.md §6) — every certificate-requesting node used
-# to curl these individually from GitHub (12+ redundant fetches of the
-# same files, F-037's network-congestion finding). Every other tier's
-# own cloud-init waits for this node to be reachable before requesting
-# its own certificate — the same explicit-wait pattern every prior tier
-# used for its own bootstrap dependency, not relying on Terraform apply
-# order.
+# pinned, checksum-verified .debs already cached in the host-level
+# cloudcore-repo's artifacts share (haFullStack.md §14) — every
+# certificate-requesting node used to curl these individually from
+# GitHub (12+ redundant fetches of the same files, F-037's
+# network-congestion finding). Every other tier's own cloud-init waits
+# for this node to be reachable before requesting its own certificate —
+# the same explicit-wait pattern every prior tier used for its own
+# bootstrap dependency, not relying on Terraform apply order.
 #
 # apt_preserve_sources_list — without this, cloud-init's own apt-
 # configure module regenerates /etc/apt/sources.list right after
-# bootcmd runs, silently overwriting the NFS-repo rewrite below with
-# zero error (confirmed directly).
+# bootcmd runs, silently overwriting the cloudcore-repo rewrite below
+# with zero error (confirmed directly, F-042, haFullStack-Findings-Log.md).
 #
 # bootcmd (not runcmd/write_files) — cloud-init's earliest hook, the
-# only one guaranteed to run before the packages: module below. nfs-
-# common itself still has to come from the real Ubuntu mirror — nothing
-# can mount the repo before an NFS client exists to mount it with — a
-# small, deliberate, acknowledged exception to "no mirror traffic," not
-# an oversight.
+# only one guaranteed to run before the packages: module below.
+# cloudcore-repo (192.168.100.1:8090, haFullStack.md §14) is a
+# host-level, always-on service reachable over plain HTTP — unlike the
+# old per-project NFS repo this replaces, no client package needs
+# installing first, so the "one small bootstrap fetch from the real
+# mirror" exception this comment used to describe no longer applies at
+# all.
 apt_preserve_sources_list: true
 bootcmd:
-  # Scoped to "jammy main" only (nfs-common lives there), not the full
-  # default sources.list (main+universe+multiverse+backports+security,
-  # ~40MB of index files) — confirmed directly this was still enough to
-  # reproduce F-037's mirror congestion across 15 concurrently-booting
-  # nodes, even for "just installing one small bootstrap package."
-  - |
-    echo "deb http://archive.ubuntu.com/ubuntu jammy main" > /etc/apt/sources.list.bootstrap
-    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
-    apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.bootstrap -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 install -y --no-install-recommends nfs-common
-  - mkdir -p /mnt/apt-repo /mnt/artifacts
-  - |
-    for i in $(seq 1 180); do
-      mount -t nfs ${nfs_ip}:/exports/apt-repo /mnt/apt-repo 2>/dev/null && break
-      sleep 5
-    done
-  - |
-    for i in $(seq 1 180); do
-      mount -t nfs ${nfs_ip}:/exports/artifacts /mnt/artifacts 2>/dev/null && break
-      sleep 5
-    done
-  - |
-    for i in $(seq 1 180); do
-      test -f /mnt/apt-repo/.build-complete && test -f /mnt/artifacts/.build-complete && break
-      sleep 10
-    done
-  - mv /etc/apt/sources.list /etc/apt/sources.list.orig-mirror
+  # cloudcore-repo is a host-level, always-on systemd service (not
+  # per-project, no build-completion race to wait on like the old
+  # NFS-based repo needed) — a plain HTTP GET, no client package to
+  # install first the way NFS needed nfs-common, so the old
+  # archive.ubuntu.com bootstrap fetch this block used to need is gone
+  # entirely, not just relocated.
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] file:///mnt/apt-repo/ ./
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -68,8 +50,8 @@ write_files:
 
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-      cp /mnt/artifacts/step-ca.deb /tmp/step-ca.deb
-      cp /mnt/artifacts/step-cli.deb /tmp/step-cli.deb
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-ca.deb -o /tmp/step-ca.deb
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "${step_ca_deb_sha256}  /tmp/step-ca.deb" | sha256sum -c -
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-ca.deb /tmp/step-cli.deb || apt-get install -f -y

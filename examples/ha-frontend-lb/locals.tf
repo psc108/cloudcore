@@ -81,7 +81,6 @@ locals {
         step_ca_deb_sha256   = local.step_ca_deb_sha256
         step_cli_deb_sha256  = local.step_cli_deb_sha256
         provisioner_password = random_id.ca_provisioner_password.hex
-        nfs_ip               = local.nfs_ip
       })
     }
   }
@@ -90,52 +89,6 @@ locals {
   # and issue certificates against, and the shared provisioner password.
   ca_ip                   = values(module.ca.private_ips_by_key)[0]
   ca_provisioner_password = random_id.ca_provisioner_password.hex
-
-  # Local apt repo + pinned-artifact cache (haFullStack-LLD.md §6). Full
-  # package closure across every tier's own cloud-init, deduplicated —
-  # apt resolves the transitive dependency graph for each of these on
-  # the repo-builder node itself, same as it would against the real
-  # mirror; only these top-level names need listing here.
-  nfs_ip = values(module.nfs.private_ips_by_key)[0]
-  repo_packages = [
-    "curl", "ca-certificates", "dpkg-dev",
-    "mysql-server", "mysql-client",
-    "nginx", "keepalived",
-    "keystone", "python3-pymysql", "python3-memcache", "python3",
-    "rabbitmq-server",
-  ]
-
-  # Pinned, checksum-verified GitHub release URLs for the artifacts
-  # share — same versions every per-tier template curls directly today
-  # (see step_ca_deb_sha256/step_cli_deb_sha256/proxysql_deb_url below);
-  # the repo-builder fetches each exactly once instead of every
-  # certificate-requesting/ProxySQL node fetching its own copy.
-  step_ca_deb_url  = "https://github.com/smallstep/certificates/releases/download/v0.30.2/step-ca_0.30.2-1_amd64.deb"
-  step_cli_deb_url = "https://github.com/smallstep/cli/releases/download/v0.30.6/step-cli_0.30.6-1_amd64.deb"
-
-  # Gated by var.build_repo_now, not a permanent part of the stack — see
-  # its own description. An empty map (when false) means OpenTofu
-  # destroys this instance on the next apply while leaving the NFS
-  # server and its already-populated shares untouched.
-  repo_builder_instances = var.build_repo_now ? {
-    "repo-builder${local.sfx}" = {
-      image_id           = "ubuntu-22.04"
-      flavor             = var.repo_builder_flavor
-      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
-      security_group_ids = [module.security_groups.security_group_ids_by_key["repo-builder${local.sfx}"]]
-      user_data = templatefile("${path.module}/files/repo-builder-cloud-init.yaml.tftpl", {
-        nfs_ip              = local.nfs_ip
-        repo_packages_csv   = join(" ", local.repo_packages)
-        step_ca_deb_url      = local.step_ca_deb_url
-        step_ca_deb_sha256   = local.step_ca_deb_sha256
-        step_cli_deb_url     = local.step_cli_deb_url
-        step_cli_deb_sha256  = local.step_cli_deb_sha256
-        proxysql_deb_url     = local.proxysql_deb_url
-        proxysql_deb_sha256  = local.proxysql_deb_sha256
-      })
-    }
-  } : {}
 
   # Lab-only placeholders, not production secrets — same convention as
   # vrrp_auth_pass above.
@@ -171,7 +124,6 @@ locals {
         step_cli_deb_sha256     = local.step_cli_deb_sha256
         ca_provisioner_password = local.ca_provisioner_password
         vip_address             = var.vip_address
-        nfs_ip                  = local.nfs_ip
       })
     }
   }
@@ -201,7 +153,6 @@ locals {
         step_cli_deb_sha256     = local.step_cli_deb_sha256
         ca_provisioner_password = local.ca_provisioner_password
         vip_address             = var.vip_address
-        nfs_ip                  = local.nfs_ip
       })
     }
   }
@@ -247,7 +198,6 @@ locals {
         vrrp_auth_pass          = local.vrrp_auth_pass
         nginx_conf              = local.nginx_conf
         nginx_stream_conf       = local.nginx_stream_conf
-        nfs_ip                  = local.nfs_ip
       })
     }
   }
@@ -259,7 +209,6 @@ locals {
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password
     step_cli_deb_sha256     = local.step_cli_deb_sha256
-    nfs_ip                  = local.nfs_ip
   })
 
   memcached_user_data = templatefile("${path.module}/files/memcached-cloud-init.yaml.tftpl", {})
@@ -288,7 +237,6 @@ locals {
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password
     step_cli_deb_sha256     = local.step_cli_deb_sha256
-    nfs_ip                  = local.nfs_ip
   })
 
   # Seed node only — modules/compute's per-key user_data can't reference
@@ -314,7 +262,6 @@ locals {
         ca_provisioner_password = local.ca_provisioner_password
         vip_address             = var.vip_address
         step_cli_deb_sha256     = local.step_cli_deb_sha256
-        nfs_ip                  = local.nfs_ip
       })
     }
   }
@@ -339,7 +286,6 @@ locals {
         ca_provisioner_password = local.ca_provisioner_password
         vip_address             = var.vip_address
         step_cli_deb_sha256     = local.step_cli_deb_sha256
-        nfs_ip                  = local.nfs_ip
       })
     }
   }

@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v2.1 | 11 September 2026 | Paul Scott
+v2.2 | 12 September 2026 | Paul Scott
 
 ---
 
@@ -789,7 +789,17 @@ phase is independently verifiable before moving to the next.
 
 ---
 
-## 13. Local Package Repository
+## 13. Local Package Repository (superseded by §14 for this stack)
+
+**`ha-frontend-lb` no longer uses the NFS-based design below** — it was
+retrofitted onto §14's host-level `cloudcore-repo` service instead
+(`module.nfs`/`module.repo_builder` and the per-tier NFS-mount `bootcmd`
+blocks removed entirely, two fewer nodes as a result). This section is
+kept for the underlying pattern's own documentation value — the same
+"download once, refresh on a deliberate cadence" idea still applies
+directly to a genuinely air-gapped On-Prem estate where no host-level
+equivalent exists yet (`haFullStack-LLD.md` §6.4) — not because any
+current template still builds it this way.
 
 Rebuilding this stack's ~15-17 nodes concurrently repeatedly exhausted
 the path to the public Ubuntu mirror — no IPv6 route on the network
@@ -912,12 +922,19 @@ itself is host-local, gitignored build output — expensive to regenerate
 exception so a `git clean -xfd` leaves a marker behind explaining what
 used to be there, instead of silently emptying the directory.
 
-**Not yet consumed by `ha-frontend-lb` itself** — the Lab stack described
-in §13 still builds and uses its own per-project NFS repo; retrofitting
-it onto this host-level service instead (retiring `module.nfs` and
-`module.repo_builder` entirely) is a real, available next step, not yet
-done. New templates going forward should prefer this host-level service
-over building another per-project NFS repo from scratch.
+**Now consumed by `ha-frontend-lb` itself** — retrofitted onto this
+service, retiring `module.nfs`/`module.repo_builder` and the per-tier
+NFS-mount `bootcmd` blocks entirely (§13's own design is kept only as
+documentation of the underlying pattern, not as this stack's actual
+mechanism any more). 15 nodes instead of 17. Verified for real: a full
+`tofu apply` from a clean slate, all four dashboard checks (MySQL,
+Keystone, RabbitMQ, TLS) confirmed `OK`, `archive.ubuntu.com` confirmed
+absent from every node's `sources.list`/cloud-init log (spot-checked the
+CA and MySQL bootstrap nodes directly — 0 references, versus 44
+references to the host-level repo on the MySQL node alone), then a
+clean `tofu destroy`. New templates going forward should prefer this
+host-level service over building another per-project NFS repo from
+scratch.
 
 ## 15. Troubleshooting Guide
 
@@ -992,3 +1009,4 @@ journalctl -u keepalived -f
 | v1.9 | 2026-09-11 | Paul Scott | §4.1 updated: the Lab's CA now deliberately issues 365-day certificates instead of `step-ca`'s unconfigured 24h default, to mirror the lifetimes a real On-Prem/AWS PKI would realistically use ahead of building those slices — `authority.claims` in `ca.json` set explicitly rather than left unconfigured. `step ca renew --daemon` still runs unchanged on every node (it renews at a fixed fraction of validity, not a fixed interval), so the auto-renewal safety net that motivated the original 24h correction is unaffected. Also fixed a `step ca renew` positional-argument-order bug and a `require_secure_transport=ON` / Group Replication recovery-channel interaction found rebuilding the stack (haFullStack-Findings-Log.md). |
 | v2.0 | 2026-09-11 | Paul Scott | New §13, Local Package Repository — a real local apt repo + pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion first observed as F-037. Built and verified for real directly (not drafted first): confirmed a rebuilt tier went from 22+ minutes stuck on a single bootstrap step to under 6 minutes for its entire package-install phase. Sections renumbered: old §13 Troubleshooting Guide → §14, old §14 Appendix → §15 (no other section in this document referenced either by number, confirmed before renumbering). |
 | v2.1 | 2026-09-11 | Paul Scott | New §14, Host-Level Package Repository (Platform Capability) — §13's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, extended to cover every example template's package/artifact needs (not just `ha-frontend-lb`), including two third-party apt repos (Adoptium, Kismet) and pinned release artifacts. Protected against accidental removal: `teardown-network.sh` now refuses to delete the bridge it's bound to without `--force`, and its build output survives a `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself — §13's NFS repo remains that stack's actual mechanism until a retrofit is done. Sections renumbered: old §14 Troubleshooting Guide → §15, old §15 Appendix → §16. |
+| v2.2 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §14's host-level `cloudcore-repo` — `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed entirely, 15 nodes instead of 17. §13 marked superseded for this stack (kept only for the underlying pattern's own documentation value). Verified for real: a clean `tofu apply`, all four dashboard checks `OK`, `archive.ubuntu.com` confirmed absent from every checked node's `sources.list` and cloud-init log, then a clean `tofu destroy`. One pre-existing, already-documented issue recurred along the way and needed its usual manual fix — F-045's `nginx`/`keepalived` dpkg race, unrelated to this retrofit. |

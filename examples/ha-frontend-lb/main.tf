@@ -136,72 +136,7 @@ module "security_groups" {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
       }
     }
-    # The one-shot repo-builder instance (haFullStack-LLD.md §6) — no
-    # inbound service of its own, just SSH for debugging. The NFS server
-    # itself (cloudcore_nfs_server) takes no security_group_ids at all —
-    # confirmed directly against modules/nfs-server and the platform's
-    # own provisioning code (api/nfs.py): it's a fixed appliance with no
-    # SG hookup, unlike every plain compute instance in this stack.
-    "repo-builder${local.sfx}" = {
-      description = "One-shot apt-repo/artifact-cache builder — SSH only, no service exposed"
-      ingress_rules = {
-        ssh = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
-      }
-      egress_rules = {
-        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
-      }
-    }
   }
-}
-
-# Local apt repo + pinned-artifact cache (haFullStack-LLD.md §6) —
-# "download once, refresh only on an OS bump or a security patch," not a
-# continuously-reconciled cache: every other tier's cloud-init points
-# `sources.list` at this NFS export instead of the real Ubuntu mirror,
-# and fetches step-ca/step-cli/proxysql from its `artifacts` share
-# instead of GitHub — see F-037 (haFullStack-Findings-Log.md), the
-# concurrent-rebuild mirror congestion this slice exists to fix.
-# cloudcore_nfs_server is a fixed appliance (nfs-kernel-server + LVM,
-# confirmed directly against api/nfs.py) with no user_data hook of its
-# own, so the actual repo-building work happens on a separate one-shot
-# instance (module.repo_builder below) that mounts these same exports
-# and populates them, rather than on the NFS server itself.
-module "nfs" {
-  source = "../../modules/nfs-server"
-
-  project     = var.project
-  environment = var.environment
-  owner       = var.owner
-
-  nfs_servers = {
-    "repo${local.sfx}" = {
-      vpc_id  = module.vpc.vpc_ids_by_key[local.vpc_key]
-      flavor  = var.nfs_flavor
-      disk_gb = var.nfs_disk_gb
-      # clients = local.bridge_cidr, NOT the default "vpc" — "vpc"
-      # resolves to the CloudCore VPC's own declared CIDR block
-      # (var.cidr_block), but bridged instances get their real address
-      # from the Lab bridge's DHCP pool instead (192.168.100.0/24),
-      # same mismatch every SG rule in this stack already routes around
-      # via local.bridge_cidr. Confirmed directly: "vpc" here produced
-      # "access denied by server" on every mount attempt from a real
-      # bridged client.
-      shares = [
-        { name = "apt-repo", clients = local.bridge_cidr },
-        { name = "artifacts", clients = local.bridge_cidr },
-      ]
-    }
-  }
-}
-
-module "repo_builder" {
-  source = "../../modules/compute"
-
-  project     = var.project
-  environment = var.environment
-  owner       = var.owner
-
-  instances = local.repo_builder_instances
 }
 
 # Both Keystone nodes need identical Fernet key material from first boot —
