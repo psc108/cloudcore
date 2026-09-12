@@ -125,6 +125,27 @@ module "security_groups" {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
       }
     }
+    # Backend application tier. Its own inbound needs are just SSH +
+    # HTTP from the shared LB (the LB's own :8080 listener proxies to
+    # backend nodes' local nginx on :80 — see nginx-backend.conf.tftpl).
+    # Its *outbound* access to MySQL/ProxySQL/Keystone/RabbitMQ needs no
+    # new rule anywhere else: every one of those tiers' existing ingress
+    # rules is already scoped to local.bridge_cidr (the whole shared
+    # bridge subnet, not a specific peer security group — the
+    # already-established pattern every tier in this file uses, not
+    # source_sg_id-based rules, which this module supports but nothing
+    # in this example has ever actually exercised), and backend's own
+    # bridge-mode instances land on that exact same subnet.
+    "backend${local.sfx}" = {
+      description = "Backend application tier — HTTP from the shared LB tier's subnet, SSH for debugging. The application itself is deployed manually, not by this template."
+      ingress_rules = {
+        http = { ip_protocol = "tcp", from_port = 80, to_port = 80, cidr = local.bridge_cidr }
+        ssh  = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+      }
+      egress_rules = {
+        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
+      }
+    }
     "ca${local.sfx}" = {
       description = "step-ca — issuance/renewal API + plain-HTTP root/intermediate cert serving, from the bridge subnet, plus SSH"
       ingress_rules = {
@@ -288,6 +309,27 @@ module "keystone" {
 # asymmetric (join_cluster runs on the joiner against an already-running
 # seed), and the joiners' user_data needs the seed's real IP, which a
 # single module call can't self-reference (haFullStack-LLD.md §4.1/§4.3.2).
+# instance-group, not compute: identical config on both nodes, no
+# per-node role — the application layer (installed manually afterward,
+# not by this template) is what would introduce any real asymmetry, not
+# this infrastructure. Same reasoning as Keystone.
+module "backend" {
+  source = "../../modules/instance-group"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  name               = "backend${local.sfx}"
+  image_id           = "ubuntu-22.04"
+  flavor             = var.backend_flavor
+  count_instances    = 2
+  vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
+  security_group_ids = [module.security_groups.security_group_ids_by_key["backend${local.sfx}"]]
+  user_data          = local.backend_user_data
+}
+
 module "rabbitmq_seed" {
   source = "../../modules/compute"
 

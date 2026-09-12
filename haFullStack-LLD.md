@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.17 (in progress — built section by section) | Paul Scott
+v0.18 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -1793,10 +1793,11 @@ AWS story where a managed drop-in clearly wins).
 - **RabbitMQ inter-node and MySQL GR recovery-channel TLS** —
   deliberately deferred (§5.1); both are real, separate mechanisms worth
   a future pass, not bundled into this already-broad slice.
-- **Backend↔X mTLS** — fully specified by this section's design (every
-  tier already requires client certs; a backend service would request
-  its own from the same CA using the same mechanism) but can't be built
-  or tested for real until the backend tier itself exists (§1.1).
+- ~~**Backend↔X mTLS**~~ — **resolved.** Built and verified for real in
+  §8 — backend requests its own client cert from the same CA using the
+  same mechanism every other tier already uses, exactly as specified
+  here. Real TLS handshakes confirmed accepted (`Verify return code: 0`)
+  against ProxySQL `:6033`, Keystone `:5443`, and RabbitMQ `:5671`.
 - **On-prem/AWS existing PKI** — as with every other tier, confirm
   whether a given estate already has a trusted internal CA before
   assuming this design is needed wholesale.
@@ -2100,6 +2101,118 @@ deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
 
 ---
 
+## 8. Backend Tier
+
+### 8.1 Scope
+
+The last tier this document's own topology diagram and component table
+(`haFullStack.md` §2.1/§2.2) always described but every prior slice
+explicitly deferred, waiting for it to exist. **Infrastructure only** —
+the actual business-logic application is the user's own, installed by
+hand after this tier is up; this slice's job stops at handing that
+application a ready host: correctly sized disk, an unconfigured local
+NGINX for it to configure itself, network reachability and an mTLS
+client identity to reach ProxySQL/Keystone/RabbitMQ, and an LB route in.
+No application-level integration is assumed or built beyond that
+handoff point.
+
+### 8.2 Environment and Tooling Matrix
+
+Same three-environment structure as every prior tier (§1–§4). Only
+Lab/OpenTofu is built this slice, per this document's own established
+build order.
+
+### 8.3 Lab Environment (CloudCore)
+
+- **Sizing** — `standard.medium` (2 vCPU, 2048MB RAM, 20GB disk).
+  Driven directly by the user's own stated requirement: the application
+  is 2.5GB compressed, needs roughly the same again decompressed, then
+  more again for its running footprint — comfortably inside 20GB with
+  headroom, rather than cutting it close against the 10GB minimum
+  actually asked for.
+- **NGINX — installed, deliberately not configured** — `systemctl
+  enable --now nginx` with its stock package config only, no
+  `nginx.conf`/`sites-available` content written. Per direct
+  instruction: "in lieu of a load balancer since this is the lab
+  version... don't configure nginx, the application itself does that."
+  This is each backend node's own local reverse proxy for the
+  not-yet-installed application to configure for itself, distinct from
+  the shared NGINX/ProxySQL tier that continues to front every HTTP
+  service in this stack (§1) — backend does not get its own dedicated
+  LB tier, matching the Lab-appropriate framing of that same
+  instruction.
+- **mTLS client identity** — same mechanism every other tier already
+  uses (`haFullStack.md` §4.3, `haFullStack-LLD.md` §5): fetch
+  `root_ca.crt`/`intermediate_ca.crt` from the CA node, `step ca
+  certificate` for a client cert, `step ca renew --daemon` for
+  continuous renewal. Provisioned to `/etc/backend/tls/{cert.pem,
+  key.pem,ca.pem,root_ca.pem}` — a well-known path the user's own
+  application can pick up later, not wired into any application logic
+  here since none exists yet.
+- **Security groups** — a new `backend` SG (SSH from `local.bridge_cidr`,
+  HTTP/HTTPS from the shared NGINX/ProxySQL tier's own SG, egress-all —
+  matching every other tier's own SG shape) was the *only* new SG
+  needed. See F-048 (`haFullStack-Findings-Log.md`) — no changes to
+  proxysql/keystone/rabbitmq's own security groups were required at
+  all, a genuine finding about how this stack's existing SG posture was
+  already scoped.
+- **LB routing** — a new `upstream backend { server backend1:80;
+  server backend2:80; }` block on the shared NGINX/ProxySQL tier,
+  matching frontend's/keystone's own already-working upstream shape
+  exactly. `haFullStack.md` §3.1/§3.3/§3.4's own illustrative examples
+  had said `:8080` — corrected to `:80` to match backend's own local
+  NGINX's real stock listening port (same as frontend's own pattern)
+  rather than an arbitrary port number from an earlier draft.
+
+### 8.4 On-Prem Environment
+
+Not started — same pattern as every other tier's own On-Prem section:
+real hypervisor/network specifics needed before porting this design,
+not assumed to be a drop-in port of the Lab's bridge-network-specific
+pieces (the SG-scoped-to-`local.bridge_cidr` posture in particular,
+per F-048, would need re-examining against whatever real network
+segmentation an on-prem estate actually uses).
+
+### 8.5 AWS Environment
+
+Not started — an ALB target group per backend ASG/instance set,
+Security Group ingress from the ALB's own SG rather than a CIDR block,
+otherwise the same disk/nginx/mTLS shape.
+
+### 8.6 Cross-Environment Consistency
+
+The guest-level cloud-init content (nginx install, mTLS cert
+provisioning) doesn't change with the provider, same as every other
+tier — only the surrounding network/LB plumbing does.
+
+### 8.7 Open Items
+
+- **The application itself** — genuinely out of scope for this slice by
+  design, not an oversight. Whatever gets installed at
+  `/etc/backend/tls/` and behind the unconfigured local NGINX is the
+  user's own next step.
+- **On-Prem/AWS** — not started, per §8.4/§8.5.
+- **`tls-status.py`** (the frontend's own mesh-of-trust dashboard check,
+  §5) does not yet include backend's own handshakes to
+  ProxySQL/Keystone/RabbitMQ — verified manually this slice
+  (`openssl s_client` against each, `Verify return code: 0` for all
+  three) rather than added to that script. Worth folding in later if
+  backend's mTLS posture needs continuous monitoring the way the other
+  four tiers' already does.
+
+**Verification for this phase (Lab/OpenTofu):** built and verified
+against real infrastructure, not just `tofu apply` completing without
+error — both backend nodes reached `running` with no `error_message`;
+NGINX confirmed serving its stock default page; packages confirmed
+sourced from the host-level repo, not `archive.ubuntu.com`; real TLS
+handshakes from a backend node, presenting its own CA-issued client
+cert, confirmed accepted (`Verify return code: 0`) against ProxySQL
+`:6033`, Keystone `:5443`, and RabbitMQ `:5671`; the shared LB's new
+backend route confirmed reachable (`200`) via the VIP. Clean `tofu
+destroy` afterward — 31 resources, 0 instances remaining.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2121,3 +2234,4 @@ deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
 | v0.15 | 2026-09-11 | Paul Scott | New §6, Local Package Repository (cross-cutting) — built and verified for real directly, not drafted first: a real `dpkg-scanpackages`-indexed local apt repo plus a pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion behind F-037. Six real findings along the way (F-039–F-045, `haFullStack-Findings-Log.md`) — most notably a genuine provider bug (`cloudcore_nfs_server`'s `Create()` never waited for a populated `private_ip`, F-039, fixed and rebuilt) and cloud-init's own apt module silently discarding the NFS-repo `sources.list` rewrite (F-042). A node rebuilt with the full fix finished its entire package-install phase in under 6 minutes versus 22+ minutes stuck on the bootstrap step alone beforehand. All four dashboard checks confirmed `OK` twice in a row on the finished rebuild. |
 | v0.16 | 2026-09-11 | Paul Scott | New §7, Host-Level Package Repository — §6's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, not tracked as a CloudCore resource so no `tofu destroy` can reach it. Extended to cover every example template's package/artifact needs, including two third-party apt repos (Adoptium, Kismet) mirrored on the throwaway builder and pinned release artifacts (Ghidra, kiwix-tools, the Wikipedia ZIM, RTL8812AU driver source) cached alongside the existing `step-ca`/`step-cli`/`proxysql` set. F-040 resolved (§6.4 updated) — a real backend `PATCH` endpoint plus provider `Update()` support now handle in-place share-client changes. F-041's platform-level fix noted in §6.3. New F-046 (a `write_files`/`owner:` race in `api/nfs.py`, same class as F-026) and F-047 (a genuinely stalled, not merely slow, apt-mirror connection) logged in `haFullStack-Findings-Log.md`. Protected against accidental removal: `teardown-network.sh` requires `--force` while the service is active; its build output survives `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself. |
 | v0.17 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §7's host-level `cloudcore-repo` — §6's own NFS design marked superseded for this stack (kept as a design reference only). `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed, 15 nodes instead of 17. Verified with a real `tofu apply`/dashboard-check/`tofu destroy` cycle from a clean slate — see §7.4. |
+| v0.18 | 2026-09-12 | Paul Scott | New §8, Backend Tier — the last tier this document's own diagram always described but every prior slice deferred, now built: 2 nodes, `standard.medium` (20GB disk, sized against the user's own stated 2.5GB-compressed/decompressed/running-footprint requirement), local NGINX installed but deliberately unconfigured (the not-yet-installed application configures itself), mTLS client identity from the same CA every other tier uses. §5's "Backend↔X mTLS... can't be built until the backend tier exists" open item resolved — real handshakes confirmed accepted against ProxySQL/Keystone/RabbitMQ. `haFullStack.md` §3.1/§3.3/§3.4's stale `:8080` upstream examples corrected to `:80` to match backend's own real NGINX port. One finding (F-048): no new security-group rules were needed on proxysql/keystone/rabbitmq at all — their existing ingress was already scoped to the whole bridge subnet, not narrowed per-source-SG. |

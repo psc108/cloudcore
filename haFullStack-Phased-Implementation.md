@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.19 (in progress — built section by section) | Paul Scott
+v0.20 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -30,7 +30,9 @@ environment/tool combination as each phase completes.
 | 2 | Database Tier — MySQL High Availability | LLD §2 | Phase 2.A complete (2A-01–2A-17) — see [findings](haFullStack-Findings-Log.md#phase-2a--lab-opentofu-database-tier); On-Prem/AWS and Ansible still pending |
 | 3 | Identity Tier — Keystone | LLD §3 | Phase 3.A complete (3A-01–3A-15) — see [findings](haFullStack-Findings-Log.md#phase-3a--lab-opentofu-identity-tier); On-Prem/AWS and Ansible still pending |
 | 4 | Message Broker Tier — RabbitMQ | LLD §4 | Phase 4.A complete (4A-01–4A-15) — see [findings](haFullStack-Findings-Log.md#phase-4a--lab-opentofu-message-broker-tier); On-Prem/AWS and Ansible still pending |
-| 5 | TLS and Mutual TLS — Cross-Cutting | LLD §5 | Draft, under review |
+| 5 | TLS and Mutual TLS — Cross-Cutting | LLD §5 | Phase 5.A complete (5A-01–5A-13, 5A-17, 5A-18 done; 5A-14–5A-16 open) — see [findings](haFullStack-Findings-Log.md#phase-5a--lab-opentofu-tls-and-mutual-tls) |
+| 6 | Local Package Repository — Cross-Cutting | LLD §6/§7 | Phase 6.A complete (6A-01–6A-11); `ha-frontend-lb` since retrofitted onto LLD §7's host-level repo — see [findings](haFullStack-Findings-Log.md#phase-6a--lab-opentofu-local-package-repository) |
+| 7 | Backend Tier | LLD §8 | Phase 7.A complete (7A-01–7A-11) — see [findings](haFullStack-Findings-Log.md#phase-7a--lab-opentofu-backend-tier) |
 
 ---
 
@@ -421,6 +423,36 @@ Not started — same as 6.E.
 
 ---
 
+## Phase 7 — Backend Tier
+
+The last tier this document's own component table and topology diagram
+(`haFullStack.md` §2.1/§2.2) always described but every prior phase
+explicitly deferred. Infrastructure only, by direct instruction —
+the application itself is the user's own, installed by hand afterward.
+
+### Phase 7.A — Lab, OpenTofu — Done
+
+| ID | Task | Description | Status |
+|---|---|---|---|
+| 7A-01 | Backend instances | 2 nodes, `standard.medium` (20GB disk — sized against the user's own stated 2.5GB-compressed/decompressed/running-footprint requirement) | Done |
+| 7A-02 | NGINX installed, not configured | `systemctl enable --now nginx`, stock package config only — the not-yet-installed application configures it | Done |
+| 7A-03 | Backend security group | SSH from `local.bridge_cidr`, HTTP/HTTPS from the shared NGINX/ProxySQL tier's SG, egress-all | Done — no changes needed to proxysql/keystone/rabbitmq's own SGs, [F-048](haFullStack-Findings-Log.md#f-048--no-new-security-group-rules-were-needed-on-proxysqlkeystonerabbitmq-to-let-backend-reach-them) |
+| 7A-04 | mTLS client identity | Same CA/`step ca certificate` mechanism as every other tier, provisioned to `/etc/backend/tls/` | Done |
+| 7A-05 | LB routing | New `upstream backend {...}` on the shared NGINX/ProxySQL tier, port corrected from `haFullStack.md`'s stale `:8080` example to backend's real `:80` | Done |
+| 7A-06 | `tofu apply` | Stand up for real — 17 nodes total | Done |
+| 7A-07 | Verify instance health | Both backend nodes `running`, no `error_message` | Done |
+| 7A-08 | Verify package provenance | Packages sourced from the host-level repo, not `archive.ubuntu.com` | Done |
+| 7A-09 | Verify mTLS for real | `openssl s_client` from a backend node against ProxySQL `:6033`, Keystone `:5443`, RabbitMQ `:5671`, presenting backend's own client cert | Done — `Verify return code: 0` against all three |
+| 7A-10 | Verify LB routing | `curl` the shared VIP's new backend route | Done — `200` |
+| 7A-11 | Teardown | `tofu destroy`; confirm no orphaned resources | Done — 31 resources destroyed, 0 instances remain |
+
+**Verification for this phase (Lab/OpenTofu):** 7A-09/7A-10 are the real
+test, matching this document's own established bar — not just a `tofu
+apply` completing without error, but real TLS handshakes accepted and a
+real HTTP route reachable through the VIP. Both confirmed directly.
+
+---
+
 ## Cross-Cutting Notes
 
 - Every phase's `.A` (Lab) sub-path is the only one that can be built and
@@ -462,3 +494,4 @@ Not started — same as 6.E.
 | v0.17 | 2026-09-11 | Paul Scott | Sixth phase — Phase 6, Local Package Repository (cross-cutting), built directly and verified for real rather than drafted first (6A-01–6A-11 done, 6A-12 teardown remains open). A local `dpkg-scanpackages`-indexed apt repo (260 packages) plus a pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion behind F-037. Six real findings along the way — a genuine provider bug (`cloudcore_nfs_server`'s `Create()` never waited for a populated `private_ip`, F-039, fixed and redeployed), the NFS module's `"vpc"` share default resolving to the wrong CIDR for this Lab (F-041), cloud-init's own apt module silently discarding the NFS-repo `sources.list` rewrite (F-042), the bootstrap `nfs-common` install itself still hammering the full mirror (F-043), a `-target`-scoped apply leaving stale baked-in IPs on a dependent tier (F-044), and a recurring `nginx`+`keepalived` dpkg quirk unrelated to any of the above (F-045). Verified directly: the same tier (Keystone) went from 22+ minutes stuck on the bootstrap step alone to under 6 minutes for its entire package-install phase after the fix. All four dashboard checks confirmed `OK` twice in a row on the finished rebuild. |
 | v0.18 | 2026-09-11 | Paul Scott | Platform Hardening review (post-Phase 6.A), same pattern as the reviews after Phase 1.A/2.A: reflecting on Phase 6.A surfaced a better generalization than fixing it in place — the per-project NFS repo became a host-level, always-available `cloudcore-repo` service (`haFullStack.md` §14, `haFullStack-LLD.md` §7), not tracked as a CloudCore resource so no project's `tofu destroy` can reach it, and extended to cover every example template's package/artifact needs rather than just `ha-frontend-lb`'s. F-040 resolved for real with a generic backend `PATCH` endpoint plus provider support. Two new findings from live verification, `write_files`/`owner:` in `api/nfs.py` (F-046, same class as F-026) and a genuinely stalled apt-mirror connection recovered by killing the stuck apt worker (F-047). Protected against accidental removal (`teardown-network.sh` requires `--force` while active; build output survives `git clean -xfd`). Not yet consumed by `ha-frontend-lb` itself — Phase 6.A's own NFS repo remains that stack's actual mechanism; no Phase 6 task-table changes, matching how Platform Hardening reviews are tracked (Findings Log + Document History only, not phase/task rows). |
 | v0.19 | 2026-09-12 | Paul Scott | Second Platform Hardening review (post-Phase 6.A/v0.18) — `ha-frontend-lb` retrofitted onto the host-level `cloudcore-repo` service, retiring Phase 6.A's own NFS design for this stack entirely (`module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed). 15 nodes instead of 17. Verified with a real `tofu apply`/dashboard-check/`tofu destroy` cycle from a clean slate — all four checks `OK`, `archive.ubuntu.com` confirmed absent from checked nodes' cloud-init logs. No Phase 6 task-table changes, same reasoning as v0.18. |
+| v0.20 | 2026-09-12 | Paul Scott | Seventh phase — Phase 7, Backend Tier (7A-01–7A-11 done), the last tier this document's own summary table and `haFullStack.md`'s component table/topology diagram always described but every prior phase deferred. Infrastructure only, by direct instruction — 2 nodes sized against the user's own stated application-footprint requirement, local NGINX installed but deliberately left unconfigured, mTLS client identity from the same CA every other tier trusts. Resolved `haFullStack-LLD.md` §5's "Backend↔X mTLS... can't be built until the backend tier exists" open item for real — TLS handshakes from a backend node confirmed accepted against ProxySQL/Keystone/RabbitMQ. One finding (F-048): no security-group changes were needed on proxysql/keystone/rabbitmq at all. Also corrected the summary table above, stale since Phase 5 was drafted (rows 5-6 hadn't been marked complete). |

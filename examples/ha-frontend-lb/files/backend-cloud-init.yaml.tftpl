@@ -1,0 +1,88 @@
+#cloud-config
+# Backend application tier — pure infrastructure handoff. This platform
+# does not install, configure, or know anything about the application
+# itself (deployed manually afterward) — its job is: enough disk for a
+# 2.5GB-compressed app plus decompression plus its running footprint
+# (var.backend_flavor, standard.medium's 20GB comfortably covers the
+# stated ~10GB need), nginx installed and running with its untouched
+# stock config (the application configures it, not this template — no
+# nginx.conf/sites-available content is written here, deliberately), and
+# an mTLS client certificate from the Lab CA so the application can
+# authenticate to ProxySQL/Keystone/RabbitMQ the same way every other
+# tier already does (haFullStack-LLD.md §5.7 — "Backend↔X mTLS... fully
+# specified by this section's design... a backend service would request
+# its own [cert] from the same CA using the same mechanism" — applied
+# here verbatim, no new design). Genuinely identical config on both
+# nodes — no per-node role, same as Keystone — so this uses
+# modules/instance-group, not modules/compute.
+# apt_preserve_sources_list / bootcmd — same host-level cloudcore-repo
+# rewrite as every other tier post-retrofit; see
+# keystone-cloud-init.yaml.tftpl for the full rationale.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - nginx
+  - curl
+  - ca-certificates
+
+write_files:
+  # step-ca client-cert provisioning, adapted from keystone's own
+  # setup-keystone-tls.sh: same `step ca certificate` invocation (the
+  # provisioner's default X.509 leaf template grants both serverAuth and
+  # clientAuth EKUs, confirmed by inspecting ca-cloud-init.yaml.tftpl's
+  # provisioner setup — no separate "client-only" flag or template
+  # needed), but no Apache/mod_ssl vhost — backend has no TLS listener of
+  # its own to wire up here, it's a pure outbound *client* to
+  # ProxySQL/Keystone/RabbitMQ. Cert material lands at /etc/backend/tls/,
+  # a well-known handoff path for whatever application gets installed
+  # afterward, mirroring every other tier's own /etc/<service>/ssl/
+  # convention.
+  - path: /usr/local/sbin/setup-backend-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 180); do
+        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/backend/tls
+      step ca certificate "$LOCAL_IP" /etc/backend/tls/cert.pem /etc/backend/tls/key.pem \
+        --san "$LOCAL_IP" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/backend/tls/ca.pem
+      cp /tmp/root_ca.crt /etc/backend/tls/root_ca.pem
+      chmod 644 /etc/backend/tls/cert.pem /etc/backend/tls/ca.pem /etc/backend/tls/root_ca.pem
+      chmod 600 /etc/backend/tls/key.pem
+
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/backend/tls/cert.pem /etc/backend/tls/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/backend/tls/root_ca.pem
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
+
+runcmd:
+  - /usr/local/sbin/setup-backend-tls.sh
+  - systemctl enable --now nginx

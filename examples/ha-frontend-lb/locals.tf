@@ -60,11 +60,34 @@ locals {
     keystone_ips = values(module.keystone.private_ips_by_key)
   })
 
-  # Concatenated, not two separate files — sites-available/default only
-  # loads once per vhost-style config in this setup, and both are
+  # Dedicated port (8080), not vhost routing — same reasoning and same
+  # precedent as Keystone's own :5000 above, applied to backend now that
+  # its tier actually exists (haFullStack-LLD.md §5.7's "Backend↔X mTLS"
+  # open item). Upstream members listen on :80 (backend's own local
+  # nginx, stock config) — haFullStack.md §3.1's old illustrative example
+  # showed backend1:8080/backend2:8080 for the *upstream member* port;
+  # corrected here since that's not what an unconfigured stock nginx
+  # actually listens on, not a deviation from an established real value.
+  nginx_backend_conf = templatefile("${path.module}/files/nginx-backend.conf.tftpl", {
+    backend_ips = values(module.backend.private_ips_by_key)
+  })
+
+  # Concatenated, not separate files — sites-available/default only loads
+  # once per vhost-style config in this setup, and all three are
   # http{}-context server{} blocks that coexist fine in one file (each
-  # with its own listen directive: 80 vs 5000).
-  nginx_conf = "${local.nginx_frontend_conf}\n${local.nginx_keystone_conf}"
+  # with its own listen directive: 80, 5000, 8080).
+  nginx_conf = "${local.nginx_frontend_conf}\n${local.nginx_keystone_conf}\n${local.nginx_backend_conf}"
+
+  # The application deployed onto these nodes afterward (not by this
+  # template) is what would actually use these — provisioned now so that
+  # step exists, following haFullStack-LLD.md §5.7's already-specified
+  # design ("a backend service would request its own [cert] from the
+  # same CA using the same mechanism") rather than inventing anything new.
+  backend_user_data = templatefile("${path.module}/files/backend-cloud-init.yaml.tftpl", {
+    ca_ip                   = local.ca_ip
+    ca_provisioner_password = local.ca_provisioner_password
+    step_cli_deb_sha256     = local.step_cli_deb_sha256
+  })
 
   # Pinned, checksum-verified — same pattern as proxysql_deb_sha256 below.
   step_ca_deb_sha256  = "f8e43f0f2ba1e37121b75623993ea0bece5cc3a02b73eefc16e414d41c9fec71"

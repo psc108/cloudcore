@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v2.2 | 12 September 2026 | Paul Scott
+v2.3 | 12 September 2026 | Paul Scott
 
 ---
 
@@ -169,8 +169,8 @@ http {
         server frontend2:80  max_fails=3 fail_timeout=10s;
     }
     upstream backend {
-        server backend1:8080 max_fails=3 fail_timeout=10s;
-        server backend2:8080 max_fails=3 fail_timeout=10s;
+        server backend1:80 max_fails=3 fail_timeout=10s;
+        server backend2:80 max_fails=3 fail_timeout=10s;
     }
     upstream keystone {
         server keystone1:5000 max_fails=3 fail_timeout=10s;
@@ -244,8 +244,8 @@ after a cool-down period.
 
 ```nginx
 upstream backend {
-    server backend1:8080 max_fails=3 fail_timeout=10s;
-    server backend2:8080 max_fails=3 fail_timeout=10s;
+    server backend1:80 max_fails=3 fail_timeout=10s;
+    server backend2:80 max_fails=3 fail_timeout=10s;
 }
 ```
 
@@ -269,8 +269,8 @@ is unnecessary.
 # Only if statelessness genuinely cannot be achieved short-term:
 upstream backend {
     ip_hash;
-    server backend1:8080;
-    server backend2:8080;
+    server backend1:80;
+    server backend2:80;
 }
 ```
 
@@ -1010,3 +1010,4 @@ journalctl -u keepalived -f
 | v2.0 | 2026-09-11 | Paul Scott | New §13, Local Package Repository — a real local apt repo + pinned-artifact cache, both NFS-served, eliminating the concurrent-rebuild mirror congestion first observed as F-037. Built and verified for real directly (not drafted first): confirmed a rebuilt tier went from 22+ minutes stuck on a single bootstrap step to under 6 minutes for its entire package-install phase. Sections renumbered: old §13 Troubleshooting Guide → §14, old §14 Appendix → §15 (no other section in this document referenced either by number, confirmed before renumbering). |
 | v2.1 | 2026-09-11 | Paul Scott | New §14, Host-Level Package Repository (Platform Capability) — §13's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, extended to cover every example template's package/artifact needs (not just `ha-frontend-lb`), including two third-party apt repos (Adoptium, Kismet) and pinned release artifacts. Protected against accidental removal: `teardown-network.sh` now refuses to delete the bridge it's bound to without `--force`, and its build output survives a `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself — §13's NFS repo remains that stack's actual mechanism until a retrofit is done. Sections renumbered: old §14 Troubleshooting Guide → §15, old §15 Appendix → §16. |
 | v2.2 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §14's host-level `cloudcore-repo` — `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed entirely, 15 nodes instead of 17. §13 marked superseded for this stack (kept only for the underlying pattern's own documentation value). Verified for real: a clean `tofu apply`, all four dashboard checks `OK`, `archive.ubuntu.com` confirmed absent from every checked node's `sources.list` and cloud-init log, then a clean `tofu destroy`. One pre-existing, already-documented issue recurred along the way and needed its usual manual fix — F-045's `nginx`/`keepalived` dpkg race, unrelated to this retrofit. |
+| v2.3 | 2026-09-12 | Paul Scott | Backend tier built (`haFullStack-LLD.md` §8) — the last tier §2.1's component table and topology diagram always described but every prior slice deferred. Infrastructure only, by direct instruction: 2 nodes sized for the user's own stated application footprint, local NGINX installed but deliberately left unconfigured for that application to set up itself, mTLS client identity from the same CA every other tier already trusts. §3.1/§3.3/§3.4's illustrative NGINX examples corrected from `backend1:8080`/`backend2:8080` to `:80` — backend's real local NGINX listens on its stock default port, not an arbitrary port number carried forward from an earlier draft. Verified for real: TLS handshakes from a backend node accepted (`Verify return code: 0`) against ProxySQL/Keystone/RabbitMQ, the shared LB's new backend route reachable via the VIP, then a clean `tofu destroy`. |

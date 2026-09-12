@@ -88,3 +88,9 @@ variable "ca_flavor" {
   default     = "standard.nano"
 }
 
+variable "backend_flavor" {
+  description = "Compute flavor for the two backend application nodes. standard.medium's 20GB disk covers the stated ~10GB requirement (2.5GB compressed app + ~2.5GB decompression + running footprint) with headroom; its 2048MB RAM is reasonable for decompressing/running an application of unspecified size. The application itself is installed manually after this infrastructure exists — not provisioned by this template."
+  type        = string
+  default     = "standard.medium"
+}
+

@@ -1325,6 +1325,22 @@ produce a genuine quorum queue via the management API's own type field.
 
 ---
 
+## Phase 7.A — Lab, OpenTofu (Backend Tier)
+
+### F-048 — No new security-group rules were needed on proxysql/keystone/rabbitmq to let backend reach them
+
+**Where:** `examples/ha-frontend-lb`'s `security_groups` module — the existing ingress rules on the `proxysql`, `keystone`, and `rabbitmq` security groups.
+
+**Symptom:** Not a failure — the opposite. Building the backend tier's own security group and expecting to also need new `source_sg_id`-scoped ingress rules added to proxysql/keystone/rabbitmq's own security groups (matching the plan's own stated approach), it turned out none were required at all — backend's real TLS handshakes against ProxySQL `:6033`, Keystone `:5443`, and RabbitMQ `:5671` succeeded on the first attempt with zero changes to those three tiers' SGs.
+
+**Root cause:** Every existing ingress rule on proxysql/keystone/rabbitmq's own security groups is already scoped to `local.bridge_cidr` — the entire shared bridge subnet (`192.168.100.0/24`) — not narrowed to specific source security groups, despite `source_sg_id`-based rules being a real, already-used capability elsewhere in this same `security_groups` module (e.g. keystone's SG already allows ingress from frontend's SG by ID for other paths). Any instance anywhere on the bridge, including a brand new backend tier that didn't exist when those rules were written, is already implicitly permitted.
+
+**Assessment:** Not a bug to fix — this is a real, accurate observation about how permissive this Lab's existing security-group posture already is (every bridged instance trusts every other bridged instance at the network layer; TLS/mTLS is what actually enforces trust at the application layer, per §5). Worth carrying forward as a known characteristic if this design is ever ported to On-Prem/AWS, where CIDR-wide trust across an entire subnet is a much bigger blast radius than it is here — those environments' own SGs should almost certainly use `source_sg_id`-scoped rules properly rather than inheriting this Lab-specific shortcut, per the LLD §8.4/§8.5 On-Prem/AWS notes.
+
+**Verified by:** Direct reproduction — no SG changes made to proxysql/keystone/rabbitmq at all, and `openssl s_client` from a backend node against all three, presenting backend's own CA-issued client cert, returned `Verify return code: 0` on the first real attempt.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
