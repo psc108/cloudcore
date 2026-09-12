@@ -218,6 +218,7 @@ module "frontend" {
   subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
   security_group_ids = [module.security_groups.security_group_ids_by_key["frontend${local.sfx}"]]
   user_data          = local.frontend_user_data
+  users              = local.ecs_user
 }
 
 # Split into two module calls (bootstrap node, then joiners) rather than
@@ -277,6 +278,7 @@ module "memcached" {
   subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
   security_group_ids = [module.security_groups.security_group_ids_by_key["memcached${local.sfx}"]]
   user_data          = local.memcached_user_data
+  users              = local.ecs_user
 }
 
 # instance-group, not compute: unlike MySQL's bootstrap/joiner split or
@@ -302,6 +304,7 @@ module "keystone" {
   subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
   security_group_ids = [module.security_groups.security_group_ids_by_key["keystone${local.sfx}"]]
   user_data          = local.keystone_user_data
+  users              = local.ecs_user
 }
 
 # Split into two module calls (seed, then joiners) — same reasoning as
@@ -328,6 +331,7 @@ module "backend" {
   subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
   security_group_ids = [module.security_groups.security_group_ids_by_key["backend${local.sfx}"]]
   user_data          = local.backend_user_data
+  users              = local.ecs_user
 }
 
 module "rabbitmq_seed" {
@@ -348,4 +352,24 @@ module "rabbitmq_joiners" {
   owner       = var.owner
 
   instances = local.rabbitmq_joiner_instances
+}
+
+# Short-hostname DNS for every instance in the stack (see locals.tf's
+# dns_records for how the name-per-tier keying works) — created after every
+# other module above since it needs each one's real private_ip.
+module "dns_records" {
+  source = "../../modules/dns-records"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  records = {
+    for name, ip in local.dns_records : name => {
+      zone  = "instances.cloudcore.internal"
+      name  = name
+      type  = "A"
+      value = ip
+    }
+  }
 }

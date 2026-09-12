@@ -10,6 +10,15 @@ locals {
   # have to live in this real subnet, not var.cidr_block.
   bridge_cidr = "192.168.100.0/24"
 
+  # Every instance in this stack gets an "ecs" user with passwordless sudo
+  # for operational/config-management access, distinct from the default
+  # "ubuntu" image user. No ssh_keys given here — cloudcore_instance's
+  # users block always adds the CloudCore inter-instance keypair to every
+  # extra user automatically (both inbound authorized_keys and outbound
+  # ~/.ssh/), which is exactly what lets ecs SSH from any node in this
+  # stack to any other node's ecs account without a separate key to manage.
+  ecs_user = [{ username = "ecs", sudo = true }]
+
   # VRRP is IP protocol 112, which this platform's security-group model
   # doesn't expose individually (tcp/udp/icmp/-1 only — see
   # modules/security-groups) — see the "-1"-scoped ingress rule in
@@ -100,6 +109,7 @@ locals {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
       security_group_ids = [module.security_groups.security_group_ids_by_key["ca${local.sfx}"]]
+      users              = local.ecs_user
       user_data = templatefile("${path.module}/files/ca-cloud-init.yaml.tftpl", {
         step_ca_deb_sha256   = local.step_ca_deb_sha256
         step_cli_deb_sha256  = local.step_cli_deb_sha256
@@ -134,6 +144,7 @@ locals {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
       security_group_ids = [module.security_groups.security_group_ids_by_key["mysql${local.sfx}"]]
+      users              = local.ecs_user
       user_data = templatefile("${path.module}/files/mysql-cloud-init.yaml.tftpl", {
         server_id               = 1
         is_bootstrap            = true
@@ -163,6 +174,7 @@ locals {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
       security_group_ids = [module.security_groups.security_group_ids_by_key["mysql${local.sfx}"]]
+      users              = local.ecs_user
       user_data = templatefile("${path.module}/files/mysql-cloud-init.yaml.tftpl", {
         server_id               = cfg.server_id
         is_bootstrap            = false
@@ -204,6 +216,7 @@ locals {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
       security_group_ids = [module.security_groups.security_group_ids_by_key["proxysql${local.sfx}"]]
+      users              = local.ecs_user
       user_data = templatefile("${path.module}/files/proxysql-cloud-init.yaml.tftpl", {
         proxysql_deb_url        = local.proxysql_deb_url
         proxysql_deb_sha256     = local.proxysql_deb_sha256
@@ -277,6 +290,7 @@ locals {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
       security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
+      users              = local.ecs_user
       user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
         is_seed                 = true
         seed_ip                 = ""
@@ -301,6 +315,7 @@ locals {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
       security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
+      users              = local.ecs_user
       user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
         is_seed                 = false
         seed_ip                 = values(module.rabbitmq_seed.private_ips_by_key)[0]
@@ -319,5 +334,27 @@ locals {
   rabbitmq_all_ips = concat(
     values(module.rabbitmq_seed.private_ips_by_key),
     values(module.rabbitmq_joiners.private_ips_by_key),
+  )
+
+  # Short-hostname DNS, one A record per instance in the stack, so ecs (or
+  # anyone) can "ssh <name>" between nodes instead of needing the private
+  # IP or the full FQDN — the platform's DHCP domain-search option
+  # (instances.cloudcore.internal, set up by api/setup-network.sh) makes
+  # the bare name resolve. modules/compute's private_ips_by_key is already
+  # keyed by the exact short name (e.g. "mysql-a", "proxysql-b") since
+  # that's the caller-supplied key in var.instances; modules/instance-group
+  # is keyed by two-digit index only ("01", "02"), so those four tiers
+  # need their group name prefixed back on here.
+  dns_records = merge(
+    { for k, ip in module.ca.private_ips_by_key : k => ip },
+    { for k, ip in module.mysql_bootstrap.private_ips_by_key : k => ip },
+    { for k, ip in module.mysql_replicas.private_ips_by_key : k => ip },
+    { for k, ip in module.proxysql.private_ips_by_key : k => ip },
+    { for k, ip in module.rabbitmq_seed.private_ips_by_key : k => ip },
+    { for k, ip in module.rabbitmq_joiners.private_ips_by_key : k => ip },
+    { for k, ip in module.frontend.private_ips_by_key : "frontend${local.sfx}-${k}" => ip },
+    { for k, ip in module.memcached.private_ips_by_key : "memcached${local.sfx}-${k}" => ip },
+    { for k, ip in module.keystone.private_ips_by_key : "keystone${local.sfx}-${k}" => ip },
+    { for k, ip in module.backend.private_ips_by_key : "backend${local.sfx}-${k}" => ip },
   )
 }
