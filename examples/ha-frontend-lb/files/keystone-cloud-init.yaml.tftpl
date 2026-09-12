@@ -37,6 +37,8 @@ packages:
   - mysql-client
   - curl
   - ca-certificates
+  - python3-requests
+  - python3-yaml
 
 write_files:
   # Identical Fernet key material on both nodes, generated once in
@@ -283,6 +285,1315 @@ write_files:
           "identity:get_domain_config_default": "rule:admin_required"
       }
 
+  # Generic, idempotent Keystone role/domain/user importer plus its two
+  # input files, provided verbatim (DXC Technology's import_p3.py) —
+  # ported in unmodified. Creates roles.yml's 125 application roles
+  # (with implication hierarchies) and system_domain.yml's "system"
+  # domain + 22 service/admin accounts. Run locally on each Keystone
+  # node (setup-keystone-roles.sh below), not from a remote machine, per
+  # direct instruction.
+  - path: /usr/local/lib/keystone-import/import_p3.py
+    permissions: '0644'
+    content: |
+      #!/usr/bin/env python
+
+      #  Copyright (c) 2022 DXC Technology. All rights reserved.
+
+      import argparse
+      import os
+      import requests
+      import string
+      import sys
+      import yaml
+
+
+      class ExtendedTemplate(string.Template):
+          """
+          Template with customized idpattern since we also want to allow ".", "-" in identifier
+          """
+          idpattern = r'[_a-z][_a-z0-9.\-]*'
+
+
+      def read_import_file(work_dir, file_name, params):
+          """
+          Reads import file
+          """
+          yml_path = os.path.join(work_dir, file_name)
+          if os.path.isfile(yml_path):
+              with open(yml_path, "r") as yml_file:
+                  yml_template = ExtendedTemplate(yml_file.read())
+                  yml_content = yml_template.safe_substitute(params)
+                  return yaml.safe_load(yml_content)
+          else:
+              return None
+
+
+      def login(url, username, password, ca):
+          """
+          Login into Keystone API
+          """
+          sys.stdout.write("Login user\n")
+
+          api_url = url + "/auth/tokens"
+          login_body = {
+              "auth": {
+                  "identity": {
+                      "methods": [
+                          "password"
+                      ],
+                      "password": {
+                          "user": {
+                              "name": username,
+                              "domain": {
+                                  "name": "Default"
+                              },
+                              "password": password
+                          }
+                      }
+                  },
+                  "scope": {
+                      "project": {
+                          "name": "admin",
+                          "domain": {
+                              "name": "Default"
+                          }
+                      }
+                  }
+              }
+          }
+          response = requests.post(api_url, json=login_body, verify=ca)
+          if response.status_code != 201:
+              sys.stdout.write("Login error {0}\n".format(response.status_code))
+              raise
+          return response.headers['X-Subject-Token']
+
+
+      def load_roles(url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.get(url + "/roles", headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Get roles error {0}\n".format(response.status_code))
+              raise
+          role_list = response.json()['roles']
+          sys.stdout.write("Loaded {0} existing roles\n".format(len(role_list)))
+          result = {}
+          for role in role_list:
+              result[role['name']] = role
+          return result
+
+
+      def load_implied_roles(url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.get(url + "/role_inferences", headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Get role inferences error {0}\n".format(response.status_code))
+              raise
+          role_list = response.json()['role_inferences']
+          sys.stdout.write("Loaded {0} existing roles implications\n".format(len(role_list)))
+          result = {}
+          for role in role_list:
+              implied = []
+              for inherited in role['implies']:
+                  implied.append(inherited['name'])
+              result[role['prior_role']['name']] = implied
+          return result
+
+
+      def import_role(role, roles, url, token, ca):
+          role_name = role['role']
+
+          if role_name not in roles:
+              new_role = create_role(role_name, url, token, ca)
+              roles[role_name] = new_role
+
+          return
+
+
+      def import_role_inheritance(role, roles, implied_roles, url, token, ca):
+          role_name = role['role']
+
+          if 'implies' in role:
+              for implied_role in role['implies']:
+                  if role_name not in implied_roles or implied_role not in implied_roles[role_name]:
+                      create_role_implication(role_name, implied_role, roles, url, token, ca)
+                      if role_name not in implied_roles:
+                          implied_roles[role_name] = [implied_role]
+                      else:
+                          implied_roles[role_name].append(implied_role)
+
+          if 'not_implies' in role:
+              for implied_role in role['not_implies']:
+                  if role_name in implied_roles and implied_role in implied_roles[role_name]:
+                      delete_role_implication(role_name, implied_role, roles, url, token, ca)
+                      if role_name in implied_roles:
+                          implied_roles[role_name].remove(implied_role)
+
+          return
+
+
+      def create_role(role_name, url, token, ca):
+          sys.stdout.write("Create role {0}\n".format(role_name))
+          headers = {"X-Auth-Token": token}
+          api_url = url + "/roles"
+          role_body = {
+              "role": {
+                  "name": role_name
+              }
+          }
+          response = requests.post(api_url, json=role_body, headers=headers, verify=ca)
+          if response.status_code != 201:
+              sys.stdout.write("Create role error {0}\n".format(response.status_code))
+              raise
+          return response.json()['role']
+
+
+      def create_role_implication(parent_role_name, inherited_role_name, roles, url, token, ca):
+          sys.stdout.write("Create role implication {0} -> {1}\n".format(parent_role_name, inherited_role_name))
+          headers = {"X-Auth-Token": token}
+          parent_role_id = roles[parent_role_name]['id']
+          inherited_role_id = roles[inherited_role_name]['id']
+          api_url = url + "/roles/" + parent_role_id + "/implies/" + inherited_role_id
+          response = requests.put(api_url, headers=headers, verify=ca)
+          if response.status_code != 201:
+              sys.stdout.write("Create role implication error {0}\n".format(response.status_code))
+              raise
+          return
+
+
+      def delete_role_implication(parent_role_name, inherited_role_name, roles, url, token, ca):
+          sys.stdout.write("Delete role implication {0} -> {1}\n".format(parent_role_name, inherited_role_name))
+          headers = {"X-Auth-Token": token}
+          parent_role_id = roles[parent_role_name]['id']
+          inherited_role_id = roles[inherited_role_name]['id']
+          api_url = url + "/roles/" + parent_role_id + "/implies/" + inherited_role_id
+          response = requests.delete(api_url, headers=headers, verify=ca)
+          if response.status_code != 204:
+              sys.stdout.write("Delete role implication error {0}\n".format(response.status_code))
+              raise
+          return
+
+
+      def import_domain(domain, url, token, ca):
+          domain_obj = find_domain(domain['domain'], url, token, ca)
+          if domain_obj is None:
+              domain_obj = create_domain(domain['domain'], domain['description'], domain.get('customer_id'), url, token, ca)
+          else:
+              sys.stdout.write("Using existing domain {0}\n".format(domain['domain']))
+          return domain_obj
+
+
+      def find_domain(domain_name, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          api_url = url + "/domains?name=" + domain_name
+          response = requests.get(api_url, headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Find domain error {0}\n".format(response.status_code))
+              raise
+          domains = response.json()['domains']
+          if len(domains) > 0:
+              return domains[0]
+          else:
+              return None
+
+
+      def create_domain(domain_name, description, customer_id, url, token, ca):
+          sys.stdout.write("Create domain {0}\n".format(domain_name))
+          headers = {"X-Auth-Token": token}
+          api_url = url + "/domains"
+          domain_body = {
+              "domain": {
+                  "name": domain_name,
+                  "description": description,
+                  "enabled": True
+              }
+          }
+          if customer_id is not None:
+              domain_body['domain']['vpc_customer_id'] = customer_id
+
+          response = requests.post(api_url, json=domain_body, headers=headers, verify=ca)
+          if response.status_code != 201:
+              sys.stdout.write("Create domain error {0}\n".format(response.status_code))
+              raise
+          return response.json()['domain']
+
+
+      def load_users(domain_id, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.get(url + "/users?domain_id=" + domain_id, headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Get users error {0}\n".format(response.status_code))
+              raise
+          user_list = response.json()['users']
+          sys.stdout.write("Loaded {0} existing users\n".format(len(user_list)))
+          result = {}
+          for user in user_list:
+              result[user['name']] = user
+          return result
+
+
+      def load_groups(domain_id, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.get(url + "/groups?domain_id=" + domain_id, headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Get groups error {0}\n".format( response.status_code))
+              raise
+          group_list = response.json()['groups']
+          sys.stdout.write("Loaded {0} existing groups\n".format(len(group_list)))
+          result = {}
+          for group in group_list:
+              result[group['name']] = group
+          return result
+
+
+      def import_user(user, users, roles, domain_id, url, token, ca):
+          user_name = user['user']
+
+          if user_name not in users:
+              new_user = create_user(user_name, domain_id, user['password'], url, token, ca)
+              users[user_name] = new_user
+
+          user_id = users[user_name]['id']
+          user_roles = load_user_roles(user_id, domain_id, url, token, ca)
+          if 'roles' in user:
+              for role in user['roles']:
+                  if role not in user_roles:
+                      assign_role_to_user(user_id, roles[role]['id'], domain_id, url, token, ca)
+          return
+
+
+      def create_user(user_name, domain_id, password, url, token, ca):
+          sys.stdout.write("Create user {0}\n".format(user_name))
+          headers = {"X-Auth-Token": token}
+          api_url = url + "/users"
+          user_body = {
+              "user": {
+                  "name": user_name,
+                  "password": password,
+                  "domain_id": domain_id,
+                  "options": {
+                      "ignore_change_password_upon_first_use": True
+                  }
+              }
+          }
+          response = requests.post(api_url, json=user_body, headers=headers, verify=ca)
+          if response.status_code != 201:
+              sys.stdout.write("Create user error {0} {1}\n".format(response.status_code, response.text))
+              raise
+
+          response2 = requests.patch(api_url+"/"+response.json()['user']['id'], json=user_body, headers=headers, verify=ca)
+          if response2.status_code != 200:
+              sys.stdout.write("Create user error {0} {1}\n".format(response2.status_code, response2.text))
+              raise
+
+          return response.json()['user']
+
+
+      def load_user_roles(user_id, domain_id, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.get(url + "/domains/"+domain_id+"/users/"+user_id+"/roles", headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Get user roles error {0}\n".format(response.status_code))
+              raise
+          role_list = response.json()['roles']
+          result = []
+          for role in role_list:
+              result.append(role['name'])
+          return result
+
+
+      def assign_role_to_user(user_id, role_id, domain_id, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.put(url + "/domains/"+domain_id+"/users/"+user_id+"/roles/"+role_id, headers=headers, verify=ca)
+          if response.status_code != 204:
+              sys.stdout.write("Assign user roles error {0}\n".format(response.status_code))
+              raise
+
+
+      def import_group(group, groups, users, domain_id, url, token, ca):
+          group_name = group['group']
+          if group_name not in groups:
+              new_group = create_group(group_name, domain_id, url, token, ca)
+              groups[group_name] = new_group
+
+          group_id = groups[group_name]['id']
+          sys.stdout.write("Group id {0}\n".format(group_id))
+          group_users = load_group_users(group_id, url, token, ca)
+          sys.stdout.write("Group users {0}\n".format(len(group_users)))
+          if 'users' in group:
+              for user in group['users']:
+                  sys.stdout.write("Check user {0}\n".format(user))
+                  if user not in group_users:
+                      sys.stdout.write("Assign user {0}\n".format(user))
+                      assign_user_to_group(users[user]['id'], group_id, url, token, ca)
+          return
+
+
+      def create_group(group_name, domain_id, url, token, ca):
+          sys.stdout.write("Create group {0}\n".format(group_name))
+          headers = {"X-Auth-Token": token}
+          api_url = url + "/groups"
+          group_body = {
+              "group": {
+                  "name": group_name,
+                  "domain_id": domain_id
+              }
+          }
+          response = requests.post(api_url, json=group_body, headers=headers, verify=ca)
+          if response.status_code != 201:
+              sys.stdout.write("Create group error {0}\n".format(response.status_code))
+              raise
+
+          return response.json()['group']
+
+
+      def load_group_users(group_id, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.get(url + "/groups/"+group_id+"/users", headers=headers, verify=ca)
+          if response.status_code != 200:
+              sys.stdout.write("Get group users error {0}\n".format(response.status_code))
+              raise
+          user_list = response.json()['users']
+          result = []
+          for user in user_list:
+              result.append(user['name'])
+          return result
+
+
+      def assign_user_to_group(user_id, group_id, url, token, ca):
+          headers = {"X-Auth-Token": token}
+          response = requests.put(url + "/groups/"+group_id+"/users/"+user_id, headers=headers, verify=ca)
+          if response.status_code != 204:
+              sys.stdout.write("Assign group users error {0}\n".format(response.status_code))
+              raise
+
+
+      def build_params(args):
+          params = {}
+          if args.extraParams:
+              for entry in args.extraParams:
+                  s = entry.split(',')
+                  params[s[0]] = s[1]
+          return params
+
+
+      def keystone_import(source_dir, args):
+          params = build_params(args)
+          import_file = read_import_file(source_dir, args.importFile, params)
+          if import_file is None:
+              sys.stdout.write("Import file not found\n")
+              return
+          token = login(args.keystoneUrl, args.keystoneUser, args.keystonePassword, args.caCert)
+
+          roles = load_roles(args.keystoneUrl, token, args.caCert)
+          implied_roles = load_implied_roles(args.keystoneUrl, token, args.caCert)
+          domain_id = None
+
+          for entry in import_file:
+              if 'role' in entry:
+                  import_role(entry, roles, args.keystoneUrl, token, args.caCert)
+              elif 'domain' in entry:
+                  domain_id = import_domain(entry, args.keystoneUrl, token, args.caCert)['id']
+
+          for entry in import_file:
+              if 'implies' in entry or 'not_implies' in entry:
+                  import_role_inheritance(entry, roles, implied_roles, args.keystoneUrl, token, args.caCert)
+
+          if domain_id is not None:
+              users = load_users(domain_id, args.keystoneUrl, token, args.caCert)
+              groups = load_groups(domain_id, args.keystoneUrl, token, args.caCert)
+
+              for entry in import_file:
+                  if 'user' in entry:
+                      import_user(entry, users, roles, domain_id, args.keystoneUrl, token, args.caCert)
+                  elif 'group' in entry:
+                      import_group(entry, groups, users, domain_id, args.keystoneUrl, token, args.caCert)
+
+          sys.stdout.write("Finished\n")
+
+
+      if __name__ == "__main__":
+          parser = argparse.ArgumentParser(description="Import Keystone users and roles")
+          parser.add_argument("-i", "--importFile", metavar="FILE", dest="importFile",
+                              help="YML file containing roles or users to import", required=True)
+          parser.add_argument("-k", "--keystoneUrl", metavar="URL", dest="keystoneUrl",
+                              help="Keystone API URL e.g. https://server:35357/api/idm/v3", required=True)
+          parser.add_argument("-u", "--username", metavar="USERNAME", dest="keystoneUser", help="Keystone admin username",
+                              required=True)
+          parser.add_argument("-p", "--password", metavar="PASSWORD", dest="keystonePassword", help="Keystone admin password",
+                              required=True)
+          parser.add_argument("-c", "--CACert", metavar="CERT", dest="caCert", help="CA certificate", required=True)
+          parser.add_argument("-e", "--extraParams", metavar="PARAMS", dest="extraParams", nargs="+",
+                              help="Additional parameters used for replacement in input file, in format key1,value1 key2,value2")
+          args = parser.parse_args()  # exits if there is argument error
+
+          keystone_import(os.getcwd(), args)
+
+  - path: /usr/local/lib/keystone-import/roles.yml
+    permissions: '0644'
+    content: |
+      ---
+      # Low level service roles (permissions)
+      - role: BLOB_STORE_ADMIN
+      - role: BLOB_STORE_ORG_ADMIN
+      - role: BLOB_STORE_CUSTOMER_ORG_ADMIN
+      - role: BLOB_STORE_USER
+      - role: CATALOG_ADMIN
+        implies:
+            - CATALOG_ADMIN_READER
+            - CATALOG_CUSTOMER_ADMIN
+            - CATALOG_PRICING_ADMIN
+      - role: CATALOG_SYSTEM_ADMIN
+        implies:
+            - CATALOG_ADMIN
+      - role: CATALOG_ADMIN_READER
+      - role: CATALOG_ORG_ADMIN
+      - role: CATALOG_CUSTOMER_ORG_ADMIN
+      - role: CATALOG_CONSUMER
+      - role: CATALOG_USER
+      - role: CUSTOMERS_ADMIN
+        implies:
+            - CUSTOMERS_ADMIN_READER
+      - role: CUSTOMERS_ADMIN_READER
+      - role: CUSTOMERS_ORG_ADMIN
+      - role: CUSTOMERS_CUSTOMER_ORG_ADMIN
+      - role: CUSTOMERS_USER
+      - role: CUSTOMERS_SYSTEM_ADMIN
+      - role: CUSTOMERS_ADM_ACCOUNTS_CUSTOMERS_ADMIN
+      - role: REQUEST_ADMIN
+        implies:
+            - REQUEST_ADMIN_READER
+            - REQUEST_OPERATIONS_ADMIN
+      - role: REQUEST_ADMIN_READER
+      - role: REQUEST_ORG_ADMIN
+      - role: REQUEST_CUSTOMER_ORG_ADMIN
+      - role: REQUEST_CONSUMER
+      - role: REQUEST_USER
+      - role: REQUEST_ORDER_CREATOR
+      - role: REQUEST_ACTION_CREATOR
+      - role: REQUEST_FORM_READER
+      - role: REQUEST_DEPARTMENT_ADMIN
+      - role: REQUEST_DEPARTMENT_USER
+      - role: REQUEST_NOTIFICATION_SENDER
+      - role: REQUEST_NOTIFICATION_SENDER_ADMIN
+        implies:
+            - REQUEST_NOTIFICATION_SENDER
+      - role: FULFILLMENT_ADMIN
+        implies:
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_NOTIFIER
+            - FULFILLMENT_OPERATIONS_ADMIN
+            - FULFILLMENT_ADAPTER_ADMIN
+            - FULFILLMENT_CUSTOMER_ADMIN
+            - FULFILLMENT_DESIGN_ADMIN
+            - FULFILLMENT_NOTIFICATION_ADMIN
+            - FULFILLMENT_PRICING_ADMIN
+            - FULFILLMENT_DESIGN_SETTINGS_ADMIN
+      - role: FULFILLMENT_NOTIFIER
+      - role: FULFILLMENT_ADMIN_READER
+        implies:
+            - FULFILLMENT_NOTIFICATION_READER
+      - role: FULFILLMENT_ORG_ADMIN
+      - role: FULFILLMENT_CUSTOMER_ORG_ADMIN
+      - role: FULFILLMENT_USER
+      - role: FULFILLMENT_SYSTEM_ADMIN
+      - role: FULFILLMENT_DESIGN_SETTINGS_ADMIN
+      - role: FULFILLMENT_NOTIFICATION_READER
+      - role: FULFILLMENT_NOTIFICATION_ADMIN
+        implies:
+            - FULFILLMENT_NOTIFICATION_READER
+            - FULFILLMENT_NOTIFIER
+      - role: FULFILLMENT_NOTIF_RULE_CONFIG_ADMIN
+        implies:
+            - FULFILLMENT_NOTIFICATION_READER
+      - role: SERVICE_INSTANCES_SYSTEM_ADMIN
+      - role: SERVICE_INSTANCES_ADMIN
+        implies:
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_OPERATIONS_ADMIN
+      - role: SERVICE_INSTANCES_ADMIN_READER
+      - role: SERVICE_INSTANCES_ORG_ADMIN
+      - role: SERVICE_INSTANCES_CUSTOMER_ORG_ADMIN
+      - role: SERVICE_INSTANCES_USER
+      - role: SERVICE_INSTANCES_EDITOR
+      - role: SERVICE_INSTANCES_DEPARTMENT_ADMIN
+      - role: SERVICE_INSTANCES_DEPARTMENT_USER
+      - role: SERVICE_INSTANCES_VALIDATIONS_READER
+      - role: SERVICE_INSTANCES_VALIDATIONS_USER
+        implies:
+            - SERVICE_INSTANCES_VALIDATIONS_READER
+      - role: SERVICE_INSTANCES_VALIDATIONS_ADMIN
+        implies:
+            - SERVICE_INSTANCES_VALIDATIONS_USER
+      - role: SERVICE_INSTANCES_IMPORT
+      - role: EVENT_ADMIN
+      - role: SERVICE_USER
+      - role: MONITOR
+      - role: PRICING_ADMIN
+        implies:
+            - PRICING_ADMIN_READER
+      - role: PRICING_ADMIN_READER
+      - role: PRICING_ORG_ADMIN
+      - role: PRICING_CUSTOMER_ORG_ADMIN
+      - role: PRICING_USER
+      - role: REPORTING_SYSTEM_ADMIN
+        implies:
+            - REPORTING_ADMIN
+            - METRICS_EDITOR
+      - role: REPORTING_ADMIN
+        implies:
+            - REPORTING_ORG_ADMIN
+      - role: REPORTING_ORG_ADMIN
+        implies:
+            - REPORTING_USER
+      - role: REPORTING_USER
+      - role: TICKETING_ADMIN
+      - role: TICKETING_ORG_ADMIN
+      - role: TICKETING_CUSTOMER_ORG_ADMIN
+      - role: TICKETING_USER
+      - role: EXTERNAL_EVENTS_ADMIN_READER
+      - role: EXTERNAL_EVENTS_ADMIN
+        implies:
+            - EXTERNAL_EVENTS_ADMIN_READER
+      - role: CONFIG_USER
+      - role: CONFIG_DASHBOARD_GROUP_ADMIN
+      - role: CONFIG_DASHBOARD_ADMIN
+        implies:
+            - CONFIG_ADMIN_READER
+            - CONFIG_DASHBOARD_GROUP_ADMIN
+      - role: CONFIG_ADMIN
+        implies:
+            - CONFIG_ADMIN_READER
+            - CONFIG_ADAPTER_ADMIN
+            - CONFIG_CUSTOMER_ADMIN
+            - CONFIG_DASHBOARD_ADMIN
+      - role: CONFIG_ADMIN_READER
+      # Special role for update customer config with configNames "login-customization", "ui-customization" and "portal-reporting-dashboard"
+      - role: CUSTOMER_CUSTOMIZATION_ADMIN
+      - role: EXPORT_IMPORT_USER
+      - role: DIAGNOSTIC_ADMIN
+      - role: IMPERSONATOR
+      - role: CPS_SUPPORT
+      - role: ACL_ADMIN
+      - role: TERRAFORM_USER
+      - role: ESL_IMPORT
+      - role: OFFERING_ADMIN
+      - role: METRICS_EDITOR
+
+      # Special roles for BUSINESS_OPERATIONS_ADMIN
+      - role: FULFILLMENT_OPERATIONS_ADMIN
+      - role: REQUEST_OPERATIONS_ADMIN
+        implies:
+            - REQUEST_ACTION_CREATOR
+      - role: SERVICE_INSTANCES_OPERATIONS_ADMIN
+        implies:
+            - SERVICE_INSTANCES_EDITOR
+
+      # Special roles for BUSINESS_ADAPTER_ADMIN
+      - role: FULFILLMENT_ADAPTER_ADMIN
+      - role: CONFIG_ADAPTER_ADMIN
+
+      # Special roles for BUSINESS_CUSTOMER_ADMIN
+      - role: FULFILLMENT_CUSTOMER_ADMIN
+        implies:
+            - FULFILLMENT_DESIGN_SETTINGS_ADMIN
+      - role: CONFIG_CUSTOMER_ADMIN
+      - role: CATALOG_CUSTOMER_ADMIN
+
+      # Special roles for BUSINESS_CATALOG_ADMIN
+      - role: FULFILLMENT_DESIGN_ADMIN
+        implies:
+            - FULFILLMENT_DESIGN_SETTINGS_ADMIN
+
+      # Special roles for BUSINESS_PRICING_ADMIN
+      - role: FULFILLMENT_PRICING_ADMIN
+      - role: CATALOG_PRICING_ADMIN
+
+      # Special role for importing prices with history (REWRITE mode)
+      - role: PRICING_HISTORY_ADMIN
+
+      # High level business roles (roles for human users, not to be checked in code, they will include low level roles).
+      # They have prefix BUSINESS_ to set them aside from service roles.
+      - role: BUSINESS_ADMIN
+        implies:
+            - BUSINESS_OPERATIONS_ADMIN
+            - BUSINESS_ADAPTER_ADMIN
+            - BUSINESS_CUSTOMER_ADMIN
+            - BUSINESS_CATALOG_ADMIN
+            - BUSINESS_PRICING_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - PRICING_ADMIN
+            - PRICING_USER
+            - REPORTING_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - EXTERNAL_EVENTS_ADMIN
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - CONFIG_ADAPTER_ADMIN
+            - CONFIG_CUSTOMER_ADMIN
+            - REQUEST_NOTIFICATION_SENDER
+            - ESL_IMPORT
+        not_implies:
+            - CONFIG_ADMIN
+            - EXPORT_IMPORT_USER
+      - role: BUSINESS_SYSTEM_ADMIN
+        implies:
+            - BUSINESS_ADMIN
+            - CONFIG_ADMIN
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_SYSTEM_ADMIN
+            - SERVICE_INSTANCES_VALIDATIONS_ADMIN
+            - CUSTOMERS_SYSTEM_ADMIN
+            - FULFILLMENT_SYSTEM_ADMIN
+            - REPORTING_SYSTEM_ADMIN
+            - EXPORT_IMPORT_USER
+            - PRICING_HISTORY_ADMIN
+            - REQUEST_NOTIFICATION_SENDER_ADMIN
+            - IMPERSONATOR
+            - CATALOG_SYSTEM_ADMIN
+      - role: BUSINESS_ORG_ADMIN
+        implies:
+            - BLOB_STORE_ORG_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ORG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_ORG_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_ORG_ADMIN
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ORG_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ORG_ADMIN
+            - FULFILLMENT_USER
+            - PRICING_ORG_ADMIN
+            - PRICING_USER
+            - REPORTING_ORG_ADMIN
+            - TICKETING_ORG_ADMIN
+            - TICKETING_USER
+            - REQUEST_NOTIFICATION_SENDER
+            - SERVICE_INSTANCES_VALIDATIONS_READER
+      - role: BUSINESS_CUSTOMER_ORG_ADMIN
+        implies:
+            - BUSINESS_CUSTOMER_END_USER
+            - BLOB_STORE_CUSTOMER_ORG_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_CUSTOMER_ORG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_CUSTOMER_ORG_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_CUSTOMER_ORG_ADMIN
+            - REQUEST_USER
+            - REQUEST_ORDER_CREATOR
+            - REQUEST_ACTION_CREATOR
+            - REQUEST_FORM_READER
+            - SERVICE_INSTANCES_CUSTOMER_ORG_ADMIN
+            - SERVICE_INSTANCES_USER
+            - SERVICE_INSTANCES_EDITOR
+            - FULFILLMENT_CUSTOMER_ORG_ADMIN
+            - FULFILLMENT_USER
+            - PRICING_CUSTOMER_ORG_ADMIN
+            - PRICING_USER
+            - REPORTING_ORG_ADMIN
+            - TICKETING_CUSTOMER_ORG_ADMIN
+            - TICKETING_USER
+            - TERRAFORM_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_VALIDATIONS_READER
+      - role: BUSINESS_CUSTOMER_END_USER
+        implies:
+            - BLOB_STORE_USER
+            - CATALOG_CONSUMER
+            - CATALOG_USER
+            - CUSTOMERS_USER
+            - REQUEST_CONSUMER
+            - REQUEST_USER
+            - REQUEST_ORDER_CREATOR
+            - REQUEST_ACTION_CREATOR
+            - REQUEST_FORM_READER
+            - SERVICE_INSTANCES_USER
+            - SERVICE_INSTANCES_EDITOR
+            - FULFILLMENT_USER
+            - PRICING_USER
+            - TICKETING_USER
+            - REPORTING_USER
+      - role: BUSINESS_CUSTOMER_END_USER_READER
+        implies:
+            - BLOB_STORE_USER
+            - CATALOG_CONSUMER
+            - CATALOG_USER
+            - CUSTOMERS_USER
+            - REQUEST_CONSUMER
+            - REQUEST_USER
+            - REQUEST_FORM_READER
+            - SERVICE_INSTANCES_USER
+            - SERVICE_INSTANCES_EDITOR
+            - FULFILLMENT_USER
+            - PRICING_USER
+            - TICKETING_USER
+            - REPORTING_USER
+      - role: BUSINESS_OPERATIONS_ADMIN
+        implies:
+            - FULFILLMENT_OPERATIONS_ADMIN
+            - REQUEST_OPERATIONS_ADMIN
+            - SERVICE_INSTANCES_OPERATIONS_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN_READER
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN_READER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - PRICING_ADMIN_READER
+            - PRICING_USER
+            - REPORTING_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - REQUEST_NOTIFICATION_SENDER
+      - role: BUSINESS_ADAPTER_ADMIN
+        implies:
+            - FULFILLMENT_ADAPTER_ADMIN
+            - CONFIG_ADAPTER_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN_READER
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN_READER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - PRICING_ADMIN_READER
+            - PRICING_USER
+            - REPORTING_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - EXPORT_IMPORT_USER
+            - REQUEST_NOTIFICATION_SENDER
+      - role: BUSINESS_CUSTOMER_ADMIN
+        implies:
+            - CUSTOMERS_ADMIN
+            - FULFILLMENT_CUSTOMER_ADMIN
+            - CONFIG_CUSTOMER_ADMIN
+            - CATALOG_CUSTOMER_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN_READER
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN_READER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - PRICING_ADMIN_READER
+            - PRICING_USER
+            - REPORTING_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - REQUEST_NOTIFICATION_SENDER
+            - CUSTOMER_CUSTOMIZATION_ADMIN
+        not_implies:
+            - CONFIG_DASHBOARD_GROUP_ADMIN
+      - role: BUSINESS_CATALOG_ADMIN
+        implies:
+            - CATALOG_ADMIN
+            - FULFILLMENT_DESIGN_ADMIN
+            - FULFILLMENT_NOTIFICATION_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN_READER
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN_READER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - PRICING_ADMIN_READER
+            - PRICING_USER
+            - REPORTING_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - CONFIG_DASHBOARD_ADMIN
+            - REQUEST_NOTIFICATION_SENDER
+      - role: BUSINESS_PRICING_ADMIN
+        implies:
+            - PRICING_ADMIN
+            - FULFILLMENT_PRICING_ADMIN
+            - CATALOG_PRICING_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN_READER
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN_READER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - PRICING_ADMIN_READER
+            - PRICING_USER
+            - REPORTING_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - REQUEST_NOTIFICATION_SENDER
+      - role: BUSINESS_DEPARTMENT_ADMIN
+        implies:
+            - BUSINESS_CUSTOMER_END_USER
+            - SERVICE_INSTANCES_DEPARTMENT_ADMIN
+            - REQUEST_DEPARTMENT_ADMIN
+      - role: BUSINESS_DEPARTMENT_USER
+        implies:
+            - BUSINESS_CUSTOMER_END_USER
+            - SERVICE_INSTANCES_DEPARTMENT_USER
+            - REQUEST_DEPARTMENT_USER
+      - role: BUSINESS_ADM_ACCOUNTS_CUSTOMERS_ADMIN
+        implies:
+            - CUSTOMERS_ADM_ACCOUNTS_CUSTOMERS_ADMIN
+      - role: BUSINESS_ACL_ADMIN
+        implies:
+            - ACL_ADMIN
+      - role: BUSINESS_USER_IMPERSONATOR
+        implies:
+            - IMPERSONATOR
+      - role: BUSINESS_ESL_IMPORT
+        implies:
+            - ESL_IMPORT
+      - role: BUSINESS_NOTIF_RULE_CONFIG_ADMIN
+        implies:
+            - FULFILLMENT_NOTIF_RULE_CONFIG_ADMIN
+            - FULFILLMENT_NOTIFIER
+            - BLOB_STORE_USER
+            - FULFILLMENT_DESIGN_SETTINGS_ADMIN
+            - REPORTING_USER
+            - CUSTOMERS_ADMIN_READER
+      - role: BUSINESS_VALIDATIONS_USER
+        implies:
+            - SERVICE_INSTANCES_VALIDATIONS_USER
+      - role: BUSINESS_VALIDATIONS_ADMIN
+        implies:
+            - SERVICE_INSTANCES_VALIDATIONS_ADMIN
+      - role: BUSINESS_SERVICE_INSTANCE_READER
+        implies:
+            - BLOB_STORE_USER
+            - SERVICE_INSTANCES_USER
+            - PRICING_USER
+            - FULFILLMENT_USER
+        not_implies:
+            - REQUEST_USER
+            - REQUEST_ORG_ADMIN
+      - role: BUSINESS_METRICS_EDITOR
+        implies:
+            - METRICS_EDITOR
+      - role: BUSINESS_CUSTOMER_SERVICE_INSTANCES_IMPORT
+        implies:
+            - SERVICE_INSTANCES_IMPORT
+            - BUSINESS_CUSTOMER_END_USER
+            - BLOB_STORE_CUSTOMER_ORG_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_CUSTOMER_ORG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_CUSTOMER_ORG_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_CUSTOMER_ORG_ADMIN
+            - REQUEST_USER
+            - REQUEST_ORDER_CREATOR
+            - REQUEST_ACTION_CREATOR
+            - REQUEST_FORM_READER
+            - SERVICE_INSTANCES_CUSTOMER_ORG_ADMIN
+            - SERVICE_INSTANCES_USER
+            - SERVICE_INSTANCES_EDITOR
+            - FULFILLMENT_CUSTOMER_ORG_ADMIN
+            - FULFILLMENT_USER
+            - PRICING_CUSTOMER_ORG_ADMIN
+            - PRICING_USER
+            - REPORTING_ORG_ADMIN
+            - TICKETING_CUSTOMER_ORG_ADMIN
+            - TICKETING_USER
+            - TERRAFORM_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_VALIDATIONS_READER
+      - role: BUSINESS_CUSTOMER_PORTAL_REPORTING
+        implies:
+            - SERVICE_INSTANCES_CUSTOMER_ORG_ADMIN
+            - CUSTOMERS_USER
+            - BLOB_STORE_USER
+            - REPORTING_ORG_ADMIN
+            - SERVICE_INSTANCES_USER
+            - PRICING_USER
+            - SERVICE_INSTANCES_VALIDATIONS_USER
+            - FULFILLMENT_USER
+      - role: BUSINESS_L1_SUPPORT
+        implies:
+            - REQUEST_OPERATIONS_ADMIN
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN_READER
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN_READER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN_READER
+            - FULFILLMENT_USER
+            - EVENT_ADMIN
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - DIAGNOSTIC_ADMIN
+            - CONFIG_ADMIN_READER
+            - REQUEST_NOTIFICATION_SENDER
+            - SERVICE_INSTANCES_EDITOR
+        not_implies:
+            - SERVICE_INSTANCES_OPERATIONS_ADMIN
+            - PRICING_ADMIN_READER
+            - PRICING_USER
+
+  # $${password} below is import_p3.py's OWN template placeholder
+  # (its ExtendedTemplate.safe_substitute(), substituted at runtime via
+  # setup-keystone-roles.sh's -e password,... argument) — escaped here
+  # so Terraform's templatefile() passes it through literally instead of
+  # trying to resolve it as one of its own interpolations.
+  - path: /usr/local/lib/keystone-import/system_domain.yml
+    permissions: '0644'
+    content: |
+      ---
+      - domain: system
+        description: Domain for system administrators and service accounts
+      - user: admin
+        password: $${password}
+        roles:
+            - BUSINESS_ADMIN
+      - user: intadmin
+        password: $${password}
+        roles:
+            - BUSINESS_ADMIN
+      - user: systemadmin
+        password: $${password}
+        roles:
+            - BUSINESS_SYSTEM_ADMIN
+      - user: blobStoreSvc
+        password: $${password}
+        roles:
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - SERVICE_USER
+            - CONFIG_USER
+            - CUSTOMERS_ADMIN_READER
+      - user: catalogSvc
+        password: $${password}
+        roles:
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN
+            - REQUEST_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - SERVICE_USER
+            - PRICING_ADMIN
+            - PRICING_USER
+            - CONFIG_USER
+            - REPORTING_ADMIN
+      - user: customersSvc
+        password: $${password}
+        roles:
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN
+            - REQUEST_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - SERVICE_USER
+            - CONFIG_USER
+            - PRICING_ADMIN
+      - user: externalEventsSvc
+        password: $${password}
+        roles:
+          - EXTERNAL_EVENTS_ADMIN
+          - CUSTOMERS_ADMIN_READER
+          - FULFILLMENT_NOTIFIER
+          - SERVICE_USER
+          - CONFIG_USER
+      - user: fulfillmentSvc
+        password: $${password}
+        roles:
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - CUSTOMERS_SYSTEM_ADMIN
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - SERVICE_USER
+            - CONFIG_USER
+            - CONFIG_ADMIN
+            - PRICING_USER
+            - PRICING_ADMIN
+            - ACL_ADMIN
+            - REQUEST_ADMIN
+            - REQUEST_NOTIFICATION_SENDER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - REPORTING_ADMIN
+            - TICKETING_USER
+            - EXTERNAL_EVENTS_ADMIN
+      - user: requestSvc
+        password: $${password}
+        roles:
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN
+            - REQUEST_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - SERVICE_USER
+            - PRICING_ADMIN
+            - REPORTING_ADMIN
+            - CONFIG_USER
+      - user: serviceInstanceSvc
+        password: $${password}
+        roles:
+            - BLOB_STORE_ADMIN
+            - BLOB_STORE_USER
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - REQUEST_ADMIN
+            - REQUEST_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - SERVICE_USER
+            - REPORTING_ADMIN
+            - PRICING_ADMIN
+            - CONFIG_USER
+            - IMPERSONATOR
+      - user: eventSvc
+        password: $${password}
+        roles:
+            - EVENT_ADMIN
+            - SERVICE_USER
+            - CONFIG_USER
+      - user: monitor
+        password: $${password}
+        roles:
+            - MONITOR
+            - SERVICE_USER
+            - CONFIG_USER
+      - user: pricingSvc
+        password: $${password}
+        roles:
+            - PRICING_ADMIN
+            - PRICING_USER
+            - SERVICE_USER
+            - CUSTOMERS_ADMIN
+            - CUSTOMERS_USER
+            - SERVICE_USER
+            - CONFIG_USER
+      - user: reportingSvc
+        password: $${password}
+        roles:
+            - REPORTING_ADMIN
+            - PRICING_ADMIN
+            - PRICING_USER
+            - REQUEST_ADMIN
+            - REQUEST_USER
+            - ACL_ADMIN
+            - SERVICE_INSTANCES_ADMIN
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_USER
+            - FULFILLMENT_ADMIN
+            - CUSTOMERS_ADMIN
+            - SERVICE_USER
+            - CONFIG_USER
+            - CONFIG_ADMIN
+            - CATALOG_ADMIN_READER
+            - CATALOG_USER
+      - user: ticketingSvc
+        password: $${password}
+        roles:
+            - TICKETING_ADMIN
+            - TICKETING_USER
+            - SERVICE_USER
+            - CONFIG_USER
+            - SERVICE_INSTANCES_USER
+            - SERVICE_INSTANCES_ADMIN_READER
+            - ACL_ADMIN
+            - CUSTOMERS_ADMIN_READER
+      - user: exportSvc
+        password: $${password}
+        roles:
+            - EXPORT_IMPORT_USER
+            - BLOB_STORE_ADMIN
+            - CATALOG_ADMIN
+            - CATALOG_USER
+            - FULFILLMENT_ADMIN
+            - FULFILLMENT_USER
+            - PRICING_ADMIN
+            - CONFIG_USER
+            - SERVICE_USER
+            - IMPERSONATOR
+            - CUSTOMERS_ADMIN_READER
+            - CONFIG_DASHBOARD_ADMIN
+      - user: portal
+        password: $${password}
+        roles:
+            - PRICING_USER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_USER
+            - CATALOG_USER
+            - TICKETING_USER
+            - SERVICE_USER
+            - CONFIG_USER
+            - IMPERSONATOR
+            - CONFIG_ADMIN_READER
+      - user: portalTest
+        password: $${password}
+        roles:
+            - PRICING_USER
+            - REQUEST_USER
+            - SERVICE_INSTANCES_USER
+            - FULFILLMENT_USER
+            - CATALOG_USER
+            - TICKETING_USER
+            - SERVICE_USER
+            - CONFIG_USER
+            - IMPERSONATOR
+      - user: portalUiSvc
+        password: $${password}
+        roles:
+            - CONFIG_USER
+            - SERVICE_USER
+      - user: managementUiSvc
+        password: $${password}
+        roles:
+            - CONFIG_USER
+            - SERVICE_USER
+      - user: testadmin
+        password: $${password}
+        roles:
+            - BUSINESS_ADMIN
+      - user: testsystemadmin
+        password: $${password}
+        roles:
+            - BUSINESS_SYSTEM_ADMIN
+
+  # No WSGIDaemonProcess/service pool involved here — this is a one-shot
+  # API client, not a listener, so none of F-051's memory concerns apply.
+  # Runs against Keystone's own local :5000 (plain HTTP, no CA needed —
+  # requests' verify= parameter is only consulted for https:// URLs;
+  # /etc/keystone/ssl/root_ca.pem is passed anyway since it already
+  # exists by this point in the boot sequence, real value not a dummy).
+  # Retries each import a few times: both Keystone nodes run this same
+  # script concurrently, and import_p3.py's own "does this already
+  # exist" check has a real (if narrow) race window between the two
+  # nodes — a retry after a losing 409 just re-checks state and finds
+  # the object the other node already created.
+  - path: /usr/local/sbin/setup-keystone-roles.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      cd /usr/local/lib/keystone-import
+
+      for i in $(seq 1 60); do
+        curl -sf http://127.0.0.1:5000/v3 >/dev/null 2>&1 && break
+        sleep 5
+      done
+
+      export OS_AUTH_URL=http://127.0.0.1:5000/v3
+      export OS_USERNAME=admin
+      export OS_PASSWORD=admin
+
+      roles_ok=false
+      for i in 1 2 3; do
+        python3 import_p3.py -i roles.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
+          -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem && { roles_ok=true; break; }
+        sleep 10
+      done
+      $roles_ok || echo "setup-keystone-roles.sh: roles.yml import did not complete after 3 attempts" >&2
+
+      domain_ok=false
+      for i in 1 2 3; do
+        python3 import_p3.py -i system_domain.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
+          -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem \
+          -e password,${keystone_system_domain_password} && { domain_ok=true; break; }
+        sleep 10
+      done
+      $domain_ok || echo "setup-keystone-roles.sh: system_domain.yml import did not complete after 3 attempts" >&2
+
+      $roles_ok && $domain_ok
+
   - path: /usr/local/sbin/setup-keystone.sh
     permissions: '0755'
     content: |
@@ -509,6 +1820,7 @@ write_files:
 runcmd:
   - /usr/local/sbin/setup-keystone.sh
   - /usr/local/sbin/setup-keystone-tls.sh
+  - /usr/local/sbin/setup-keystone-roles.sh
   - /usr/local/sbin/setup-keystone-admin-port.sh
   - systemctl restart apache2
   - |

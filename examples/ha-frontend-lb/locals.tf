@@ -131,6 +131,12 @@ locals {
   mysql_app_password      = "changeme-app"
   mysql_keystone_password = "changeme-keystone" # lab-only placeholder, not a production secret
 
+  # Shared across all 22 "system" domain service/admin accounts created
+  # by setup-keystone-roles.sh's system_domain.yml import — same
+  # single-shared-credential convention as every other Lab-only
+  # placeholder above, not a production secret.
+  keystone_system_domain_password = "changeme-system-domain"
+
   # Node "a" only — modules/compute's per-key user_data can't reference
   # that same module call's own private_ips_by_key output, so it's split
   # into two module calls (bootstrap node, then joiners referencing its
@@ -265,14 +271,15 @@ locals {
   # keys always carry this padding, which is what made the difference
   # obvious once compared side by side.
   keystone_user_data = templatefile("${path.module}/files/keystone-cloud-init.yaml.tftpl", {
-    vip_address             = var.vip_address
-    keystone_password       = local.mysql_keystone_password
-    memcached_servers_csv   = local.memcached_servers_csv
-    fernet_key0             = "${random_id.fernet_key0.b64_url}="
-    fernet_key1             = "${random_id.fernet_key1.b64_url}="
-    ca_ip                   = local.ca_ip
-    ca_provisioner_password = local.ca_provisioner_password
-    step_cli_deb_sha256     = local.step_cli_deb_sha256
+    vip_address                     = var.vip_address
+    keystone_password               = local.mysql_keystone_password
+    memcached_servers_csv           = local.memcached_servers_csv
+    fernet_key0                     = "${random_id.fernet_key0.b64_url}="
+    fernet_key1                     = "${random_id.fernet_key1.b64_url}="
+    ca_ip                           = local.ca_ip
+    ca_provisioner_password         = local.ca_provisioner_password
+    step_cli_deb_sha256             = local.step_cli_deb_sha256
+    keystone_system_domain_password = local.keystone_system_domain_password
   })
 
   # Seed node only — modules/compute's per-key user_data can't reference
