@@ -75,3 +75,14 @@ variable "user_data" {
   type        = string
   default     = null
 }
+
+variable "users" {
+  description = "Extra users to create at boot via cloud-init on every instance in the group, each with optional NOPASSWD sudo. The CloudCore inter-instance keypair is automatically added to authorized_keys and installed in ~/.ssh/ for outbound use, same as the default image user."
+  type = list(object({
+    username      = string
+    sudo          = optional(bool, false)
+    ssh_keys      = optional(list(string), [])
+    password_hash = optional(string, null)
+  }))
+  default = []
+}

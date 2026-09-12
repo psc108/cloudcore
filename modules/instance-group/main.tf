@@ -10,11 +10,11 @@
 resource "cloudcore_instance" "this" {
   for_each = local.instance_keys
 
-  name               = "${var.project}-${var.environment}-${var.name}-${each.key}"
-  image_id           = var.image_id
-  flavor             = var.flavor
-  vpc_id             = var.vpc_id
-  subnet_id          = var.subnet_id
+  name      = "${var.project}-${var.environment}-${var.name}-${each.key}"
+  image_id  = var.image_id
+  flavor    = var.flavor
+  vpc_id    = var.vpc_id
+  subnet_id = var.subnet_id
   # length(...) > 0 ? ... : null, not the bare variable: the provider's
   # stringsToList collapses an empty API response into a null list (to
   # match Terraform's "attribute omitted" convention), so a *configured*
@@ -25,7 +25,8 @@ resource "cloudcore_instance" "this" {
   security_group_ids = length(var.security_group_ids) > 0 ? var.security_group_ids : null
   usb_device_ids     = length(var.usb_device_ids) > 0 ? var.usb_device_ids : null
   user_data          = var.user_data
-  tags               = merge(local.common_tags, var.tags, {
+  users              = var.users
+  tags = merge(local.common_tags, var.tags, {
     Name          = "${var.project}-${var.environment}-${var.name}-${each.key}"
     InstanceGroup = var.name
   })

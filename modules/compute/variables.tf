@@ -29,6 +29,12 @@ variable "instances" {
     subnet_id          = string
     security_group_ids = optional(list(string), [])
     user_data          = optional(string, null)
+    users = optional(list(object({
+      username      = string
+      sudo          = optional(bool, false)
+      ssh_keys      = optional(list(string), [])
+      password_hash = optional(string, null)
+    })), [])
   }))
   default = {}
 }
