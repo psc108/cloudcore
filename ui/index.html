@@ -1639,6 +1639,22 @@ function toggleForm(id) {
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+// SLIRP instances/NFS servers are reachable at 127.0.0.1 via a forwarded
+// ssh_port. Bridge-mode ones (ssh_port always 0 — this platform's default
+// whenever the bridge is usable, and the only mode ha-frontend-lb and
+// friends use) are reached directly at their own private_ip on the
+// standard port 22 instead — every call site here used to only handle
+// the SLIRP case, showing "—"/"No SSH port" for every bridge-mode
+// instance regardless of it being perfectly SSH-reachable.
+function sshHasAccess(r) {
+  return !!(r.ssh_port || r.private_ip);
+}
+function sshDisplay(r) {
+  if (r.ssh_port) return `127.0.0.1:${r.ssh_port}`;
+  if (r.private_ip) return `${r.private_ip}:22`;
+  return '—';
+}
+
 function copyText(text, btn) {
   navigator.clipboard.writeText(text).then(() => {
     const orig = btn.textContent;
@@ -1825,7 +1841,7 @@ function openDetail(type, resource) {
   document.getElementById('detail-title').textContent = titles[type] + ': ' + resource.name;
   const fieldMap = {
     vpc:      () => [['ID', resource.id], ['CIDR', resource.cidr_block], ['DNS Support', resource.dns_support ? 'Yes' : 'No'], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
-    instance: () => [['ID', resource.id], ['Image', resource.image_id], ['Flavor', resource.flavor], ['Private IP', resource.private_ip || '—'], ['SSH Port', resource.ssh_port ? '127.0.0.1:' + resource.ssh_port : '—'], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
+    instance: () => [['ID', resource.id], ['Image', resource.image_id], ['Flavor', resource.flavor], ['Private IP', resource.private_ip || '—'], ['SSH', sshDisplay(resource)], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
     lb:       () => [['ID', resource.id], ['Type', resource.type], ['Scheme', resource.internal ? 'Internal' : 'Internet-facing'], ['Listen Port', resource.listen_port ? '127.0.0.1:' + resource.listen_port : '—'], ['Backends', (resource.backends || []).length], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
     nfs:      () => [['ID', resource.id], ['Flavor', resource.flavor], ['Disk', resource.disk_gb + ' GB'], ['Private IP', resource.private_ip || '—'], ['Shares', (resource.shares || []).map(s => s.name).join(', ') || '—'], ['Status', resource.status], ['Created', fmtDate(resource.created_at)]],
   };
@@ -1983,16 +1999,19 @@ async function loadInstances() {
 
 // ── Instances — SSH panel ─────────────────────────────────────────────────────
 function sshPanel(i) {
-  if (i.status !== 'running' || !i.ssh_port) {
+  if (i.status !== 'running' || !sshHasAccess(i)) {
     return `<div class="ssh-panel"><span class="text-muted" style="font-size:13px">SSH available once instance is running.</span></div>`;
   }
   const user    = i.ssh_user || 'ubuntu';
-  const host    = '127.0.0.1';
-  const port    = i.ssh_port;
   const keyPath = '~/.local/share/cloudcore/cloudcore_ed25519';
-  const sshCmd  = `ssh -i ${keyPath} -p ${port} ${user}@${host}`;
-  const scpTo   = `scp -i ${keyPath} -P ${port} <local-file> ${user}@${host}:<remote-path>`;
-  const scpFrom = `scp -i ${keyPath} -P ${port} ${user}@${host}:<remote-path> <local-dest>`;
+  // Bridge-mode: connect directly to the instance's own IP, standard port
+  // 22, no -p/-P flag. SLIRP: through the forwarded port on 127.0.0.1.
+  const host    = i.ssh_port ? '127.0.0.1' : i.private_ip;
+  const portFlag = i.ssh_port ? `-p ${i.ssh_port} ` : '';
+  const scpPortFlag = i.ssh_port ? `-P ${i.ssh_port} ` : '';
+  const sshCmd  = `ssh -i ${keyPath} ${portFlag}${user}@${host}`;
+  const scpTo   = `scp -i ${keyPath} ${scpPortFlag}<local-file> ${user}@${host}:<remote-path>`;
+  const scpFrom = `scp -i ${keyPath} ${scpPortFlag}${user}@${host}:<remote-path> <local-dest>`;
   const p2p     = `ssh -i ~/.ssh/cloudcore_ed25519 ${user}@<other-instance-ip>`;
   return `
     <div class="ssh-panel">
@@ -2104,7 +2123,7 @@ function renderInstances(items) {
       <td class="mono">${i.image_id}</td>
       <td>${i.flavor}</td>
       <td class="mono">${i.private_ip || '—'}</td>
-      <td class="mono">${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</td>
+      <td class="mono">${sshDisplay(i)}</td>
       <td><button class="expand-btn" onclick="toggleSSH('${i.id}')">SSH ▾</button></td>
       <td>
         <button class="expand-btn" onclick="toggleUsers('${i.id}')">
@@ -2508,7 +2527,7 @@ async function loadTerminalInstances() {
       const running   = i.status === 'running';
       const nonSudo   = _pickNonSudoUser(i);
       const allSudo   = (i.users||[]).length > 0 && (i.users||[]).every(u => u.sudo);
-      const noSshPort = !i.ssh_port;
+      const noSshPort = !sshHasAccess(i);
       const isNfs     = i._kind === 'nfs';
 
       let actionHtml;
@@ -2539,7 +2558,7 @@ async function loadTerminalInstances() {
             <div class="inst-name">${i.name} ${badge(i.status)}</div>
             <div class="inst-meta">
               ${metaKind}
-              &nbsp;·&nbsp; SSH: <code>${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</code>
+              &nbsp;·&nbsp; SSH: <code>${sshDisplay(i)}</code>
               &nbsp;·&nbsp; User: <code>${metaUser}</code>
             </div>
           </div>
@@ -3904,11 +3923,13 @@ function _renderShareRows(s) {
 }
 
 function _nfsSSHPanel(s) {
-  if (s.status !== 'running' || !s.ssh_port) {
+  if (s.status !== 'running' || !sshHasAccess(s)) {
     return `<div class="ssh-panel"><span class="text-muted" style="font-size:13px">SSH available once NFS server is running.</span></div>`;
   }
   const keyPath = '~/.ssh/cloudcore_ed25519';
-  const cmd = `ssh -i ${keyPath} -p ${s.ssh_port} ubuntu@127.0.0.1`;
+  const cmd = s.ssh_port
+    ? `ssh -i ${keyPath} -p ${s.ssh_port} ubuntu@127.0.0.1`
+    : `ssh -i ${keyPath} ubuntu@${s.private_ip}`;
   return `<div class="ssh-panel">
     <div class="ssh-block">
       <label>SSH into NFS server</label>

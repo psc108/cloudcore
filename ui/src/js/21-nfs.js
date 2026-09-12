@@ -58,11 +58,13 @@ function _renderShareRows(s) {
 }
 
 function _nfsSSHPanel(s) {
-  if (s.status !== 'running' || !s.ssh_port) {
+  if (s.status !== 'running' || !sshHasAccess(s)) {
     return `<div class="ssh-panel"><span class="text-muted" style="font-size:13px">SSH available once NFS server is running.</span></div>`;
   }
   const keyPath = '~/.ssh/cloudcore_ed25519';
-  const cmd = `ssh -i ${keyPath} -p ${s.ssh_port} ubuntu@127.0.0.1`;
+  const cmd = s.ssh_port
+    ? `ssh -i ${keyPath} -p ${s.ssh_port} ubuntu@127.0.0.1`
+    : `ssh -i ${keyPath} ubuntu@${s.private_ip}`;
   return `<div class="ssh-panel">
     <div class="ssh-block">
       <label>SSH into NFS server</label>

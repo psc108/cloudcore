@@ -211,12 +211,22 @@ class Instance:
     users: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        # SLIRP instances are reachable at 127.0.0.1 via forwarded ports.
-        effective_public_ip = self.public_ip or ("127.0.0.1" if self.ssh_host_port else "")
-        ssh_endpoint = (
-            f"{self.ssh_user}@127.0.0.1 -p {self.ssh_host_port}"
-            if self.ssh_host_port else ""
-        )
+        # SLIRP instances are reachable at 127.0.0.1 via forwarded ports;
+        # bridge-mode instances (ssh_host_port always 0 — no forwarded port
+        # exists) are reached directly at their own private_ip on the
+        # standard port 22 instead. Both branches were previously only
+        # handled for SLIRP, silently leaving bridge-mode instances (this
+        # platform's default whenever the bridge is usable, and the only
+        # mode ha-frontend-lb and friends use) with an empty ssh_endpoint.
+        if self.ssh_host_port:
+            effective_public_ip = self.public_ip or "127.0.0.1"
+            ssh_endpoint = f"{self.ssh_user}@127.0.0.1 -p {self.ssh_host_port}"
+        elif self.private_ip:
+            effective_public_ip = self.public_ip or self.private_ip
+            ssh_endpoint = f"{self.ssh_user}@{self.private_ip}"
+        else:
+            effective_public_ip = self.public_ip or ""
+            ssh_endpoint = ""
         return {
             "id": self.id,
             "name": self.name,

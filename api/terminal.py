@@ -63,12 +63,23 @@ def _ssh_connect(instance) -> tuple[paramiko.SSHClient, paramiko.Channel, str]:
     if username is None:
         raise RuntimeError("NO_NONSUDO_USER")
 
+    # SLIRP instances are reachable at 127.0.0.1 via a forwarded port;
+    # bridge-mode ones (ssh_host_port always 0) are reached directly at
+    # their own private_ip on the standard port 22 instead — this branch
+    # was previously missing entirely, so the Terminal feature could never
+    # connect to a bridge-mode instance (this platform's default whenever
+    # the bridge is usable) despite it being perfectly SSH-reachable.
+    if instance.ssh_host_port:
+        hostname, port = "127.0.0.1", instance.ssh_host_port
+    else:
+        hostname, port = instance.private_ip, 22
+
     key_path = compute.get_cc_privkey_path()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
-        hostname="127.0.0.1",
-        port=instance.ssh_host_port,
+        hostname=hostname,
+        port=port,
         username=username,
         key_filename=key_path,
         timeout=10,
@@ -107,6 +118,7 @@ async def _terminal_handler(websocket):
             obj = _NfsAsInstance()
             obj.name         = nfs.name
             obj.ssh_host_port = nfs.ssh_host_port
+            obj.private_ip   = nfs.private_ip
             obj.ssh_user     = "ubuntu"
             obj.users        = []
             from models import NfsServerStatus
@@ -127,8 +139,8 @@ async def _terminal_handler(websocket):
         await send({"type": "error", "data": f"Instance is {instance.status.value}, not running."})
         return
 
-    if not instance.ssh_host_port:
-        await send({"type": "error", "data": "No SSH port available for this instance."})
+    if not instance.ssh_host_port and not instance.private_ip:
+        await send({"type": "error", "data": "No SSH port or private IP available for this instance."})
         return
 
     # Check for non-sudo user

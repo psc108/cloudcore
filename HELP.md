@@ -123,7 +123,7 @@ Click **SSH ▾** on any running instance row to expand the SSH panel:
 | SCP — download file | Copy a file from the instance locally |
 | SSH between instances | Passwordless inter-instance SSH via the shared CloudCore keypair |
 
-Click **⎘** to copy any command to the clipboard.
+Click **⎘** to copy any command to the clipboard. Commands adapt automatically to how the instance is reachable: bridge-mode instances (the default whenever `ccbr0` is usable — real IP, no `-p`/`-P` port flag needed) connect directly to their own private IP; SLIRP-mode ones go through a forwarded port on `127.0.0.1` instead.
 
 ### User Management
 Click **N users ▾** to expand the Users panel.
@@ -233,6 +233,8 @@ Browser-based SSH terminal powered by xterm.js and a WebSocket proxy (port 8081)
 1. Go to **Infrastructure → Terminal**. Running instances are listed as cards.
 2. Click **Open Terminal** on any running instance.
 3. The session connects as the first non-sudo user. If none exists, add one via the Users panel first.
+
+Works for both networking modes — bridge-mode instances connect directly to their own private IP; SLIRP-mode ones through their forwarded port. Only shows **No SSH port** if an instance genuinely has neither (shouldn't happen for a `running` instance in either mode).
 
 ### Terminal Window
 - **Drag**: click and drag the title bar to reposition.

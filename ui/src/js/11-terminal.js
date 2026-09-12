@@ -33,7 +33,7 @@ async function loadTerminalInstances() {
       const running   = i.status === 'running';
       const nonSudo   = _pickNonSudoUser(i);
       const allSudo   = (i.users||[]).length > 0 && (i.users||[]).every(u => u.sudo);
-      const noSshPort = !i.ssh_port;
+      const noSshPort = !sshHasAccess(i);
       const isNfs     = i._kind === 'nfs';
 
       let actionHtml;
@@ -64,7 +64,7 @@ async function loadTerminalInstances() {
             <div class="inst-name">${i.name} ${badge(i.status)}</div>
             <div class="inst-meta">
               ${metaKind}
-              &nbsp;·&nbsp; SSH: <code>${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</code>
+              &nbsp;·&nbsp; SSH: <code>${sshDisplay(i)}</code>
               &nbsp;·&nbsp; User: <code>${metaUser}</code>
             </div>
           </div>

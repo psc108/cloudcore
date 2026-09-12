@@ -33,16 +33,19 @@ async function loadInstances() {
 
 // ── Instances — SSH panel ─────────────────────────────────────────────────────
 function sshPanel(i) {
-  if (i.status !== 'running' || !i.ssh_port) {
+  if (i.status !== 'running' || !sshHasAccess(i)) {
     return `<div class="ssh-panel"><span class="text-muted" style="font-size:13px">SSH available once instance is running.</span></div>`;
   }
   const user    = i.ssh_user || 'ubuntu';
-  const host    = '127.0.0.1';
-  const port    = i.ssh_port;
   const keyPath = '~/.local/share/cloudcore/cloudcore_ed25519';
-  const sshCmd  = `ssh -i ${keyPath} -p ${port} ${user}@${host}`;
-  const scpTo   = `scp -i ${keyPath} -P ${port} <local-file> ${user}@${host}:<remote-path>`;
-  const scpFrom = `scp -i ${keyPath} -P ${port} ${user}@${host}:<remote-path> <local-dest>`;
+  // Bridge-mode: connect directly to the instance's own IP, standard port
+  // 22, no -p/-P flag. SLIRP: through the forwarded port on 127.0.0.1.
+  const host    = i.ssh_port ? '127.0.0.1' : i.private_ip;
+  const portFlag = i.ssh_port ? `-p ${i.ssh_port} ` : '';
+  const scpPortFlag = i.ssh_port ? `-P ${i.ssh_port} ` : '';
+  const sshCmd  = `ssh -i ${keyPath} ${portFlag}${user}@${host}`;
+  const scpTo   = `scp -i ${keyPath} ${scpPortFlag}<local-file> ${user}@${host}:<remote-path>`;
+  const scpFrom = `scp -i ${keyPath} ${scpPortFlag}${user}@${host}:<remote-path> <local-dest>`;
   const p2p     = `ssh -i ~/.ssh/cloudcore_ed25519 ${user}@<other-instance-ip>`;
   return `
     <div class="ssh-panel">
@@ -154,7 +157,7 @@ function renderInstances(items) {
       <td class="mono">${i.image_id}</td>
       <td>${i.flavor}</td>
       <td class="mono">${i.private_ip || '—'}</td>
-      <td class="mono">${i.ssh_port ? '127.0.0.1:' + i.ssh_port : '—'}</td>
+      <td class="mono">${sshDisplay(i)}</td>
       <td><button class="expand-btn" onclick="toggleSSH('${i.id}')">SSH ▾</button></td>
       <td>
         <button class="expand-btn" onclick="toggleUsers('${i.id}')">
