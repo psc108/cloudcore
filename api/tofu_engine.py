@@ -441,27 +441,29 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
     # anywhere. This is expected, not a real failure: confirmed directly that
     # init still fully resolves and writes .terraform/modules/modules.json
     # *before* hitting the provider step, so a subsequent apply/destroy works
-    # completely normally despite init's own non-zero exit. Previously this
-    # only worked on a *second* run of a given example directory (skipped
-    # init if .terraform already existed, from some earlier init that
-    # predated dev_overrides) — the very first run of any example directory
-    # under dev_overrides failed outright, which is exactly what a genuinely
-    # fresh clone hits on its first build.
+    # completely normally despite init's own non-zero exit.
+    #
+    # Always run it — a previous version of this code tried to skip init
+    # whenever modules.json already existed, as a speed optimization. That
+    # heuristic only checks presence, not whether the file actually accounts
+    # for every module block currently declared in this template's own .tf
+    # files, so it can (and did) skip a genuinely-needed init: a modules.json
+    # copied or left over from before a module block was added or renamed
+    # looks "already resolved" right up until "Module not installed" on
+    # apply. Since a full init is safe and cheap here regardless of its exit
+    # code (see above), there's no real benefit to skipping it worth that risk.
     using_dev_overrides = tofurc.exists() and "dev_overrides" in tofurc.read_text()
     modules_json = work_dir / ".terraform" / "modules" / "modules.json"
-    if using_dev_overrides and modules_json.exists():
-        _log(build, "Skipping tofu init (modules already resolved, dev_overrides active)")
-    else:
-        rc = _run_cmd([tofu, "init", "-no-color"])
-        if rc != 0:
-            if using_dev_overrides and modules_json.exists():
-                _log(build, f"tofu init exited {rc}, but modules resolved successfully "
-                             "(expected under dev_overrides — see comment above) — continuing")
-            else:
-                build["exit_code"] = rc
-                build["status"] = "failed"
-                _log(build, f"tofu init failed (exit {rc})")
-                return
+    rc = _run_cmd([tofu, "init", "-no-color"])
+    if rc != 0:
+        if using_dev_overrides and modules_json.exists():
+            _log(build, f"tofu init exited {rc}, but modules resolved successfully "
+                         "(expected under dev_overrides — see comment above) — continuing")
+        else:
+            build["exit_code"] = rc
+            build["status"] = "failed"
+            _log(build, f"tofu init failed (exit {rc})")
+            return
 
     # tofu apply
     rc = _run_cmd([tofu, "apply", "-auto-approve", "-no-color", *_parallelism_args()])
