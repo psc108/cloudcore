@@ -92,12 +92,21 @@ sleep 0.5
 # default/catch-all for everything else, so normal internet resolution
 # (apt installs, curl downloads, ...) keeps working unchanged. --no-resolv
 # is kept so this never depends on the host's own /etc/resolv.conf state.
+#
+# domain-search — lets a guest reach another by its bare short DNS record
+# name (e.g. "frontend-01") without typing the full
+# "frontend-01.instances.cloudcore.internal" every time: the resolver's
+# own search-list expansion tries that suffix automatically. Purely
+# additive (only affects unqualified, single-label lookups that would
+# otherwise just fail) — doesn't change resolution of anything already
+# working, including plain internet hostnames.
 touch "$LEASE_FILE"
 dnsmasq \
   --interface="$BRIDGE" \
   --bind-interfaces \
   --dhcp-range="${DHCP_START},${DHCP_END},12h" \
   --dhcp-option="option:dns-server,${GW}" \
+  --dhcp-option="option:domain-search,instances.cloudcore.internal" \
   --server="/cloudcore.internal/127.0.0.1#5353" \
   --server=8.8.8.8 \
   --server=1.1.1.1 \
@@ -107,5 +116,5 @@ dnsmasq \
   --no-resolv \
   --except-interface=lo
 
-echo "Bridge $BRIDGE up at ${GW}/24, DHCP ${DHCP_START}-${DHCP_END}, DNS ${GW} (cloudcore.internal -> API DNS, everything else -> 8.8.8.8/1.1.1.1)"
+echo "Bridge $BRIDGE up at ${GW}/24, DHCP ${DHCP_START}-${DHCP_END}, DNS ${GW} (cloudcore.internal -> API DNS, everything else -> 8.8.8.8/1.1.1.1), search domain instances.cloudcore.internal"
 echo "Run 'sudo bash api/teardown-network.sh' to remove."

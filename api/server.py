@@ -449,6 +449,7 @@ def create_instance():
                 "instances.cloudcore.internal", instance.name, "A",
                 ip or "127.0.0.1", resource_type="instance", resource_id=instance.id,
             )
+            dns_server.reload()
             # Apply security group rules once the VM is up
             if instance.security_group_ids:
                 from sg_routes import _merged_rules
@@ -497,6 +498,7 @@ def get_instance(instance_id):
                     "instances.cloudcore.internal", instance.name, "A",
                     instance.private_ip, resource_type="instance", resource_id=instance.id,
                 )
+                dns_server.reload()
         store.put_instance(instance)
     return jsonify(instance.to_dict())
 
@@ -552,6 +554,7 @@ def delete_instance(instance_id):
     # Mark deleted immediately so list excludes it before async teardown completes
     store.delete_instance_record(instance_id)
     dns_store.delete_records_for_resource(instance_id)
+    dns_server.reload()
     sg_enforce.remove(instance)
 
     # Reload LBs in the same VPC — deleted instance is already excluded from the query
@@ -701,6 +704,7 @@ def create_lb():
             "lb.cloudcore.internal", lb.name, "A", "127.0.0.1",
             resource_type="lb", resource_id=lb.id,
         )
+        dns_server.reload()
     except Exception as e:
         app.logger.error("DNS registration failed for lb %s: %s", lb.id, e)
     return jsonify(lb.to_dict()), 201
@@ -750,6 +754,7 @@ def delete_lb(lb_id):
     store.delete_lb(lb_id)
     lb_backend.stop(lb_id)
     dns_store.delete_records_for_resource(lb_id)
+    dns_server.reload()
     return "", 204
 
 
@@ -1284,6 +1289,7 @@ def dns_create_record(zone_name):
         return problem(400, "Bad Request", "type must be A, CNAME, TXT, MX, or PTR")
     rec = dns_store.upsert_record(zone_name, name, rtype, value,
                                   ttl=int(body.get("ttl", 300)))
+    dns_server.reload()
     return jsonify(rec), 201
 
 
@@ -1292,6 +1298,7 @@ def dns_create_record(zone_name):
 def dns_delete_record(zone_name, name, rtype):
     if not dns_store.delete_record(zone_name, name, rtype):
         return problem(404, "Not Found", f"Record '{name}/{rtype}' not found in zone '{zone_name}'")
+    dns_server.reload()
     return "", 204
 
 
