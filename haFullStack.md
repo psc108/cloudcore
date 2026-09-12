@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v2.3 | 12 September 2026 | Paul Scott
+v2.4 | 12 September 2026 | Paul Scott
 
 ---
 
@@ -970,9 +970,39 @@ journalctl -u keepalived -f
 
 ---
 
-## 16. Appendix
+## 16. Operational Access
 
-### 16.1 Glossary
+Every instance in the stack gets a dedicated `ecs` operational account,
+distinct from the default per-image user (`ubuntu`), for config-management
+and ad-hoc administrative access:
+
+- **Passwordless (NOPASSWD) sudo** — `ecs` can run any command as root
+  without a password prompt.
+- **The existing CloudCore inter-instance keypair, reused** — the same
+  keypair every instance already receives for its default user is also
+  added to `ecs`'s `authorized_keys` (inbound) and installed in `ecs`'s own
+  `~/.ssh/` (outbound), so no separate key needs to be generated,
+  distributed, or rotated for this account. `ecs` on any node in the stack
+  can SSH to `ecs` on any other node in the stack with zero additional key
+  setup.
+- **Short-hostname DNS** — every instance also gets a short DNS A record
+  (`frontend-01`, `backend-01`, `mysql-a`, etc., under
+  `instances.cloudcore.internal`), backed by a platform-level DHCP
+  domain-search option, so `ssh ecs@backend-01` works without typing the
+  full instance name or IP. The full FQDN form and the private IP both
+  still work as fallbacks.
+
+This is infrastructure-layer tooling only — it doesn't touch the
+frontend/backend/MySQL/Keystone/RabbitMQ tiers' own application
+configuration, and carries no equivalent AWS/On-Prem design implication
+beyond "provision an equivalent break-glass/config-management account
+using whatever keypair and DNS mechanism that environment already uses."
+
+---
+
+## 17. Appendix
+
+### 17.1 Glossary
 
 | Term | Definition |
 |---|---|
@@ -985,7 +1015,7 @@ journalctl -u keepalived -f
 | AMQP | Advanced Message Queuing Protocol |
 | Quorum queue | RabbitMQ's Raft-based replicated queue type; the modern HA default |
 
-### 16.2 References
+### 17.2 References
 
 - NGINX stream module documentation — nginx.org/en/docs/stream/ngx_stream_core_module.html
 - MySQL Group Replication — dev.mysql.com/doc/refman/8.0/en/group-replication.html
@@ -993,7 +1023,7 @@ journalctl -u keepalived -f
 - RabbitMQ Quorum Queues — rabbitmq.com/quorum-queues.html
 - Keepalived unicast configuration — keepalived.readthedocs.io
 
-### 16.3 Document History
+### 17.3 Document History
 
 | Version | Date | Author | Change Summary |
 |---|---|---|---|
@@ -1011,3 +1041,4 @@ journalctl -u keepalived -f
 | v2.1 | 2026-09-11 | Paul Scott | New §14, Host-Level Package Repository (Platform Capability) — §13's per-project NFS repo generalized into a host-level, always-available HTTP service (`cloudcore-repo.service`) shared by every project, extended to cover every example template's package/artifact needs (not just `ha-frontend-lb`), including two third-party apt repos (Adoptium, Kismet) and pinned release artifacts. Protected against accidental removal: `teardown-network.sh` now refuses to delete the bridge it's bound to without `--force`, and its build output survives a `git clean -xfd` via a tracked README marker. Not yet consumed by `ha-frontend-lb` itself — §13's NFS repo remains that stack's actual mechanism until a retrofit is done. Sections renumbered: old §14 Troubleshooting Guide → §15, old §15 Appendix → §16. |
 | v2.2 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §14's host-level `cloudcore-repo` — `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed entirely, 15 nodes instead of 17. §13 marked superseded for this stack (kept only for the underlying pattern's own documentation value). Verified for real: a clean `tofu apply`, all four dashboard checks `OK`, `archive.ubuntu.com` confirmed absent from every checked node's `sources.list` and cloud-init log, then a clean `tofu destroy`. One pre-existing, already-documented issue recurred along the way and needed its usual manual fix — F-045's `nginx`/`keepalived` dpkg race, unrelated to this retrofit. |
 | v2.3 | 2026-09-12 | Paul Scott | Backend tier built (`haFullStack-LLD.md` §8) — the last tier §2.1's component table and topology diagram always described but every prior slice deferred. Infrastructure only, by direct instruction: 2 nodes sized for the user's own stated application footprint, local NGINX installed but deliberately left unconfigured for that application to set up itself, mTLS client identity from the same CA every other tier already trusts. §3.1/§3.3/§3.4's illustrative NGINX examples corrected from `backend1:8080`/`backend2:8080` to `:80` — backend's real local NGINX listens on its stock default port, not an arbitrary port number carried forward from an earlier draft. Verified for real: TLS handshakes from a backend node accepted (`Verify return code: 0`) against ProxySQL/Keystone/RabbitMQ, the shared LB's new backend route reachable via the VIP, then a clean `tofu destroy`. |
+| v2.4 | 2026-09-12 | Paul Scott | New §16, Operational Access — every instance gets an "ecs" NOPASSWD-sudo account reusing the existing CloudCore inter-instance keypair (no new key to manage) and a short-hostname DNS record. Node.js/Java/jasypt/BouncyCastle also added to frontend/backend via §14's host-level repo. Two real platform-layer bugs found and fixed verifying this for real, not just example-level Terraform (`haFullStack-Findings-Log.md` F-049/F-050): CloudCore's own DNS resolver never reloaded after API-server startup, and a cloud-init `users:` semantics gap that broke default-user SSH stack-wide the first time an extra user was created at launch. Verified with a real three-iteration build/destroy cycle against the full 15-node stack. Sections renumbered: old §16 Appendix → §17. |

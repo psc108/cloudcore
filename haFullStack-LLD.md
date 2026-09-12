@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.19 (in progress — built section by section) | Paul Scott
+v0.20 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -2237,6 +2237,118 @@ destroy` afterward — 31 resources, 0 instances remaining.
 
 ---
 
+## 9. Operational Access — Cross-Cutting
+
+### 9.1 Scope
+
+Every instance in `ha-frontend-lb` — all 15 nodes across every tier —
+gets a dedicated `ecs` operational account and a short-hostname DNS
+record. Cross-cutting like §5/§7, not owned by any one tier's module.
+
+### 9.2 The `ecs` User
+
+Provisioned via cloud-init's native `users:` module, driven by a new
+`users` attribute on `cloudcore_instance` (`{username, sudo, ssh_keys,
+password_hash}`, each optional except `username`) rather than any
+per-template cloud-init hand-rolling — the platform's compute layer
+(`api/compute.py`'s `_build_users_block()`/`_build_write_files_block()`)
+already fully supported baking extra users into an instance's initial
+cloud-init, including automatically adding the CloudCore inter-instance
+keypair to every extra user (both `authorized_keys` inbound and a copy
+in that user's own `~/.ssh/` for outbound use, identical to what the
+default per-image user already gets) — it just needed wiring through
+`POST /v1/instances`'s request body and the Go provider's schema, which
+it had never had before this slice (see §9.4).
+
+`examples/ha-frontend-lb/locals.tf` defines one shared
+`local.ecs_user = [{ username = "ecs", sudo = true }]`, passed as `users
+= local.ecs_user` on every instance-creating resource block (both
+`modules/compute` and `modules/instance-group` call sites) — deliberately
+no `ssh_keys` given per-instance, since the CloudCore keypair injection
+is automatic and already sufficient for the stated requirement (ecs
+needs to reach every other instance in the stack, not any specific
+external key holder).
+
+No password is set (`password_hash` omitted) — `ecs` is SSH/sudo-only,
+matching this Lab's existing `ubuntu` account's own access model.
+
+### 9.3 Short-Hostname DNS
+
+`modules/dns-records` (already existed, previously unused by this
+example) registers one `cloudcore_dns_record` per instance under the
+`instances.cloudcore.internal` zone — `frontend-01`/`frontend-02`,
+`backend-01`/`backend-02`, `ca-a`, `mysql-a`/`mysql-b`/`mysql-c`,
+`proxysql-a`/`proxysql-b`, `rabbitmq-a`/`rabbitmq-b`/`rabbitmq-c`,
+`keystone-01`/`keystone-02`, `memcached-01`/`memcached-02`. Built in
+`locals.tf`'s `dns_records` map: `modules/compute`-based tiers key their
+own `private_ips_by_key` output by the exact short name already (the
+caller-supplied key in `var.instances`), so those merge in directly;
+`modules/instance-group`-based tiers key by two-digit index only (`01`,
+`02`), so those get `"${tier}${local.sfx}-${k}"` prefixed back on.
+
+Short-name resolution itself is a platform capability, not something
+`ha-frontend-lb` configures per-instance: `api/setup-network.sh`'s
+bridge dnsmasq hands out a DHCP domain-search option
+(`instances.cloudcore.internal`), so a guest's resolver tries that
+suffix automatically for any unqualified single-label lookup. The full
+FQDN form (`frontend-01.instances.cloudcore.internal`) and the private
+IP both still work as fallbacks.
+
+### 9.4 Platform Bugs Found and Fixed
+
+Both found live-verifying this feature — neither was hit by any earlier
+slice because `instance.users` (or a `cloudcore_dns_record`-heavy
+retrofit like this one) had never actually been exercised end-to-end
+before:
+
+- **DNS resolver never reloaded after API-server startup**
+  (`haFullStack-Findings-Log.md` F-049) — `dns_server.start()` is called
+  exactly once, at API server boot; none of the 7 call sites elsewhere in
+  `api/server.py` that mutate the DNS store called `dns_server.reload()`
+  afterward, so guest-visible DNS silently only ever reflected whatever
+  records existed at that process's last startup. Fixed by adding
+  `dns_server.reload()` after each of those 7 call sites.
+- **cloud-init `users:` semantics gap** (F-050) — a `users:` cloud-config
+  key replaces cloud-init's own implicit creation of the image's default
+  user unless the literal string `"default"` is included as one of the
+  list's own entries. `_build_users_block()` never did this, so the
+  first real build with `ecs` broke SSH access to `ubuntu` stack-wide.
+  Fixed by always prepending `"- default"` when any extra users are
+  requested. A second, related gap fixed in the same investigation:
+  `POST /v1/instances` never read a `users` key from its request body at
+  all, despite the compute layer fully supporting it — the only existing
+  path (`POST /v1/instances/{id}/users`) applies too late for bridge-mode
+  instances. Fixed by wiring `users` through the create endpoint and
+  adding a matching `users` attribute (`RequiresReplace`, matching
+  `user_data`'s own convention) to the Go provider's `cloudcore_instance`
+  resource.
+
+### 9.5 Verification
+
+A real three-iteration build/destroy cycle against the full 15-node
+stack (48 resources each time) — not drafted and assumed working:
+
+1. First `tofu apply` completed, but `ecs` didn't exist on any instance
+   at all — the API server process running at the time predated the
+   `POST /v1/instances` `users`-wiring fix (Python doesn't hot-reload
+   edited modules). Diagnosed, API server restarted, stack destroyed.
+2. Second `tofu apply` completed with `ecs` present and passwordless
+   sudo working, but SSH to `ubuntu` was completely broken stack-wide —
+   F-050. Diagnosed via the instance's own rendered cloud-init and
+   console log, fixed, API server restarted, stack destroyed again.
+3. Third `tofu apply`: clean end-to-end. `ecs` present with working
+   `sudo -n` on every node; `ubuntu` SSH unaffected; `getent hosts
+   backend-01` resolves from `ecs`'s own account; `ssh ecs@backend-01`
+   (short name, no `-i`, no password) succeeds from a
+   `modules/instance-group`-managed node (frontend) to another
+   `instance-group`-managed node (backend), and separately to two
+   `modules/compute`-managed nodes (`mysql-a`, `ca-a`) — confirming the
+   mechanism works identically regardless of which shared module created
+   the target instance. `sudo -n whoami` on the far side also returned
+   `root` in every case. Clean `tofu destroy` afterward, 48/48 resources.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2260,3 +2372,4 @@ destroy` afterward — 31 resources, 0 instances remaining.
 | v0.17 | 2026-09-12 | Paul Scott | `ha-frontend-lb` retrofitted onto §7's host-level `cloudcore-repo` — §6's own NFS design marked superseded for this stack (kept as a design reference only). `module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed, 15 nodes instead of 17. Verified with a real `tofu apply`/dashboard-check/`tofu destroy` cycle from a clean slate — see §7.4. |
 | v0.18 | 2026-09-12 | Paul Scott | New §8, Backend Tier — the last tier this document's own diagram always described but every prior slice deferred, now built: 2 nodes, `standard.medium` (20GB disk, sized against the user's own stated 2.5GB-compressed/decompressed/running-footprint requirement), local NGINX installed but deliberately unconfigured (the not-yet-installed application configures itself), mTLS client identity from the same CA every other tier uses. §5's "Backend↔X mTLS... can't be built until the backend tier exists" open item resolved — real handshakes confirmed accepted against ProxySQL/Keystone/RabbitMQ. `haFullStack.md` §3.1/§3.3/§3.4's stale `:8080` upstream examples corrected to `:80` to match backend's own real NGINX port. One finding (F-048): no new security-group rules were needed on proxysql/keystone/rabbitmq at all — their existing ingress was already scoped to the whole bridge subnet, not narrowed per-source-SG. |
 | v0.19 | 2026-09-12 | Paul Scott | Runtime software added to frontend (§1.3) and backend (§8.3): Node.js (frontend only, NodeSource, 18.x minimum), Temurin 21 JDK, jasypt 1.9.3, and Bouncy Castle's `bcprov-jdk18on` 1.80 (both tiers) — jasypt needs a JVM to run its own CLI scripts, which a stock Ubuntu image doesn't provide, correcting an initial assumption that frontend/backend already had Java. All four cached in the host-level repo rather than fetched live; `build-package-repo.sh` extended to trust NodeSource's repo (same pattern as Adoptium/Kismet) and cache jasypt's dist zip + Bouncy Castle's provider jar as pinned artifacts, both verified as real, current, working URLs directly before use. Verified for real on a throwaway instance: correct versions installed, and jasypt's own `encrypt.sh` actually ran successfully against the newly-installed JVM. `chmod u+x` (not `+x`/`a+x`) applied to every `.sh` file jasypt installs, per direct instruction. |
+| v0.20 | 2026-09-12 | Paul Scott | New §9, Operational Access (cross-cutting) — every instance gets an `ecs` NOPASSWD-sudo account (reusing the existing CloudCore inter-instance keypair, no new key to manage) and a short-hostname `cloudcore_dns_record`. Required real platform-layer fixes, not just Terraform: `POST /v1/instances` never read a `users` key at all despite the compute layer already fully supporting it, and the API's own DNS resolver never reloaded after startup (F-049); once fixed, cloud-init's `users:` semantics (replaces the image's own default user unless `"default"` is explicitly listed) broke `ubuntu` SSH stack-wide the first time an extra user was actually created at launch (F-050) — both found and fixed live across a real three-iteration build/destroy cycle against the full 15-node stack, final iteration clean end-to-end. |

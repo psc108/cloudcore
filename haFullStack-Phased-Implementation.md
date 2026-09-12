@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.20 (in progress — built section by section) | Paul Scott
+v0.21 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -453,6 +453,49 @@ real HTTP route reachable through the VIP. Both confirmed directly.
 
 ---
 
+## Platform Hardening (post-Phase 7.A review) — Operational Tooling
+
+Same pattern as the reviews after Phase 1.A/2.A/6.A: cross-cutting
+operational needs that aren't a new tier, tracked here plus the Findings
+Log rather than as new phase/task rows.
+
+- **Node.js/Java/jasypt/BouncyCastle** — added to the host-level
+  `cloudcore-repo` service for frontend (Node.js, prior stock-Ubuntu-has-
+  no-JVM-at-all assumption corrected) and backend (Java). Both tiers also
+  get `jasypt`/`bcprov` unpacked with every `bin/*.sh` script explicitly
+  `chmod u+x`. Verified against a real throwaway instance: Node v20.20.2,
+  Temurin 21.0.12.1, and `jasypt-dist.zip`'s own `encrypt.sh` executed
+  successfully against the freshly-installed JVM.
+- **"ecs" operational user** — every instance in `ha-frontend-lb` (all 15
+  nodes) now gets an "ecs" account with passwordless (NOPASSWD) sudo,
+  reusing the platform's existing CloudCore inter-instance keypair rather
+  than provisioning a new one — the same key is added to `ecs`'s
+  `authorized_keys` on every node and installed in `ecs`'s own `~/.ssh/`
+  for outbound use, so `ecs` can SSH from any node in the stack to any
+  other node's `ecs` account with no additional key management.
+- **Short-hostname DNS** — every instance also gets a `cloudcore_dns_record`
+  (e.g. `frontend-01`, `backend-01`, `mysql-a`) so nodes can be reached by
+  short name, not just the private IP or full FQDN — backed by a new
+  platform-level DHCP domain-search option (`instances.cloudcore.internal`).
+- Both features required real platform-layer fixes, not just Terraform
+  changes at the example level — a DNS resolver that silently never
+  reloaded after the API server's own startup (F-049), and a cloud-init
+  `users:` semantics gap that broke default-user SSH access stack-wide
+  the first time an extra user was actually created at instance-launch
+  time (F-050) — see the Findings Log for both.
+- Verified with a real three-iteration build/destroy cycle against the
+  full 15-node stack (48 resources each time): iteration 1 surfaced
+  F-049, iteration 2 surfaced F-050, iteration 3 confirmed clean —
+  `ecs` present with working sudo on every node, `ubuntu` SSH unaffected,
+  short-hostname DNS resolving, and `ssh ecs@<short-name>` succeeding
+  passwordlessly between an `instance-group`-managed tier and a
+  `compute`-managed tier, with working sudo on the far side too. Torn
+  down cleanly afterward (48/48 resources).
+- No Phase 7 task-table changes — this is cross-cutting operational
+  tooling applied across the whole stack, not a new tier.
+
+---
+
 ## Cross-Cutting Notes
 
 - Every phase's `.A` (Lab) sub-path is the only one that can be built and
@@ -495,3 +538,4 @@ real HTTP route reachable through the VIP. Both confirmed directly.
 | v0.18 | 2026-09-11 | Paul Scott | Platform Hardening review (post-Phase 6.A), same pattern as the reviews after Phase 1.A/2.A: reflecting on Phase 6.A surfaced a better generalization than fixing it in place — the per-project NFS repo became a host-level, always-available `cloudcore-repo` service (`haFullStack.md` §14, `haFullStack-LLD.md` §7), not tracked as a CloudCore resource so no project's `tofu destroy` can reach it, and extended to cover every example template's package/artifact needs rather than just `ha-frontend-lb`'s. F-040 resolved for real with a generic backend `PATCH` endpoint plus provider support. Two new findings from live verification, `write_files`/`owner:` in `api/nfs.py` (F-046, same class as F-026) and a genuinely stalled apt-mirror connection recovered by killing the stuck apt worker (F-047). Protected against accidental removal (`teardown-network.sh` requires `--force` while active; build output survives `git clean -xfd`). Not yet consumed by `ha-frontend-lb` itself — Phase 6.A's own NFS repo remains that stack's actual mechanism; no Phase 6 task-table changes, matching how Platform Hardening reviews are tracked (Findings Log + Document History only, not phase/task rows). |
 | v0.19 | 2026-09-12 | Paul Scott | Second Platform Hardening review (post-Phase 6.A/v0.18) — `ha-frontend-lb` retrofitted onto the host-level `cloudcore-repo` service, retiring Phase 6.A's own NFS design for this stack entirely (`module.nfs`/`module.repo_builder` and every tier's NFS-mount `bootcmd` block removed). 15 nodes instead of 17. Verified with a real `tofu apply`/dashboard-check/`tofu destroy` cycle from a clean slate — all four checks `OK`, `archive.ubuntu.com` confirmed absent from checked nodes' cloud-init logs. No Phase 6 task-table changes, same reasoning as v0.18. |
 | v0.20 | 2026-09-12 | Paul Scott | Seventh phase — Phase 7, Backend Tier (7A-01–7A-11 done), the last tier this document's own summary table and `haFullStack.md`'s component table/topology diagram always described but every prior phase deferred. Infrastructure only, by direct instruction — 2 nodes sized against the user's own stated application-footprint requirement, local NGINX installed but deliberately left unconfigured, mTLS client identity from the same CA every other tier trusts. Resolved `haFullStack-LLD.md` §5's "Backend↔X mTLS... can't be built until the backend tier exists" open item for real — TLS handshakes from a backend node confirmed accepted against ProxySQL/Keystone/RabbitMQ. One finding (F-048): no security-group changes were needed on proxysql/keystone/rabbitmq at all. Also corrected the summary table above, stale since Phase 5 was drafted (rows 5-6 hadn't been marked complete). |
+| v0.21 | 2026-09-12 | Paul Scott | Platform Hardening review (post-Phase 7.A) — operational tooling, not a new tier: Node.js/Java/jasypt/BouncyCastle on frontend/backend (verified against a real instance: Node v20.20.2, Temurin 21.0.12.1, `jasypt`'s `encrypt.sh` run for real), an "ecs" NOPASSWD-sudo operational user on every instance (reusing the existing CloudCore inter-instance keypair, no new key to manage), and short-hostname DNS per instance. Two real platform-layer bugs found and fixed along the way, not just example-level Terraform: CloudCore's own DNS resolver never reloaded after API-server startup (F-049), and a cloud-init `users:` semantics gap that broke default-user SSH stack-wide the first time an extra user was created at launch time (F-050). Verified with a real three-iteration build/destroy cycle against the full 15-node stack, both bugs caught live, final iteration clean end-to-end. |
