@@ -98,6 +98,22 @@ write_files:
       rabbitmqctl set_user_tags admin administrator
       rabbitmqctl set_permissions -p / admin '.*' '.*' '.*'
       rabbitmqctl set_cluster_name rabbitmq-cluster
+
+      # Application service accounts + vhost, per direct instruction —
+      # ported from create_users.sh/create_vhost.sh, merged into one
+      # combined step here rather than kept as separate scripts. Runs
+      # only on the seed, same reasoning as admin: above. All 13 users
+      # share one password, matching create_users.sh's own single-
+      # positional-argument design and this stack's existing single-
+      # shared-credential convention for Lab-only placeholders.
+      for u in blobstore catalog customer event fulfillment pricing reporting request svcinst config export ticketing extevt; do
+        rabbitmqctl add_user "$u" '${rabbitmq_services_password}'
+      done
+
+      rabbitmqctl add_vhost /ssp
+      for u in blobstore catalog customer event fulfillment pricing reporting request svcinst config export ticketing extevt; do
+        rabbitmqctl set_permissions -p /ssp "$u" '.*' '.*' '.*'
+      done
       %{ else ~}
       # Wait for the seed to actually be up before attempting to join —
       # cloud-init on all 3 nodes runs concurrently, so the seed's own

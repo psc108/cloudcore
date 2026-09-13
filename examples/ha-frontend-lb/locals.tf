@@ -137,6 +137,11 @@ locals {
   # placeholder above, not a production secret.
   keystone_system_domain_password = "changeme-system-domain"
 
+  # Shared across the 13 application service accounts setup-rabbitmq.sh
+  # creates on the seed (create_users.sh/create_vhost.sh, ported in) —
+  # same single-shared-credential convention as keystone_system_domain_password.
+  rabbitmq_services_password = "changeme-rabbitmq-services"
+
   # Node "a" only — modules/compute's per-key user_data can't reference
   # that same module call's own private_ips_by_key output, so it's split
   # into two module calls (bootstrap node, then joiners referencing its
@@ -299,13 +304,14 @@ locals {
       security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
       users              = local.ecs_user
       user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
-        is_seed                 = true
-        seed_ip                 = ""
-        erlang_cookie           = random_id.erlang_cookie.b64_url
-        ca_ip                   = local.ca_ip
-        ca_provisioner_password = local.ca_provisioner_password
-        vip_address             = var.vip_address
-        step_cli_deb_sha256     = local.step_cli_deb_sha256
+        is_seed                    = true
+        seed_ip                    = ""
+        erlang_cookie              = random_id.erlang_cookie.b64_url
+        ca_ip                      = local.ca_ip
+        ca_provisioner_password    = local.ca_provisioner_password
+        vip_address                = var.vip_address
+        step_cli_deb_sha256        = local.step_cli_deb_sha256
+        rabbitmq_services_password = local.rabbitmq_services_password
       })
     }
   }
@@ -324,13 +330,14 @@ locals {
       security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
       users              = local.ecs_user
       user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
-        is_seed                 = false
-        seed_ip                 = values(module.rabbitmq_seed.private_ips_by_key)[0]
-        erlang_cookie           = random_id.erlang_cookie.b64_url
-        ca_ip                   = local.ca_ip
-        ca_provisioner_password = local.ca_provisioner_password
-        vip_address             = var.vip_address
-        step_cli_deb_sha256     = local.step_cli_deb_sha256
+        is_seed                    = false
+        seed_ip                    = values(module.rabbitmq_seed.private_ips_by_key)[0]
+        erlang_cookie              = random_id.erlang_cookie.b64_url
+        ca_ip                      = local.ca_ip
+        ca_provisioner_password    = local.ca_provisioner_password
+        vip_address                = var.vip_address
+        step_cli_deb_sha256        = local.step_cli_deb_sha256
+        rabbitmq_services_password = local.rabbitmq_services_password
       })
     }
   }
