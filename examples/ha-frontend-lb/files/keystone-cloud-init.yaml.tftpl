@@ -1793,9 +1793,10 @@ write_files:
   # project's own real-world convention, per direct instruction — the
   # same pattern RabbitMQ's server.key now uses) via Apache's
   # SSLPassPhraseDialog exec: mechanism, which runs
-  # /etc/keystone/ssl/key.password once at startup/reload to obtain the
-  # passphrase rather than prompting interactively (which would hang a
-  # boot with no console attached).
+  # /etc/keystone/server.key.password.sh once at startup/reload to
+  # obtain the passphrase rather than prompting interactively (which
+  # would hang a boot with no console attached). Path/filename per
+  # direct instruction.
   - path: /usr/local/sbin/setup-keystone-tls.sh
     permissions: '0755'
     content: |
@@ -1839,12 +1840,12 @@ write_files:
       chown keystone:keystone /etc/keystone/ssl/key.pem
       chmod 600 /etc/keystone/ssl/key.pem
 
-      cat > /etc/keystone/ssl/key.password <<'EOF'
+      cat > /etc/keystone/server.key.password.sh <<'EOF'
       #!/bin/sh
       echo "${admin_password}"
       EOF
-      chown keystone:keystone /etc/keystone/ssl/key.password
-      chmod 700 /etc/keystone/ssl/key.password
+      chown keystone:keystone /etc/keystone/server.key.password.sh
+      chmod 700 /etc/keystone/server.key.password.sh
 
       # A dedicated "ecs" CLI identity for env.sh — see env.sh's own
       # comment above. Deliberately unencrypted (no passphrase): consumed
@@ -1878,7 +1879,7 @@ write_files:
       # it lives in its own conf-available fragment instead of inline in
       # keystone-tls.conf below.
       cat > /etc/apache2/conf-available/keystone-ssl-passphrase.conf <<'EOF'
-      SSLPassPhraseDialog exec:/etc/keystone/ssl/key.password
+      SSLPassPhraseDialog exec:/etc/keystone/server.key.password.sh
       EOF
       a2enconf keystone-ssl-passphrase
 
