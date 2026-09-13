@@ -52,7 +52,20 @@ def _cors(response):
 
 @app.get("/")
 def ui():
-    return send_from_directory(UI_DIR, "index.html")
+    # No caching — index.html bundles the entire dashboard (all of
+    # ui/src/js/*.js inlined by ui/build.sh), so a browser holding a
+    # stale cached copy silently keeps running old JS indefinitely after
+    # any dashboard fix ships, with no visible error — found directly
+    # chasing a report that a just-fixed bug ("No SSH port" shown for
+    # instances with a valid private_ip) was still happening: the fix
+    # was already on disk and already correct, the browser just never
+    # re-fetched it. send_from_directory's default Cache-Control let
+    # that happen; explicitly disabling it here means a normal refresh
+    # (not a hard-refresh) always picks up the latest dashboard.
+    resp = send_from_directory(UI_DIR, "index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 def require_auth(f):
