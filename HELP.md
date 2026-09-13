@@ -232,7 +232,7 @@ Browser-based SSH terminal powered by xterm.js and a WebSocket proxy (port 8081)
 ### Open a Terminal
 1. Go to **Infrastructure → Terminal**. Running instances are listed as cards.
 2. Click **Open Terminal** on any running instance.
-3. The session connects as the first non-sudo user. If none exists, add one via the Users panel first.
+3. The session connects as the first non-sudo user tracked in the Users panel. If every tracked user is sudo (or none are tracked at all), it falls back to the instance's own default SSH user (e.g. `ubuntu`, or `ecs` on the HA Frontend LB template) — a terminal is only refused if neither exists.
 
 Works for both networking modes — bridge-mode instances connect directly to their own private IP; SLIRP-mode ones through their forwarded port. Only shows **No SSH port** if an instance genuinely has neither (shouldn't happen for a `running` instance in either mode).
 
@@ -328,6 +328,10 @@ Click **Run Build**. A log panel streams live output from `ansible-playbook`.
 | Network Load Balancer (L4) | VPC + 2 instances + internal network load balancer |
 | Full Stack | VPC + 3 instances + ALB + DNS zone + CNAME |
 | NFS Shared Storage | VPC + NFS server + 2 instances with shared mount |
+| OpenStack Services Stack | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
+| Ghidra Workstation | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
+| Kiwix Library | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
+| WiFi Sniffer | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter |
 
 ### Build History and Destroy
 See [Build History and Destroy](#build-history-and-destroy) below — the behaviour is identical for both Ansible and OpenTofu builds.
@@ -375,6 +379,7 @@ Click **Run Apply**. A log panel streams live output from `tofu init` and `tofu 
 | Full Stack | VPC + instance group + application load balancer (uses all modules) |
 | NFS Shared Storage | VPC + NFS server with two exports + two app instances |
 | OpenStack Services Stack | VPC + 6 named instances (frontend, backend, mysql, keystone, rabbitmq, admin/NFS) + public frontend ALB + internal backend NLB |
+| HA Frontend Load Balancer | VPC + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + DNS records — see `haFullStack.md` for the full architecture writeup |
 | Ghidra Workstation | VPC + 1 instance running Ghidra with a full XFCE desktop, browser-accessible via noVNC through a network load balancer — no client install needed |
 | Kiwix Library | VPC + 1 instance serving an offline Kiwix content library over HTTP through a load balancer |
 | WiFi Sniffer | VPC + 1 instance running Kismet + the aircrack-ng suite, driven by a physical USB WiFi adapter passed through from the host (see [USB Device Passthrough](#usb-device-passthrough)) |
@@ -424,7 +429,7 @@ Two tabs at the top switch between file trees:
 
 | Tab | Path |
 |---|---|
-| **Ansible** | `ansible/examples/` — playbooks 01–07 |
+| **Ansible** | `ansible/examples/` — playbooks 01–11, plus `07-teardown.yml` |
 | **OpenTofu** | `examples/` — OpenTofu example directories |
 
 ### Open a File
@@ -647,6 +652,8 @@ journalctl --user -u cloudcore-terminal -f
 systemctl --user restart cloudcore-api
 systemctl --user restart cloudcore-terminal
 ```
+
+Restarting `cloudcore-api` also restarts `cloudcore-terminal` (they're tied via systemd `PartOf=`) — but not the other way round. If the Terminal feature ever starts behaving inconsistently with the rest of the platform (e.g. after a manual code change or a partial restart), restart `cloudcore-terminal` directly rather than assuming a `cloudcore-api` restart already covered it.
 
 To change the API token:
 ```bash

@@ -70,6 +70,26 @@ _TEMPLATE_META = {
         "description": "VPC + 6 named instances (frontend, backend, mysql, keystone, rabbitmq, admin/NFS) + public frontend ALB + internal backend NLB.",
         "resources": ["vpc", "subnet", "security_group", "instance", "nfs_server", "load_balancer"],
     },
+    "ha-frontend-lb": {
+        "title": "HA Frontend Load Balancer",
+        "description": "VPC + subnets + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + DNS records.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "dns_record"],
+    },
+    "ghidra-workstation": {
+        "title": "Ghidra Workstation",
+        "description": "VPC + security group + 1 instance running Ghidra with a full XFCE desktop, browser-accessible via noVNC through a network load balancer.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
+    },
+    "kiwix-library": {
+        "title": "Kiwix Library",
+        "description": "VPC + security group + 1 instance serving an offline Kiwix content library over HTTP through a load balancer.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
+    },
+    "wifi-sniffer": {
+        "title": "WiFi Sniffer",
+        "description": "VPC + security group + 1 instance running Kismet + the aircrack-ng suite, driven by a passed-through USB WiFi adapter, through a network load balancer.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
+    },
 }
 
 
