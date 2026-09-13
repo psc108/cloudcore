@@ -1,6 +1,20 @@
 [Unit]
 Description=CloudCore Terminal WebSocket Server
 After=cloudcore-api.service
+# Restarting/stopping cloudcore-api also restarts/stops this unit —
+# PartOf propagates stop/restart (one-way, not start) from the unit(s)
+# listed here. Without this, "systemctl --user restart cloudcore-api"
+# leaves an old, still-running terminal.py process untouched — and since
+# Python doesn't hot-reload its own imports, that process keeps using
+# whatever store.py/models.py/etc. looked like whenever it last started,
+# silently diverging from a freshly-restarted cloudcore-api that's
+# already running today's code. Confirmed directly as a real, repeatable
+# point of confusion: three separate operations (install.sh re-run,
+# systemctl --user enable --now cloudcore-terminal — a no-op on an
+# already-running unit — and a manual cloudcore-api restart) all failed
+# to pick up a fix that was already correct and already on disk, because
+# none of them actually restarted this specific process.
+PartOf=cloudcore-api.service
 
 [Service]
 Type=simple
