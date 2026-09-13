@@ -138,6 +138,26 @@ locals {
   mysql_keystone_password = var.admin_password
   mysql_ssp_password      = var.admin_password
 
+  # MySQL's actual root account, per direct instruction — two accounts,
+  # both var.admin_password:
+  #   - 'root'@'localhost': every node's own OS-package-default root
+  #     account, switched from auth_socket (no password, OS-user-match
+  #     only) to a real password, for manual/ad-hoc admin work directly
+  #     on a MySQL instance. Set identically on every node (bootstrap and
+  #     replicas both), same reasoning as the repl account above — a
+  #     local-only account each node owns independently, not something
+  #     replication should propagate.
+  #   - 'root'@'%': a new, genuinely network-reachable superuser account
+  #     for the backend application (haFullStack-LLD.md — backend
+  #     connects remotely, via the shared VIP -> ProxySQL, same as
+  #     appuser/keystone/ssp_*, which already reliably routes to
+  #     whichever node GR currently elects primary — a raw bypass
+  #     straight to one MySQL node's own IP would need its own primary-
+  #     discovery logic the backend doesn't have). Created once on the
+  #     bootstrap node alongside appuser/keystone/ssp_*, replicates
+  #     normally via Group Replication.
+  mysql_root_password = var.admin_password
+
   # Shared across all 22 "system" domain service/admin accounts created
   # by setup-keystone-roles.sh's system_domain.yml import.
   keystone_system_domain_password = var.admin_password
@@ -170,6 +190,7 @@ locals {
         app_password            = local.mysql_app_password
         keystone_password       = local.mysql_keystone_password
         ssp_password            = local.mysql_ssp_password
+        root_password           = local.mysql_root_password
         ca_ip                   = local.ca_ip
         step_cli_deb_sha256     = local.step_cli_deb_sha256
         ca_provisioner_password = local.ca_provisioner_password
@@ -201,6 +222,7 @@ locals {
         app_password            = local.mysql_app_password
         keystone_password       = local.mysql_keystone_password
         ssp_password            = local.mysql_ssp_password
+        root_password           = local.mysql_root_password
         ca_ip                   = local.ca_ip
         step_cli_deb_sha256     = local.step_cli_deb_sha256
         ca_provisioner_password = local.ca_provisioner_password
@@ -241,6 +263,7 @@ locals {
         monitor_password        = local.mysql_monitor_password
         app_password            = local.mysql_app_password
         keystone_password       = local.mysql_keystone_password
+        root_password           = local.mysql_root_password
         ca_ip                   = local.ca_ip
         ca_provisioner_password = local.ca_provisioner_password
         vip_address             = var.vip_address

@@ -115,6 +115,47 @@ write_files:
       EOF
       systemctl restart mysql
 
+      # root@localhost, per direct instruction — the OS-package default
+      # (auth_socket: no password, OS-user-match only) switched to a real
+      # password for manual/ad-hoc admin work directly on a MySQL
+      # instance. Every node (bootstrap and replicas alike) runs this
+      # identically, same as the repl user's own local-account reasoning
+      # below — SET SQL_LOG_BIN=0 keeps it out of the binlog Group
+      # Replication would otherwise try to replicate, since each node
+      # already sets its own copy independently rather than relying on
+      # replication to propagate it. Still authenticated via auth_socket
+      # here (this script runs as the OS root user, which is all
+      # auth_socket ever checks) — this ALTER is what switches it away
+      # from that for every connection after this point. A client
+      # credentials file is what keeps every *other* `mysql -u root` call
+      # already in this file (and quorum-watchdog.py, and step-renew's
+      # own ALTER INSTANCE hook below) working unchanged afterward — but
+      # ~/.my.cnf specifically does NOT work here: confirmed directly,
+      # cloud-init's runcmd scripts run without a real $HOME, so the very
+      # next script's own `mysql -u root` calls looked for it at the
+      # wrong path and got "Access denied ... (using password: NO)",
+      # which broke Group Replication outright (the repl user was never
+      # created, every node stayed OFFLINE). /etc/mysql/mysql.conf.d/ is
+      # $HOME-independent — mysqld ignores its [client] section (it only
+      # reads [mysqld]), so this is safe to drop alongside
+      # zz-group-replication.cnf, and every `mysql`/client invocation on
+      # this host picks it up regardless of the calling process's
+      # environment. Explicitly chmod 600 — unlike ~/.my.cnf, MySQL
+      # doesn't refuse to use an over-permissive file here, so a
+      # plaintext password would otherwise sit world-readable.
+      mysql -u root <<SQL
+      SET SQL_LOG_BIN=0;
+      ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${root_password}';
+      FLUSH PRIVILEGES;
+      SET SQL_LOG_BIN=1;
+      SQL
+      cat > /etc/mysql/mysql.conf.d/zz-client-root.cnf <<EOF
+      [client]
+      user=root
+      password=${root_password}
+      EOF
+      chmod 600 /etc/mysql/mysql.conf.d/zz-client-root.cnf
+
       # step ca renew's positional <crt-file> <key-file> args must come
       # immediately after the subcommand, before any flags — confirmed
       # directly: `step ca renew --daemon --force <crt> <key> --exec ...`
@@ -165,6 +206,7 @@ write_files:
       ALTER USER 'ssp_ticketing'@'%' REQUIRE X509;
       ALTER USER 'ssp_event'@'%' REQUIRE X509;
       ALTER USER 'ssp_extevt'@'%' REQUIRE X509;
+      ALTER USER 'root'@'%' REQUIRE X509;
       SQL
       %{ endif ~}
 
@@ -339,6 +381,19 @@ write_files:
       CREATE DATABASE IF NOT EXISTS ssp_extevt CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
       CREATE USER IF NOT EXISTS 'ssp_extevt'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
       GRANT ALL ON ssp_extevt.* TO 'ssp_extevt'@'%';
+
+      -- 'root'@'%' — a genuinely network-reachable superuser account for
+      -- the backend application, per direct instruction (it connects
+      -- remotely, via the shared VIP -> ProxySQL, same path as
+      -- appuser/keystone/ssp_* above — see proxysql-cloud-init.yaml.tftpl's
+      -- matching mysql_users entry). Created here, not with SQL_LOG_BIN=0
+      -- like root@localhost above — this is a normal application-facing
+      -- account, not a local-only one, so it should replicate to the
+      -- other two nodes the same ordinary way appuser/keystone/ssp_* do.
+      -- REQUIRE X509 applied afterward in setup-mysql-tls-accounts.sh,
+      -- same as every other client-facing account.
+      CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH mysql_native_password BY '${root_password}';
+      GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
       SQL
       %{ else ~}
       # Wait for the bootstrap node's group to actually be ONLINE before

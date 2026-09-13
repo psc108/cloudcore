@@ -89,6 +89,7 @@ write_files:
 
       INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('appuser', '${app_password}', 10);
       INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('keystone', '${keystone_password}', 10);
+      INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('root', '${root_password}', 10);
 
       LOAD MYSQL VARIABLES TO RUNTIME;
       LOAD MYSQL SERVERS TO RUNTIME;
