@@ -58,16 +58,12 @@ locals {
     keystone_tls_ips = values(module.keystone.private_ips_by_key)
   })
 
-  # http{}-context server{} block for Keystone, sibling to the frontend
-  # one — both end up in the same sites-available/default file (see
-  # nginx_conf below), matching haFullStack-LLD.md §3.3.1's explicit
-  # framing: dedicated port 5000, not vhost routing, per direct
-  # confirmation this matches the real backend application's own
-  # addressing scheme (not a DNS workaround — CloudCore's guest DNS is
-  # fixed as of F-022, but that was never the reason for this choice).
-  nginx_keystone_conf = templatefile("${path.module}/files/nginx-keystone.conf.tftpl", {
-    keystone_ips = values(module.keystone.private_ips_by_key)
-  })
+  # Keystone no longer has an http{}-context vhost of its own — :5000/
+  # :35357 both closed, per direct instruction, leaving only the :5443
+  # mTLS listener, which is a stream{} passthrough (nginx_stream_conf
+  # above, keystone_tls_ips) like every other TLS port in this stack.
+  # nginx-keystone.conf.tftpl (the file that used to hold this) is
+  # deleted, not just unreferenced.
 
   # Dedicated port (8080), not vhost routing — same reasoning and same
   # precedent as Keystone's own :5000 above, applied to backend now that
@@ -82,10 +78,11 @@ locals {
   })
 
   # Concatenated, not separate files — sites-available/default only loads
-  # once per vhost-style config in this setup, and all three are
-  # http{}-context server{} blocks that coexist fine in one file (each
-  # with its own listen directive: 80, 5000, 8080).
-  nginx_conf = "${local.nginx_frontend_conf}\n${local.nginx_keystone_conf}\n${local.nginx_backend_conf}"
+  # once per vhost-style config in this setup, and both are http{}-context
+  # server{} blocks that coexist fine in one file (each with its own
+  # listen directive: 80, 8080). Keystone no longer has one of its own —
+  # see the comment above where nginx_keystone_conf used to be.
+  nginx_conf = "${local.nginx_frontend_conf}\n${local.nginx_backend_conf}"
 
   # The application deployed onto these nodes afterward (not by this
   # template) is what would actually use these — provisioned now so that
@@ -281,6 +278,7 @@ locals {
   frontend_user_data = templatefile("${path.module}/files/frontend-cloud-init.yaml.tftpl", {
     vip_address             = var.vip_address
     app_password            = local.mysql_app_password
+    admin_password          = var.admin_password
     keystone_ips            = values(module.keystone.private_ips_by_key)
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password

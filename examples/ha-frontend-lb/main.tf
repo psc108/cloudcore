@@ -91,12 +91,10 @@ module "security_groups" {
       }
     }
     "keystone${local.sfx}" = {
-      description = "Keystone identity tier — API (plain + TLS) from the NGINX nodes' subnet only, plus SSH"
+      description = "Keystone identity tier — API (TLS-only) from the NGINX nodes' subnet only, plus SSH"
       ingress_rules = {
-        api       = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = local.bridge_cidr }
-        api_tls   = { ip_protocol = "tcp", from_port = 5443, to_port = 5443, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS — haFullStack-LLD.md §5.3.1" }
-        api_admin = { ip_protocol = "tcp", from_port = 35357, to_port = 35357, cidr = local.bridge_cidr, description = "Classic OpenStack admin-API port, used by env.sh CLI clients" }
-        ssh       = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+        api_tls = { ip_protocol = "tcp", from_port = 5443, to_port = 5443, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS — the only listener, per direct instruction (haFullStack-LLD.md §5.3.1)" }
+        ssh     = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -113,11 +111,10 @@ module "security_groups" {
       }
     }
     "rabbitmq${local.sfx}" = {
-      description = "RabbitMQ tier — AMQP (plain + TLS)/management from nginx SG's subnet, Erlang clustering within the bridge subnet, plus SSH"
+      description = "RabbitMQ tier — AMQP + management (both TLS-only) from nginx SG's subnet, Erlang clustering within the bridge subnet (still plaintext — internal-only, per direct instruction), plus SSH"
       ingress_rules = {
-        amqp     = { ip_protocol = "tcp", from_port = 5672, to_port = 5672, cidr = local.bridge_cidr }
-        amqp_tls = { ip_protocol = "tcp", from_port = 5671, to_port = 5671, cidr = local.bridge_cidr, description = "TLS + mTLS listener (verify_peer, fail_if_no_peer_cert) — haFullStack-LLD.md §5.3.1" }
-        mgmt     = { ip_protocol = "tcp", from_port = 15672, to_port = 15672, cidr = local.bridge_cidr }
+        amqp_tls = { ip_protocol = "tcp", from_port = 5671, to_port = 5671, cidr = local.bridge_cidr, description = "AMQP TLS + mTLS listener (verify_peer, fail_if_no_peer_cert) — the only AMQP listener, per direct instruction (haFullStack-LLD.md §5.3.1)" }
+        mgmt_tls = { ip_protocol = "tcp", from_port = 15671, to_port = 15671, cidr = local.bridge_cidr, description = "Management HTTPS listener — the only management listener, per direct instruction" }
         epmd     = { ip_protocol = "tcp", from_port = 4369, to_port = 4369, cidr = local.bridge_cidr }
         erldist  = { ip_protocol = "tcp", from_port = 25672, to_port = 25672, cidr = local.bridge_cidr }
         ssh      = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }

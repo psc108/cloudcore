@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.28 | Paul Scott
+v0.29 | Paul Scott
 
 ---
 
@@ -1453,6 +1453,102 @@ produce a genuine quorum queue via the management API's own type field.
 
 **Verified by:** Installed the updated unit file, started both services fresh, recorded `cloudcore-terminal`'s `MainPID`, then ran `systemctl --user restart cloudcore-api` only — confirmed `cloudcore-terminal`'s `MainPID` changed too (a real restart, not a no-op), with both services reporting `active` and the API responding `200` afterward. On the reporting machine, manually restarting `cloudcore-terminal` directly is what actually resolved the original symptom, confirming the diagnosis before this fix was even written.
 
+### F-058 — `openssl pkey -in X -out X` (identical path) silently corrupts the key it's meant to encrypt
+
+**Where:** `rabbitmq-cloud-init.yaml.tftpl` and `keystone-cloud-init.yaml.tftpl`'s TLS setup scripts, encrypting each node's freshly-issued private key with `var.admin_password` (per direct instruction, matching this project's own real-world passphrase-protected-key convention).
+
+**Symptom:** `rabbitmq-server` crash-looped immediately after the TLS setup script ran, with `openssl pkey`'s very next invocation failing "Could not read key from /etc/rabbitmq/server.key" — a file `step ca certificate` had just written successfully moments earlier.
+
+**Root cause:** The encryption command was `openssl pkey -aes256 -in server.key -out server.key -passout pass:...` — `-in` and `-out` pointing at the same path. `openssl` opens (and truncates) the `-out` file before it has finished reading the `-in` file, so the key is destroyed mid-read; the file that's left behind is neither the original key nor a valid encrypted one.
+
+**Fix:** Write to a temporary path (`server.key.enc` / `key.pem.enc`) and `mv` it into place afterward, for both the initial issuance and every future `step ca renew` cycle's re-encryption.
+
+**Verified by:** Reproduced directly (RabbitMQ crash-looping with the exact "Could not read key" error), fixed, then confirmed a full destroy/rebuild leaves both services with a valid, correctly-encrypted key that Apache/RabbitMQ start against successfully.
+
+### F-059 — RabbitMQ's `listeners.tcp.default = none` / `management.tcp.port = none` are invalid cuttlefish syntax
+
+**Where:** `rabbitmq-cloud-init.yaml.tftpl`'s `rabbitmq.conf`, written to disable the plain AMQP and management listeners now that both are TLS-only.
+
+**Symptom:** `rabbitmq-server` failed to boot at all: `Error preparing configuration in phase transform_datatypes: Error transforming datatype for: management.tcp.port — "none" cannot be converted to a(n) integer` (and the same for `listeners.tcp.default`), a hard, unrecoverable boot failure on every start attempt.
+
+**Root cause:** Cuttlefish's schema expects an integer (or IP) for these specific keys — the literal string `"none"` is not a special-cased disable value at `.default`/`.port` granularity, despite `none` being valid syntax elsewhere in RabbitMQ's config surface. The actual disable mechanism is different for each: `listeners.tcp = none` (the bare top-level key, no `.default`) is cuttlefish's real special case for AMQP; the management plugin has no equivalent bare-key special case at all — it's disabled simply by never setting `management.tcp.port` in the first place while `management.ssl.port` is configured.
+
+**Fix:** Changed to `listeners.tcp = none` and removed the `management.tcp.port` line entirely.
+
+**Verified by:** Reproduced directly (repeated `BOOT FAILED`/`failed_to_prepare_configuration` crash loop with the exact datatype error in `/var/log/rabbitmq/rabbitmq-server.log`), then confirmed the corrected config starts cleanly with `ss -tlnp` showing only `5671`/`15671` (no `5672`/`15672`).
+
+### F-060 — RabbitMQ's `management.ssl.*` is a fully independent config stanza from `ssl_options.*` — it needs its own mTLS enforcement directives
+
+**Where:** `rabbitmq-cloud-init.yaml.tftpl`'s `rabbitmq.conf`.
+
+**Symptom:** A plain `curl` with no client certificate against the management HTTPS API (`:15671`) received a normal HTTP `401` (missing-credentials) response instead of being rejected at the TLS layer — the API was encrypted but not actually enforcing mutual TLS, unlike every other TLS surface in this stack.
+
+**Root cause:** `ssl_options.verify`/`ssl_options.fail_if_no_peer_cert` (already set, governing the AMQP listener) have no effect on the management plugin's listener — it reads its own, separate `management.ssl.verify`/`management.ssl.fail_if_no_peer_cert`, which were never set.
+
+**Fix:** Added `management.ssl.verify = verify_peer` and `management.ssl.fail_if_no_peer_cert = true` alongside the existing `management.ssl.*` cert/key/password lines.
+
+**Verified by:** Confirmed via the running node's own effective config (`rabbitmqctl eval "application:get_env(rabbitmq_management, ssl_config)."`) showing both flags set, then a real curl round-trip: no client cert → TLS alert `certificate required`; valid client cert + Basic-Auth → `200 OK` with the full API response body.
+
+### F-061 — Apache's `SSLPassPhraseDialog` cannot appear inside a `<VirtualHost>` block
+
+**Where:** `keystone-cloud-init.yaml.tftpl`'s `:5443` vhost, adding passphrase support for the now-encrypted server key (same `var.admin_password` convention as F-058/RabbitMQ).
+
+**Symptom:** `apache2` refused to start outright: `AH00526: Syntax error on line 7 of /etc/apache2/sites-enabled/keystone-tls.conf: SSLPassPhraseDialog cannot occur within <VirtualHost> section` — a hard config-parse failure, not a runtime issue.
+
+**Root cause:** `SSLPassPhraseDialog` is a server-level (global) `mod_ssl` directive, not a per-vhost one — placing it inside `<VirtualHost *:5443>` is invalid regardless of context.
+
+**Fix:** Moved it into its own file (`/etc/apache2/conf-available/keystone-ssl-passphrase.conf`), enabled via `a2enconf`, rather than inline in the vhost.
+
+**Verified by:** `apache2ctl configtest` clean, `systemctl start apache2` succeeding, and a live TLS handshake against `:5443` completing using the encrypted key (proving the passphrase script was actually invoked and worked, not just that Apache started).
+
+### F-062 — The Keystone package's default plain vhost is a site named `keystone`, not `wsgi-keystone`
+
+**Where:** `keystone-cloud-init.yaml.tftpl`'s `setup-keystone-tls.sh`, disabling the plain `:5000` vhost now that `:5443` is the only listener.
+
+**Symptom:** After the disable logic ran, `:5000` was still listening alongside `:5443` — the plain listener this whole change was meant to close remained open.
+
+**Root cause:** The disable logic checked for `/etc/apache2/{conf,sites}-enabled/wsgi-keystone.conf`, an assumed filename that was never verified against a real install. The Ubuntu `keystone` package actually ships this as a **site** literally named `keystone` (`/etc/apache2/sites-available/keystone.conf`) — the check for a nonexistent filename silently matched nothing and disabled nothing.
+
+**Fix:** Changed the check to the confirmed real filename/site name: `a2dissite keystone`.
+
+**Verified by:** `ss -tlnp` on a rebuilt node showing only `:5443` listening, `:5000` gone entirely.
+
+### F-063 — The boot-time role-import script's target (`127.0.0.1`) isn't in its own node's certificate SAN list
+
+**Where:** `keystone-cloud-init.yaml.tftpl`'s `setup-keystone-roles.sh`, which runs `import_p3.py` against Keystone's own local API once it moved from plain `:5000` to mTLS `:5443`.
+
+**Symptom:** Every import attempt failed with `CertificateError: hostname '127.0.0.1' doesn't match either of '<node-ip>', '<vip>'` — a TLS hostname-verification failure despite a perfectly valid certificate and correctly-presented client cert.
+
+**Root cause:** Each node's own server certificate (`setup-keystone-tls.sh`'s `step ca certificate ... --san "$LOCAL_IP" --san "${vip_address}"`) only ever carried SANs for its real private IP and the VIP — never `127.0.0.1` — so connecting to `https://127.0.0.1:5443` can never pass hostname verification, regardless of certificate validity.
+
+**Fix:** `setup-keystone-roles.sh` now computes its own `LOCAL_IP` (same `hostname -I` pattern already used elsewhere in this stack) and connects via that instead of `127.0.0.1`.
+
+**Verified by:** Manually re-ran the corrected script against a live node — both `roles.yml` and `system_domain.yml` imports completed with `Finished`, no certificate errors.
+
+### F-064 — `setup-keystone-tls.sh` enabled the new `:5443` site but never reloaded the already-running Apache process before the role-import script needed it
+
+**Where:** `keystone-cloud-init.yaml.tftpl`'s `runcmd` ordering — `setup-keystone.sh` → `setup-keystone-tls.sh` → `setup-keystone-roles.sh`, with a single trailing `systemctl restart apache2` previously placed as the very last `runcmd` step.
+
+**Symptom:** Every role-import attempt failed with a plain connection-level error — `Failed to establish a new connection: [Errno 111] Connection refused` — for the entire 300-second readiness-retry window, despite `:5443`'s vhost config having just been written and `a2ensite`'d correctly.
+
+**Root cause:** `a2ensite`/`a2dissite`/`a2enconf` only change what Apache *would* load on its next start/reload — they don't touch the `apache2` process already running (auto-started earlier by cloud-init's `packages:` stage against the OLD, now-superseded `:5000`-only config). Since the only restart in the whole boot sequence was the very last `runcmd` step, `setup-keystone-roles.sh` (which runs *before* that) always found `:5443` genuinely not listening, no matter how long it waited.
+
+**Fix:** Moved the `systemctl restart apache2` call into the end of `setup-keystone-tls.sh` itself, immediately after the site/config changes — so `:5443` is live before anything downstream depends on it. Removed the now-redundant trailing `runcmd` step.
+
+**Verified by:** Full destroy/rebuild — `grep -c 'did not complete after 3 attempts' /var/log/cloud-init-output.log` went from 2 (both imports failing) to 0, with the log showing real import activity (`Create role`, `Create user`, `Finished`).
+
+### F-065 — Keystone's role/user import raced both nodes against the same shared MySQL data, producing intermittent 409s
+
+**Where:** `keystone-cloud-init.yaml.tftpl`'s `setup-keystone-roles.sh`, run identically on both Keystone nodes (this tier is "genuinely active-active, no per-node role" by design — see this file's own header comment).
+
+**Symptom:** On one otherwise-fully-fixed rebuild (all of F-061–F-064 already applied), `keystone-02`'s `roles.yml` import still failed after 3 attempts — `Create role implication error 409` followed by a secondary `RuntimeError: No active exception to reraise` inside `import_p3.py`'s own exception handling, crashing the whole import.
+
+**Root cause:** Correctly identified by direct question, not initially caught: Keystone has no data replication of its own — every role/domain/user this script imports lives entirely in the one shared `keystone` MySQL database both nodes already connect to. `keystone-manage db_sync`/`bootstrap` are safe to run concurrently on both nodes because they're properly idempotent SQL operations against that shared store, but `import_p3.py`'s own check-then-create pattern is not — running it from both nodes at once is a genuine, if narrow, race for the same inserts. `keystone-02`'s run in this instance found 128 roles already created by `keystone-01` and then lost a race creating one of the last role implications.
+
+**Fix:** Gated the actual import behind a hostname check — `case "$(hostname)" in *-01) ;; *) exit 0 ;; esac` — so only the first node (`modules/instance-group`'s own documented naming convention guarantees `-01` exists as long as any instance does) runs `import_p3.py` at all; every other node is a clean no-op, relying on `-01` having already populated the shared database. `db_sync`/`bootstrap` are unaffected and still run on every node.
+
+**Verified by:** Full destroy/rebuild — `keystone-01`'s log showed the real import completing cleanly (0 failures, hundreds of lines of genuine `Create role`/`Create user` activity); `keystone-02`'s log showed the new skip message and zero `import_p3.py` errors or tracebacks of any kind.
+
 ---
 
 ## Document History
@@ -1487,3 +1583,4 @@ produce a genuine quorum queue via the management API's own type field.
 | v0.26 | 2026-09-13 | Paul Scott | F-054's fix confirmed correct on disk but the exact same symptom still reported from a second machine — traced to a second, unrelated CloudCore platform bug (F-055): the Dashboard's `index.html` (the entire dashboard bundled into one file) was being cached by the browser across page loads, so an already-fixed dashboard silently kept serving old JS with no visible error. Fixed by disabling caching on `GET /` outright. Surfaced a further, genuinely separate, real issue on that same machine that isn't a code bug: bridge-mode security-group enforcement failing on every instance there (`sudo -n iptables` denied) — same class as F-010, needs the NOPASSWD sudo grant matched to whichever user actually runs `api/server.py` on that machine. |
 | v0.27 | 2026-09-13 | Paul Scott | The security-group sudoers grant turned out not to be a wrong-user problem but a genuine CloudCore platform bug (F-056): `install.sh` never invokes `setup-network.sh` directly, only via `cloudcore-bridge.service` — and systemd sets neither `SUDO_USER` nor `USER`, which the grant logic depended on. That resolves to an empty username, producing an invalid sudoers line `visudo -c` silently rejects, meaning the grant has never been installed for anyone on any `install.sh`-provisioned machine. Fixed with a new `CLOUDCORE_BRIDGE_USER` environment variable, injected into the systemd unit by `install.sh` from the real invoking user it already captures. Reproduced and verified directly under a clean, systemd-like environment (`env -i`): old logic → empty username → `visudo -c` syntax error; fixed logic → correct user → valid, accepted rule. Existing installs still need a one-time `sudo bash api/setup-network.sh` re-run to actually pick up the grant. |
 | v0.28 | 2026-09-13 | Paul Scott | The "No SSH port available" saga's actual final cause (F-057): `cloudcore-terminal.service` (the Terminal WebSocket server) is a separate systemd unit from `cloudcore-api.service`, and nothing in the whole investigation — `install.sh`, `setup-network.sh`, a hard browser refresh, or a manual `cloudcore-api` restart — ever touched it. Python doesn't hot-reload its own imports, so the long-running process kept using stale code indefinitely; `install.sh`'s own `enable --now` is a no-op on an already-running unit, so even a fresh install couldn't have force-restarted it. Fixed with `PartOf=cloudcore-api.service` on the terminal unit, propagating restart/stop from the API service to it — verified directly by restarting only `cloudcore-api` and confirming `cloudcore-terminal`'s own PID changed too. Manually restarting `cloudcore-terminal` is what actually resolved the symptom on the reporting machine, confirming the diagnosis. |
+| v0.29 | 2026-09-13 | Paul Scott | RabbitMQ AMQP + management API and Keystone's identity API closed to TLS-only, per direct instruction — RabbitMQ's plain `5672`/`15672` and Keystone's plain `:5000`/`:35357` are gone entirely (not kept alongside the TLS listeners), both server keys now passphrase-protected with `var.admin_password`, and `ecs`/`import_p3.py` gained real client certificates for their own mTLS access. MySQL deliberately left unchanged — every account an application uses already had `REQUIRE X509` enforced. Seven real bugs found and fixed via direct live-node testing across several full destroy/rebuild cycles: an `openssl pkey` same-path in/out corrupting keys mid-write (F-058); RabbitMQ's `listeners.tcp.default`/`management.tcp.port = none` being invalid cuttlefish syntax, with the real disable mechanism being the bare `listeners.tcp = none` plus simply omitting `management.tcp.port` (F-059); `management.ssl.*` needing its own independent `verify`/`fail_if_no_peer_cert` from `ssl_options.*` (F-060); Apache's `SSLPassPhraseDialog` being invalid inside a `<VirtualHost>` block (F-061); the real Keystone default site being named `keystone`, not the assumed `wsgi-keystone` (F-062); the boot-time role-import script's `127.0.0.1` target not matching any SAN on the node's own certificate (F-063); `setup-keystone-tls.sh` never reloading the already-running Apache process before the role-import script needed the new `:5443` listener (F-064); and, spotted by direct question rather than error output, both Keystone nodes racing to import the same role/user data into the one shared MySQL database they both already use — fixed by gating the import to the `-01` node only (F-065). |

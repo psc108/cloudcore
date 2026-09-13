@@ -350,14 +350,25 @@ write_files:
     permissions: '0755'
     content: |
       #!/usr/bin/env python3
-      import json, datetime, urllib.request, urllib.error
+      import json, datetime, ssl, urllib.request, urllib.error
 
       VIP = "${vip_address}"
       KEYSTONE_IPS = ${jsonencode(keystone_ips)}
       ADMIN_USER = "admin"
-      ADMIN_PASSWORD = "admin"
+      ADMIN_PASSWORD = "${admin_password}"
       HISTORY_FILE = "/var/log/keystone-cluster-status-history.json"
       MAX_HISTORY = 60
+
+      # Keystone's only listener is now :5443 (mTLS) — :5000 is gone. Reuses
+      # this same node's own CA-issued client identity that tls-status.py
+      # already holds (setup-frontend-tls.sh), rather than issuing a
+      # second one just for this script.
+      CA_PEM = "/etc/frontend/tls/ca.pem"
+      CLIENT_CERT = "/etc/frontend/tls/cert.pem"
+      CLIENT_KEY = "/etc/frontend/tls/key.pem"
+      SSL_CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+      SSL_CTX.load_verify_locations(cafile=CA_PEM)
+      SSL_CTX.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
 
       def request(url, method="GET", body=None, headers=None, timeout=5):
           data = json.dumps(body).encode() if body is not None else None
@@ -366,7 +377,7 @@ write_files:
           if body is not None:
               req.add_header("Content-Type", "application/json")
           try:
-              with urllib.request.urlopen(req, timeout=timeout) as resp:
+              with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
                   return resp.status, dict(resp.headers), resp.read()
           except urllib.error.HTTPError as e:
               return e.code, dict(e.headers or {}), e.read()
@@ -385,7 +396,7 @@ write_files:
                   "scope": {"project": {"name": "admin", "domain": {"id": "default"}}},
               }
           }
-          status, headers, raw = request(f"http://{VIP}:5000/v3/auth/tokens",
+          status, headers, raw = request(f"https://{VIP}:5443/v3/auth/tokens",
                                           method="POST", body=body)
           if status != 201:
               return None, f"issuance failed (HTTP {status}): {raw[:200].decode(errors='replace')}"
@@ -396,7 +407,7 @@ write_files:
 
       def validate_against(node_ip, token):
           status, _, raw = request(
-              f"http://{node_ip}:5000/v3/auth/tokens",
+              f"https://{node_ip}:5443/v3/auth/tokens",
               headers={"X-Auth-Token": token, "X-Subject-Token": token},
           )
           if status == 200:
@@ -526,11 +537,11 @@ write_files:
     permissions: '0755'
     content: |
       #!/usr/bin/env python3
-      import json, datetime, base64, urllib.request, urllib.error
+      import json, datetime, base64, ssl, urllib.request, urllib.error
 
       VIP = "${vip_address}"
       ADMIN_USER = "admin"
-      ADMIN_PASSWORD = "admin"
+      ADMIN_PASSWORD = "${admin_password}"
       QUEUE = "status-heartbeat"
       EXPECTED_NODES = 3
       HISTORY_FILE = "/var/log/rabbitmq-cluster-status-history.json"
@@ -538,15 +549,25 @@ write_files:
 
       AUTH_HEADER = "Basic " + base64.b64encode(f"{ADMIN_USER}:{ADMIN_PASSWORD}".encode()).decode()
 
+      # RabbitMQ's management API is now HTTPS-only (:15671) — :15672 is
+      # gone. Reuses this node's own CA-issued client identity, same as
+      # tls-status.py/keystone-status.py.
+      CA_PEM = "/etc/frontend/tls/ca.pem"
+      CLIENT_CERT = "/etc/frontend/tls/cert.pem"
+      CLIENT_KEY = "/etc/frontend/tls/key.pem"
+      SSL_CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+      SSL_CTX.load_verify_locations(cafile=CA_PEM)
+      SSL_CTX.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+
       def api(path, method="GET", body=None, timeout=5):
-          url = f"http://{VIP}:15672/api{path}"
+          url = f"https://{VIP}:15671/api{path}"
           data = json.dumps(body).encode() if body is not None else None
           req = urllib.request.Request(url, data=data, method=method,
                                         headers={"Authorization": AUTH_HEADER})
           if body is not None:
               req.add_header("Content-Type", "application/json")
           try:
-              with urllib.request.urlopen(req, timeout=timeout) as resp:
+              with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
                   raw = resp.read()
                   return resp.status, (json.loads(raw) if raw else None), None
           except urllib.error.HTTPError as e:

@@ -306,6 +306,17 @@ write_files:
       import sys
       import yaml
 
+      # Not fully verbatim any more — SESSION plus the -C/-K args and the
+      # SESSION.cert assignment in __main__ below are the only additions
+      # to the original script, needed once Keystone's plain :5000 (which
+      # this originally ran against) closed and everything moved onto the
+      # :5443 mTLS listener. Every requests.get/post/put/patch/delete call
+      # already threaded a `ca` (server CA) argument through by hand — a
+      # client cert only needs to be supplied once, on a shared Session,
+      # rather than threading a second argument through the same ~20
+      # functions/call sites too.
+      SESSION = requests.Session()
+
 
       class ExtendedTemplate(string.Template):
           """
@@ -361,7 +372,7 @@ write_files:
                   }
               }
           }
-          response = requests.post(api_url, json=login_body, verify=ca)
+          response = SESSION.post(api_url, json=login_body, verify=ca)
           if response.status_code != 201:
               sys.stdout.write("Login error {0}\n".format(response.status_code))
               raise
@@ -370,7 +381,7 @@ write_files:
 
       def load_roles(url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.get(url + "/roles", headers=headers, verify=ca)
+          response = SESSION.get(url + "/roles", headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Get roles error {0}\n".format(response.status_code))
               raise
@@ -384,7 +395,7 @@ write_files:
 
       def load_implied_roles(url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.get(url + "/role_inferences", headers=headers, verify=ca)
+          response = SESSION.get(url + "/role_inferences", headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Get role inferences error {0}\n".format(response.status_code))
               raise
@@ -440,7 +451,7 @@ write_files:
                   "name": role_name
               }
           }
-          response = requests.post(api_url, json=role_body, headers=headers, verify=ca)
+          response = SESSION.post(api_url, json=role_body, headers=headers, verify=ca)
           if response.status_code != 201:
               sys.stdout.write("Create role error {0}\n".format(response.status_code))
               raise
@@ -453,7 +464,7 @@ write_files:
           parent_role_id = roles[parent_role_name]['id']
           inherited_role_id = roles[inherited_role_name]['id']
           api_url = url + "/roles/" + parent_role_id + "/implies/" + inherited_role_id
-          response = requests.put(api_url, headers=headers, verify=ca)
+          response = SESSION.put(api_url, headers=headers, verify=ca)
           if response.status_code != 201:
               sys.stdout.write("Create role implication error {0}\n".format(response.status_code))
               raise
@@ -466,7 +477,7 @@ write_files:
           parent_role_id = roles[parent_role_name]['id']
           inherited_role_id = roles[inherited_role_name]['id']
           api_url = url + "/roles/" + parent_role_id + "/implies/" + inherited_role_id
-          response = requests.delete(api_url, headers=headers, verify=ca)
+          response = SESSION.delete(api_url, headers=headers, verify=ca)
           if response.status_code != 204:
               sys.stdout.write("Delete role implication error {0}\n".format(response.status_code))
               raise
@@ -485,7 +496,7 @@ write_files:
       def find_domain(domain_name, url, token, ca):
           headers = {"X-Auth-Token": token}
           api_url = url + "/domains?name=" + domain_name
-          response = requests.get(api_url, headers=headers, verify=ca)
+          response = SESSION.get(api_url, headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Find domain error {0}\n".format(response.status_code))
               raise
@@ -510,7 +521,7 @@ write_files:
           if customer_id is not None:
               domain_body['domain']['vpc_customer_id'] = customer_id
 
-          response = requests.post(api_url, json=domain_body, headers=headers, verify=ca)
+          response = SESSION.post(api_url, json=domain_body, headers=headers, verify=ca)
           if response.status_code != 201:
               sys.stdout.write("Create domain error {0}\n".format(response.status_code))
               raise
@@ -519,7 +530,7 @@ write_files:
 
       def load_users(domain_id, url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.get(url + "/users?domain_id=" + domain_id, headers=headers, verify=ca)
+          response = SESSION.get(url + "/users?domain_id=" + domain_id, headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Get users error {0}\n".format(response.status_code))
               raise
@@ -533,7 +544,7 @@ write_files:
 
       def load_groups(domain_id, url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.get(url + "/groups?domain_id=" + domain_id, headers=headers, verify=ca)
+          response = SESSION.get(url + "/groups?domain_id=" + domain_id, headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Get groups error {0}\n".format( response.status_code))
               raise
@@ -575,12 +586,12 @@ write_files:
                   }
               }
           }
-          response = requests.post(api_url, json=user_body, headers=headers, verify=ca)
+          response = SESSION.post(api_url, json=user_body, headers=headers, verify=ca)
           if response.status_code != 201:
               sys.stdout.write("Create user error {0} {1}\n".format(response.status_code, response.text))
               raise
 
-          response2 = requests.patch(api_url+"/"+response.json()['user']['id'], json=user_body, headers=headers, verify=ca)
+          response2 = SESSION.patch(api_url+"/"+response.json()['user']['id'], json=user_body, headers=headers, verify=ca)
           if response2.status_code != 200:
               sys.stdout.write("Create user error {0} {1}\n".format(response2.status_code, response2.text))
               raise
@@ -590,7 +601,7 @@ write_files:
 
       def load_user_roles(user_id, domain_id, url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.get(url + "/domains/"+domain_id+"/users/"+user_id+"/roles", headers=headers, verify=ca)
+          response = SESSION.get(url + "/domains/"+domain_id+"/users/"+user_id+"/roles", headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Get user roles error {0}\n".format(response.status_code))
               raise
@@ -603,7 +614,7 @@ write_files:
 
       def assign_role_to_user(user_id, role_id, domain_id, url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.put(url + "/domains/"+domain_id+"/users/"+user_id+"/roles/"+role_id, headers=headers, verify=ca)
+          response = SESSION.put(url + "/domains/"+domain_id+"/users/"+user_id+"/roles/"+role_id, headers=headers, verify=ca)
           if response.status_code != 204:
               sys.stdout.write("Assign user roles error {0}\n".format(response.status_code))
               raise
@@ -638,7 +649,7 @@ write_files:
                   "domain_id": domain_id
               }
           }
-          response = requests.post(api_url, json=group_body, headers=headers, verify=ca)
+          response = SESSION.post(api_url, json=group_body, headers=headers, verify=ca)
           if response.status_code != 201:
               sys.stdout.write("Create group error {0}\n".format(response.status_code))
               raise
@@ -648,7 +659,7 @@ write_files:
 
       def load_group_users(group_id, url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.get(url + "/groups/"+group_id+"/users", headers=headers, verify=ca)
+          response = SESSION.get(url + "/groups/"+group_id+"/users", headers=headers, verify=ca)
           if response.status_code != 200:
               sys.stdout.write("Get group users error {0}\n".format(response.status_code))
               raise
@@ -661,7 +672,7 @@ write_files:
 
       def assign_user_to_group(user_id, group_id, url, token, ca):
           headers = {"X-Auth-Token": token}
-          response = requests.put(url + "/groups/"+group_id+"/users/"+user_id, headers=headers, verify=ca)
+          response = SESSION.put(url + "/groups/"+group_id+"/users/"+user_id, headers=headers, verify=ca)
           if response.status_code != 204:
               sys.stdout.write("Assign group users error {0}\n".format(response.status_code))
               raise
@@ -722,9 +733,18 @@ write_files:
           parser.add_argument("-p", "--password", metavar="PASSWORD", dest="keystonePassword", help="Keystone admin password",
                               required=True)
           parser.add_argument("-c", "--CACert", metavar="CERT", dest="caCert", help="CA certificate", required=True)
+          parser.add_argument("-C", "--clientCert", metavar="CERT", dest="clientCert",
+                              help="Client certificate for mTLS (paired with --clientKey)")
+          parser.add_argument("-K", "--clientKey", metavar="KEY", dest="clientKey",
+                              help="Client private key for mTLS (paired with --clientCert); must be an "
+                                   "unencrypted key — Python's requests/urllib3 cannot load a "
+                                   "passphrase-protected key directly")
           parser.add_argument("-e", "--extraParams", metavar="PARAMS", dest="extraParams", nargs="+",
                               help="Additional parameters used for replacement in input file, in format key1,value1 key2,value2")
           args = parser.parse_args()  # exits if there is argument error
+
+          if args.clientCert and args.clientKey:
+              SESSION.cert = (args.clientCert, args.clientKey)
 
           keystone_import(os.getcwd(), args)
 
@@ -1550,10 +1570,14 @@ write_files:
 
   # No WSGIDaemonProcess/service pool involved here — this is a one-shot
   # API client, not a listener, so none of F-051's memory concerns apply.
-  # Runs against Keystone's own local :5000 (plain HTTP, no CA needed —
-  # requests' verify= parameter is only consulted for https:// URLs;
-  # /etc/keystone/ssl/root_ca.pem is passed anyway since it already
-  # exists by this point in the boot sequence, real value not a dummy).
+  # Runs against Keystone's own local :5443 (mTLS — :5000 no longer
+  # exists, per direct instruction to close every plaintext Keystone
+  # listener, including boot-time tooling). import_p3.py's SESSION.cert
+  # (requests/urllib3) can't load a passphrase-protected key directly, so
+  # this script decrypts a throwaway, root-only copy of this node's own
+  # already-issued key into /run (tmpfs, never touches persistent disk)
+  # right before the import and removes it immediately after — the
+  # encrypted original on /etc/keystone/ssl/key.pem is untouched.
   # Retries each import a few times: both Keystone nodes run this same
   # script concurrently, and import_p3.py's own "does this already
   # exist" check has a real (if narrow) race window between the two
@@ -1564,21 +1588,62 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+
+      # Keystone has no data replication of its own — every role/domain/
+      # user this script imports lives entirely in the shared 'keystone'
+      # MySQL database both nodes already connect to (same as db_sync/
+      # bootstrap above, which is why those two are safe to run
+      # concurrently on both nodes: proper idempotent SQL against one
+      # shared backing store). This script's own check-then-create
+      # pattern is NOT concurrency-safe the same way — running it from
+      # both nodes at once produces real 409s racing to create the same
+      # role/domain/user, confirmed directly. Per direct instruction:
+      # only the first node (modules/instance-group always names one
+      # "-01", per its own documented convention: "Scaling up adds
+      # instances; scaling down removes the highest-numbered ones" — -01
+      # is guaranteed to exist as long as any instance does) actually
+      # runs the import; every other node is a no-op here, relying on
+      # -01 having already populated the shared database.
+      case "$(hostname)" in
+        *-01) ;;
+        *) echo "setup-keystone-roles.sh: not the -01 node, skipping (roles/domains are shared via MySQL, not per-node)"; exit 0 ;;
+      esac
+
       cd /usr/local/lib/keystone-import
 
+      # This node's own cert only carries SANs for its own private IP and
+      # the VIP (setup-keystone-tls.sh's --san list) — no 127.0.0.1 entry
+      # — so hostname verification against "127.0.0.1" fails even with a
+      # perfectly valid cert/key pair (confirmed directly:
+      # "hostname '127.0.0.1' doesn't match either of '<ip>', '<vip>'").
+      # Connect via the node's own real IP instead, which the cert
+      # actually covers.
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      # Decrypted once, up front, as a real temp file — curl's --key (and
+      # import_p3.py's SESSION.cert below) both need an actual seekable
+      # file path, not a process-substitution pipe, to read a private key
+      # reliably.
+      TMP_KEY=$(mktemp /run/keystone-import-key.XXXXXX)
+      trap 'rm -f "$TMP_KEY"' EXIT
+      openssl pkey -in /etc/keystone/ssl/key.pem -passin pass:'${admin_password}' -out "$TMP_KEY"
+      chmod 600 "$TMP_KEY"
+
       for i in $(seq 1 60); do
-        curl -sf http://127.0.0.1:5000/v3 >/dev/null 2>&1 && break
+        curl -sf --cacert /etc/keystone/ssl/ca.pem --cert /etc/keystone/ssl/cert.pem --key "$TMP_KEY" \
+          "https://$LOCAL_IP:5443/v3" >/dev/null 2>&1 && break
         sleep 5
       done
 
-      export OS_AUTH_URL=http://127.0.0.1:5000/v3
+      export OS_AUTH_URL="https://$LOCAL_IP:5443/v3"
       export OS_USERNAME=admin
       export OS_PASSWORD='${admin_password}'
 
       roles_ok=false
       for i in 1 2 3; do
         python3 import_p3.py -i roles.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
-          -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem && { roles_ok=true; break; }
+          -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem \
+          -C /etc/keystone/ssl/cert.pem -K "$TMP_KEY" && { roles_ok=true; break; }
         sleep 10
       done
       $roles_ok || echo "setup-keystone-roles.sh: roles.yml import did not complete after 3 attempts" >&2
@@ -1587,6 +1652,7 @@ write_files:
       for i in 1 2 3; do
         python3 import_p3.py -i system_domain.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
           -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem \
+          -C /etc/keystone/ssl/cert.pem -K "$TMP_KEY" \
           -e password,${keystone_system_domain_password} && { domain_ok=true; break; }
         sleep 10
       done
@@ -1656,61 +1722,23 @@ write_files:
       keystone-manage db_sync
 
       # admin/var.admin_password — this stack's shared admin/service
-      # credential (haFullStack-LLD.md §3.3.1, variables.tf). Public/
-      # internal stay on the VIP:5000 vhost the keystone package ships
-      # out of the box; admin uses the classic
-      # OpenStack :35357 convention instead (setup-keystone-admin-port.sh
-      # below adds that listener) — this Lab has no distinct admin/
-      # internal network to separate them onto otherwise.
+      # credential (haFullStack-LLD.md §3.3.1, variables.tf). Per direct
+      # instruction, every plaintext Keystone listener closes — public,
+      # internal, and admin catalog URLs all now point at the same :5443
+      # mTLS listener instead of the old plain :5000/:35357 split. Modern
+      # Keystone has no separate admin WSGI app anyway (same
+      # keystone-wsgi-public script every vhost already pointed at), so
+      # this loses no real capability, just the "classic OpenStack admin
+      # port" convention/port-number distinction, which existed only
+      # because this Lab has no distinct admin/internal network to
+      # separate them onto in the first place.
       keystone-manage bootstrap \
         --bootstrap-username admin --bootstrap-password '${admin_password}' \
         --bootstrap-project-name admin --bootstrap-role-name admin \
         --bootstrap-service-name keystone \
-        --bootstrap-admin-url "http://${vip_address}:35357/v3" \
-        --bootstrap-public-url "http://${vip_address}:5000/v3" \
-        --bootstrap-internal-url "http://${vip_address}:5000/v3"
-
-  # Classic OpenStack admin-API port (35357), alongside the package's own
-  # :5000 vhost — same unified keystone-wsgi-public WSGI app as :5000 and
-  # the :5443 mTLS vhost below (modern Keystone has no separate admin WSGI
-  # script), so this is just a second plain-HTTP listener, not a
-  # functionally different API. Routed to clients through the shared
-  # VIP's NGINX (nginx-keystone.conf.tftpl), same as :5000.
-  - path: /usr/local/sbin/setup-keystone-admin-port.sh
-    permissions: '0755'
-    content: |
-      #!/bin/bash
-      set -euo pipefail
-
-      # No WSGIDaemonProcess of its own — reuses the :5000 vhost's existing
-      # "keystone-public" pool (processes=5, from the keystone package's
-      # own wsgi-keystone.conf) by name instead of spawning a new one.
-      # A first attempt gave this port its own 3-process pool, on top of
-      # :5000's 5 and :5443's 3 — 11 mod_wsgi worker processes total OOM-
-      # killed apache2 outright on this tier's standard.small flavor
-      # (957MB RAM), confirmed directly (systemctl status showed "Result:
-      # oom-kill", found chasing what looked like a security-group/DNS
-      # connectivity failure but was neither). Sharing the pool costs zero
-      # extra memory — it's the same already-running workers now also
-      # bound to a second port.
-      cat > /etc/apache2/sites-available/keystone-admin.conf <<'EOF'
-      Listen 35357
-
-      <VirtualHost *:35357>
-        WSGIProcessGroup keystone-public
-        WSGIScriptAlias / /usr/bin/keystone-wsgi-public
-        WSGIApplicationGroup %%{GLOBAL}
-
-        <Directory /usr/bin>
-          Require all granted
-        </Directory>
-
-        ErrorLog $${APACHE_LOG_DIR}/keystone-admin-error.log
-        LogLevel warn
-        CustomLog $${APACHE_LOG_DIR}/keystone-admin-access.log combined
-      </VirtualHost>
-      EOF
-      a2ensite keystone-admin
+        --bootstrap-admin-url "https://${vip_address}:5443/v3" \
+        --bootstrap-public-url "https://${vip_address}:5443/v3" \
+        --bootstrap-internal-url "https://${vip_address}:5443/v3"
 
   # env.sh — OpenStack CLI client environment, sourced by root/ecs/ubuntu
   # (runcmd below symlinks it into each user's home directory). Lives
@@ -1718,17 +1746,21 @@ write_files:
   # keystone:keystone 0750 (package default), so non-keystone-group users
   # like ecs can't even traverse into it to reach a 0644 file inside,
   # confirmed directly ("Permission denied" sourcing the symlink as ecs).
-  # OS_AUTH_URL points at the VIP's :35357 admin listener, not any one
+  # OS_AUTH_URL points at the VIP's :5443 mTLS listener, not any one
   # keystone node's own IP — the VIP is already a static value known at
   # Terraform-render time (var.vip_address), so no runtime IP-discovery
   # step (e.g. a systemd oneshot) is needed here; a fixed per-node IP
   # would also break this file on failover, defeating the point of the HA
   # VIP. OS_PASSWORD matches the bootstrap credential above (both
   # var.admin_password) — this Lab's shared, documented placeholder, not
-  # a new secret. No OS_CACERT/
-  # https — :35357 is plain HTTP like :5000, not the separate :5443 mTLS
-  # listener, which needs a client cert+key to authenticate, not just a
-  # CA cert.
+  # a new secret. Since :5000/:35357 are gone, a plain-HTTP CLI path no
+  # longer exists — OS_CERT/OS_KEY point at a dedicated "ecs" client
+  # identity issued by the same CA (setup-keystone-tls.sh below), the
+  # same mechanism the backend tier already uses successfully against
+  # this exact listener (haFullStack-LLD.md §5.7). Deliberately an
+  # *unencrypted* key, unlike the node's own server key — this is read
+  # directly by python-openstackclient/requests, which (like
+  # import_p3.py's SESSION.cert) has no way to supply a key passphrase.
   - path: /etc/openstack/env.sh
     permissions: '0644'
     content: |
@@ -1737,21 +1769,33 @@ write_files:
       export OS_PROJECT_NAME=admin
       export OS_USER_DOMAIN_NAME=Default
       export OS_PROJECT_DOMAIN_NAME=Default
-      export OS_AUTH_URL=http://${vip_address}:35357/v3
+      export OS_AUTH_URL=https://${vip_address}:5443/v3
       export OS_IDENTITY_API_VERSION=3
+      export OS_CACERT=/etc/openstack/ca.pem
+      export OS_CERT=/etc/openstack/ecs-cert.pem
+      export OS_KEY=/etc/openstack/ecs-key.pem
       export no_proxy=${vip_address}
 
-  # TLS/mTLS (haFullStack-LLD.md §5.3.1). A NEW port (5443) alongside the
-  # existing plain :5000 vhost, which stays as-is for the Lab's own
-  # convenience — routed through NGINX's stream{} as a raw TCP
-  # passthrough (not http{} + proxy_ssl_*), keeping Keystone consistent
-  # with how MySQL/ProxySQL/RabbitMQ's TLS ports are fronted. SSLCACertificateFile
-  # is the root+intermediate chain concatenated, not just the root —
-  # confirmed necessary the same way RabbitMQ's Erlang SSL stack needed
-  # it (see haFullStack-Findings-Log.md); Apache/OpenSSL's own chain
-  # verification of the client cert needs the intermediate available
-  # locally too, mirroring that finding rather than assuming mod_ssl is
-  # exempt from it.
+  # TLS/mTLS (haFullStack-LLD.md §5.3.1). Per direct instruction, this is
+  # now the ONLY Keystone listener — the package's own plain :5000 vhost
+  # is disabled below, and the :35357 admin port (setup-keystone-admin-
+  # port.sh) is gone entirely, not just closed at the network edge.
+  # Routed through NGINX's stream{} as a raw TCP passthrough (not http{} +
+  # proxy_ssl_*), keeping Keystone consistent with how MySQL/ProxySQL/
+  # RabbitMQ's TLS ports are fronted. SSLCACertificateFile is the
+  # root+intermediate chain concatenated, not just the root — confirmed
+  # necessary the same way RabbitMQ's Erlang SSL stack needed it (see
+  # haFullStack-Findings-Log.md); Apache/OpenSSL's own chain verification
+  # of the client cert needs the intermediate available locally too,
+  # mirroring that finding rather than assuming mod_ssl is exempt from it.
+  #
+  # The server key is passphrase-protected with var.admin_password (this
+  # project's own real-world convention, per direct instruction — the
+  # same pattern RabbitMQ's server.key now uses) via Apache's
+  # SSLPassPhraseDialog exec: mechanism, which runs
+  # /etc/keystone/ssl/key.password once at startup/reload to obtain the
+  # passphrase rather than prompting interactively (which would hang a
+  # boot with no console attached).
   - path: /usr/local/sbin/setup-keystone-tls.sh
     permissions: '0755'
     content: |
@@ -1782,7 +1826,61 @@ write_files:
       chown -R keystone:keystone /etc/keystone/ssl
       chmod 600 /etc/keystone/ssl/key.pem
 
+      # server.key -> `openssl pkey`, not the key-type-specific `openssl
+      # rsa`/`openssl ec` — step-ca's default provisioner issues an EC
+      # key, and pkey handles either uniformly.
+      # -in and -out must NOT be the same path — openssl truncates -out
+      # before it's finished reading -in, corrupting the key (confirmed
+      # directly, same failure mode as RabbitMQ's identical mistake).
+      # Write to a temp file, then move it into place.
+      openssl pkey -aes256 -in /etc/keystone/ssl/key.pem -out /etc/keystone/ssl/key.pem.enc \
+        -passout pass:'${admin_password}'
+      mv /etc/keystone/ssl/key.pem.enc /etc/keystone/ssl/key.pem
+      chown keystone:keystone /etc/keystone/ssl/key.pem
+      chmod 600 /etc/keystone/ssl/key.pem
+
+      cat > /etc/keystone/ssl/key.password <<'EOF'
+      #!/bin/sh
+      echo "${admin_password}"
+      EOF
+      chown keystone:keystone /etc/keystone/ssl/key.password
+      chmod 700 /etc/keystone/ssl/key.password
+
+      # A dedicated "ecs" CLI identity for env.sh — see env.sh's own
+      # comment above. Deliberately unencrypted (no passphrase): consumed
+      # directly by python-openstackclient/requests, which has no key-
+      # password mechanism, unlike Apache's own server key above. SAN
+      # doesn't matter here — this is a client-only identity, never
+      # presented as anyone's server cert, so nothing validates it.
+      step ca certificate "ecs-cli" /etc/openstack/ecs-cert.pem /etc/openstack/ecs-key.pem \
+        --san "ecs-cli" \
+        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --force
+      cp /etc/keystone/ssl/ca.pem /etc/openstack/ca.pem
+      chmod 644 /etc/openstack/ecs-cert.pem /etc/openstack/ecs-key.pem /etc/openstack/ca.pem
+
       a2enmod ssl
+
+      # Ubuntu's keystone package enables its own plain :5000 vhost as a
+      # SITE named "keystone" (/etc/apache2/sites-available/keystone.conf)
+      # — confirmed directly (an earlier guess assuming a conf snippet
+      # named "wsgi-keystone" was wrong and silently disabled nothing,
+      # leaving :5000 enabled alongside :5443). Disabled here since :5443
+      # is now the only listener.
+      if [ -e /etc/apache2/sites-enabled/keystone.conf ]; then
+        a2dissite keystone
+      fi
+
+      # SSLPassPhraseDialog is a server-level (mod_ssl global) directive —
+      # confirmed directly: Apache refuses to start with "SSLPassPhraseDialog
+      # cannot occur within <VirtualHost> section" if placed inside one, so
+      # it lives in its own conf-available fragment instead of inline in
+      # keystone-tls.conf below.
+      cat > /etc/apache2/conf-available/keystone-ssl-passphrase.conf <<'EOF'
+      SSLPassPhraseDialog exec:/etc/keystone/ssl/key.password
+      EOF
+      a2enconf keystone-ssl-passphrase
 
       # Quoted heredoc (<<'EOF') so bash performs no expansion of its own —
       # the doubled-up escapes below are for templatefile()'s own
@@ -1821,23 +1919,35 @@ write_files:
       # before any flags — confirmed directly: flags-then-positional
       # fails with "too many positional arguments were provided". No
       # `step ca bootstrap` has been run here, so --ca-url/--root are
-      # passed explicitly, same as the issuance call above.
+      # passed explicitly, same as the issuance call above. Re-encrypts
+      # the freshly-renewed (and therefore freshly-unencrypted) key before
+      # restarting Apache, same reasoning as RabbitMQ's renew hook.
       cat > /etc/systemd/system/step-renew.service <<EOF
       [Unit]
       Description=step-ca certificate auto-renewal daemon
       [Service]
-      ExecStart=/usr/bin/step ca renew /etc/keystone/ssl/cert.pem /etc/keystone/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/keystone/ssl/root_ca.pem --exec "systemctl restart apache2"
+      ExecStart=/usr/bin/step ca renew /etc/keystone/ssl/cert.pem /etc/keystone/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/keystone/ssl/root_ca.pem --exec "openssl pkey -aes256 -in /etc/keystone/ssl/key.pem -out /etc/keystone/ssl/key.pem.enc -passout pass:'${admin_password}' && mv /etc/keystone/ssl/key.pem.enc /etc/keystone/ssl/key.pem && systemctl restart apache2"
       Restart=always
       EOF
       systemctl daemon-reload
       systemctl enable --now step-renew
 
+      # a2ensite/a2dissite/a2enconf above only change what WOULD load on
+      # the next start/reload — they don't touch the apache2 process the
+      # packages: stage already auto-started (still serving the OLD,
+      # now-disabled :5000-only config). Without this restart here,
+      # setup-keystone-roles.sh (next in runcmd) hits :5443 with nothing
+      # listening yet — confirmed directly: "Connection refused" on every
+      # one of its 60 retries, since nothing in this boot ever reloads
+      # apache2 before that script's own readiness loop gives up. Restart
+      # here, not just once at the very end of runcmd, so :5443 is
+      # actually live before anything downstream depends on it.
+      systemctl restart apache2
+
 runcmd:
   - /usr/local/sbin/setup-keystone.sh
   - /usr/local/sbin/setup-keystone-tls.sh
   - /usr/local/sbin/setup-keystone-roles.sh
-  - /usr/local/sbin/setup-keystone-admin-port.sh
-  - systemctl restart apache2
   - |
     for u in root ecs ubuntu; do
       home=$(getent passwd "$u" | cut -d: -f6)

@@ -2,7 +2,7 @@
 
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
-v0.20 (in progress — built section by section) | Paul Scott
+v0.21 (in progress — built section by section) | Paul Scott
 
 ---
 
@@ -1672,9 +1672,18 @@ this slice revisited.
   its MySQL backends (`mysql-ssl_p2s_*` globals, enabled per-row via
   `mysql_servers.use_ssl`, not a single global boolean). Both confirmed
   working end-to-end against the real deployed stack.
-- **Keystone**: Apache `mod_ssl` termination on a **new** port, 5443,
-  alongside the existing plain `:5000` vhost (kept for the Lab's own
-  convenience, not removed) — `SSLEngine on`,
+- **Keystone**: Apache `mod_ssl` termination on port 5443. **Update, once
+  an application's imminent arrival made "kept for convenience" the
+  wrong call:** the plain `:5000` vhost, and the classic-OpenStack-
+  convention `:35357` admin port added in a later pass, are both now
+  removed entirely — `:5443` is the only Keystone listener, including
+  for boot-time tooling (`import_p3.py`) and CLI access (`env.sh`, now
+  carrying its own CA-issued client identity for `ecs`). See
+  `haFullStack-Findings-Log.md` F-061–F-065 for what actually broke
+  getting there (Apache's `SSLPassPhraseDialog` scope, a wrong assumed
+  site name, a certificate-SAN/hostname mismatch, an Apache-reload
+  ordering gap, and a same-database import race between the two nodes).
+  `SSLEngine on`,
   `SSLCertificateFile`/`SSLCertificateKeyFile` from the CA-issued cert,
   `SSLVerifyClient require`/`SSLCACertificateFile` requiring a client
   certificate on the mTLS path. `SSLCACertificateFile` needs the full
@@ -1683,19 +1692,35 @@ this slice revisited.
   waiting to reproduce the same symptom here too. Confirmed working via
   the frontend's own `tls-status.py` continuously reporting a
   successful mTLS handshake against this listener through the VIP.
-- **RabbitMQ**: a TLS listener (`5671`, alongside the existing plain
-  `5672`) via `ssl_options` in `rabbitmq.conf`
-  (`verify = verify_peer`, `fail_if_no_peer_cert = true`,
+- **RabbitMQ**: a TLS listener (`5671`) via `ssl_options` in
+  `rabbitmq.conf` (`verify = verify_peer`, `fail_if_no_peer_cert = true`,
   `cacertfile`/`certfile`/`keyfile` from the CA). `cacertfile` must be
   the full chain, not just the root — Erlang's SSL stack doesn't
   chain-build from what the client presents the way OpenSSL does;
-  confirmed directly (F-033).
-- Frontend's status scripts keep using plain HTTP to Keystone/RabbitMQ
-  for their own application-level checks (mysql-status.py,
-  keystone-status.py, rabbitmq-status.py — deliberately not switched to
-  mTLS in this pass, a mechanical follow-up if ever needed) — but a
-  **new fourth script, `tls-status.py`**, was added specifically for
-  this slice: it holds its own CA-issued client identity and performs a
+  confirmed directly (F-033). **Update, same pass as Keystone above:**
+  the plain `5672` AMQP listener is now removed entirely, and the
+  management HTTP API gets the identical treatment — a new `15671` TLS
+  listener (`management.ssl.*`, its own independent
+  `verify`/`fail_if_no_peer_cert` — confirmed the hard way that this
+  stanza doesn't inherit `ssl_options.*`'s settings, F-060) replaces
+  plain `15672` outright. Both server keys (RabbitMQ's and Keystone's)
+  are now passphrase-protected with `var.admin_password`, establishing
+  that pattern for other services expected to need it later. See
+  `haFullStack-Findings-Log.md` F-058–F-060 for what broke getting
+  there (an `openssl` same-path in/out key corruption, and RabbitMQ's
+  actual — non-obvious — listener-disable syntax).
+- Frontend's status scripts: `mysql-status.py` still uses plain
+  connections for its own application-level checks (MySQL wasn't
+  touched by the RabbitMQ/Keystone closure above — every account an
+  application uses already had `REQUIRE X509` enforced, so it was
+  already effectively TLS-only). **Update:** `keystone-status.py` and
+  `rabbitmq-status.py`, by contrast, now connect exclusively over
+  `:5443`/`:15671` with a real client certificate, since their old
+  plain targets (`:5000`, `:15672`) no longer exist at all — no longer
+  the "mechanical follow-up if ever needed" this paragraph originally
+  deferred. Separately, a **fourth script, `tls-status.py`**, was added
+  specifically for this slice: it holds its own CA-issued client
+  identity and performs a
   real TLS/mTLS handshake against every TLS-enabled listener (NGINX
   `:443`, RabbitMQ `:5671`, Keystone `:5443`, all via raw `ssl.SSLContext`
   socket handshakes; MySQL/ProxySQL `:3306` via the `mysql` CLI's
@@ -2373,3 +2398,4 @@ stack (48 resources each time) — not drafted and assumed working:
 | v0.18 | 2026-09-12 | Paul Scott | New §8, Backend Tier — the last tier this document's own diagram always described but every prior slice deferred, now built: 2 nodes, `standard.medium` (20GB disk, sized against the user's own stated 2.5GB-compressed/decompressed/running-footprint requirement), local NGINX installed but deliberately unconfigured (the not-yet-installed application configures itself), mTLS client identity from the same CA every other tier uses. §5's "Backend↔X mTLS... can't be built until the backend tier exists" open item resolved — real handshakes confirmed accepted against ProxySQL/Keystone/RabbitMQ. `haFullStack.md` §3.1/§3.3/§3.4's stale `:8080` upstream examples corrected to `:80` to match backend's own real NGINX port. One finding (F-048): no new security-group rules were needed on proxysql/keystone/rabbitmq at all — their existing ingress was already scoped to the whole bridge subnet, not narrowed per-source-SG. |
 | v0.19 | 2026-09-12 | Paul Scott | Runtime software added to frontend (§1.3) and backend (§8.3): Node.js (frontend only, NodeSource, 18.x minimum), Temurin 21 JDK, jasypt 1.9.3, and Bouncy Castle's `bcprov-jdk18on` 1.80 (both tiers) — jasypt needs a JVM to run its own CLI scripts, which a stock Ubuntu image doesn't provide, correcting an initial assumption that frontend/backend already had Java. All four cached in the host-level repo rather than fetched live; `build-package-repo.sh` extended to trust NodeSource's repo (same pattern as Adoptium/Kismet) and cache jasypt's dist zip + Bouncy Castle's provider jar as pinned artifacts, both verified as real, current, working URLs directly before use. Verified for real on a throwaway instance: correct versions installed, and jasypt's own `encrypt.sh` actually ran successfully against the newly-installed JVM. `chmod u+x` (not `+x`/`a+x`) applied to every `.sh` file jasypt installs, per direct instruction. |
 | v0.20 | 2026-09-12 | Paul Scott | New §9, Operational Access (cross-cutting) — every instance gets an `ecs` NOPASSWD-sudo account (reusing the existing CloudCore inter-instance keypair, no new key to manage) and a short-hostname `cloudcore_dns_record`. Required real platform-layer fixes, not just Terraform: `POST /v1/instances` never read a `users` key at all despite the compute layer already fully supporting it, and the API's own DNS resolver never reloaded after startup (F-049); once fixed, cloud-init's `users:` semantics (replaces the image's own default user unless `"default"` is explicitly listed) broke `ubuntu` SSH stack-wide the first time an extra user was actually created at launch (F-050) — both found and fixed live across a real three-iteration build/destroy cycle against the full 15-node stack, final iteration clean end-to-end. |
+| v0.21 | 2026-09-13 | Paul Scott | §5 updated — RabbitMQ AMQP+management and Keystone's identity API closed to TLS-only, per direct instruction, superseding this section's original "kept alongside, not removed" framing for both. Plain `5672`/`15672` and `:5000`/`:35357` are gone entirely; both services' server keys are now passphrase-protected with `var.admin_password` (a pattern other services will need later); `keystone-status.py`/`rabbitmq-status.py` now use real client certificates instead of plain HTTP, closing the "mechanical follow-up if ever needed" this section had deferred. MySQL deliberately untouched — already effectively TLS-only via per-account `REQUIRE X509`. Seven real bugs found and fixed across several full destroy/rebuild cycles (F-058–F-065, `haFullStack-Findings-Log.md`): an `openssl` same-path in/out key corruption; RabbitMQ's actual (non-obvious) listener-disable syntax; `management.ssl.*`'s independent mTLS directives; Apache's `SSLPassPhraseDialog` scope; a wrong assumed Keystone site name; a certificate-SAN/hostname mismatch in the boot-time role-import script; an Apache-reload ordering gap; and — caught by direct question rather than an error — both Keystone nodes racing to import the same role/user data into the one shared MySQL database they already use, fixed by restricting the import to the `-01` node only. |
