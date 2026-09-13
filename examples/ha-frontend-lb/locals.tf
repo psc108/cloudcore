@@ -131,6 +131,12 @@ locals {
   mysql_app_password      = "changeme-app"
   mysql_keystone_password = "changeme-keystone" # lab-only placeholder, not a production secret
 
+  # Shared across the 13 "ssp_*" application databases/users created on
+  # the bootstrap node (create_db_users.sh/createUser.sh, ported in) —
+  # same single-shared-credential convention as every other Lab-only
+  # placeholder above.
+  mysql_ssp_password = "changeme-ssp"
+
   # Shared across all 22 "system" domain service/admin accounts created
   # by setup-keystone-roles.sh's system_domain.yml import — same
   # single-shared-credential convention as every other Lab-only
@@ -165,6 +171,7 @@ locals {
         monitor_password        = local.mysql_monitor_password
         app_password            = local.mysql_app_password
         keystone_password       = local.mysql_keystone_password
+        ssp_password            = local.mysql_ssp_password
         ca_ip                   = local.ca_ip
         step_cli_deb_sha256     = local.step_cli_deb_sha256
         ca_provisioner_password = local.ca_provisioner_password
@@ -195,6 +202,7 @@ locals {
         monitor_password        = local.mysql_monitor_password
         app_password            = local.mysql_app_password
         keystone_password       = local.mysql_keystone_password
+        ssp_password            = local.mysql_ssp_password
         ca_ip                   = local.ca_ip
         step_cli_deb_sha256     = local.step_cli_deb_sha256
         ca_provisioner_password = local.ca_provisioner_password

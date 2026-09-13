@@ -152,6 +152,19 @@ write_files:
       ALTER USER 'appuser'@'%' REQUIRE X509;
       ALTER USER 'keystone'@'%' REQUIRE X509;
       ALTER USER 'proxysql_monitor'@'%' REQUIRE X509;
+      ALTER USER 'ssp_catalog'@'%' REQUIRE X509;
+      ALTER USER 'ssp_blobstore'@'%' REQUIRE X509;
+      ALTER USER 'ssp_customers'@'%' REQUIRE X509;
+      ALTER USER 'ssp_request'@'%' REQUIRE X509;
+      ALTER USER 'ssp_fulfill'@'%' REQUIRE X509;
+      ALTER USER 'ssp_svcinst'@'%' REQUIRE X509;
+      ALTER USER 'ssp_pricing'@'%' REQUIRE X509;
+      ALTER USER 'ssp_reporting'@'%' REQUIRE X509;
+      ALTER USER 'ssp_config'@'%' REQUIRE X509;
+      ALTER USER 'ssp_export'@'%' REQUIRE X509;
+      ALTER USER 'ssp_ticketing'@'%' REQUIRE X509;
+      ALTER USER 'ssp_event'@'%' REQUIRE X509;
+      ALTER USER 'ssp_extevt'@'%' REQUIRE X509;
       SQL
       %{ endif ~}
 
@@ -266,6 +279,66 @@ write_files:
       CREATE USER IF NOT EXISTS 'keystone'@'%' IDENTIFIED WITH mysql_native_password BY '${keystone_password}';
       CREATE DATABASE IF NOT EXISTS keystone;
       GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%';
+
+      -- Application databases + users, per direct instruction — ported
+      -- from create_db_users.sh/createUser.sh, one database and one
+      -- matching user per backend service, all sharing one password
+      -- (matching createUser.sh's own single-shared-password design).
+      -- mysql_native_password, not the 8.0 default caching_sha2_password,
+      -- same reasoning as every other user above (F-019) — REQUIRE X509
+      -- applied afterward in setup-mysql-tls-accounts.sh, once these
+      -- accounts exist.
+      CREATE DATABASE IF NOT EXISTS ssp_catalog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_catalog'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_catalog.* TO 'ssp_catalog'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_blobstore CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_blobstore'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_blobstore.* TO 'ssp_blobstore'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_customers CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_customers'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_customers.* TO 'ssp_customers'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_request CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_request'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_request.* TO 'ssp_request'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_fulfill CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_fulfill'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_fulfill.* TO 'ssp_fulfill'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_svcinst CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_svcinst'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_svcinst.* TO 'ssp_svcinst'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_pricing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_pricing'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_pricing.* TO 'ssp_pricing'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_reporting CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_reporting'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_reporting.* TO 'ssp_reporting'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_config CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_config'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_config.* TO 'ssp_config'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_export CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_export'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_export.* TO 'ssp_export'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_ticketing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_ticketing'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_ticketing.* TO 'ssp_ticketing'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_event CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_event'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_event.* TO 'ssp_event'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_extevt CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_extevt'@'%' IDENTIFIED WITH mysql_native_password BY '${ssp_password}';
+      GRANT ALL ON ssp_extevt.* TO 'ssp_extevt'@'%';
       SQL
       %{ else ~}
       # Wait for the bootstrap node's group to actually be ONLINE before
