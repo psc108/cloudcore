@@ -136,12 +136,14 @@ export CLOUDCORE_API_TOKEN=dev-token
 
 ### Modules
 
-Nine reusable modules live in `modules/`:
+Eleven reusable modules live in `modules/`:
 
 | Module | Path | Resources |
 |---|---|---|
 | VPC | `modules/vpc/` | `cloudcore_vpc` |
 | Subnets | `modules/subnets/` | subnet metadata |
+| Internet Gateway | `modules/internet-gateway/` | `cloudcore_internet_gateway` |
+| Route Table | `modules/route-table/` | `cloudcore_route_table` |
 | Compute | `modules/compute/` | `cloudcore_instance` |
 | Instance Group | `modules/instance-group/` | `cloudcore_instance` (count-based) |
 | Load Balancer | `modules/load-balancer/` | `cloudcore_load_balancer` |
@@ -162,16 +164,22 @@ All modules follow the standard argument contract:
 
 ### Examples
 
-Six ready-to-run configurations in `examples/`:
+Twelve ready-to-run configurations in `examples/`:
 
 | Directory | Creates |
 |---|---|
 | `examples/vpc-only/` | Single VPC |
 | `examples/compute-basic/` | VPC + 1 instance |
+| `examples/dns-with-compute/` | VPC + instance + DNS zone + A record |
 | `examples/load-balanced-web/` | VPC + 2 instances + L7 ALB |
 | `examples/network-lb/` | VPC + 2 instances + internal L4 NLB |
 | `examples/full-stack/` | VPC + 3 instances + ALB |
+| `examples/nfs-shared-storage/` | VPC + NFS server + 2 instances with shared mount |
 | `examples/openstack-services/` | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
+| `examples/ha-frontend-lb/` | VPC + HA frontend instance-group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone |
+| `examples/ghidra-workstation/` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
+| `examples/kiwix-library/` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
+| `examples/wifi-sniffer/` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
 
 All examples accept a `suffix` variable to keep resource names unique across runs:
 
@@ -188,12 +196,16 @@ Or run them end-to-end from the UI via **Builds → OpenTofu**.
 | Resource | Data Source | API path |
 |---|---|---|
 | `cloudcore_vpc` | `cloudcore_vpc` | `/v1/vpcs` |
+| `cloudcore_internet_gateway` | — | `/v1/internet-gateways` |
+| `cloudcore_route_table` | — | `/v1/route-tables` |
 | `cloudcore_instance` | `cloudcore_instance` | `/v1/instances` |
 | `cloudcore_load_balancer` | `cloudcore_load_balancer` | `/v1/load-balancers` |
 | `cloudcore_security_group` | `cloudcore_security_group` | `/v1/security-groups` |
 | `cloudcore_nfs_server` | `cloudcore_nfs_server` | `/v1/nfs-servers` |
 | `cloudcore_dns_zone` | `cloudcore_dns_zone` | `/v1/dns/zones` |
 | `cloudcore_dns_record` | `cloudcore_dns_record` | `/v1/dns/zones/{zone}/records` |
+| `cloudcore_lb_target_group` | — | `/v1/load-balancers/{id}/target-groups` |
+| `cloudcore_lb_listener` | — | `/v1/load-balancers/{id}/listeners` |
 
 ## Ansible Collection
 
@@ -216,10 +228,14 @@ ansible-galaxy collection install cloudcore-cloudcore-*.tar.gz --force
 | `cloudcore.cloudcore.dns_record` | `/v1/dns/zones/{zone}/records` |
 | `cloudcore.cloudcore.nfs_server` | `/v1/nfs-servers` |
 | `cloudcore.cloudcore.nfs_mount` | `/v1/nfs-servers/{id}/shares/{name}/mount-config` |
+| `cloudcore.cloudcore.security_group` | `/v1/security-groups` |
+| `cloudcore.cloudcore.lb_target_group` | `/v1/load-balancers/{id}/target-groups` |
+| `cloudcore.cloudcore.lb_listener` | `/v1/load-balancers/{id}/listeners` |
+| `cloudcore.cloudcore.usb_device_info` | `/v1/usb-devices` (read-only) |
 
 ### Examples
 
-Eight ready-to-run playbooks in `ansible/examples/`:
+Eleven ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml`, which tears down everything the numbered playbooks create):
 
 | Playbook | Creates |
 |---|---|
@@ -231,6 +247,9 @@ Eight ready-to-run playbooks in `ansible/examples/`:
 | `06-full-stack.yml` | VPC + 3 instances + ALB + DNS zone + CNAME |
 | `07-nfs-shared-storage.yml` | VPC + NFS server + 2 instances with shared mount |
 | `08-openstack-services.yml` | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
+| `09-ghidra-workstation.yml` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
+| `10-kiwix-library.yml` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
+| `11-wifi-sniffer.yml` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
 
 Run directly:
 
@@ -246,13 +265,18 @@ Or run end-to-end from the UI via **Builds → Ansible**.
 | Resource | OpenTofu provider | Ansible module | API path |
 |---|---|---|---|
 | VPC | `cloudcore_vpc` | `cloudcore.cloudcore.vpc` | `/v1/vpcs` |
+| Internet Gateway | `cloudcore_internet_gateway` | — | `/v1/internet-gateways` |
+| Route Table | `cloudcore_route_table` | — | `/v1/route-tables` |
 | Instance | `cloudcore_instance` | `cloudcore.cloudcore.instance` | `/v1/instances` |
 | Load Balancer | `cloudcore_load_balancer` | `cloudcore.cloudcore.load_balancer` | `/v1/load-balancers` |
-| Security Group | `cloudcore_security_group` | — | `/v1/security-groups` |
+| Security Group | `cloudcore_security_group` | `cloudcore.cloudcore.security_group` | `/v1/security-groups` |
 | DNS Zone | `cloudcore_dns_zone` | `cloudcore.cloudcore.dns_zone` | `/v1/dns/zones` |
 | DNS Record | `cloudcore_dns_record` | `cloudcore.cloudcore.dns_record` | `/v1/dns/zones/{zone}/records` |
 | NFS Server | `cloudcore_nfs_server` | `cloudcore.cloudcore.nfs_server` | `/v1/nfs-servers` |
 | NFS Mount | — | `cloudcore.cloudcore.nfs_mount` | `/v1/nfs-servers/{id}/shares/{name}/mount-config` |
+| LB Target Group | `cloudcore_lb_target_group` | `cloudcore.cloudcore.lb_target_group` | `/v1/load-balancers/{id}/target-groups` |
+| LB Listener | `cloudcore_lb_listener` | `cloudcore.cloudcore.lb_listener` | `/v1/load-balancers/{id}/listeners` |
+| USB Device (read-only) | — | `cloudcore.cloudcore.usb_device_info` | `/v1/usb-devices` |
 
 ## Tests
 
