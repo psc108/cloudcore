@@ -1611,24 +1611,38 @@ write_files:
       chmod 644 /etc/keystone/policy.json
 
       # Wait for the shared MySQL path (VIP -> NGINX stream{} -> ProxySQL
-      # -> MySQL) to actually accept the keystone user's connection before
-      # running db_sync — cloud-init on every tier runs concurrently, so
+      # -> MySQL) to actually accept the root connection before running
+      # db_sync — cloud-init on every tier runs concurrently, so
       # NGINX/ProxySQL/MySQL may not be ready yet at this exact moment.
       # Matches this stack's established pattern (see mysql-cloud-init.yaml.tftpl's
       # own wait loop) of an explicit retry rather than relying on
       # Terraform apply order, which doesn't wait for cloud-init to finish
       # on any other node either.
       for i in $(seq 1 180); do
-        mysql -h "${vip_address}" -P 3306 -u keystone -p'${keystone_password}' \
+        mysql -h "${vip_address}" -P 3306 -u root -p'${root_password}' \
           -e "SELECT 1" >/dev/null 2>&1 && break
         sleep 5
       done
 
+      # Per direct instruction: keystone.conf's [database] connection uses
+      # root (the "highest order" account), not a scoped 'keystone' user,
+      # against the same 'keystone' schema mysql-cloud-init.yaml.tftpl
+      # already creates. Routed through the VIP -> ProxySQL path, same as
+      # every other app-level connection in this stack (root@'%' exists
+      # specifically for this — see locals.tf's mysql_root_password
+      # comment) rather than a direct single-node address, so this keeps
+      # working across a MySQL primary failover.
+      #
+      # This whole script only runs once per instance — it's invoked from
+      # cloud-init's runcmd (see the bottom of this file), which cloud-init
+      # tracks per instance-id and never re-executes on a simple reboot of
+      # the same instance, only on a genuinely new/rebuilt one. No extra
+      # guard needed here for that.
       python3 - <<'PYEOF'
       import configparser
       c = configparser.ConfigParser(strict=False)
       c.read('/etc/keystone/keystone.conf')
-      c['database']['connection'] = 'mysql+pymysql://keystone:${keystone_password}@${vip_address}:3306/keystone'
+      c['database']['connection'] = 'mysql+pymysql://root:${root_password}@${vip_address}:3306/keystone'
       if 'cache' not in c:
           c['cache'] = {}
       c['cache']['enabled'] = 'true'

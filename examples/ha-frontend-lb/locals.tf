@@ -306,7 +306,7 @@ locals {
   # obvious once compared side by side.
   keystone_user_data = templatefile("${path.module}/files/keystone-cloud-init.yaml.tftpl", {
     vip_address                     = var.vip_address
-    keystone_password               = local.mysql_keystone_password
+    root_password                   = local.mysql_root_password
     memcached_servers_csv           = local.memcached_servers_csv
     fernet_key0                     = "${random_id.fernet_key0.b64_url}="
     fernet_key1                     = "${random_id.fernet_key1.b64_url}="
