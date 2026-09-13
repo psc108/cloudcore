@@ -60,12 +60,30 @@ fi
 # (never blanket root access) to the user who ran this script, so
 # api/sg.py's "sudo -n iptables ..." calls succeed non-interactively from
 # the API's background instance-launch thread.
+#
+# CLOUDCORE_BRIDGE_USER takes priority over SUDO_USER/USER — this script
+# also runs unattended via cloudcore-bridge.service (install.sh's own
+# automated path), where systemd sets neither SUDO_USER nor USER at all,
+# so ${SUDO_USER:-$USER} silently resolved to an empty string. That's not
+# just "the wrong user" — an empty username makes the generated sudoers
+# line invalid, so visudo -c rejects it and the grant is never installed
+# for anyone, confirmed directly as the actual cause of every instance's
+# "sudo -n iptables ... exit status 1" post-launch error on a fresh
+# install. install.sh sets CLOUDCORE_BRIDGE_USER in the unit file's own
+# Environment= to the real invoking user it already captures for exactly
+# this reason; manual invocation (sudo bash setup-network.sh) still works
+# unchanged via the SUDO_USER fallback.
 IPTABLES_BIN=$(command -v iptables)
 IP6TABLES_BIN=$(command -v ip6tables)
-SG_SUDOERS_USER=${SUDO_USER:-$USER}
+SG_SUDOERS_USER=${CLOUDCORE_BRIDGE_USER:-${SUDO_USER:-$USER}}
 SG_SUDOERS_FILE=/etc/sudoers.d/cloudcore-sg
-SG_SUDOERS_LINE="${SG_SUDOERS_USER} ALL=(root) NOPASSWD: ${IPTABLES_BIN}, ${IP6TABLES_BIN}"
-if [ ! -f "$SG_SUDOERS_FILE" ] || ! grep -qxF "$SG_SUDOERS_LINE" "$SG_SUDOERS_FILE" 2>/dev/null; then
+if [ -z "$SG_SUDOERS_USER" ]; then
+  echo "WARNING: could not determine a user for the security-group sudoers grant" \
+       "(CLOUDCORE_BRIDGE_USER/SUDO_USER/USER all empty) — skipping. Bridge-mode" \
+       "security groups will silently fail to enforce until this is fixed; run" \
+       "'sudo bash $0' interactively, or set CLOUDCORE_BRIDGE_USER, to resolve." >&2
+elif [ ! -f "$SG_SUDOERS_FILE" ] || ! grep -qxF "${SG_SUDOERS_USER} ALL=(root) NOPASSWD: ${IPTABLES_BIN}, ${IP6TABLES_BIN}" "$SG_SUDOERS_FILE" 2>/dev/null; then
+  SG_SUDOERS_LINE="${SG_SUDOERS_USER} ALL=(root) NOPASSWD: ${IPTABLES_BIN}, ${IP6TABLES_BIN}"
   TMP_SUDOERS=$(mktemp)
   echo "$SG_SUDOERS_LINE" > "$TMP_SUDOERS"
   chmod 440 "$TMP_SUDOERS"

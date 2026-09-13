@@ -156,7 +156,19 @@ echo "==> Installing bridge service (cloudcore-bridge)..."
 # cloudcore-bridge.service (unlike the two user services below) is a static
 # committed file with a hardcoded example path baked in — substitute it the
 # same way, rather than a plain copy, so this works from any clone location.
-sed "s|/home/scottp/IdeaProjects/CloudProject|$REPO_DIR|g" \
+#
+# Also inject CLOUDCORE_BRIDGE_USER=$CURRENT_USER — setup-network.sh's own
+# security-group sudoers grant is keyed off ${SUDO_USER:-$USER}, which is
+# correct for a manual "sudo bash setup-network.sh" invocation but resolves
+# to an empty string when the script runs unattended via this systemd
+# service instead (systemd sets neither var), silently skipping the grant
+# for everyone — confirmed directly as the cause of every instance's
+# "sudo -n iptables ... exit status 1" post-launch error on a fresh
+# install. Environment= here is what lets setup-network.sh resolve the
+# real user without relying on an interactive sudo context it will never
+# have when systemd starts it.
+sed -e "s|/home/scottp/IdeaProjects/CloudProject|$REPO_DIR|g" \
+    -e "s|\[Service\]|[Service]\nEnvironment=CLOUDCORE_BRIDGE_USER=$CURRENT_USER|" \
     "$REPO_DIR/api/cloudcore-bridge.service" | sudo tee /etc/systemd/system/cloudcore-bridge.service > /dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now cloudcore-bridge.service
