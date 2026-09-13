@@ -148,12 +148,16 @@ write_files:
   # upgrade; the management HTTPS API gets its own TLS listener (15671)
   # the same way — both routed through NGINX's stream{} as raw
   # passthroughs. management.ssl.* is a completely independent config
-  # stanza from ssl_options.* (AMQP) — confirmed directly: without its
-  # own verify/fail_if_no_peer_cert, a plain curl with no client cert at
-  # all got a normal HTTP 401 (auth challenge) instead of being rejected
-  # at the TLS layer, i.e. the management API was TLS-encrypted but not
-  # actually mTLS-enforced. Both listeners now require a client cert,
-  # matching every other TLS surface in this stack.
+  # stanza from ssl_options.* (AMQP) — confirmed directly: setting
+  # verify/fail_if_no_peer_cert here too (an initial attempt, matching
+  # every other TLS surface in this stack) made the admin console
+  # unreachable from a plain browser, which has no client cert to
+  # present — the TLS handshake itself fails before RabbitMQ ever shows
+  # a login page. Per direct instruction: management.ssl stays
+  # server-TLS-only (encrypted, browser-reachable, username/password
+  # auth as normal) while AMQP (ssl_options.*, below) keeps requiring a
+  # client cert — real application connections, not a human in a
+  # browser, use that one.
   # cacertfile MUST be the root+intermediate chain concatenated, not just
   # the root — confirmed directly: Erlang's SSL stack rejects the client
   # cert with an "unknown ca" alert if only the root is present locally,
@@ -217,12 +221,9 @@ write_files:
       ssl_options.verify = verify_peer
       ssl_options.fail_if_no_peer_cert = true
       management.ssl.port = 15671
-      management.ssl.cacertfile = /etc/rabbitmq/ca.crt
       management.ssl.certfile = /etc/rabbitmq/server.crt
       management.ssl.keyfile = /etc/rabbitmq/server.key
       management.ssl.password = ${admin_password}
-      management.ssl.verify = verify_peer
-      management.ssl.fail_if_no_peer_cert = true
       heartbeat = 580
       log.file.level = info
       listeners.tcp = none
