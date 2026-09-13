@@ -32,9 +32,17 @@ async function loadTerminalInstances() {
     list.innerHTML = allItems.map(i => {
       const running   = i.status === 'running';
       const nonSudo   = _pickNonSudoUser(i);
-      const allSudo   = (i.users||[]).length > 0 && (i.users||[]).every(u => u.sudo);
       const noSshPort = !sshHasAccess(i);
       const isNfs     = i._kind === 'nfs';
+      // Block only when there's truly no usable non-sudo login — i.e. every
+      // explicitly-tracked user is sudo AND there's no ssh_user fallback
+      // either. Previously this ignored the ssh_user fallback entirely
+      // (unlike _pickNonSudoUser right above it, and unlike the backend's
+      // own matching check in terminal.py), so any instance with even one
+      // tracked sudo user — every ha-frontend-lb node, once the "ecs"
+      // operational user was added — got blocked here even though ubuntu
+      // was a perfectly valid, working non-sudo login the whole time.
+      const allSudo   = !isNfs && !nonSudo;
 
       let actionHtml;
       if (!running) {
