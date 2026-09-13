@@ -425,48 +425,31 @@ def _migrate_help_articles_slug_uniqueness() -> None:
     _conn.commit()
 
 
-_HELP_MD_FILE = Path(__file__).parent.parent / "HELP.md"
-
-_HELP_CATEGORY_MAP = {
-    "Navigation": "Getting Started", "Dashboard": "Getting Started",
-    "VPCs": "Infrastructure", "Instances": "Infrastructure",
-    "USB Device Passthrough": "Infrastructure", "Load Balancers": "Infrastructure",
-    "Terminal": "Infrastructure", "DNS": "Networking",
-    "NFS Servers": "Storage", "Builds — Ansible": "Builds",
-    "Builds — OpenTofu": "Builds", "Build History and Destroy": "Builds",
-    "Editor": "Reference", "About": "Reference", "API Reference": "Reference",
-    "Networking": "Networking", "Service Management": "Reference",
-}
+_HELP_SEED_FILE = Path(__file__).parent / "help_seed.json"
 
 
 def _seed_help_from_markdown() -> None:
-    """One-time import of HELP.md into help_articles, one article per
-    top-level '##' section. Gated on the TABLE being empty (never on file
-    existence) — HELP.md is git-tracked and must be left untouched, unlike
-    the JSON files _migrate_json() renames after import."""
+    """One-time import of help_seed.json into help_articles. Gated on the
+    TABLE being empty (never on file existence). help_seed.json is the sole
+    source of default help content — the searchable help_articles table
+    (managed via the Help Manager UI / /v1/help/articles API) is the only
+    help system; there is no separate static-Markdown help view to keep in
+    sync with it."""
     if _conn.execute("SELECT COUNT(*) FROM help_articles").fetchone()[0]:
         return
-    if not _HELP_MD_FILE.exists():
+    if not _HELP_SEED_FILE.exists():
         return
-    import re
-    from models import new_id, now_iso, slugify
-    text = _HELP_MD_FILE.read_text()
-    parts = re.split(r'(?m)^## (.+)$', text)
+    import json as _json
+    from models import new_id, now_iso
+    seeds = _json.loads(_HELP_SEED_FILE.read_text())
     ts = now_iso()
-    seeds = []
-    if parts[0].strip():
-        seeds.append(("Overview", "General", parts[0].strip()))
-    for i in range(1, len(parts), 2):
-        heading = parts[i].strip()
-        body = parts[i + 1] if i + 1 < len(parts) else ""
-        seeds.append((heading, _HELP_CATEGORY_MAP.get(heading, "General"),
-                      f"## {heading}\n{body.rstrip()}\n"))
-    for title, category, content in seeds:
+    for seed in seeds:
         _conn.execute(
             """INSERT OR IGNORE INTO help_articles
                (id,slug,title,category,content,status,created_at,updated_at)
                VALUES (?,?,?,?,?,?,?,?)""",
-            (new_id(), slugify(title), title, category, content, "active", ts, ts))
+            (new_id(), seed["slug"], seed["title"], seed["category"], seed["content"],
+             "active", ts, ts))
     _conn.commit()
 
 

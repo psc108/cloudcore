@@ -63,10 +63,10 @@ case "$CODENAME" in
   *) echo "Unknown codename '$CODENAME' — add it to the case statement in this script first" >&2; exit 1 ;;
 esac
 
-# Defaults match every other doc/script in this repo (README, HELP.md,
-# setup-package-repo.sh's own printed instructions) — override either by
-# exporting the env var first if your CloudCore instance uses a different
-# API URL or token.
+# Defaults match every other doc/script in this repo (README, the in-app
+# Help articles, setup-package-repo.sh's own printed instructions) —
+# override either by exporting the env var first if your CloudCore
+# instance uses a different API URL or token.
 CLOUDCORE_API_URL="${CLOUDCORE_API_URL:-http://127.0.0.1:8080}"
 CLOUDCORE_API_TOKEN="${CLOUDCORE_API_TOKEN:-dev-token}"
 
