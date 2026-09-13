@@ -123,30 +123,28 @@ locals {
   ca_ip                   = values(module.ca.private_ips_by_key)[0]
   ca_provisioner_password = random_id.ca_provisioner_password.hex
 
-  # Lab-only placeholders, not production secrets — same convention as
-  # vrrp_auth_pass above.
+  # Every admin/service-account login credential in this stack (MySQL's
+  # replication/monitor/app/keystone/ssp_* accounts, Keystone's bootstrap
+  # admin and system-domain service accounts, RabbitMQ's admin and
+  # application service accounts) shares var.admin_password — one
+  # settable value instead of a scattered "changeme-*" placeholder per
+  # service. Purely internal, non-login secrets (VRRP, the Erlang
+  # cookie, Fernet keys, the CA provisioner password) are deliberately
+  # NOT wired to this — see variables.tf's admin_password description.
   mysql_group_name        = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-  mysql_repl_password     = "changeme-repl"
-  mysql_monitor_password  = "changeme-monitor"
-  mysql_app_password      = "changeme-app"
-  mysql_keystone_password = "changeme-keystone" # lab-only placeholder, not a production secret
-
-  # Shared across the 13 "ssp_*" application databases/users created on
-  # the bootstrap node (create_db_users.sh/createUser.sh, ported in) —
-  # same single-shared-credential convention as every other Lab-only
-  # placeholder above.
-  mysql_ssp_password = "changeme-ssp"
+  mysql_repl_password     = var.admin_password
+  mysql_monitor_password  = var.admin_password
+  mysql_app_password      = var.admin_password
+  mysql_keystone_password = var.admin_password
+  mysql_ssp_password      = var.admin_password
 
   # Shared across all 22 "system" domain service/admin accounts created
-  # by setup-keystone-roles.sh's system_domain.yml import — same
-  # single-shared-credential convention as every other Lab-only
-  # placeholder above, not a production secret.
-  keystone_system_domain_password = "changeme-system-domain"
+  # by setup-keystone-roles.sh's system_domain.yml import.
+  keystone_system_domain_password = var.admin_password
 
   # Shared across the 13 application service accounts setup-rabbitmq.sh
-  # creates on the seed (create_users.sh/create_vhost.sh, ported in) —
-  # same single-shared-credential convention as keystone_system_domain_password.
-  rabbitmq_services_password = "changeme-rabbitmq-services"
+  # creates on the seed (create_users.sh/create_vhost.sh, ported in).
+  rabbitmq_services_password = var.admin_password
 
   # Node "a" only — modules/compute's per-key user_data can't reference
   # that same module call's own private_ips_by_key output, so it's split
@@ -293,6 +291,7 @@ locals {
     ca_provisioner_password         = local.ca_provisioner_password
     step_cli_deb_sha256             = local.step_cli_deb_sha256
     keystone_system_domain_password = local.keystone_system_domain_password
+    admin_password                  = var.admin_password
   })
 
   # Seed node only — modules/compute's per-key user_data can't reference
@@ -320,6 +319,7 @@ locals {
         vip_address                = var.vip_address
         step_cli_deb_sha256        = local.step_cli_deb_sha256
         rabbitmq_services_password = local.rabbitmq_services_password
+        admin_password             = var.admin_password
       })
     }
   }
@@ -346,6 +346,7 @@ locals {
         vip_address                = var.vip_address
         step_cli_deb_sha256        = local.step_cli_deb_sha256
         rabbitmq_services_password = local.rabbitmq_services_password
+        admin_password             = var.admin_password
       })
     }
   }

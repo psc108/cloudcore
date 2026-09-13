@@ -88,6 +88,13 @@ variable "ca_flavor" {
   default     = "standard.nano"
 }
 
+variable "admin_password" {
+  description = "Single shared password applied to every admin/service account this stack creates: MySQL's replication/monitor/app/keystone-connection/ssp_* application accounts, Keystone's bootstrap admin user (and env.sh's OS_PASSWORD, which must match it) plus its 22 system-domain service accounts, and RabbitMQ's admin user plus its 13 application service accounts. Lab-only convenience, not a production secret-management pattern — every one of these already shared a single hardcoded placeholder value per service; this just makes that placeholder settable in one place. Does not affect purely internal, non-login secrets (VRRP auth, the Erlang cookie, Keystone's Fernet keys, the CA provisioner password), which stay independently random/generated, or MySQL's root account, which has no password at all (unix-socket auth only) and is out of scope for this variable."
+  type        = string
+  default     = "changeme-admin"
+  sensitive   = true
+}
+
 variable "backend_flavor" {
   description = "Compute flavor for the two backend application nodes. standard.medium's 20GB disk covers the stated ~10GB requirement (2.5GB compressed app + ~2.5GB decompression + running footprint) with headroom; its 2048MB RAM is reasonable for decompressing/running an application of unspecified size. The application itself is installed manually after this infrastructure exists — not provisioned by this template."
   type        = string

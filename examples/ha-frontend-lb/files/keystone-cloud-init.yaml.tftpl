@@ -1573,7 +1573,7 @@ write_files:
 
       export OS_AUTH_URL=http://127.0.0.1:5000/v3
       export OS_USERNAME=admin
-      export OS_PASSWORD=admin
+      export OS_PASSWORD='${admin_password}'
 
       roles_ok=false
       for i in 1 2 3; do
@@ -1641,15 +1641,15 @@ write_files:
 
       keystone-manage db_sync
 
-      # admin:admin — a deliberate, explicit Lab-only credential (see
-      # haFullStack-LLD.md §3.3.1), same convention as vrrp_auth_pass and
-      # the MySQL passwords. Public/internal stay on the VIP:5000 vhost
-      # the keystone package ships out of the box; admin uses the classic
+      # admin/var.admin_password — this stack's shared admin/service
+      # credential (haFullStack-LLD.md §3.3.1, variables.tf). Public/
+      # internal stay on the VIP:5000 vhost the keystone package ships
+      # out of the box; admin uses the classic
       # OpenStack :35357 convention instead (setup-keystone-admin-port.sh
       # below adds that listener) — this Lab has no distinct admin/
       # internal network to separate them onto otherwise.
       keystone-manage bootstrap \
-        --bootstrap-username admin --bootstrap-password admin \
+        --bootstrap-username admin --bootstrap-password '${admin_password}' \
         --bootstrap-project-name admin --bootstrap-role-name admin \
         --bootstrap-service-name keystone \
         --bootstrap-admin-url "http://${vip_address}:35357/v3" \
@@ -1709,8 +1709,9 @@ write_files:
   # Terraform-render time (var.vip_address), so no runtime IP-discovery
   # step (e.g. a systemd oneshot) is needed here; a fixed per-node IP
   # would also break this file on failover, defeating the point of the HA
-  # VIP. admin:admin matches the bootstrap credential above — this Lab's
-  # deliberate, documented placeholder, not a new secret. No OS_CACERT/
+  # VIP. OS_PASSWORD matches the bootstrap credential above (both
+  # var.admin_password) — this Lab's shared, documented placeholder, not
+  # a new secret. No OS_CACERT/
   # https — :35357 is plain HTTP like :5000, not the separate :5443 mTLS
   # listener, which needs a client cert+key to authenticate, not just a
   # CA cert.
@@ -1718,7 +1719,7 @@ write_files:
     permissions: '0644'
     content: |
       export OS_USERNAME=admin
-      export OS_PASSWORD='admin'
+      export OS_PASSWORD='${admin_password}'
       export OS_PROJECT_NAME=admin
       export OS_USER_DOMAIN_NAME=Default
       export OS_PROJECT_DOMAIN_NAME=Default

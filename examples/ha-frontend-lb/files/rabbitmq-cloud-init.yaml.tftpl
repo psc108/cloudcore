@@ -87,14 +87,15 @@ write_files:
       rabbitmq-plugins enable rabbitmq_management
 
       %{ if is_seed ~}
-      # admin:admin — a deliberate, explicit Lab-only credential (same
-      # convention as Keystone's admin:admin and every other credential
-      # in this stack). Only needs to run once, here — RabbitMQ's user
-      # database is shared cluster-wide via Mnesia once nodes join,
-      # confirmed directly: a user created on the seed before any joiner
-      # has clustered is still visible from the joiner immediately after
-      # it joins, no separate propagation step needed.
-      rabbitmqctl add_user admin admin
+      # admin/var.admin_password — this stack's shared admin/service
+      # credential (same convention as Keystone's bootstrap admin and
+      # every other account in this stack, see variables.tf). Only needs
+      # to run once, here — RabbitMQ's user database is shared cluster-
+      # wide via Mnesia once nodes join, confirmed directly: a user
+      # created on the seed before any joiner has clustered is still
+      # visible from the joiner immediately after it joins, no separate
+      # propagation step needed.
+      rabbitmqctl add_user admin '${admin_password}'
       rabbitmqctl set_user_tags admin administrator
       rabbitmqctl set_permissions -p / admin '.*' '.*' '.*'
       rabbitmqctl set_cluster_name rabbitmq-cluster
