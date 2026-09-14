@@ -101,3 +101,15 @@ variable "backend_flavor" {
   default     = "standard.medium"
 }
 
+variable "nfs_flavor" {
+  description = "Compute flavor for the shared NFS server — a single lightweight node serving one export, same tier as this stack's other non-DB support nodes (keystone_flavor, rabbitmq_flavor)."
+  type        = string
+  default     = "standard.small"
+}
+
+variable "nfs_disk_gb" {
+  description = "Storage disk size in GiB for the shared NFS server. Application-prep requirement is a 10GB minimum."
+  type        = number
+  default     = 10
+}
+

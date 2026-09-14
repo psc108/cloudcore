@@ -2374,6 +2374,127 @@ stack (48 resources each time) — not drafted and assumed working:
 
 ---
 
+## 10. Shared Application Storage
+
+### 10.1 Scope
+
+Prep for the pending application install, per direct instruction: "as
+part of the last items we need to do to prepare for the application
+installation we need to offer a nfs server with 10gb minimum disk space
+that all frontend and backend instances can access read/write." A
+single shared, read/write NFS export reachable by every frontend and
+backend node — nothing about the application itself is known or
+assumed, same "infrastructure handoff only" framing as §8's backend
+tier.
+
+Not a revival of §6's now-superseded per-project NFS package-repo
+design (§7/v0.17 — `module.nfs`/`module.repo_builder` were removed from
+this stack when it moved onto the host-level `cloudcore-repo` service).
+This is an unrelated, new use of the same `modules/nfs-server` module
+for a different purpose — application data, not package caching.
+
+### 10.2 Environment and Tooling Matrix
+
+Same three-environment structure as every prior tier. Only Lab/OpenTofu
+is built this slice.
+
+### 10.3 Lab Environment (CloudCore)
+
+- **`module.nfs`** (`modules/nfs-server`) — one server, one export named
+  `shared`. `var.nfs_flavor` (default `standard.small`, matching this
+  stack's other lightweight support nodes) / `var.nfs_disk_gb` (default
+  10, the stated minimum).
+- **Mount point** — `/mnt/shared` on every frontend and backend node,
+  via each tier's own `setup-nfs-mount.sh` (`{frontend,backend}
+  -cloud-init.yaml.tftpl`, `write_files` + `runcmd`): waits for the
+  export to actually be registered (`showmount -e "$nfs_ip" | grep -q
+  "/exports/shared"`, up to 15 minutes, same retry idiom every other
+  cross-tier wait loop in this stack already uses — e.g.
+  `setup-backend-tls.sh`'s CA-cert fetch), then adds a persistent
+  `/etc/fstab` entry (`defaults,_netdev,nofail`, matching
+  `api/nfs.py`'s own `cloud_init_mount_entry()` shape exactly) and
+  mounts it. `showmount`, not a raw TCP probe against port 2049 —
+  confirms the export is actually registered, not just that the NFS
+  server's port has started listening (`nfs-kernel-server` opens the
+  port before it finishes applying `/etc/exports` on first boot).
+  `nfs-common` added to both tiers' `packages:` list for the
+  `mount.nfs`/`showmount` binaries.
+- **Access control — no CloudCore security group involved.**
+  `cloudcore_nfs_server` (confirmed by reading
+  `provider/internal/resources/nfs_server.go` and
+  `modules/nfs-server/variables.tf` directly) has no
+  `security_group_ids` input and no SG attachment point at all in this
+  provider — unlike every compute-backed tier elsewhere in this stack,
+  there is no ingress rule to write. Access control is entirely the
+  export's own `clients` setting (`modules/nfs-server`'s `shares[]`),
+  set here to `"vpc"`. `api/nfs.py` resolves that literal string to the
+  real bridge subnet (`192.168.100.0/24`), not the declared VPC CIDR —
+  an already-established platform behavior (F-041,
+  `haFullStack-Findings-Log.md`) found and fixed during §6/§7's own
+  work, reused here rather than re-derived. This lands on the same
+  bridge-wide access boundary every other tier's own SG rules in this
+  file already use (`local.bridge_cidr`), just enforced one layer
+  further down, at the export itself rather than a security group —
+  satisfying "all frontend and backend instances can access" without
+  needing (or being able to express) a narrower per-tier restriction at
+  the CloudCore resource level.
+- **A real, novel package-repo gap** — F-067
+  (`haFullStack-Findings-Log.md`): `nfs-common` was added to both
+  tiers' `packages:` list but not to `build-package-repo.sh`'s own
+  `PACKAGES` array, so the host-level repo (§7) never actually cached
+  it — every fresh node's apt install failed outright ("not found by
+  APT"), not a transient mirror hiccup. Fixed and the repo cache
+  rebuilt.
+
+### 10.4 On-Prem Environment
+
+Not started — same pattern as every other tier's own On-Prem section.
+
+### 10.5 AWS Environment
+
+Not started — EFS is the natural analogue (POSIX NFS semantics, no
+CloudCore-style access-control gap to work around since EFS mount
+targets sit behind their own real Security Groups), rather than a
+self-managed NFS server.
+
+### 10.6 Cross-Environment Consistency
+
+The guest-level cloud-init content (the wait-then-mount script,
+`/etc/fstab` entry) doesn't change with the provider — only the export
+side (a CloudCore `cloudcore_nfs_server` here vs. EFS on AWS) does.
+
+### 10.7 Open Items
+
+- **The application itself** — genuinely out of scope, same framing as
+  §8.7. What, if anything, the application actually stores at
+  `/mnt/shared` is unknown.
+- **On-Prem/AWS** — not started, per §10.4/§10.5.
+- **Single node, not HA** — same deliberately-flagged Lab simplification
+  as the CA (§5.1) — `modules/nfs-server` has no multi-node/HA option
+  today.
+
+**Verification for this phase (Lab/OpenTofu):** built and verified
+against real infrastructure across two full destroy/rebuild cycles, not
+just `tofu apply` completing without error. First cycle surfaced F-067
+(`nfs-common` genuinely unavailable via apt) with `/mnt/shared` never
+created on either tier. Second cycle, after rebuilding the package
+repo: both a frontend and a backend node mounted `/mnt/shared`
+successfully (`192.168.100.35:/exports/shared` over NFSv4.2, ~9.8G
+available, `/etc/fstab` entry present and correct); a genuine cross-node
+read/write round-trip was confirmed — a file written from the frontend
+node's mount was read back correctly from the backend node's mount, and
+vice versa, proving a real shared export rather than two independent
+local directories. One node needed its mount script re-run manually
+after an unrelated boot-time stall under full-stack concurrent-build
+resource contention (the same class of boot-time timing sensitivity
+already noted elsewhere in this document, e.g. §3.3/§3.7's `mod_wsgi`
+worker-startup delay, F-028) — not a defect in the mount script itself,
+which ran
+to completion correctly once actually invoked. Stack destroyed cleanly
+afterward.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2399,3 +2520,4 @@ stack (48 resources each time) — not drafted and assumed working:
 | v0.19 | 2026-09-12 | Paul Scott | Runtime software added to frontend (§1.3) and backend (§8.3): Node.js (frontend only, NodeSource, 18.x minimum), Temurin 21 JDK, jasypt 1.9.3, and Bouncy Castle's `bcprov-jdk18on` 1.80 (both tiers) — jasypt needs a JVM to run its own CLI scripts, which a stock Ubuntu image doesn't provide, correcting an initial assumption that frontend/backend already had Java. All four cached in the host-level repo rather than fetched live; `build-package-repo.sh` extended to trust NodeSource's repo (same pattern as Adoptium/Kismet) and cache jasypt's dist zip + Bouncy Castle's provider jar as pinned artifacts, both verified as real, current, working URLs directly before use. Verified for real on a throwaway instance: correct versions installed, and jasypt's own `encrypt.sh` actually ran successfully against the newly-installed JVM. `chmod u+x` (not `+x`/`a+x`) applied to every `.sh` file jasypt installs, per direct instruction. |
 | v0.20 | 2026-09-12 | Paul Scott | New §9, Operational Access (cross-cutting) — every instance gets an `ecs` NOPASSWD-sudo account (reusing the existing CloudCore inter-instance keypair, no new key to manage) and a short-hostname `cloudcore_dns_record`. Required real platform-layer fixes, not just Terraform: `POST /v1/instances` never read a `users` key at all despite the compute layer already fully supporting it, and the API's own DNS resolver never reloaded after startup (F-049); once fixed, cloud-init's `users:` semantics (replaces the image's own default user unless `"default"` is explicitly listed) broke `ubuntu` SSH stack-wide the first time an extra user was actually created at launch (F-050) — both found and fixed live across a real three-iteration build/destroy cycle against the full 15-node stack, final iteration clean end-to-end. |
 | v0.21 | 2026-09-13 | Paul Scott | §5 updated — RabbitMQ AMQP+management and Keystone's identity API closed to TLS-only, per direct instruction, superseding this section's original "kept alongside, not removed" framing for both. Plain `5672`/`15672` and `:5000`/`:35357` are gone entirely; both services' server keys are now passphrase-protected with `var.admin_password` (a pattern other services will need later); `keystone-status.py`/`rabbitmq-status.py` now use real client certificates instead of plain HTTP, closing the "mechanical follow-up if ever needed" this section had deferred. MySQL deliberately untouched — already effectively TLS-only via per-account `REQUIRE X509`. Seven real bugs found and fixed across several full destroy/rebuild cycles (F-058–F-065, `haFullStack-Findings-Log.md`): an `openssl` same-path in/out key corruption; RabbitMQ's actual (non-obvious) listener-disable syntax; `management.ssl.*`'s independent mTLS directives; Apache's `SSLPassPhraseDialog` scope; a wrong assumed Keystone site name; a certificate-SAN/hostname mismatch in the boot-time role-import script; an Apache-reload ordering gap; and — caught by direct question rather than an error — both Keystone nodes racing to import the same role/user data into the one shared MySQL database they already use, fixed by restricting the import to the `-01` node only. |
+| v0.22 | 2026-09-14 | Paul Scott | New §10, Shared Application Storage — a single NFS export (`module.nfs`, `modules/nfs-server`, `var.nfs_disk_gb` default 10GB) mounted read/write at `/mnt/shared` on every frontend and backend node, per direct instruction ahead of the pending application install. Not a revival of §6's superseded per-project NFS design (§7/v0.17) — an unrelated new use of the same module. Noted that `cloudcore_nfs_server` has no security-group attachment point in this provider at all; access control is entirely the export's own `clients = "vpc"` setting, which resolves to the real bridge subnet per the already-established F-041 platform behavior. One real bug found and fixed (F-067, `haFullStack-Findings-Log.md`): `nfs-common` was added to both tiers' `packages:` list but not to the host-level package repo's own build script, so it was never actually cached and apt genuinely couldn't find it. Verified across two full destroy/rebuild cycles — the second showing a real cross-node read/write round-trip through the live NFS export. |

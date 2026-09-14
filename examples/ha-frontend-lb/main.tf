@@ -94,7 +94,7 @@ module "security_groups" {
       description = "Keystone identity tier — API (TLS-only) from the NGINX nodes' subnet only, plus SSH"
       ingress_rules = {
         api_admin = { ip_protocol = "tcp", from_port = 35357, to_port = 35357, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS, classic OpenStack admin-port convention (keystone-wsgi-admin, /api/idm) — the only listener, per direct instruction (haFullStack-LLD.md §5.3.1). Not :443 — that's the frontend tier's own client-facing port on this same VIP." }
-        ssh     = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+        ssh       = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -330,6 +330,32 @@ module "backend" {
   security_group_ids = [module.security_groups.security_group_ids_by_key["backend${local.sfx}"]]
   user_data          = local.backend_user_data
   users              = local.ecs_user
+}
+
+# Shared read/write storage for the frontend + backend tiers, prep for
+# the imminent application install (not consumed by this template's own
+# infrastructure) — a single export, auto-mounted by both tiers' own
+# cloud-init (frontend-cloud-init.yaml.tftpl, backend-cloud-init.yaml.tftpl)
+# at /mnt/shared. clients = "vpc" resolves to the real bridge subnet, not
+# the declared VPC CIDR (api/nfs.py, F-041) — same real-address caveat as
+# the VIP/VRRP rule elsewhere in this file (locals.tf's bridge_cidr comment).
+module "nfs" {
+  source = "../../modules/nfs-server"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  nfs_servers = {
+    "nfs${local.sfx}" = {
+      vpc_id  = module.vpc.vpc_ids_by_key[local.vpc_key]
+      flavor  = var.nfs_flavor
+      disk_gb = var.nfs_disk_gb
+      shares = [
+        { name = "shared", clients = "vpc" },
+      ]
+    }
+  }
 }
 
 module "rabbitmq_seed" {

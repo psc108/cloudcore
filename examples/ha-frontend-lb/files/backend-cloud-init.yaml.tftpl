@@ -32,6 +32,7 @@ packages:
   - ca-certificates
   - unzip
   - temurin-21-jdk
+  - nfs-common
 
 write_files:
   # jasypt (CLI dist — its own bin/*.sh scripts, not just the library
@@ -113,7 +114,35 @@ write_files:
       systemctl daemon-reload
       systemctl enable --now step-renew
 
+  # Shared application storage (haFullStack-LLD.md — app-install prep).
+  # showmount, not a raw TCP probe — confirms the export is actually
+  # registered, not just that the NFS server's port is open (it starts
+  # listening before nfs-kernel-server finishes applying /etc/exports on
+  # first boot). fstab entry uses api/nfs.py's own
+  # cloud_init_mount_entry() shape exactly (defaults,_netdev,nofail) so a
+  # later reboot remounts it the same way without this script's help;
+  # _netdev/nofail alone don't retry a mount that wasn't ready yet at
+  # boot, which is what the wait loop below is actually for.
+  - path: /usr/local/sbin/setup-nfs-mount.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      mkdir -p ${nfs_mount_dir}
+
+      for i in $(seq 1 180); do
+        showmount -e "${nfs_ip}" 2>/dev/null | grep -q "/exports/${nfs_share}" && break
+        sleep 5
+      done
+
+      grep -q "^${nfs_ip}:/exports/${nfs_share} " /etc/fstab || \
+        echo "${nfs_ip}:/exports/${nfs_share} ${nfs_mount_dir} nfs defaults,_netdev,nofail 0 0" >> /etc/fstab
+
+      mount -a
+
 runcmd:
   - /usr/local/sbin/setup-backend-tls.sh
   - /usr/local/sbin/setup-jasypt.sh
+  - /usr/local/sbin/setup-nfs-mount.sh
   - systemctl enable --now nginx

@@ -35,6 +35,7 @@ packages:
   - unzip
   - nodejs
   - temurin-21-jdk
+  - nfs-common
 
 write_files:
   # jasypt (CLI dist — its own bin/*.sh scripts, not just the library
@@ -910,10 +911,32 @@ write_files:
       [Install]
       WantedBy=timers.target
 
+  # Shared application storage (haFullStack-LLD.md — app-install prep).
+  # Same script/wait/fstab shape as backend-cloud-init.yaml.tftpl — see
+  # its comment for why showmount + a wait loop, not a bare fstab entry.
+  - path: /usr/local/sbin/setup-nfs-mount.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      mkdir -p ${nfs_mount_dir}
+
+      for i in $(seq 1 180); do
+        showmount -e "${nfs_ip}" 2>/dev/null | grep -q "/exports/${nfs_share}" && break
+        sleep 5
+      done
+
+      grep -q "^${nfs_ip}:/exports/${nfs_share} " /etc/fstab || \
+        echo "${nfs_ip}:/exports/${nfs_share} ${nfs_mount_dir} nfs defaults,_netdev,nofail 0 0" >> /etc/fstab
+
+      mount -a
+
 runcmd:
   - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
   - /usr/local/sbin/setup-frontend-tls.sh
   - /usr/local/sbin/setup-jasypt.sh
+  - /usr/local/sbin/setup-nfs-mount.sh
   - systemctl restart nginx
   - systemctl daemon-reload
   - systemctl enable --now mysql-status.timer

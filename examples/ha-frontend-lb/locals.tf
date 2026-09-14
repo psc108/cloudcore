@@ -95,6 +95,9 @@ locals {
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password
     step_cli_deb_sha256     = local.step_cli_deb_sha256
+    nfs_ip                  = local.nfs_ip
+    nfs_share               = local.nfs_share
+    nfs_mount_dir           = local.nfs_mount_dir
   })
 
   # Pinned, checksum-verified — same pattern as proxysql_deb_sha256 below.
@@ -121,6 +124,14 @@ locals {
   # and issue certificates against, and the shared provisioner password.
   ca_ip                   = values(module.ca.private_ips_by_key)[0]
   ca_provisioner_password = random_id.ca_provisioner_password.hex
+
+  # Frontend + backend both mount this share at boot — see
+  # setup-nfs-mount.sh in each tier's own cloud-init. api/nfs.py's
+  # mount_command()/cloud_init_mount_entry() define the exact
+  # "<ip>:/exports/<share>" export path shape reused there.
+  nfs_ip        = values(module.nfs.private_ips_by_key)[0]
+  nfs_share     = "shared"
+  nfs_mount_dir = "/mnt/shared"
 
   # Every admin/service-account login credential in this stack (MySQL's
   # replication/monitor/app/keystone/ssp_* accounts, Keystone's bootstrap
@@ -285,6 +296,9 @@ locals {
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password
     step_cli_deb_sha256     = local.step_cli_deb_sha256
+    nfs_ip                  = local.nfs_ip
+    nfs_share               = local.nfs_share
+    nfs_mount_dir           = local.nfs_mount_dir
   })
 
   memcached_user_data = templatefile("${path.module}/files/memcached-cloud-init.yaml.tftpl", {})
@@ -393,6 +407,7 @@ locals {
   # need their group name prefixed back on here.
   dns_records = merge(
     { for k, ip in module.ca.private_ips_by_key : k => ip },
+    { for k, ip in module.nfs.private_ips_by_key : k => ip },
     { for k, ip in module.mysql_bootstrap.private_ips_by_key : k => ip },
     { for k, ip in module.mysql_replicas.private_ips_by_key : k => ip },
     { for k, ip in module.proxysql.private_ips_by_key : k => ip },
