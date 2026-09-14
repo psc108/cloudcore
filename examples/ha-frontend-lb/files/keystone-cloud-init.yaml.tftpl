@@ -1733,13 +1733,23 @@ write_files:
       # no distinct admin/internal network to separate them onto, and
       # :443 is already the frontend tier's own client-facing port on
       # this same VIP, so it's not an option here regardless.
+      #
+      # --bootstrap-username/-project-name/-role-name/-service-name are
+      # deliberately omitted — checked keystone/cmd/cli.py directly:
+      # they default to admin/admin/admin/keystone respectively, exactly
+      # what this project's own real bootstrap command already relies on
+      # implicitly, so passing them explicitly was pure noise.
+      # --bootstrap-region-id is NOT a default-backed omission, though —
+      # checked bootstrap.py directly: without it, no region object is
+      # created at all and catalog endpoints get no region_id, a real
+      # difference from this project's own convention, not a cosmetic
+      # one. RegionOne per direct instruction.
       keystone-manage bootstrap \
-        --bootstrap-username admin --bootstrap-password '${admin_password}' \
-        --bootstrap-project-name admin --bootstrap-role-name admin \
-        --bootstrap-service-name keystone \
+        --bootstrap-password '${admin_password}' \
         --bootstrap-admin-url "https://${vip_address}:35357/api/idm/v3" \
         --bootstrap-public-url "https://${vip_address}:35357/api/idm/v3" \
-        --bootstrap-internal-url "https://${vip_address}:35357/api/idm/v3"
+        --bootstrap-internal-url "https://${vip_address}:35357/api/idm/v3" \
+        --bootstrap-region-id RegionOne
 
   # env.sh — OpenStack CLI client environment, sourced by root/ecs/ubuntu
   # (runcmd below symlinks it into each user's home directory). Lives
