@@ -1,0 +1,682 @@
+---
+# 12-ha-frontend-lb.yml
+# Ansible port of examples/ha-frontend-lb (OpenTofu) — HA frontend
+# instance-group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating
+# VIP + MySQL Group Replication (3 nodes) + Keystone (2, mTLS) + memcached
+# (2) + RabbitMQ (3, mTLS cluster) + backend application tier (2) + a
+# single-node step-ca issuing the whole TLS/mTLS mesh + a shared NFS
+# export — 16 instances total, see haFullStack-LLD.md for the full
+# architecture writeup this mirrors task-for-task.
+#
+# Every cloud-init body lives in templates/ha-frontend-lb/*.yml.j2 — same
+# bash/YAML content as the OpenTofu version's own files/*.tftpl, only the
+# templating syntax changed (Terraform's ${x}/%{ if %} -> Jinja2's
+# {{ x }}/{% if %}). This playbook's own job is pure orchestration:
+# instances in true dependency order (NOT the OpenTofu module block's
+# textual order — OpenTofu's graph resolves cross-references
+# automatically; ProxySQL's own nginx_conf/nginx_stream_conf actually
+# depend on frontend/backend/keystone/rabbitmq, so it's created LAST
+# here despite appearing earlier in the OpenTofu file), waiting for each
+# tier's real IP before rendering the next tier's cloud-init.
+#
+# Run: ansible-playbook -i ../inventory.ini 12-ha-frontend-lb.yml \
+#        -e admin_password=<a-real-password> -e build_suffix=<short-id>
+# Teardown: ansible-playbook -i ../inventory.ini 12-teardown.yml -e build_suffix=<short-id>
+- name: "Example 12 — HA Frontend Load Balancer"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env:     "{{ default_environment }}"
+    project: "{{ default_project }}"
+    pfx:     "{{ project }}-{{ env }}-{{ build_suffix }}"
+    vpc_name: "{{ pfx }}-main"
+    subnet_id: "subnet-{{ pfx }}-main"
+
+    # Lab bridged instances get their real address from the host's ccbr0
+    # DHCP pool, not from any declared VPC/subnet CIDR — same fact the
+    # OpenTofu version's own locals.tf documents. The VIP and every SG
+    # rule below live in this real subnet, not a Terraform-style
+    # cidr_block variable.
+    bridge_cidr: "192.168.100.0/24"
+    admin_cidr: "0.0.0.0/0"
+    vip_address: "192.168.100.5"
+
+    # No safe default is possible for a shared admin password — caught
+    # by the assert below, this collection's equivalent of the OpenTofu
+    # variable's validation{} block.
+    admin_password: "CHANGE_ME_min8chars"
+
+    frontend_flavor: standard.small
+    frontend_count: 2
+    mysql_flavor: standard.medium
+    proxysql_flavor: standard.small
+    keystone_flavor: standard.small
+    memcached_flavor: standard.nano
+    rabbitmq_flavor: standard.small
+    ca_flavor: standard.nano
+    backend_flavor: standard.medium
+    nfs_flavor: standard.small
+    nfs_disk_gb: 10
+
+    nfs_share: shared
+    nfs_mount_dir: /mnt/shared
+
+    # Pinned, checksum-verified .debs from the host-level cloudcore-repo
+    # (haFullStack-LLD.md §7) — same exact values as the OpenTofu
+    # version's own locals.tf, not independently re-derived.
+    step_ca_deb_sha256: "f8e43f0f2ba1e37121b75623993ea0bece5cc3a02b73eefc16e414d41c9fec71"
+    step_cli_deb_sha256: "5845c181251ffe43ca2331bc171e0b92324a71be9cf4ef76cd6fbbba4f2a3cc6"
+    proxysql_deb_sha256: "f06a27b32fb96e42aa1b7f71bedd39600101b920f6f1e44e9fd5945c92a2b5b0"
+
+    # Idempotent local secret state — the closest Ansible-native
+    # equivalent of OpenTofu's state-persisted random_id resources (see
+    # haFullStack-LLD.md's new Ansible-port section). Scoped per
+    # build_suffix so a genuinely different build gets fresh secrets
+    # while re-running against the same suffix reuses them. Gitignored.
+    secrets_dir: "{{ playbook_dir }}/.state/ha-frontend-lb-{{ build_suffix }}"
+
+    ecs_user:
+      - username: ecs
+        sudo: true
+
+    security_groups:
+      - name: frontend
+        description: "Frontend web tier — HTTP from the LB nodes' subnet only, plus SSH for debugging"
+        ingress_rules:
+          - { protocol: tcp, from_port: 80, to_port: 80, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      - name: mysql
+        description: "MySQL Group Replication tier — client port + GR peer traffic within the bridge subnet"
+        ingress_rules:
+          - { protocol: tcp, from_port: 3306, to_port: 3306, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 33061, to_port: 33061, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      - name: proxysql
+        description: "ProxySQL + NGINX/Keepalived LB tier — client HTTP/HTTPS, ProxySQL client port, SSH, VRRP/health between LB nodes"
+        ingress_rules:
+          - { protocol: tcp, from_port: 6033, to_port: 6033, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 80, to_port: 80, cidr: "0.0.0.0/0" }
+          - { protocol: tcp, from_port: 443, to_port: 443, cidr: "0.0.0.0/0" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+          - { protocol: "-1", cidr: "{{ bridge_cidr }}" }
+      - name: keystone
+        description: "Keystone identity tier — API (TLS-only) from the NGINX nodes' subnet only, plus SSH"
+        ingress_rules:
+          - { protocol: tcp, from_port: 35357, to_port: 35357, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      - name: memcached
+        description: "memcached — Keystone tier's subnet only, never exposed beyond it; plus SSH"
+        ingress_rules:
+          - { protocol: tcp, from_port: 11211, to_port: 11211, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      - name: rabbitmq
+        description: "RabbitMQ tier — AMQP + management (both TLS-only) from the bridge subnet, Erlang clustering within the bridge subnet, plus SSH"
+        ingress_rules:
+          - { protocol: tcp, from_port: 5671, to_port: 5671, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 15671, to_port: 15671, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 4369, to_port: 4369, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 25672, to_port: 25672, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      - name: backend
+        description: "Backend application tier — HTTP from the shared LB tier's subnet, SSH for debugging"
+        ingress_rules:
+          - { protocol: tcp, from_port: 80, to_port: 80, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      - name: ca
+        description: "step-ca — issuance/renewal API + plain-HTTP root/intermediate cert serving, from the bridge subnet, plus SSH"
+        ingress_rules:
+          - { protocol: tcp, from_port: 8443, to_port: 8443, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 8080, to_port: 8080, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+
+  tasks:
+    - name: Require a real admin_password
+      ansible.builtin.assert:
+        that:
+          - admin_password != "CHANGE_ME_min8chars"
+          - admin_password | length >= 8
+        fail_msg: >-
+          Set admin_password to a real value at least 8 characters long
+          (-e admin_password=yourpassword). This is the single shared
+          credential for MySQL root, Keystone's bootstrap admin, and
+          RabbitMQ's admin account — see variables.tf's own admin_password
+          description in examples/ha-frontend-lb for the full list.
+
+    # ── VPC + security groups ───────────────────────────────────────────────
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.20.0.0/16"
+        dns_support: true
+        tags: &common_tags
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: platform-team
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create security groups
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-{{ item.name }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        description: "{{ item.description }}"
+        ingress_rules: "{{ item.ingress_rules }}"
+        egress_rules:
+          - { protocol: "-1", cidr: "0.0.0.0/0" }
+        tags:
+          <<: *common_tags
+          Role: "{{ item.name }}-sg"
+      loop: "{{ security_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: sg_results
+
+    - name: Index security group IDs by tier name
+      ansible.builtin.set_fact:
+        sg_ids: "{{ sg_ids | default({}) | combine({item.item.name: item.security_group.id}) }}"
+      loop: "{{ sg_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # ── Secrets (idempotent — generated once, reused on re-runs against
+    # the same build_suffix) ────────────────────────────────────────────────
+    - name: Ensure local secrets state directory exists
+      ansible.builtin.file:
+        path: "{{ secrets_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Generate CA provisioner password
+      ansible.builtin.shell: openssl rand -hex 24 > "{{ secrets_dir }}/ca_provisioner_password"
+      args:
+        creates: "{{ secrets_dir }}/ca_provisioner_password"
+
+    - name: Generate Erlang cookie
+      ansible.builtin.shell: openssl rand 20 | base64 | tr '+/' '-_' | tr -d '=\n' > "{{ secrets_dir }}/erlang_cookie"
+      args:
+        creates: "{{ secrets_dir }}/erlang_cookie"
+
+    - name: Generate Keystone Fernet key 0
+      ansible.builtin.shell: openssl rand 32 | base64 | tr '+/' '-_' > "{{ secrets_dir }}/fernet_key0"
+      args:
+        creates: "{{ secrets_dir }}/fernet_key0"
+
+    - name: Generate Keystone Fernet key 1
+      ansible.builtin.shell: openssl rand 32 | base64 | tr '+/' '-_' > "{{ secrets_dir }}/fernet_key1"
+      args:
+        creates: "{{ secrets_dir }}/fernet_key1"
+
+    - name: Read back generated secrets
+      ansible.builtin.set_fact:
+        ca_provisioner_password: "{{ lookup('file', secrets_dir + '/ca_provisioner_password') }}"
+        erlang_cookie: "{{ lookup('file', secrets_dir + '/erlang_cookie') }}"
+        fernet_key0: "{{ lookup('file', secrets_dir + '/fernet_key0') }}"
+        fernet_key1: "{{ lookup('file', secrets_dir + '/fernet_key1') }}"
+
+    # ── step-ca ──────────────────────────────────────────────────────────────
+    - name: Create CA instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-ca-a"
+        image_id: ubuntu-22.04
+        flavor: "{{ ca_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.ca }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/ca-cloud-init.yml.j2', template_vars={
+          'step_ca_deb_sha256': step_ca_deb_sha256, 'step_cli_deb_sha256': step_cli_deb_sha256,
+          'provisioner_password': ca_provisioner_password }) }}"
+        tags: { <<: *common_tags, Role: ca }
+      register: ca_instance
+
+    - name: Wait for CA to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ ca_instance.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: ca_poll
+      until: ca_poll.json.status == "running" and ca_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    - name: Record CA IP
+      ansible.builtin.set_fact:
+        ca_ip: "{{ ca_poll.json.private_ip }}"
+
+    # ── MySQL Group Replication (bootstrap, then replicas) ──────────────────
+    - name: Create MySQL bootstrap instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-mysql-a"
+        image_id: ubuntu-22.04
+        flavor: "{{ mysql_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.mysql }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/mysql-cloud-init.yml.j2', template_vars={
+          'server_id': 1, 'is_bootstrap': true,
+          'group_name': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'group_seeds': '',
+          'repl_password': admin_password, 'monitor_password': admin_password,
+          'app_password': admin_password, 'keystone_password': admin_password,
+          'ssp_password': admin_password, 'root_password': admin_password,
+          'ca_ip': ca_ip, 'step_cli_deb_sha256': step_cli_deb_sha256,
+          'ca_provisioner_password': ca_provisioner_password, 'vip_address': vip_address }) }}"
+        tags: { <<: *common_tags, Role: mysql-bootstrap }
+      register: mysql_a
+
+    - name: Wait for MySQL bootstrap to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ mysql_a.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: mysql_a_poll
+      until: mysql_a_poll.json.status == "running" and mysql_a_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    - name: Create MySQL replicas
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-mysql-{{ item.role }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ mysql_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.mysql }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/mysql-cloud-init.yml.j2', template_vars={
+          'server_id': item.server_id, 'is_bootstrap': false,
+          'group_name': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          'group_seeds': mysql_a_poll.json.private_ip + ':33061',
+          'repl_password': admin_password, 'monitor_password': admin_password,
+          'app_password': admin_password, 'keystone_password': admin_password,
+          'ssp_password': admin_password, 'root_password': admin_password,
+          'ca_ip': ca_ip, 'step_cli_deb_sha256': step_cli_deb_sha256,
+          'ca_provisioner_password': ca_provisioner_password, 'vip_address': vip_address }) }}"
+        tags: { <<: *common_tags, Role: mysql-replica }
+      loop:
+        - { role: b, server_id: 2 }
+        - { role: c, server_id: 3 }
+      loop_control:
+        label: "{{ item.role }}"
+      register: mysql_replicas_results
+
+    - name: Wait for MySQL replicas to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: mysql_replicas_poll
+      until: mysql_replicas_poll.json.status == "running" and mysql_replicas_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ mysql_replicas_results.results }}"
+      loop_control:
+        label: "{{ item.item.role }}"
+
+    - name: Record all MySQL IPs
+      ansible.builtin.set_fact:
+        mysql_all_ips: >-
+          {{ [mysql_a_poll.json.private_ip] + (mysql_replicas_poll.results | map(attribute='json.private_ip') | list) }}
+
+    # ── memcached ────────────────────────────────────────────────────────────
+    - name: Create memcached instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-memcached-{{ item }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ memcached_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.memcached }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/memcached-cloud-init.yml.j2') }}"
+        tags: { <<: *common_tags, Role: memcached }
+      loop: ["01", "02"]
+      register: memcached_results
+
+    - name: Wait for memcached to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: memcached_poll
+      until: memcached_poll.json.status == "running" and memcached_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ memcached_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Record memcached servers CSV
+      ansible.builtin.set_fact:
+        memcached_servers_csv: "{{ (memcached_poll.results | map(attribute='json.private_ip') | map('regex_replace', '$', ':11211') | list) | join(',') }}"
+
+    # ── Shared NFS storage ───────────────────────────────────────────────────
+    - name: Create NFS server
+      cloudcore.cloudcore.nfs_server:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-nfs"
+        vpc_id: "{{ vpc.vpc.id }}"
+        flavor: "{{ nfs_flavor }}"
+        disk_gb: "{{ nfs_disk_gb }}"
+        shares:
+          - { name: "{{ nfs_share }}", clients: vpc }
+        tags: { <<: *common_tags, Role: nfs }
+      register: nfs
+
+    - name: Wait for NFS server to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/nfs-servers/{{ nfs.nfs_server.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: nfs_poll
+      until: nfs_poll.json.status == "running" and nfs_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    - name: Record NFS server IP
+      ansible.builtin.set_fact:
+        nfs_ip: "{{ nfs_poll.json.private_ip }}"
+
+    # ── Keystone (genuinely active-active, identical config both nodes) ─────
+    - name: Create Keystone instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-keystone-{{ item }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ keystone_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.keystone }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/keystone-cloud-init.yml.j2', template_vars={
+          'vip_address': vip_address, 'root_password': admin_password,
+          'memcached_servers_csv': memcached_servers_csv,
+          'fernet_key0': fernet_key0, 'fernet_key1': fernet_key1,
+          'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
+          'step_cli_deb_sha256': step_cli_deb_sha256,
+          'keystone_system_domain_password': admin_password,
+          'admin_password': admin_password }) }}"
+        tags: { <<: *common_tags, Role: keystone }
+      loop: ["01", "02"]
+      register: keystone_results
+
+    - name: Wait for Keystone to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: keystone_poll
+      until: keystone_poll.json.status == "running" and keystone_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ keystone_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Record Keystone IPs
+      ansible.builtin.set_fact:
+        keystone_ips: "{{ keystone_poll.results | map(attribute='json.private_ip') | list }}"
+
+    # ── Backend application tier (infrastructure handoff only) ──────────────
+    - name: Create backend instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-backend-{{ item }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ backend_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.backend }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/backend-cloud-init.yml.j2', template_vars={
+          'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
+          'step_cli_deb_sha256': step_cli_deb_sha256,
+          'nfs_ip': nfs_ip, 'nfs_share': nfs_share, 'nfs_mount_dir': nfs_mount_dir }) }}"
+        tags: { <<: *common_tags, Role: backend }
+      loop: ["01", "02"]
+      register: backend_results
+
+    - name: Wait for backend to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: backend_poll
+      until: backend_poll.json.status == "running" and backend_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ backend_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Record backend IPs
+      ansible.builtin.set_fact:
+        backend_ips: "{{ backend_poll.results | map(attribute='json.private_ip') | list }}"
+
+    # ── RabbitMQ (seed, then joiners) ────────────────────────────────────────
+    - name: Create RabbitMQ seed instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-rabbitmq-a"
+        image_id: ubuntu-22.04
+        flavor: "{{ rabbitmq_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.rabbitmq }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/rabbitmq-cloud-init.yml.j2', template_vars={
+          'is_seed': true, 'seed_ip': '', 'erlang_cookie': erlang_cookie,
+          'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
+          'vip_address': vip_address, 'step_cli_deb_sha256': step_cli_deb_sha256,
+          'rabbitmq_services_password': admin_password, 'admin_password': admin_password }) }}"
+        tags: { <<: *common_tags, Role: rabbitmq-seed }
+      register: rabbitmq_a
+
+    - name: Wait for RabbitMQ seed to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ rabbitmq_a.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: rabbitmq_a_poll
+      until: rabbitmq_a_poll.json.status == "running" and rabbitmq_a_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    - name: Create RabbitMQ joiners
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-rabbitmq-{{ item }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ rabbitmq_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.rabbitmq }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/rabbitmq-cloud-init.yml.j2', template_vars={
+          'is_seed': false, 'seed_ip': rabbitmq_a_poll.json.private_ip, 'erlang_cookie': erlang_cookie,
+          'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
+          'vip_address': vip_address, 'step_cli_deb_sha256': step_cli_deb_sha256,
+          'rabbitmq_services_password': admin_password, 'admin_password': admin_password }) }}"
+        tags: { <<: *common_tags, Role: rabbitmq-joiner }
+      loop: [b, c]
+      register: rabbitmq_joiners_results
+
+    - name: Wait for RabbitMQ joiners to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: rabbitmq_joiners_poll
+      until: rabbitmq_joiners_poll.json.status == "running" and rabbitmq_joiners_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ rabbitmq_joiners_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Record all RabbitMQ IPs
+      ansible.builtin.set_fact:
+        rabbitmq_all_ips: >-
+          {{ [rabbitmq_a_poll.json.private_ip] + (rabbitmq_joiners_poll.results | map(attribute='json.private_ip') | list) }}
+
+    # ── Frontend ─────────────────────────────────────────────────────────────
+    - name: Create frontend instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-frontend-{{ item }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ frontend_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.frontend }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/frontend-cloud-init.yml.j2', template_vars={
+          'vip_address': vip_address, 'app_password': admin_password, 'admin_password': admin_password,
+          'keystone_ips': keystone_ips, 'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
+          'step_cli_deb_sha256': step_cli_deb_sha256,
+          'nfs_ip': nfs_ip, 'nfs_share': nfs_share, 'nfs_mount_dir': nfs_mount_dir }) }}"
+        tags: { <<: *common_tags, Role: frontend }
+      loop: ["01", "02"]
+      register: frontend_results
+
+    - name: Wait for frontend to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: frontend_poll
+      until: frontend_poll.json.status == "running" and frontend_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ frontend_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Record frontend IPs
+      ansible.builtin.set_fact:
+        frontend_ips: "{{ frontend_poll.results | map(attribute='json.private_ip') | list }}"
+
+    # ── ProxySQL + NGINX/Keepalived — created LAST: its own nginx_conf/
+    # nginx_stream_conf need frontend/backend/keystone/rabbitmq IPs, all
+    # of which must already be real by this point (see this file's own
+    # header comment on true dependency order vs the OpenTofu module
+    # block's textual order). ────────────────────────────────────────────
+    - name: Render nginx_frontend_conf fragment
+      ansible.builtin.set_fact:
+        nginx_frontend_conf: "{{ lookup('template', 'templates/ha-frontend-lb/nginx-frontend.conf.j2', template_vars={'frontend_ips': frontend_ips, 'vip_address': vip_address}) }}"
+
+    - name: Render nginx_backend_conf fragment
+      ansible.builtin.set_fact:
+        nginx_backend_conf: "{{ lookup('template', 'templates/ha-frontend-lb/nginx-backend.conf.j2', template_vars={'backend_ips': backend_ips}) }}"
+
+    - name: Render nginx_stream_conf fragment
+      ansible.builtin.set_fact:
+        # proxysql_ips is "127.0.0.1", not the real ProxySQL node IPs —
+        # NGINX runs co-located ON the ProxySQL nodes, so referencing
+        # their own IPs here would be a circular dependency on the same
+        # node's own not-yet-created instance. Matches the OpenTofu
+        # version's identical reasoning (locals.tf).
+        nginx_stream_conf: "{{ lookup('template', 'templates/ha-frontend-lb/nginx-stream.conf.j2', template_vars={'proxysql_ips': ['127.0.0.1'], 'rabbitmq_ips': rabbitmq_all_ips, 'keystone_tls_ips': keystone_ips}) }}"
+
+    - name: Concatenate nginx_conf (frontend + backend http-context blocks)
+      ansible.builtin.set_fact:
+        nginx_conf: "{{ nginx_frontend_conf }}\n{{ nginx_backend_conf }}"
+
+    - name: Create ProxySQL + NGINX/Keepalived instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-proxysql-{{ item.role }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ proxysql_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.proxysql }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/proxysql-cloud-init.yml.j2', template_vars={
+          'proxysql_deb_sha256': proxysql_deb_sha256, 'mysql_ips': mysql_all_ips,
+          'monitor_password': admin_password, 'app_password': admin_password,
+          'keystone_password': admin_password, 'root_password': admin_password,
+          'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
+          'vip_address': vip_address, 'step_cli_deb_sha256': step_cli_deb_sha256,
+          'keepalived_state': item.state, 'keepalived_priority': item.priority,
+          'vrrp_router_id': 51, 'vrrp_auth_pass': 'changeme-vrrp',
+          'nginx_conf': nginx_conf, 'nginx_stream_conf': nginx_stream_conf }) }}"
+        tags: { <<: *common_tags, Role: proxysql }
+      loop:
+        - { role: a, state: MASTER, priority: 150 }
+        - { role: b, state: BACKUP, priority: 100 }
+      loop_control:
+        label: "{{ item.role }}"
+      register: proxysql_results
+
+    - name: Wait for ProxySQL to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: proxysql_poll
+      until: proxysql_poll.json.status == "running" and proxysql_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+      loop: "{{ proxysql_results.results }}"
+      loop_control:
+        label: "{{ item.item.role }}"
+
+    # ── DNS — one A record per instance, short-hostname resolution
+    # matching the OpenTofu version's own dns_records local exactly ──────────
+    - name: Build DNS record list
+      ansible.builtin.set_fact:
+        dns_entries:
+          - { name: ca-a, ip: "{{ ca_ip }}" }
+          - { name: nfs, ip: "{{ nfs_ip }}" }
+          - { name: mysql-a, ip: "{{ mysql_a_poll.json.private_ip }}" }
+          - { name: mysql-b, ip: "{{ mysql_replicas_poll.results[0].json.private_ip }}" }
+          - { name: mysql-c, ip: "{{ mysql_replicas_poll.results[1].json.private_ip }}" }
+          - { name: proxysql-a, ip: "{{ proxysql_poll.results[0].json.private_ip }}" }
+          - { name: proxysql-b, ip: "{{ proxysql_poll.results[1].json.private_ip }}" }
+          - { name: rabbitmq-a, ip: "{{ rabbitmq_a_poll.json.private_ip }}" }
+          - { name: rabbitmq-b, ip: "{{ rabbitmq_joiners_poll.results[0].json.private_ip }}" }
+          - { name: rabbitmq-c, ip: "{{ rabbitmq_joiners_poll.results[1].json.private_ip }}" }
+          - { name: frontend-01, ip: "{{ frontend_poll.results[0].json.private_ip }}" }
+          - { name: frontend-02, ip: "{{ frontend_poll.results[1].json.private_ip }}" }
+          - { name: memcached-01, ip: "{{ memcached_poll.results[0].json.private_ip }}" }
+          - { name: memcached-02, ip: "{{ memcached_poll.results[1].json.private_ip }}" }
+          - { name: keystone-01, ip: "{{ keystone_poll.results[0].json.private_ip }}" }
+          - { name: keystone-02, ip: "{{ keystone_poll.results[1].json.private_ip }}" }
+          - { name: backend-01, ip: "{{ backend_poll.results[0].json.private_ip }}" }
+          - { name: backend-02, ip: "{{ backend_poll.results[1].json.private_ip }}" }
+
+    - name: Create DNS records
+      cloudcore.cloudcore.dns_record:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        zone: instances.cloudcore.internal
+        name: "{{ pfx }}-{{ item.name }}"
+        type: A
+        value: "{{ item.ip }}"
+      loop: "{{ dns_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    - name: Show stack summary
+      ansible.builtin.debug:
+        msg:
+          - "VPC: {{ vpc.vpc.name }}"
+          - "VIP: {{ vip_address }} (floats between proxysql-a/b via Keepalived)"
+          - "Frontend URL: http://{{ vip_address }}/  (https://{{ vip_address }}/ for TLS)"
+          - "MySQL: {{ [mysql_a_poll.json.private_ip] + (mysql_replicas_poll.results | map(attribute='json.private_ip') | list) }}"
+          - "Keystone: {{ keystone_ips }} (mTLS, :35357/api/idm)"
+          - "RabbitMQ: {{ rabbitmq_all_ips }} (mTLS AMQP :5671, HTTPS mgmt :15671)"
+          - "Backend: {{ backend_ips }}"
+          - "NFS shared export: {{ nfs_ip }}:/exports/{{ nfs_share }} (mounted at {{ nfs_mount_dir }} on frontend+backend)"
+          - "Status pages: http://{{ vip_address }}/{mysql,keystone,rabbitmq,tls}-status.html"

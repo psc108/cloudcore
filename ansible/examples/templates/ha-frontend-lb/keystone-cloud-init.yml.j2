@@ -61,10 +61,10 @@ write_files:
   # ownership in runcmd instead, which runs after packages are installed.
   - path: /root/fernet-key-0
     permissions: '0600'
-    content: ${fernet_key0}
+    content: {{ fernet_key0 }}
   - path: /root/fernet-key-1
     permissions: '0600'
-    content: ${fernet_key1}
+    content: {{ fernet_key1 }}
 
   # Custom RBAC policy, staged root-owned same as the fernet keys above
   # (and for the same reason — write_files runs before the packages stage,
@@ -1312,11 +1312,12 @@ write_files:
             - PRICING_ADMIN_READER
             - PRICING_USER
 
-  # $${password} below is import_p3.py's OWN template placeholder
+  # ${password} below is import_p3.py's OWN template placeholder
   # (its ExtendedTemplate.safe_substitute(), substituted at runtime via
-  # setup-keystone-roles.sh's -e password,... argument) — escaped here
-  # so Terraform's templatefile() passes it through literally instead of
-  # trying to resolve it as one of its own interpolations.
+  # setup-keystone-roles.sh's -e password,... argument), not a Jinja2
+  # variable — a bare dollar-brace sequence needs no escaping here since
+  # Jinja2 only treats double-brace/percent-brace/hash-brace sequences
+  # specially, unlike Terraform's templatefile().
   - path: /usr/local/lib/keystone-import/system_domain.yml
     permissions: '0644'
     content: |
@@ -1324,19 +1325,19 @@ write_files:
       - domain: system
         description: Domain for system administrators and service accounts
       - user: admin
-        password: $${password}
+        password: ${password}
         roles:
             - BUSINESS_ADMIN
       - user: intadmin
-        password: $${password}
+        password: ${password}
         roles:
             - BUSINESS_ADMIN
       - user: systemadmin
-        password: $${password}
+        password: ${password}
         roles:
             - BUSINESS_SYSTEM_ADMIN
       - user: blobStoreSvc
-        password: $${password}
+        password: ${password}
         roles:
             - BLOB_STORE_ADMIN
             - BLOB_STORE_USER
@@ -1344,7 +1345,7 @@ write_files:
             - CONFIG_USER
             - CUSTOMERS_ADMIN_READER
       - user: catalogSvc
-        password: $${password}
+        password: ${password}
         roles:
             - BLOB_STORE_ADMIN
             - BLOB_STORE_USER
@@ -1365,7 +1366,7 @@ write_files:
             - CONFIG_USER
             - REPORTING_ADMIN
       - user: customersSvc
-        password: $${password}
+        password: ${password}
         roles:
             - BLOB_STORE_ADMIN
             - BLOB_STORE_USER
@@ -1384,7 +1385,7 @@ write_files:
             - CONFIG_USER
             - PRICING_ADMIN
       - user: externalEventsSvc
-        password: $${password}
+        password: ${password}
         roles:
           - EXTERNAL_EVENTS_ADMIN
           - CUSTOMERS_ADMIN_READER
@@ -1392,7 +1393,7 @@ write_files:
           - SERVICE_USER
           - CONFIG_USER
       - user: fulfillmentSvc
-        password: $${password}
+        password: ${password}
         roles:
             - BLOB_STORE_ADMIN
             - BLOB_STORE_USER
@@ -1418,7 +1419,7 @@ write_files:
             - TICKETING_USER
             - EXTERNAL_EVENTS_ADMIN
       - user: requestSvc
-        password: $${password}
+        password: ${password}
         roles:
             - BLOB_STORE_ADMIN
             - BLOB_STORE_USER
@@ -1438,7 +1439,7 @@ write_files:
             - REPORTING_ADMIN
             - CONFIG_USER
       - user: serviceInstanceSvc
-        password: $${password}
+        password: ${password}
         roles:
             - BLOB_STORE_ADMIN
             - BLOB_STORE_USER
@@ -1459,19 +1460,19 @@ write_files:
             - CONFIG_USER
             - IMPERSONATOR
       - user: eventSvc
-        password: $${password}
+        password: ${password}
         roles:
             - EVENT_ADMIN
             - SERVICE_USER
             - CONFIG_USER
       - user: monitor
-        password: $${password}
+        password: ${password}
         roles:
             - MONITOR
             - SERVICE_USER
             - CONFIG_USER
       - user: pricingSvc
-        password: $${password}
+        password: ${password}
         roles:
             - PRICING_ADMIN
             - PRICING_USER
@@ -1481,7 +1482,7 @@ write_files:
             - SERVICE_USER
             - CONFIG_USER
       - user: reportingSvc
-        password: $${password}
+        password: ${password}
         roles:
             - REPORTING_ADMIN
             - PRICING_ADMIN
@@ -1500,7 +1501,7 @@ write_files:
             - CATALOG_ADMIN_READER
             - CATALOG_USER
       - user: ticketingSvc
-        password: $${password}
+        password: ${password}
         roles:
             - TICKETING_ADMIN
             - TICKETING_USER
@@ -1511,7 +1512,7 @@ write_files:
             - ACL_ADMIN
             - CUSTOMERS_ADMIN_READER
       - user: exportSvc
-        password: $${password}
+        password: ${password}
         roles:
             - EXPORT_IMPORT_USER
             - BLOB_STORE_ADMIN
@@ -1526,7 +1527,7 @@ write_files:
             - CUSTOMERS_ADMIN_READER
             - CONFIG_DASHBOARD_ADMIN
       - user: portal
-        password: $${password}
+        password: ${password}
         roles:
             - PRICING_USER
             - REQUEST_USER
@@ -1539,7 +1540,7 @@ write_files:
             - IMPERSONATOR
             - CONFIG_ADMIN_READER
       - user: portalTest
-        password: $${password}
+        password: ${password}
         roles:
             - PRICING_USER
             - REQUEST_USER
@@ -1551,21 +1552,21 @@ write_files:
             - CONFIG_USER
             - IMPERSONATOR
       - user: portalUiSvc
-        password: $${password}
+        password: ${password}
         roles:
             - CONFIG_USER
             - SERVICE_USER
       - user: managementUiSvc
-        password: $${password}
+        password: ${password}
         roles:
             - CONFIG_USER
             - SERVICE_USER
       - user: testadmin
-        password: $${password}
+        password: ${password}
         roles:
             - BUSINESS_ADMIN
       - user: testsystemadmin
-        password: $${password}
+        password: ${password}
         roles:
             - BUSINESS_SYSTEM_ADMIN
 
@@ -1627,7 +1628,7 @@ write_files:
       # reliably.
       TMP_KEY=$(mktemp /run/keystone-import-key.XXXXXX)
       trap 'rm -f "$TMP_KEY"' EXIT
-      openssl pkey -in /etc/keystone/server.key -passin pass:'${admin_password}' -out "$TMP_KEY"
+      openssl pkey -in /etc/keystone/server.key -passin pass:'{{ admin_password }}' -out "$TMP_KEY"
       chmod 600 "$TMP_KEY"
 
       for i in $(seq 1 60); do
@@ -1638,7 +1639,7 @@ write_files:
 
       export OS_AUTH_URL="https://$LOCAL_IP:35357/api/idm/v3"
       export OS_USERNAME=admin
-      export OS_PASSWORD='${admin_password}'
+      export OS_PASSWORD='{{ admin_password }}'
 
       roles_ok=false
       for i in 1 2 3; do
@@ -1654,7 +1655,7 @@ write_files:
         python3 import_p3.py -i system_domain.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
           -p "$OS_PASSWORD" -c /etc/keystone/root_ca.crt \
           -C /etc/keystone/server.crt -K "$TMP_KEY" \
-          -e password,${keystone_system_domain_password} && { domain_ok=true; break; }
+          -e password,{{ keystone_system_domain_password }} && { domain_ok=true; break; }
         sleep 10
       done
       $domain_ok || echo "setup-keystone-roles.sh: system_domain.yml import did not complete after 3 attempts" >&2
@@ -1686,7 +1687,7 @@ write_files:
       # Terraform apply order, which doesn't wait for cloud-init to finish
       # on any other node either.
       for i in $(seq 1 180); do
-        mysql -h "${vip_address}" -P 3306 -u root -p'${root_password}' \
+        mysql -h "{{ vip_address }}" -P 3306 -u root -p'{{ root_password }}' \
           -e "SELECT 1" >/dev/null 2>&1 && break
         sleep 5
       done
@@ -1709,12 +1710,12 @@ write_files:
       import configparser
       c = configparser.ConfigParser(strict=False)
       c.read('/etc/keystone/keystone.conf')
-      c['database']['connection'] = 'mysql+pymysql://root:${root_password}@${vip_address}:3306/keystone'
+      c['database']['connection'] = 'mysql+pymysql://root:{{ root_password }}@{{ vip_address }}:3306/keystone'
       if 'cache' not in c:
           c['cache'] = {}
       c['cache']['enabled'] = 'true'
       c['cache']['backend'] = 'dogpile.cache.memcached'
-      c['cache']['memcache_servers'] = '${memcached_servers_csv}'
+      c['cache']['memcache_servers'] = '{{ memcached_servers_csv }}'
       with open('/etc/keystone/keystone.conf', 'w') as f:
           c.write(f)
       PYEOF
@@ -1745,10 +1746,10 @@ write_files:
       # difference from this project's own convention, not a cosmetic
       # one. RegionOne per direct instruction.
       keystone-manage bootstrap \
-        --bootstrap-password '${admin_password}' \
-        --bootstrap-admin-url "https://${vip_address}:35357/api/idm/v3" \
-        --bootstrap-public-url "https://${vip_address}:35357/api/idm/v3" \
-        --bootstrap-internal-url "https://${vip_address}:35357/api/idm/v3" \
+        --bootstrap-password '{{ admin_password }}' \
+        --bootstrap-admin-url "https://{{ vip_address }}:35357/api/idm/v3" \
+        --bootstrap-public-url "https://{{ vip_address }}:35357/api/idm/v3" \
+        --bootstrap-internal-url "https://{{ vip_address }}:35357/api/idm/v3" \
         --bootstrap-region-id RegionOne
 
   # env.sh — OpenStack CLI client environment, sourced by root/ecs/ubuntu
@@ -1776,16 +1777,16 @@ write_files:
     permissions: '0644'
     content: |
       export OS_USERNAME=admin
-      export OS_PASSWORD='${admin_password}'
+      export OS_PASSWORD='{{ admin_password }}'
       export OS_PROJECT_NAME=admin
       export OS_USER_DOMAIN_NAME=Default
       export OS_PROJECT_DOMAIN_NAME=Default
-      export OS_AUTH_URL=https://${vip_address}:35357/api/idm/v3
+      export OS_AUTH_URL=https://{{ vip_address }}:35357/api/idm/v3
       export OS_IDENTITY_API_VERSION=3
       export OS_CACERT=/etc/openstack/ca.pem
       export OS_CERT=/etc/openstack/ecs-cert.pem
       export OS_KEY=/etc/openstack/ecs-key.pem
-      export no_proxy=${vip_address}
+      export no_proxy={{ vip_address }}
 
   # TLS/mTLS (haFullStack-LLD.md §5.3.1). Per direct instruction, this
   # matches this project's own real-world Keystone Apache convention —
@@ -1838,20 +1839,20 @@ write_files:
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
       curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
-      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 
       for i in $(seq 1 180); do
-        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
-          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+        curl -sf "http://{{ ca_ip }}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://{{ ca_ip }}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
           && break
         sleep 5
       done
 
       step ca certificate "$LOCAL_IP" /etc/keystone/server.crt /etc/keystone/server.key \
-        --san "$LOCAL_IP" --san "${vip_address}" \
-        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
-        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --san "$LOCAL_IP" --san "{{ vip_address }}" \
+        --ca-url "https://{{ ca_ip }}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "{{ ca_provisioner_password }}") \
         --force
       cp /tmp/intermediate_ca.crt /etc/keystone/server_chain.crt
       cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/keystone/ca.crt
@@ -1867,14 +1868,14 @@ write_files:
       # directly, same failure mode as RabbitMQ's identical mistake).
       # Write to a temp file, then move it into place.
       openssl pkey -aes256 -in /etc/keystone/server.key -out /etc/keystone/server.key.enc \
-        -passout pass:'${admin_password}'
+        -passout pass:'{{ admin_password }}'
       mv /etc/keystone/server.key.enc /etc/keystone/server.key
       chown keystone:keystone /etc/keystone/server.key
       chmod 600 /etc/keystone/server.key
 
       cat > /etc/keystone/server.key.password.sh <<'EOF'
       #!/bin/sh
-      echo "${admin_password}"
+      echo "{{ admin_password }}"
       EOF
       chown keystone:keystone /etc/keystone/server.key.password.sh
       chmod 700 /etc/keystone/server.key.password.sh
@@ -1890,7 +1891,7 @@ write_files:
       # haFullStack-Findings-Log.md) — Restart=always exhausts systemd's
       # burst limit within seconds and the unit ends up permanently
       # failed, silently breaking auto-renewal from the very first boot.
-      echo -n "${admin_password}" > /etc/keystone/server.key.passfile
+      echo -n "{{ admin_password }}" > /etc/keystone/server.key.passfile
       chown keystone:keystone /etc/keystone/server.key.passfile
       chmod 600 /etc/keystone/server.key.passfile
 
@@ -1902,8 +1903,8 @@ write_files:
       # presented as anyone's server cert, so nothing validates it.
       step ca certificate "ecs-cli" /etc/openstack/ecs-cert.pem /etc/openstack/ecs-key.pem \
         --san "ecs-cli" \
-        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
-        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --ca-url "https://{{ ca_ip }}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "{{ ca_provisioner_password }}") \
         --force
       cp /etc/keystone/ca.crt /etc/openstack/ca.pem
       chmod 644 /etc/openstack/ecs-cert.pem /etc/openstack/ecs-key.pem /etc/openstack/ca.pem
@@ -1956,15 +1957,15 @@ write_files:
         WSGIDaemonProcess keystone-admin processes=3 threads=1 user=keystone group=keystone display-name=keystone-admin
         WSGIProcessGroup keystone-admin
         WSGIScriptAlias /api/idm /usr/bin/keystone-wsgi-admin
-        WSGIApplicationGroup %%{GLOBAL}
+        WSGIApplicationGroup %{GLOBAL}
 
         <Directory /usr/bin>
           Require all granted
         </Directory>
 
-        ErrorLog $${APACHE_LOG_DIR}/keystone-admin-error.log
+        ErrorLog ${APACHE_LOG_DIR}/keystone-admin-error.log
         LogLevel warn
-        CustomLog $${APACHE_LOG_DIR}/keystone-admin-access.log combined
+        CustomLog ${APACHE_LOG_DIR}/keystone-admin-access.log combined
       </VirtualHost>
       EOF
       a2ensite keystone-admin
@@ -1980,7 +1981,7 @@ write_files:
       [Unit]
       Description=step-ca certificate auto-renewal daemon
       [Service]
-      ExecStart=/usr/bin/step ca renew /etc/keystone/server.crt /etc/keystone/server.key --password-file /etc/keystone/server.key.passfile --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/keystone/root_ca.crt --exec "openssl pkey -aes256 -in /etc/keystone/server.key -passin pass:'${admin_password}' -out /etc/keystone/server.key.enc -passout pass:'${admin_password}' && mv /etc/keystone/server.key.enc /etc/keystone/server.key && systemctl restart apache2"
+      ExecStart=/usr/bin/step ca renew /etc/keystone/server.crt /etc/keystone/server.key --password-file /etc/keystone/server.key.passfile --daemon --force --ca-url "https://{{ ca_ip }}:8443" --root /etc/keystone/root_ca.crt --exec "openssl pkey -aes256 -in /etc/keystone/server.key -passin pass:'{{ admin_password }}' -out /etc/keystone/server.key.enc -passout pass:'{{ admin_password }}' && mv /etc/keystone/server.key.enc /etc/keystone/server.key && systemctl restart apache2"
       Restart=always
       EOF
       systemctl daemon-reload

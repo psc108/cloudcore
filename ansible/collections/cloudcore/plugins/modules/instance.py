@@ -36,6 +36,19 @@ options:
     type: list
     elements: str
     default: []
+  users:
+    description: >-
+      Extra OS users to create at boot, each with the CloudCore
+      inter-instance keypair auto-wired into both their authorized_keys
+      (inbound) and ~/.ssh/ (outbound) — the same mechanism every other
+      instance in a stack uses to SSH to one another without a
+      separately managed key. Applied at create time only (baked into
+      the instance's cloud-init); the API has no endpoint to change an
+      existing instance's users after boot other than
+      POST /v1/instances/{id}/users, which this module does not call.
+    type: list
+    elements: dict
+    default: []
   user_data:
     type: str
     no_log: true
@@ -58,6 +71,17 @@ EXAMPLES = r"""
     subnet_id: subnet-abc123
     tags:
       Role: web
+
+- name: Create instance with an extra sudo user
+  cloudcore.cloudcore.instance:
+    name: web-02
+    image_id: ubuntu-22.04
+    flavor: standard.small
+    vpc_id: vpc-abc123
+    subnet_id: subnet-abc123
+    users:
+      - username: ecs
+        sudo: true
 """
 
 RETURN = r"""
@@ -83,6 +107,7 @@ def run_module():
             subnet_id=dict(type="str"),
             security_group_ids=dict(type="list", elements="str", default=[]),
             usb_device_ids=dict(type="list", elements="str", default=[]),
+            users=dict(type="list", elements="dict", default=[]),
             user_data=dict(type="str", no_log=True),
             tags=dict(type="dict", default={}),
             state=dict(type="str", default="present", choices=["present", "absent"]),
@@ -114,6 +139,7 @@ def run_module():
         "subnet_id": module.params["subnet_id"],
         "security_group_ids": module.params["security_group_ids"],
         "usb_device_ids": module.params["usb_device_ids"],
+        "users": module.params["users"],
         "user_data": module.params["user_data"],
         "tags": module.params["tags"],
     }

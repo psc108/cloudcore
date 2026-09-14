@@ -251,7 +251,7 @@ ansible-galaxy collection install cloudcore-cloudcore-*.tar.gz --force
 
 ### Examples
 
-Eleven ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml`, which tears down everything the numbered playbooks create):
+Twelve ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml` and `12-teardown.yml`, which tear down everything their respective numbered playbooks create):
 
 | Playbook | Creates |
 |---|---|
@@ -266,6 +266,7 @@ Eleven ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml`, wh
 | `09-ghidra-workstation.yml` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
 | `10-kiwix-library.yml` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `11-wifi-sniffer.yml` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
+| `12-ha-frontend-lb.yml` | VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + DNS records |
 
 Run directly:
 

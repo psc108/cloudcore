@@ -1,0 +1,953 @@
+#cloud-config
+# The MySQL status script connects through the full real path — the VIP,
+# not ProxySQL directly — so it exercises Keepalived + NGINX stream{} +
+# ProxySQL + Group Replication together, not just a direct DB connection.
+# It deliberately doesn't block frontend's own boot on the DB tier being
+# ready (no Terraform dependency on the mysql/proxysql modules) — it just
+# shows "unreachable" until the DB tier comes up, then self-corrects.
+# apt_preserve_sources_list — without this, cloud-init's own apt-
+# configure module regenerates /etc/apt/sources.list right after
+# bootcmd runs, silently overwriting the cloudcore-repo rewrite below
+# with zero error (confirmed directly, F-042, haFullStack-Findings-Log.md).
+# bootcmd points apt at the host-level cloudcore-repo service
+# (192.168.100.1:8090, haFullStack.md §14) instead of the real Ubuntu
+# mirror; see ca-cloud-init.yaml.tftpl for the full rationale.
+apt_preserve_sources_list: true
+bootcmd:
+  # cloudcore-repo is a host-level, always-on systemd service (not
+  # per-project, no build-completion race to wait on like the old
+  # NFS-based repo needed) — a plain HTTP GET, no client package to
+  # install first the way NFS needed nfs-common, so the old
+  # archive.ubuntu.com bootstrap fetch this block used to need is gone
+  # entirely, not just relocated.
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - nginx
+  - mysql-client
+  - python3
+  - curl
+  - ca-certificates
+  - unzip
+  - nodejs
+  - temurin-21-jdk
+  - nfs-common
+
+write_files:
+  # jasypt (CLI dist — its own bin/*.sh scripts, not just the library
+  # jar) + Bouncy Castle's core JCE provider, dropped into jasypt's own
+  # lib/ so its scripts pick it up on their classpath automatically —
+  # jasypt needs a JVM to run at all (temurin-21-jdk above provides it;
+  # a stock Ubuntu image ships no Java of its own). Both cached in the
+  # host-level repo's artifacts store, not fetched live. jasypt's own
+  # project archived Nov 2025; 1.9.3 is its last release, still
+  # installed as requested.
+  - path: /usr/local/sbin/setup-jasypt.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/jasypt-dist.zip -o /tmp/jasypt-dist.zip
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/bcprov.jar -o /tmp/bcprov.jar
+
+      unzip -q -o /tmp/jasypt-dist.zip -d /opt
+      JASYPT_DIR=$(find /opt -maxdepth 1 -type d -name 'jasypt-*' | head -1)
+      cp /tmp/bcprov.jar "$JASYPT_DIR/lib/"
+
+      # Explicit chmod u+x on every .sh file jasypt installs, not just
+      # its top-level bin/ scripts — per direct instruction, and because
+      # zip archives don't reliably preserve the executable bit on
+      # extraction regardless of what the archive itself was built with.
+      find "$JASYPT_DIR" -name '*.sh' -exec chmod u+x {} \;
+
+      ln -sfn "$JASYPT_DIR" /opt/jasypt
+
+
+  - path: /var/www/html/index.html
+    content: |
+      <!doctype html>
+      <html><head><title>Frontend</title></head>
+      <body><h1>Served by __HOSTNAME__</h1>
+      <p><a href="/mysql-status.html">MySQL cluster status</a></p>
+      <p><a href="/keystone-status.html">Keystone status</a></p>
+      <p><a href="/rabbitmq-status.html">RabbitMQ status</a></p>
+      <p><a href="/tls-status.html">TLS/mTLS trust status</a></p>
+      </body></html>
+
+  # Frontend's own CA-issued identity, used only as an OUTBOUND client
+  # cert for tls-status.py's probes below — not served to anyone (unlike
+  # every other tier's cert, which is also a server identity). SAN is
+  # just this node's own IP; it never needs to be presented as a server
+  # cert to a VIP-connecting client. ca.pem is root+intermediate
+  # concatenated, matching the fix every other tier needed (see
+  # haFullStack-Findings-Log.md) — the client side of a handshake needs
+  # the full chain locally to validate the server's cert just as much as
+  # the server side needs it to validate the client's.
+  - path: /usr/local/sbin/setup-frontend-tls.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 180); do
+        curl -sf "http://{{ ca_ip }}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://{{ ca_ip }}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/frontend/tls
+      step ca certificate "$LOCAL_IP" /etc/frontend/tls/cert.pem /etc/frontend/tls/key.pem \
+        --san "$LOCAL_IP" \
+        --ca-url "https://{{ ca_ip }}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "{{ ca_provisioner_password }}") \
+        --force
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/frontend/tls/ca.pem
+      cp /tmp/root_ca.crt /etc/frontend/tls/root_ca.pem
+      chmod 644 /etc/frontend/tls/cert.pem /etc/frontend/tls/ca.pem
+      chmod 600 /etc/frontend/tls/key.pem
+
+      # Positional <crt> <key> must come immediately after the subcommand,
+      # before any flags — confirmed directly: flags-then-positional
+      # fails with "too many positional arguments were provided". No
+      # `step ca bootstrap` has been run here, so --ca-url/--root are
+      # passed explicitly, same as the issuance call above.
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/frontend/tls/cert.pem /etc/frontend/tls/key.pem --daemon --force --ca-url "https://{{ ca_ip }}:8443" --root /etc/frontend/tls/root_ca.pem
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
+
+  - path: /usr/local/sbin/mysql-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import subprocess, json, datetime
+
+      VIP = "{{ vip_address }}"
+      APP_USER = "appuser"
+      APP_PASSWORD = "{{ app_password }}"
+      DB = "clusterdemo"
+      EXPECTED_MEMBERS = 3
+      HISTORY_FILE = "/var/log/mysql-cluster-status-history.json"
+      MAX_HISTORY = 60
+
+      def run_sql(sql, db=None, timeout=5):
+          cmd = ["mysql", "-h", VIP, "-P", "3306", "-u", APP_USER, f"-p{APP_PASSWORD}"]
+          if db:
+              cmd.append(db)
+          cmd += ["-N", "-B", "-e", sql]
+          try:
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+              if r.returncode != 0:
+                  return None, r.stderr.strip()
+              return r.stdout, None
+          except Exception as e:
+              return None, str(e)
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "error": None,
+                    "members": [], "heartbeat": None, "answered_by": None,
+                    "remediation": None}
+
+          _, err = run_sql(
+              "INSERT INTO heartbeat (id, counter, updated_at) VALUES (1,1,NOW()) "
+              "ON DUPLICATE KEY UPDATE counter=counter+1, updated_at=NOW();",
+              db=DB,
+          )
+          if err:
+              status["error"] = f"heartbeat write failed: {err}"
+              write_status(status)
+              return
+
+          out, _ = run_sql("SELECT counter, updated_at FROM heartbeat WHERE id=1;", db=DB)
+          if out:
+              parts = out.strip().split("\t")
+              if len(parts) == 2:
+                  status["heartbeat"] = {"counter": int(parts[0]), "updated_at": parts[1]}
+
+          out, _ = run_sql("SELECT @@hostname;")
+          if out:
+              status["answered_by"] = out.strip()
+
+          out, _ = run_sql(
+              "SELECT MEMBER_HOST, MEMBER_STATE, MEMBER_ROLE FROM "
+              "performance_schema.replication_group_members;"
+          )
+          online = []
+          if out:
+              for line in out.strip().splitlines():
+                  cols = line.split("\t")
+                  if len(cols) == 3:
+                      host, state, role = cols
+                      status["members"].append({"host": host, "state": state, "role": role})
+                      if state == "ONLINE":
+                          online.append((host, role))
+
+          online_count = len(online)
+          if online_count >= EXPECTED_MEMBERS:
+              status["verdict"] = "OK"
+          elif online_count * 2 > EXPECTED_MEMBERS:
+              status["verdict"] = "DEGRADED"
+          elif online_count >= 1:
+              status["verdict"] = "CRITICAL"
+              survivor_host = online[0][0]
+              status["remediation"] = (
+                  f"Below quorum ({online_count} of {EXPECTED_MEMBERS} nodes ONLINE). "
+                  f"On the survivor ({survivor_host}), run:\n"
+                  f"  SET GLOBAL group_replication_force_members = "
+                  f"'{survivor_host}:33061';\n"
+                  f"  START GROUP_REPLICATION;\n"
+                  f"This forces the group to reform on this node alone — confirm "
+                  f"the other nodes are genuinely gone before running it; it "
+                  f"discards any state they might still hold."
+              )
+          else:
+              status["verdict"] = "CRITICAL"
+              status["remediation"] = (
+                  "No nodes reachable — check the MySQL/ProxySQL/NGINX path "
+                  "itself, not just Group Replication."
+              )
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          primary = next((m["host"] for m in status["members"] if m["role"] == "PRIMARY"), None)
+          online_count = len([m for m in status["members"] if m["state"] == "ONLINE"])
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "online_count": online_count,
+              "primary": primary,
+              "heartbeat_counter": status["heartbeat"]["counter"] if status["heartbeat"] else None,
+              "error": status["error"],
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/mysql-cluster-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+          members_html = "".join(
+              f"<li>{m['host']} — {m['state']} ({m['role']})</li>" for m in status["members"]
+          )
+          heartbeat_html = ""
+          if status["heartbeat"]:
+              heartbeat_html = (
+                  f"<p>Heartbeat counter: {status['heartbeat']['counter']} "
+                  f"(last write: {status['heartbeat']['updated_at']})</p>"
+              )
+          remediation_html = ""
+          if status["remediation"]:
+              remediation_html = (
+                  "<pre style='background:#222;color:#eee;padding:1em;"
+                  f"white-space:pre-wrap'>{status['remediation']}</pre>"
+              )
+          error_html = f"<p style='color:#c0392b'>{status['error']}</p>" if status["error"] else ""
+
+          # Most recent first, so a blip is still visible without needing to
+          # be watching the page at the exact moment it happened — a single
+          # current-snapshot view (the old design) can silently miss a
+          # transition that self-corrects between two 5s/2s page loads.
+          history_rows = ""
+          for h in reversed(history):
+              c = colors.get(h["verdict"], "#666")
+              hb = h["heartbeat_counter"] if h["heartbeat_counter"] is not None else "-"
+              pri = h["primary"] or "-"
+              err = f" — {h['error']}" if h["error"] else ""
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{c}'>{h['verdict']}</td>"
+                  f"<td>{h['online_count']}/{EXPECTED_MEMBERS}</td>"
+                  f"<td>{pri}</td><td>{hb}</td><td>{err}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>MySQL Cluster Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+{% raw %}
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+{% endraw %}
+      </style></head>
+      <body>
+      <h1>MySQL Cluster Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} - answered by {status['answered_by'] or 'unknown'}</p>
+      {error_html}
+      {heartbeat_html}
+      <h2>Members</h2>
+      <ul>{members_html}</ul>
+      {remediation_html}
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Online</th><th>Primary</th><th>Heartbeat</th><th>Error</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/mysql-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/mysql-status.service
+    content: |
+      [Unit]
+      Description=Refresh MySQL cluster status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/mysql-status.py
+
+  - path: /etc/systemd/system/mysql-status.timer
+    content: |
+      [Unit]
+      Description=Run mysql-status.service every 2s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
+  # Issues a token through the VIP (proves the full real path — Keepalived
+  # + NGINX + Keystone — same as mysql-status.py does for the DB tier),
+  # then validates that same token directly against EVERY Keystone node's
+  # own IP, bypassing the VIP/NGINX round-robin for the validation step
+  # specifically. Deliberately checks every node rather than trying to
+  # infer which one happened to answer the issuance request — that would
+  # need extra plumbing (e.g. an nginx $upstream_addr header) for no real
+  # gain, since validating against all nodes proves cross-node consistency
+  # more thoroughly than checking just one "other" node would.
+  - path: /usr/local/sbin/keystone-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import json, datetime, ssl, urllib.request, urllib.error
+
+      VIP = "{{ vip_address }}"
+      KEYSTONE_IPS = {{ keystone_ips | tojson }}
+      ADMIN_USER = "admin"
+      ADMIN_PASSWORD = "{{ admin_password }}"
+      HISTORY_FILE = "/var/log/keystone-cluster-status-history.json"
+      MAX_HISTORY = 60
+
+      # Keystone's only listener is now :35357, /api/idm (mTLS, this
+      # project's real-world admin-port convention) — :5000 is gone, and
+      # :443 was never an option (already the frontend tier's own
+      # client-facing port on this same VIP). Reuses this same node's own
+      # CA-issued client identity that tls-status.py already holds
+      # (setup-frontend-tls.sh), rather than issuing a second one just
+      # for this script.
+      CA_PEM = "/etc/frontend/tls/ca.pem"
+      CLIENT_CERT = "/etc/frontend/tls/cert.pem"
+      CLIENT_KEY = "/etc/frontend/tls/key.pem"
+      SSL_CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+      SSL_CTX.load_verify_locations(cafile=CA_PEM)
+      SSL_CTX.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+
+      def request(url, method="GET", body=None, headers=None, timeout=5):
+          data = json.dumps(body).encode() if body is not None else None
+          req = urllib.request.Request(url, data=data, method=method,
+                                        headers=headers or {})
+          if body is not None:
+              req.add_header("Content-Type", "application/json")
+          try:
+              with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
+                  return resp.status, dict(resp.headers), resp.read()
+          except urllib.error.HTTPError as e:
+              return e.code, dict(e.headers or {}), e.read()
+          except Exception as e:
+              return None, None, str(e).encode()
+
+      def issue_token():
+          body = {
+              "auth": {
+                  "identity": {
+                      "methods": ["password"],
+                      "password": {"user": {"name": ADMIN_USER,
+                                             "domain": {"id": "default"},
+                                             "password": ADMIN_PASSWORD}},
+                  },
+                  "scope": {"project": {"name": "admin", "domain": {"id": "default"}}},
+              }
+          }
+          status, headers, raw = request(f"https://{VIP}:35357/api/idm/v3/auth/tokens",
+                                          method="POST", body=body)
+          if status != 201:
+              return None, f"issuance failed (HTTP {status}): {raw[:200].decode(errors='replace')}"
+          token = headers.get("X-Subject-Token")
+          if not token:
+              return None, "issuance returned 201 but no X-Subject-Token header"
+          return token, None
+
+      def validate_against(node_ip, token):
+          status, _, raw = request(
+              f"https://{node_ip}:35357/api/idm/v3/auth/tokens",
+              headers={"X-Auth-Token": token, "X-Subject-Token": token},
+          )
+          if status == 200:
+              return True, None
+          return False, f"HTTP {status}: {raw[:200].decode(errors='replace')}"
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "error": None,
+                    "validations": []}
+
+          token, err = issue_token()
+          if err:
+              status["error"] = err
+              write_status(status)
+              return
+
+          all_ok = True
+          for ip in KEYSTONE_IPS:
+              ok, verr = validate_against(ip, token)
+              status["validations"].append({"node": ip, "ok": ok, "error": verr})
+              if not ok:
+                  all_ok = False
+
+          status["verdict"] = "OK" if all_ok else "DEGRADED"
+          if not all_ok:
+              status["error"] = "token issued successfully but failed to validate on at least one node — check shared Fernet key material"
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "nodes_validated": sum(1 for v in status["validations"] if v["ok"]),
+              "nodes_total": len(status["validations"]),
+              "error": status["error"],
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/keystone-cluster-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+          validations_html = "".join(
+              f"<li>{v['node']} — {'OK' if v['ok'] else 'FAILED: ' + str(v['error'])}</li>"
+              for v in status["validations"]
+          )
+          error_html = f"<p style='color:#c0392b'>{status['error']}</p>" if status["error"] else ""
+
+          history_rows = ""
+          for h in reversed(history):
+              c = colors.get(h["verdict"], "#666")
+              err = f" — {h['error']}" if h["error"] else ""
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{c}'>{h['verdict']}</td>"
+                  f"<td>{h['nodes_validated']}/{h['nodes_total']}</td>"
+                  f"<td>{err}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>Keystone Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+{% raw %}
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+{% endraw %}
+      </style></head>
+      <body>
+      <h1>Keystone Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} — token issued via VIP, validated directly against every node</p>
+      {error_html}
+      <h2>Cross-Node Validation</h2>
+      <ul>{validations_html}</ul>
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Nodes Validated</th><th>Error</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/keystone-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/keystone-status.service
+    content: |
+      [Unit]
+      Description=Refresh Keystone cluster status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/keystone-status.py
+
+  - path: /etc/systemd/system/keystone-status.timer
+    content: |
+      [Unit]
+      Description=Run keystone-status.service every 2s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
+  # Connects to the management HTTP API through the VIP (proving the full
+  # real path — Keepalived + NGINX stream{} + RabbitMQ — same as the other
+  # two status scripts), and does a real publish+consume round-trip
+  # through a durable quorum queue on every check, not just a cluster-
+  # membership read — proving the tier actually moves messages, not just
+  # that the nodes are up.
+  - path: /usr/local/sbin/rabbitmq-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import json, datetime, base64, ssl, urllib.request, urllib.error
+
+      VIP = "{{ vip_address }}"
+      ADMIN_USER = "admin"
+      ADMIN_PASSWORD = "{{ admin_password }}"
+      QUEUE = "status-heartbeat"
+      EXPECTED_NODES = 3
+      HISTORY_FILE = "/var/log/rabbitmq-cluster-status-history.json"
+      MAX_HISTORY = 60
+
+      AUTH_HEADER = "Basic " + base64.b64encode(f"{ADMIN_USER}:{ADMIN_PASSWORD}".encode()).decode()
+
+      # RabbitMQ's management API is now HTTPS-only (:15671) — :15672 is
+      # gone. Reuses this node's own CA-issued client identity, same as
+      # tls-status.py/keystone-status.py.
+      CA_PEM = "/etc/frontend/tls/ca.pem"
+      CLIENT_CERT = "/etc/frontend/tls/cert.pem"
+      CLIENT_KEY = "/etc/frontend/tls/key.pem"
+      SSL_CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+      SSL_CTX.load_verify_locations(cafile=CA_PEM)
+      SSL_CTX.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+
+      def api(path, method="GET", body=None, timeout=5):
+          url = f"https://{VIP}:15671/api{path}"
+          data = json.dumps(body).encode() if body is not None else None
+          req = urllib.request.Request(url, data=data, method=method,
+                                        headers={"Authorization": AUTH_HEADER})
+          if body is not None:
+              req.add_header("Content-Type", "application/json")
+          try:
+              with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
+                  raw = resp.read()
+                  return resp.status, (json.loads(raw) if raw else None), None
+          except urllib.error.HTTPError as e:
+              return e.code, None, e.read().decode(errors="replace")
+          except Exception as e:
+              return None, None, str(e)
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "error": None,
+                    "nodes": [], "roundtrip_ok": False}
+
+          code, nodes, err = api("/nodes")
+          if err:
+              status["error"] = f"cluster overview failed: {err}"
+              write_status(status)
+              return
+          for n in nodes or []:
+              status["nodes"].append({"name": n.get("name"), "running": n.get("running", False)})
+          running_count = sum(1 for n in status["nodes"] if n["running"])
+
+          # Idempotent — PUT on an already-existing queue with matching
+          # arguments is a no-op, confirmed directly.
+          code, _, err = api(f"/queues/%2F/{QUEUE}", method="PUT",
+                              body={"durable": True, "arguments": {"x-queue-type": "quorum"}})
+          if err:
+              status["error"] = f"queue declare failed: {err}"
+              write_status(status)
+              return
+
+          # Purge before publishing — a message from a check whose publish
+          # succeeded but whose own get() failed (or a publish that landed
+          # just as a below-quorum window closed) would otherwise sit
+          # ahead of every future check's own message in FIFO order,
+          # making every subsequent payload comparison mismatch forever.
+          # Confirmed directly: this is exactly what happened after
+          # failure-mode test 2 (haFullStack-Findings-Log.md F-030).
+          api(f"/queues/%2F/{QUEUE}/contents", method="DELETE")
+
+          payload = f"heartbeat-{now}"
+          code, pub, err = api("/exchanges/%2F/amq.default/publish", method="POST",
+                                body={"properties": {}, "routing_key": QUEUE,
+                                      "payload": payload, "payload_encoding": "string"})
+          if err or not (pub or {}).get("routed"):
+              status["error"] = f"publish failed: {err or 'not routed'}"
+              write_status(status)
+              return
+
+          code, got, err = api(f"/queues/%2F/{QUEUE}/get", method="POST",
+                                body={"count": 1, "ackmode": "ack_requeue_false", "encoding": "auto"})
+          if err or not got or got[0].get("payload") != payload:
+              status["error"] = f"consume failed or payload mismatch: {err}"
+              write_status(status)
+              return
+
+          status["roundtrip_ok"] = True
+          if running_count >= EXPECTED_NODES:
+              status["verdict"] = "OK"
+          else:
+              status["verdict"] = "DEGRADED"
+              status["error"] = f"only {running_count}/{EXPECTED_NODES} nodes running, but publish/consume still succeeded"
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          running_count = sum(1 for n in status["nodes"] if n["running"])
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "nodes_running": running_count,
+              "roundtrip_ok": status["roundtrip_ok"],
+              "error": status["error"],
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/rabbitmq-cluster-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+          nodes_html = "".join(
+              f"<li>{n['name']} — {'running' if n['running'] else 'DOWN'}</li>" for n in status["nodes"]
+          )
+          error_html = f"<p style='color:#c0392b'>{status['error']}</p>" if status["error"] else ""
+
+          history_rows = ""
+          for h in reversed(history):
+              c = colors.get(h["verdict"], "#666")
+              err = f" — {h['error']}" if h["error"] else ""
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{c}'>{h['verdict']}</td>"
+                  f"<td>{h['nodes_running']}/{EXPECTED_NODES}</td>"
+                  f"<td>{'OK' if h['roundtrip_ok'] else 'FAILED'}</td>"
+                  f"<td>{err}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>RabbitMQ Cluster Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+{% raw %}
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+{% endraw %}
+      </style></head>
+      <body>
+      <h1>RabbitMQ Cluster Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} — publish/consume round-trip via the VIP, real quorum queue</p>
+      {error_html}
+      <h2>Nodes</h2>
+      <ul>{nodes_html}</ul>
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Nodes Running</th><th>Round-trip</th><th>Error</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/rabbitmq-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/rabbitmq-status.service
+    content: |
+      [Unit]
+      Description=Refresh RabbitMQ cluster status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/rabbitmq-status.py
+
+  - path: /etc/systemd/system/rabbitmq-status.timer
+    content: |
+      [Unit]
+      Description=Run rabbitmq-status.service every 2s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
+  # TLS/mTLS trust status (haFullStack-LLD.md §5.3.1a), explicitly
+  # requested alongside the other three status pages. Unlike those three,
+  # this isn't proving application-level behavior (a DB write, a token
+  # validation, a queue round-trip) — it's proving the TLS layer itself:
+  # a real handshake against the VIP, presenting this node's own
+  # CA-issued client cert, verifying the peer's cert chains to the same
+  # CA root, and (for RabbitMQ/Keystone, both configured with
+  # SSLVerifyClient/verify_peer + fail_if_no_peer_cert) that mTLS is
+  # actually being enforced rather than merely offered. MySQL/ProxySQL's
+  # :3306 is checked via the mysql CLI rather than a raw TLS socket — its
+  # TLS is negotiated in-band via the wire protocol's own STARTTLS-style
+  # upgrade, which a bare ssl.wrap_socket() doesn't speak (see
+  # haFullStack-Findings-Log.md).
+  - path: /usr/local/sbin/tls-status.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import json, datetime, socket, ssl, subprocess
+
+      VIP = "{{ vip_address }}"
+      APP_PASSWORD = "{{ app_password }}"
+      CA_PEM = "/etc/frontend/tls/ca.pem"
+      CLIENT_CERT = "/etc/frontend/tls/cert.pem"
+      CLIENT_KEY = "/etc/frontend/tls/key.pem"
+      HISTORY_FILE = "/var/log/tls-status-history.json"
+      MAX_HISTORY = 60
+
+      SOCKET_TARGETS = [
+          {"name": "NGINX (client-facing :443)", "port": 443},
+          {"name": "RabbitMQ (:5671, mTLS)", "port": 5671},
+          {"name": "Keystone (:35357, mTLS)", "port": 35357},
+      ]
+
+      def check_tls_socket(port, timeout=5):
+          ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+          ctx.load_verify_locations(cafile=CA_PEM)
+          ctx.load_cert_chain(certfile=CLIENT_CERT, keyfile=CLIENT_KEY)
+          try:
+              with socket.create_connection((VIP, port), timeout=timeout) as sock:
+                  with ctx.wrap_socket(sock, server_hostname=VIP) as tls:
+                      cert = tls.getpeercert()
+                      subject = dict(x[0] for x in cert.get("subject", []))
+                      proto = tls.version()
+                      cipher = tls.cipher()[0] if tls.cipher() else None
+                      return True, {
+                          "subject_cn": subject.get("commonName"),
+                          "protocol": proto,
+                          "cipher": cipher,
+                      }, None
+          except Exception as e:
+              return False, None, str(e)
+
+      def check_mysql_tls(timeout=8):
+          cmd = [
+              "mysql", "-h", VIP, "-P", "3306", "-u", "appuser", f"-p{APP_PASSWORD}",
+              "--ssl-mode=VERIFY_IDENTITY", f"--ssl-ca={CA_PEM}",
+              f"--ssl-cert={CLIENT_CERT}", f"--ssl-key={CLIENT_KEY}",
+              "-N", "-B", "-e",
+              "SELECT VARIABLE_VALUE FROM performance_schema.session_status "
+              "WHERE VARIABLE_NAME='Ssl_cipher';",
+          ]
+          try:
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+              if r.returncode != 0:
+                  return False, None, r.stderr.strip()
+              cipher = r.stdout.strip()
+              if not cipher:
+                  return False, None, "connected but no TLS cipher negotiated"
+              return True, {"cipher": cipher}, None
+          except Exception as e:
+              return False, None, str(e)
+
+      def main():
+          now = datetime.datetime.utcnow().isoformat() + "Z"
+          status = {"timestamp": now, "verdict": "CRITICAL", "checks": []}
+
+          for target in SOCKET_TARGETS:
+              ok, detail, err = check_tls_socket(target["port"])
+              status["checks"].append({"name": target["name"], "trusted": ok,
+                                        "detail": detail, "error": err})
+
+          ok, detail, err = check_mysql_tls()
+          status["checks"].append({"name": "MySQL/ProxySQL (:3306, mTLS, in-band)",
+                                    "trusted": ok, "detail": detail, "error": err})
+
+          trusted_count = sum(1 for c in status["checks"] if c["trusted"])
+          total = len(status["checks"])
+          if trusted_count == total:
+              status["verdict"] = "OK"
+          elif trusted_count > 0:
+              status["verdict"] = "DEGRADED"
+          else:
+              status["verdict"] = "CRITICAL"
+
+          write_status(status)
+
+      def append_history(status):
+          try:
+              with open(HISTORY_FILE) as f:
+                  history = json.load(f)
+          except Exception:
+              history = []
+          history.append({
+              "timestamp": status["timestamp"],
+              "verdict": status["verdict"],
+              "trusted_count": sum(1 for c in status["checks"] if c["trusted"]),
+              "total": len(status["checks"]),
+          })
+          history = history[-MAX_HISTORY:]
+          with open(HISTORY_FILE, "w") as f:
+              json.dump(history, f, indent=2)
+          return history
+
+      def write_status(status):
+          with open("/var/log/tls-status.json", "w") as f:
+              json.dump(status, f, indent=2)
+          history = append_history(status)
+
+          colors = {"OK": "#1e7145", "DEGRADED": "#b8860b", "CRITICAL": "#c0392b"}
+          color = colors.get(status["verdict"], "#666")
+
+          checks_html = ""
+          for c in status["checks"]:
+              if c["trusted"]:
+                  d = c["detail"] or {}
+                  detail_str = ", ".join(f"{k}={v}" for k, v in d.items() if v)
+                  checks_html += f"<li style='color:#1e7145'>{c['name']} — TRUSTED ({detail_str})</li>"
+              else:
+                  checks_html += f"<li style='color:#c0392b'>{c['name']} — UNTRUSTED: {c['error']}</li>"
+
+          history_rows = ""
+          for h in reversed(history):
+              hc = colors.get(h["verdict"], "#666")
+              history_rows += (
+                  f"<tr><td>{h['timestamp']}</td>"
+                  f"<td style='color:{hc}'>{h['verdict']}</td>"
+                  f"<td>{h['trusted_count']}/{h['total']}</td></tr>"
+              )
+
+          html = f"""<!doctype html>
+      <html><head><title>TLS/mTLS Trust Status</title>
+      <meta http-equiv="refresh" content="2">
+      <style>
+{% raw %}
+        body {{ font-family:sans-serif; max-width:60em; margin:2em auto; }}
+        table {{ border-collapse:collapse; width:100%; font-size:0.9em; }}
+        td, th {{ text-align:left; padding:2px 8px; border-bottom:1px solid #ddd; }}
+{% endraw %}
+      </style></head>
+      <body>
+      <h1>TLS/mTLS Trust Status: <span style="color:{color}">{status['verdict']}</span></h1>
+      <p>Checked at {status['timestamp']} — real handshake against every TLS-enabled listener via the VIP, presenting this node's own CA-issued client cert</p>
+      <h2>Checks</h2>
+      <ul>{checks_html}</ul>
+      <h2>Recent History (newest first, last {MAX_HISTORY} checks)</h2>
+      <table>
+      <tr><th>Time</th><th>Verdict</th><th>Trusted</th></tr>
+      {history_rows}
+      </table>
+      </body></html>"""
+          with open("/var/www/html/tls-status.html", "w") as f:
+              f.write(html)
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/tls-status.service
+    content: |
+      [Unit]
+      Description=Refresh TLS/mTLS trust status page
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/tls-status.py
+
+  - path: /etc/systemd/system/tls-status.timer
+    content: |
+      [Unit]
+      Description=Run tls-status.service every 2s
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=2s
+
+      [Install]
+      WantedBy=timers.target
+
+  # Shared application storage (haFullStack-LLD.md — app-install prep).
+  # Same script/wait/fstab shape as backend-cloud-init.yaml.tftpl — see
+  # its comment for why showmount + a wait loop, not a bare fstab entry.
+  - path: /usr/local/sbin/setup-nfs-mount.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      mkdir -p {{ nfs_mount_dir }}
+
+      for i in $(seq 1 180); do
+        showmount -e "{{ nfs_ip }}" 2>/dev/null | grep -q "/exports/{{ nfs_share }}" && break
+        sleep 5
+      done
+
+      grep -q "^{{ nfs_ip }}:/exports/{{ nfs_share }} " /etc/fstab || \
+        echo "{{ nfs_ip }}:/exports/{{ nfs_share }} {{ nfs_mount_dir }} nfs defaults,_netdev,nofail 0 0" >> /etc/fstab
+
+      mount -a
+
+runcmd:
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html
+  - /usr/local/sbin/setup-frontend-tls.sh
+  - /usr/local/sbin/setup-jasypt.sh
+  - /usr/local/sbin/setup-nfs-mount.sh
+  - systemctl restart nginx
+  - systemctl daemon-reload
+  - systemctl enable --now mysql-status.timer
+  - systemctl enable --now keystone-status.timer
+  - systemctl enable --now rabbitmq-status.timer
+  - systemctl enable --now tls-status.timer

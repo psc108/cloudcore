@@ -1791,7 +1791,12 @@ Same provisioning shape as every prior slice — `security_group` ×1,
 provisioner password has no direct Ansible-native equivalent to
 Terraform's `random_id`, same substitution used for Keystone's Fernet
 keys and RabbitMQ's Erlang cookie — `openssl rand -base64 24` run once
-via a local task, passed to every relevant `instance` task.
+via a local task, passed to every relevant `instance` task. Now actually
+built — see §11's `ansible/examples/12-ha-frontend-lb.yml`, whose own
+live verification found and fixed a real, previously-latent bug in this
+TLS mesh's passphrase-protected-key renewal (F-070,
+`haFullStack-Findings-Log.md`), applying identically to this OpenTofu
+implementation above.
 
 ---
 
@@ -2522,6 +2527,131 @@ afterward.
 
 ---
 
+## 11. Ansible Port
+
+### 11.1 Scope
+
+`ansible/examples/12-ha-frontend-lb.yml` — a full Ansible port of
+`examples/ha-frontend-lb` (§1–§10 above), matching every other OpenTofu
+example in this repo, all of which already have an Ansible equivalent
+(`ansible/examples/01`–`11`) except this, the newest and largest one. A
+straight port of already-proven behavior, not a redesign: every line of
+bash/cloud-init logic this section's tiers depend on has already been
+built, broken, fixed, and verified live across the iterative slices
+documented in §1–§10 — this port's job is translating *orchestration*
+(the OpenTofu module graph → an explicit Ansible task sequence,
+Terraform's `templatefile()`/`${x}`/`%{ if %}` → Jinja2's
+`lookup('template', ...)`/`{{ x }}`/`{% if %}`), not re-deriving any of
+that design.
+
+### 11.2 Structure
+
+- **`ansible/examples/templates/ha-frontend-lb/*.yml.j2`** — one file per
+  OpenTofu `files/*.tftpl`, same bash/cloud-config bodies. Converted with
+  a small Python script per file (regex substitution of the Terraform
+  interpolation syntax), not hand-retyped — safer for files this large
+  (the Keystone one alone is ~2,000 lines, almost entirely static
+  role/policy data with a handful of real variable references scattered
+  through it). Every converted template was verified to (a) parse as
+  valid Jinja2 and (b) render to valid cloud-config YAML, both with a
+  direct Python/`jinja2`/`PyYAML` script exercising every variable
+  (including both branches of every `is_bootstrap`/`is_seed`
+  conditional) before ever being used in a real Ansible run.
+- **`ansible/examples/12-ha-frontend-lb.yml`** — the orchestration
+  playbook. Instances are created in **true dependency order, not the
+  OpenTofu file's textual module-block order** — OpenTofu's own graph
+  resolves cross-module references automatically regardless of where a
+  `module` block sits in `main.tf`, and ProxySQL's `user_data` (via
+  `local.nginx_conf`/`local.nginx_stream_conf`) actually depends on
+  frontend, backend, keystone, and both RabbitMQ tiers despite its own
+  `module.proxysql` block appearing before all of them in the file. This
+  port creates ProxySQL last, after every tier its own nginx config
+  fragments reference is already up and its real IP known — a real
+  ordering correction found working through the true graph by hand, not
+  something the approved implementation plan's own (textual-order)
+  description got right on the first pass.
+- **`ansible/examples/12-teardown.yml`** — mirrors `07-teardown.yml`'s
+  list-by-name-pattern-then-delete idiom, extended to also cover NFS
+  servers (a resource type `07-teardown.yml` predates and never needed).
+- Secrets (Erlang cookie, 2 Fernet keys, CA provisioner password) have no
+  Ansible-native equivalent of OpenTofu's state-persisted `random_id`
+  resources — generated once via `openssl rand` into a local,
+  `build_suffix`-scoped, gitignored state directory
+  (`ansible/examples/.state/ha-frontend-lb-<suffix>/`), guarded by
+  `creates:` for idempotency across re-runs against the same suffix.
+
+### 11.3 Deliberate differences from the OpenTofu version
+
+- **`subnet_id` is an opaque placeholder string** (`subnet-<prefix>-main`),
+  not a real created `cloudcore_subnet` resource — this collection has no
+  `subnet` module at all, and every existing Ansible example already
+  follows this same precedent (confirmed in `08-openstack-services.yml`
+  and others). Functionally identical either way: `subnet_id` is accepted
+  by `POST /v1/instances` but never validated against a real resource,
+  and bridge-mode instances get their real address from `ccbr0`'s own
+  DHCP pool regardless of any declared subnet/VPC CIDR — the same fact
+  §1's own `local.bridge_cidr` comment documents for the OpenTofu version.
+- **A real collection gap fixed as part of this port**: the
+  `cloudcore.cloudcore.instance` module had no `users` parameter at all,
+  despite the REST API (and the OpenTofu provider) already fully
+  supporting it — every tier in this stack depends on the `ecs`
+  NOPASSWD-sudo account (§9) for inter-node SSH, so this was a hard
+  blocker, not a nice-to-have. Fixed directly in
+  `ansible/collections/cloudcore/plugins/modules/instance.py`, mirroring
+  the provider's own `users` block shape exactly (list of
+  `{username, sudo, ssh_keys, password_hash}`) — a genuine collection
+  improvement other Ansible examples can now use too, not something
+  scoped narrowly to this one playbook.
+
+### 11.4 Verification
+
+Real, not assumed — the same discipline as every slice in §1–§10, and it
+paid off immediately: a full `ansible-playbook` run against the live
+CloudCore API from a clean slate completed with **zero task failures**
+on the first attempt (`ok=47 changed=19 failed=0`, all 17 instances +
+the NFS server reaching `running`), but live status-page checking
+surfaced a real bug (F-070, below) that a clean task-level PLAY RECAP
+alone would never have caught.
+
+1. All 17 instances (§11.1's 9 tiers) and the NFS server confirmed
+   `running` via the API.
+2. The shared VIP (`192.168.100.5`) came up and all four status pages
+   were checked. `mysql-status.html`, `rabbitmq-status.html`, and
+   `tls-status.html` read `OK` within about 90 seconds of the stack
+   finishing (the same class of boot-time settling already documented
+   elsewhere in this project, e.g. F-028) — `keystone-status.html`
+   stayed `CRITICAL` well past that point, which led to F-070 below.
+3. **F-070** (`haFullStack-Findings-Log.md`): live diagnosis (SSH,
+   `systemctl status`, `journalctl`) traced Keystone's persistent
+   failure to two *separate* things layered on top of each other — a
+   genuine but harmless boot-time race in Apache's own site-enable
+   sequence (self-corrected within the same diagnostic session, not a
+   bug), and underneath it a real, previously-undiscovered bug:
+   RabbitMQ's and Keystone's `step-renew.service` has silently
+   crash-looped to `failed` on every single boot since their keys were
+   first passphrase-protected (v0.21/v0.29) — `step ca renew` was never
+   given a way to decrypt the key it was renewing. Fixed in *both* the
+   OpenTofu `.tftpl` source and this port's own `.yml.j2` templates, not
+   just the Ansible side — the command was byte-identical in both, so
+   only fixing one would have left the two IaC front-ends diverged
+   immediately after a port whose entire premise was behavioral parity.
+4. Fix verified live: patched the running unit on one Keystone node and
+   one RabbitMQ node directly, reset each unit's failed state, and
+   confirmed both reached `active (running)` with `NRestarts=0` after
+   10+ seconds settled, their listeners (`:35357`, `:5671`/`:15671`)
+   unaffected throughout. `keystone-status.html` returned to `OK`
+   (with the same order of occasional single-check transient blip
+   `rabbitmq-status.html`/`tls-status.html` also showed while settling —
+   not a re-emergence of F-070, which was a 100%, non-self-recovering
+   failure rate before the fix, categorically different from this).
+5. A real cross-node NFS read/write round-trip through `/mnt/shared`
+   (the same test used for F-067/F-068): a file written from
+   `frontend-01`'s mount read back correctly from `backend-01`'s mount.
+6. `ansible-playbook 12-teardown.yml` — clean, zero resources left
+   behind afterward.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2549,3 +2679,4 @@ afterward.
 | v0.21 | 2026-09-13 | Paul Scott | §5 updated — RabbitMQ AMQP+management and Keystone's identity API closed to TLS-only, per direct instruction, superseding this section's original "kept alongside, not removed" framing for both. Plain `5672`/`15672` and `:5000`/`:35357` are gone entirely; both services' server keys are now passphrase-protected with `var.admin_password` (a pattern other services will need later); `keystone-status.py`/`rabbitmq-status.py` now use real client certificates instead of plain HTTP, closing the "mechanical follow-up if ever needed" this section had deferred. MySQL deliberately untouched — already effectively TLS-only via per-account `REQUIRE X509`. Seven real bugs found and fixed across several full destroy/rebuild cycles (F-058–F-065, `haFullStack-Findings-Log.md`): an `openssl` same-path in/out key corruption; RabbitMQ's actual (non-obvious) listener-disable syntax; `management.ssl.*`'s independent mTLS directives; Apache's `SSLPassPhraseDialog` scope; a wrong assumed Keystone site name; a certificate-SAN/hostname mismatch in the boot-time role-import script; an Apache-reload ordering gap; and — caught by direct question rather than an error — both Keystone nodes racing to import the same role/user data into the one shared MySQL database they already use, fixed by restricting the import to the `-01` node only. |
 | v0.22 | 2026-09-14 | Paul Scott | New §10, Shared Application Storage — a single NFS export (`module.nfs`, `modules/nfs-server`, `var.nfs_disk_gb` default 10GB) mounted read/write at `/mnt/shared` on every frontend and backend node, per direct instruction ahead of the pending application install. Not a revival of §6's superseded per-project NFS design (§7/v0.17) — an unrelated new use of the same module. Noted that `cloudcore_nfs_server` has no security-group attachment point in this provider at all; access control is entirely the export's own `clients = "vpc"` setting, which resolves to the real bridge subnet per the already-established F-041 platform behavior. One real bug found and fixed (F-067, `haFullStack-Findings-Log.md`): `nfs-common` was added to both tiers' `packages:` list but not to the host-level package repo's own build script, so it was never actually cached and apt genuinely couldn't find it. Verified across two full destroy/rebuild cycles — the second showing a real cross-node read/write round-trip through the live NFS export. |
 | v0.23 | 2026-09-14 | Paul Scott | §10.3 — resolved this section's own open gap: infrastructure to mount the share existed, but nothing to actually get data onto it from a local machine. Two options built/documented, per direct instruction: a new CloudCore Dashboard "Files" drag-and-drop panel per NFS share (generic platform capability, `api/nfs.py`/`api/nfs_routes.py`, relayed through the platform's own existing SSH channel to the NFS server VM — no new listener, no new SG rule), and SFTP directly to an already-mounting frontend/backend node (zero new infrastructure, reuses the existing `ecs` key). One real bug found and fixed (F-068, `haFullStack-Findings-Log.md`): a freshly `running` NFS server's export directory can still not exist yet, since cloud-init's LVM/mkdir/exportfs steps genuinely lag the libvirt domain's own `running` state — fixed with a defensive `mkdir -p` on every list/upload call. Verified with a real 50MB upload, SHA-256-confirmed byte-identical on the export. |
+| v0.24 | 2026-09-14 | Paul Scott | New §11, Ansible Port — `ansible/examples/12-ha-frontend-lb.yml`, a full port of §1–§10 to Ansible (all 9 tiers, 17 instances + NFS), matching every other OpenTofu example's existing Ansible equivalent. Pure orchestration translation, not a redesign — true dependency order (not the OpenTofu file's textual module order, which would have created ProxySQL before the frontend/backend/keystone/rabbitmq IPs its own nginx config fragments need), one collection gap fixed (`instance` module had no `users` parameter despite the API supporting it). Live verification (a full run, zero task failures) surfaced a real, previously-latent bug shared by both IaC front-ends — F-070 (`haFullStack-Findings-Log.md`): RabbitMQ's and Keystone's `step-renew.service` has crash-looped to `failed` on every boot since their keys were first passphrase-protected (v0.21/v0.29), `step ca renew` never having been given a way to decrypt the key it was renewing. Fixed in both the OpenTofu `.tftpl` source and the new Ansible templates, verified live on real nodes (§5.3.3, §11.4). |

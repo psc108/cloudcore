@@ -1,0 +1,64 @@
+stream {
+    upstream proxysql_write {
+{% for ip in proxysql_ips %}
+        server {{ ip }}:6033 max_fails=3 fail_timeout=10s;
+{% endfor %}
+    }
+
+    server {
+        listen 3306;
+        proxy_pass proxysql_write;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
+
+    # TLS passthroughs (haFullStack-LLD.md §5.3.1), TLS-only — RabbitMQ's
+    # plain :5672/:15672 and Keystone's plain :5000 are gone entirely.
+    # Both RabbitMQ (5671 AMQP, 15671 management) and Keystone (35357,
+    # this project's own real-world admin-port convention) are raw
+    # transparent forwards, not proxy_ssl_*-based re-encryption — the TLS
+    # handshake negotiates end-to-end between the actual client and the
+    # actual backend regardless of this hop. Deliberately NOT :443 —
+    # that's already the frontend tier's own client-facing HTTPS
+    # termination on this same VIP (nginx-frontend.conf.j2, an
+    # http{}-context server{}, not stream{}) — binding a second listener
+    # to the identical port on the same node would collide.
+    upstream rabbitmq_amqp_tls {
+{% for ip in rabbitmq_ips %}
+        server {{ ip }}:5671 max_fails=3 fail_timeout=10s;
+{% endfor %}
+    }
+
+    server {
+        listen 5671;
+        proxy_pass rabbitmq_amqp_tls;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
+
+    upstream rabbitmq_management_tls {
+{% for ip in rabbitmq_ips %}
+        server {{ ip }}:15671 max_fails=3 fail_timeout=10s;
+{% endfor %}
+    }
+
+    server {
+        listen 15671;
+        proxy_pass rabbitmq_management_tls;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
+
+    upstream keystone_tls {
+{% for ip in keystone_tls_ips %}
+        server {{ ip }}:35357 max_fails=3 fail_timeout=10s;
+{% endfor %}
+    }
+
+    server {
+        listen 35357;
+        proxy_pass keystone_tls;
+        proxy_timeout 3s;
+        proxy_connect_timeout 2s;
+    }
+}

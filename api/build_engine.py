@@ -84,6 +84,7 @@ _TEMPLATE_META = {
     "09-ghidra-workstation.yml": {"title": "Ghidra Workstation",            "description": "VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB.", "resources": ["vpc", "security_group", "instance", "load_balancer"]},
     "10-kiwix-library.yml":      {"title": "Kiwix Library",                "description": "VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer.", "resources": ["vpc", "security_group", "instance", "load_balancer"]},
     "11-wifi-sniffer.yml":       {"title": "WiFi Sniffer",                 "description": "VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter.", "resources": ["vpc", "security_group", "instance", "load_balancer"]},
+    "12-ha-frontend-lb.yml":     {"title": "HA Frontend Load Balancer",    "description": "VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + DNS records.", "resources": ["vpc", "security_group", "instance", "nfs_server", "dns_record"]},
 }
 
 

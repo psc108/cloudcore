@@ -1,0 +1,120 @@
+#cloud-config
+# Single-node step-ca — deliberately not HA (haFullStack-LLD.md §5.1).
+# step-ca/step-cli aren't in Ubuntu's default repos, installed from the
+# pinned, checksum-verified .debs already cached in the host-level
+# cloudcore-repo's artifacts share (haFullStack.md §14) — every
+# certificate-requesting node used to curl these individually from
+# GitHub (12+ redundant fetches of the same files, F-037's
+# network-congestion finding). Every other tier's own cloud-init waits
+# for this node to be reachable before requesting its own certificate —
+# the same explicit-wait pattern every prior tier used for its own
+# bootstrap dependency.
+#
+# Ansible port of examples/ha-frontend-lb/files/ca-cloud-init.yaml.tftpl
+# — same content, Terraform's dollar-brace interpolation replaced with
+# Jinja2's double-brace syntax. Nothing behavioral changed.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /usr/local/sbin/setup-ca.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-ca.deb -o /tmp/step-ca.deb
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      echo "{{ step_ca_deb_sha256 }}  /tmp/step-ca.deb" | sha256sum -c -
+      echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-ca.deb /tmp/step-cli.deb || apt-get install -f -y
+
+      export STEPPATH=/etc/step-ca
+      mkdir -p "$STEPPATH"
+      step ca init \
+        --name "CloudCore Lab CA" \
+        --dns "$LOCAL_IP" \
+        --address ":8443" \
+        --provisioner admin \
+        --password-file <(echo -n "{{ provisioner_password }}") \
+        --deployment-type standalone
+
+      echo -n "{{ provisioner_password }}" > /etc/step-ca/password.txt
+      chmod 600 /etc/step-ca/password.txt
+
+      # step ca init leaves authority.claims unset, which step-ca defaults
+      # to a 24h max/default leaf-cert duration internally. Set to 365
+      # days (8760h) instead, matching the OpenTofu version's own choice
+      # (haFullStack-LLD.md §5.1) so cert lifetimes realistically mirror
+      # a real On-Prem/AWS PKI.
+      python3 - <<'PYEOF'
+      import json
+      with open('/etc/step-ca/config/ca.json') as f:
+          cfg = json.load(f)
+      cfg['authority']['claims'] = {
+          'minTLSCertDuration': '5m',
+          'maxTLSCertDuration': '8760h',
+          'defaultTLSCertDuration': '8760h',
+      }
+      with open('/etc/step-ca/config/ca.json', 'w') as f:
+          json.dump(cfg, f, indent='\t')
+      PYEOF
+
+      chmod 644 /etc/step-ca/certs/root_ca.crt /etc/step-ca/certs/intermediate_ca.crt
+
+  - path: /etc/systemd/system/step-ca.service
+    content: |
+      [Unit]
+      Description=step-ca internal CA
+      After=network.target
+
+      [Service]
+      Environment=STEPPATH=/etc/step-ca
+      ExecStart=/usr/bin/step-ca /etc/step-ca/config/ca.json --password-file /etc/step-ca/password.txt
+      Restart=always
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/sbin/serve-ca-certs.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import http.server
+
+      class Handler(http.server.SimpleHTTPRequestHandler):
+          def __init__(self, *args, **kwargs):
+              super().__init__(*args, directory="/etc/step-ca/certs", **kwargs)
+
+      http.server.HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+
+  - path: /etc/systemd/system/ca-certs-server.service
+    content: |
+      [Unit]
+      Description=Serve step-ca root/intermediate certs over plain HTTP
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/sbin/serve-ca-certs.py
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - /usr/local/sbin/setup-ca.sh
+  - systemctl daemon-reload
+  - systemctl enable --now step-ca
+  - systemctl enable --now ca-certs-server

@@ -47,3 +47,6 @@ api/lb/*.sock
 # DNS server runtime (generated dnsmasq.conf/pid)
 api/dns/
 .amazonq/
+
+# Ansible example-generated secrets (idempotent local state, not committed)
+ansible/examples/.state/

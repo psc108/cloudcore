@@ -46,7 +46,7 @@ write_files:
   # into place with correct ownership in runcmd instead.
   - path: /root/erlang-cookie
     permissions: '0600'
-    content: ${erlang_cookie}
+    content: {{ erlang_cookie }}
 
   - path: /usr/local/sbin/setup-rabbitmq.sh
     permissions: '0755'
@@ -86,7 +86,7 @@ write_files:
 
       rabbitmq-plugins enable rabbitmq_management
 
-      %{ if is_seed ~}
+      {% if is_seed %}
       # admin/var.admin_password — this stack's shared admin/service
       # credential (same convention as Keystone's bootstrap admin and
       # every other account in this stack, see variables.tf). Only needs
@@ -95,7 +95,7 @@ write_files:
       # created on the seed before any joiner has clustered is still
       # visible from the joiner immediately after it joins, no separate
       # propagation step needed.
-      rabbitmqctl add_user admin '${admin_password}'
+      rabbitmqctl add_user admin '{{ admin_password }}'
       rabbitmqctl set_user_tags admin administrator
       rabbitmqctl set_permissions -p / admin '.*' '.*' '.*'
       rabbitmqctl set_cluster_name rabbitmq-cluster
@@ -108,14 +108,14 @@ write_files:
       # positional-argument design and this stack's existing single-
       # shared-credential convention for Lab-only placeholders.
       for u in blobstore catalog customer event fulfillment pricing reporting request svcinst config export ticketing extevt; do
-        rabbitmqctl add_user "$u" '${rabbitmq_services_password}'
+        rabbitmqctl add_user "$u" '{{ rabbitmq_services_password }}'
       done
 
       rabbitmqctl add_vhost /ssp
       for u in blobstore catalog customer event fulfillment pricing reporting request svcinst config export ticketing extevt; do
         rabbitmqctl set_permissions -p /ssp "$u" '.*' '.*' '.*'
       done
-      %{ else ~}
+      {% else %}
       # Wait for the seed to actually be up before attempting to join —
       # cloud-init on all 3 nodes runs concurrently, so the seed's own
       # setup above may not have finished yet (same risk MySQL's joiners
@@ -124,14 +124,14 @@ write_files:
       # only needs the cookie (already in place) and network reachability
       # (this SG's 4369/25672 rules) — confirmed working directly.
       for i in $(seq 1 180); do
-        rabbitmqctl -n rabbit@${seed_ip} status >/dev/null 2>&1 && break
+        rabbitmqctl -n rabbit@{{ seed_ip }} status >/dev/null 2>&1 && break
         sleep 5
       done
 
       rabbitmqctl stop_app
-      rabbitmqctl join_cluster rabbit@${seed_ip}
+      rabbitmqctl join_cluster rabbit@{{ seed_ip }}
       rabbitmqctl start_app
-      %{ endif ~}
+      {% endif %}
 
   # TLS/mTLS (haFullStack-LLD.md §5.3.1), TLS-only per direct instruction
   # — no more plain :5672/:15672. `listeners.tcp = none` (the bare
@@ -185,27 +185,27 @@ write_files:
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
       curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
-      echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
+      echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 
       for i in $(seq 1 180); do
-        curl -sf "http://${ca_ip}:8080/root_ca.crt" -o /tmp/root_ca.crt \
-          && curl -sf "http://${ca_ip}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+        curl -sf "http://{{ ca_ip }}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://{{ ca_ip }}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
           && break
         sleep 5
       done
 
       step ca certificate "$LOCAL_IP" /etc/rabbitmq/server.crt /etc/rabbitmq/server.key \
-        --san "$LOCAL_IP" --san "${vip_address}" \
-        --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
-        --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
+        --san "$LOCAL_IP" --san "{{ vip_address }}" \
+        --ca-url "https://{{ ca_ip }}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "{{ ca_provisioner_password }}") \
         --force
       # -in and -out must NOT be the same path — openssl truncates -out
       # before it's finished reading -in, corrupting the key (confirmed
       # directly: "Could not read key from ..." on the very next read).
       # Write to a temp file, then move it into place.
       openssl pkey -aes256 -in /etc/rabbitmq/server.key -out /etc/rabbitmq/server.key.enc \
-        -passout pass:'${admin_password}'
+        -passout pass:'{{ admin_password }}'
       mv /etc/rabbitmq/server.key.enc /etc/rabbitmq/server.key
       cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/rabbitmq/ca.crt
       cp /tmp/root_ca.crt /etc/rabbitmq/root_ca.crt
@@ -221,7 +221,7 @@ write_files:
       # haFullStack-Findings-Log.md) — Restart=always exhausts systemd's
       # burst limit within seconds and the unit ends up permanently
       # failed, silently breaking auto-renewal from the very first boot.
-      echo -n "${admin_password}" > /etc/rabbitmq/server.key.passfile
+      echo -n "{{ admin_password }}" > /etc/rabbitmq/server.key.passfile
       chown rabbitmq:rabbitmq /etc/rabbitmq/server.key.passfile
       chmod 600 /etc/rabbitmq/server.key.passfile
 
@@ -230,13 +230,13 @@ write_files:
       ssl_options.cacertfile = /etc/rabbitmq/ca.crt
       ssl_options.certfile = /etc/rabbitmq/server.crt
       ssl_options.keyfile = /etc/rabbitmq/server.key
-      ssl_options.password = ${admin_password}
+      ssl_options.password = {{ admin_password }}
       ssl_options.verify = verify_peer
       ssl_options.fail_if_no_peer_cert = true
       management.ssl.port = 15671
       management.ssl.certfile = /etc/rabbitmq/server.crt
       management.ssl.keyfile = /etc/rabbitmq/server.key
-      management.ssl.password = ${admin_password}
+      management.ssl.password = {{ admin_password }}
       heartbeat = 580
       log.file.level = info
       listeners.tcp = none
@@ -263,7 +263,7 @@ write_files:
       [Unit]
       Description=step-ca certificate auto-renewal daemon
       [Service]
-      ExecStart=/usr/bin/step ca renew /etc/rabbitmq/server.crt /etc/rabbitmq/server.key --password-file /etc/rabbitmq/server.key.passfile --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/rabbitmq/root_ca.crt --exec "openssl pkey -aes256 -in /etc/rabbitmq/server.key -passin pass:'${admin_password}' -out /etc/rabbitmq/server.key.enc -passout pass:'${admin_password}' && mv /etc/rabbitmq/server.key.enc /etc/rabbitmq/server.key && systemctl restart rabbitmq-server"
+      ExecStart=/usr/bin/step ca renew /etc/rabbitmq/server.crt /etc/rabbitmq/server.key --password-file /etc/rabbitmq/server.key.passfile --daemon --force --ca-url "https://{{ ca_ip }}:8443" --root /etc/rabbitmq/root_ca.crt --exec "openssl pkey -aes256 -in /etc/rabbitmq/server.key -passin pass:'{{ admin_password }}' -out /etc/rabbitmq/server.key.enc -passout pass:'{{ admin_password }}' && mv /etc/rabbitmq/server.key.enc /etc/rabbitmq/server.key && systemctl restart rabbitmq-server"
       Restart=always
       EOF
       systemctl daemon-reload

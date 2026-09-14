@@ -1,0 +1,323 @@
+#cloud-config
+# MySQL Group Replication node. Ansible port of
+# examples/ha-frontend-lb/files/mysql-cloud-init.yaml.tftpl — same
+# content, Terraform's dollar-brace/percent-brace-if interpolation
+# replaced with Jinja2's double-brace/percent-brace-if syntax.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - mysql-server
+  - curl
+
+write_files:
+  - path: /usr/local/sbin/setup-mysql-tls-certs.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
+      dpkg -i /tmp/step-cli.deb || apt-get install -f -y
+
+      for i in $(seq 1 180); do
+        curl -sf "http://{{ ca_ip }}:8080/root_ca.crt" -o /tmp/root_ca.crt \
+          && curl -sf "http://{{ ca_ip }}:8080/intermediate_ca.crt" -o /tmp/intermediate_ca.crt \
+          && break
+        sleep 5
+      done
+
+      mkdir -p /etc/mysql/ssl
+      step ca certificate "$LOCAL_IP" /etc/mysql/ssl/server-cert.pem /etc/mysql/ssl/server-key.pem \
+        --san "$LOCAL_IP" --san "{{ vip_address }}" \
+        --ca-url "https://{{ ca_ip }}:8443" --root /tmp/root_ca.crt \
+        --provisioner admin --provisioner-password-file <(echo -n "{{ ca_provisioner_password }}") \
+        --force
+      cp /tmp/root_ca.crt /etc/mysql/ssl/ca.crt
+      cp /tmp/root_ca.crt /etc/mysql/ssl/root_ca.crt
+      chown -R mysql:mysql /etc/mysql/ssl
+      chmod 600 /etc/mysql/ssl/server-key.pem
+
+      cat > /etc/mysql/mysql.conf.d/zz-tls.cnf <<EOF
+      [mysqld]
+      ssl-ca   = /etc/mysql/ssl/ca.crt
+      ssl-cert = /etc/mysql/ssl/server-cert.pem
+      ssl-key  = /etc/mysql/ssl/server-key.pem
+      EOF
+      systemctl restart mysql
+
+      mysql -u root <<SQL
+      SET SQL_LOG_BIN=0;
+      ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ root_password }}';
+      FLUSH PRIVILEGES;
+      SET SQL_LOG_BIN=1;
+      SQL
+      cat > /etc/mysql/mysql.conf.d/zz-client-root.cnf <<EOF
+      [client]
+      user=root
+      password={{ root_password }}
+      EOF
+      chmod 600 /etc/mysql/mysql.conf.d/zz-client-root.cnf
+
+      cat > /etc/systemd/system/step-renew.service <<EOF
+      [Unit]
+      Description=step-ca certificate auto-renewal daemon
+      [Service]
+      ExecStart=/usr/bin/step ca renew /etc/mysql/ssl/server-cert.pem /etc/mysql/ssl/server-key.pem --daemon --force --ca-url "https://{{ ca_ip }}:8443" --root /etc/mysql/ssl/root_ca.crt --exec "mysql -u root -e 'ALTER INSTANCE RELOAD TLS;'"
+      Restart=always
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now step-renew
+
+  - path: /usr/local/sbin/setup-mysql-tls-accounts.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      {% if is_bootstrap %}
+      mysql -u root <<SQL
+      ALTER USER 'appuser'@'%' REQUIRE X509;
+      ALTER USER 'keystone'@'%' REQUIRE X509;
+      ALTER USER 'proxysql_monitor'@'%' REQUIRE X509;
+      ALTER USER 'ssp_catalog'@'%' REQUIRE X509;
+      ALTER USER 'ssp_blobstore'@'%' REQUIRE X509;
+      ALTER USER 'ssp_customers'@'%' REQUIRE X509;
+      ALTER USER 'ssp_request'@'%' REQUIRE X509;
+      ALTER USER 'ssp_fulfill'@'%' REQUIRE X509;
+      ALTER USER 'ssp_svcinst'@'%' REQUIRE X509;
+      ALTER USER 'ssp_pricing'@'%' REQUIRE X509;
+      ALTER USER 'ssp_reporting'@'%' REQUIRE X509;
+      ALTER USER 'ssp_config'@'%' REQUIRE X509;
+      ALTER USER 'ssp_export'@'%' REQUIRE X509;
+      ALTER USER 'ssp_ticketing'@'%' REQUIRE X509;
+      ALTER USER 'ssp_event'@'%' REQUIRE X509;
+      ALTER USER 'ssp_extevt'@'%' REQUIRE X509;
+      ALTER USER 'root'@'%' REQUIRE X509;
+      SQL
+      {% endif %}
+
+
+  - path: /usr/local/sbin/setup-group-replication.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+      cat > /etc/mysql/mysql.conf.d/zz-group-replication.cnf <<EOF
+      [mysqld]
+      bind-address = 0.0.0.0
+      report_host = "$LOCAL_IP"
+      server-id = {{ server_id }}
+      gtid_mode = ON
+      enforce_gtid_consistency = ON
+      binlog_format = ROW
+      log_bin = mysql-bin
+      log_slave_updates = ON
+
+      plugin_load_add = group_replication.so
+      group_replication_group_name = "{{ group_name }}"
+      group_replication_start_on_boot = OFF
+      group_replication_local_address = "$LOCAL_IP:33061"
+      group_replication_group_seeds = "{{ group_seeds }}"
+      group_replication_single_primary_mode = ON
+      group_replication_enforce_update_everywhere_checks = OFF
+      group_replication_autorejoin_tries = 3
+      EOF
+
+      systemctl restart mysql
+
+      mysql -u root <<SQL
+      SET SQL_LOG_BIN=0;
+      CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY '{{ repl_password }}';
+      GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
+      GRANT BACKUP_ADMIN ON *.* TO 'repl'@'%';
+      GRANT SELECT ON performance_schema.* TO 'repl'@'%';
+      SET SQL_LOG_BIN=1;
+      CHANGE REPLICATION SOURCE TO SOURCE_USER='repl', SOURCE_PASSWORD='{{ repl_password }}' FOR CHANNEL 'group_replication_recovery';
+      SQL
+
+      {% if is_bootstrap %}
+      mysql -u root <<SQL
+      SET GLOBAL group_replication_bootstrap_group = ON;
+      START GROUP_REPLICATION;
+      SET GLOBAL group_replication_bootstrap_group = OFF;
+
+      CREATE USER IF NOT EXISTS 'proxysql_monitor'@'%' IDENTIFIED WITH mysql_native_password BY '{{ monitor_password }}';
+      GRANT REPLICATION CLIENT ON *.* TO 'proxysql_monitor'@'%';
+      GRANT SELECT ON performance_schema.* TO 'proxysql_monitor'@'%';
+      CREATE USER IF NOT EXISTS 'appuser'@'%' IDENTIFIED WITH mysql_native_password BY '{{ app_password }}';
+      GRANT SELECT ON performance_schema.* TO 'appuser'@'%';
+
+      CREATE DATABASE IF NOT EXISTS clusterdemo;
+      GRANT ALL PRIVILEGES ON clusterdemo.* TO 'appuser'@'%';
+      CREATE TABLE IF NOT EXISTS clusterdemo.heartbeat (
+          id INT PRIMARY KEY,
+          counter BIGINT NOT NULL DEFAULT 0,
+          updated_at DATETIME NOT NULL
+      );
+      INSERT INTO clusterdemo.heartbeat (id, counter, updated_at) VALUES (1, 0, NOW())
+        ON DUPLICATE KEY UPDATE updated_at = NOW();
+
+      CREATE USER IF NOT EXISTS 'keystone'@'%' IDENTIFIED WITH mysql_native_password BY '{{ keystone_password }}';
+      CREATE DATABASE IF NOT EXISTS keystone;
+      GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_catalog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_catalog'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_catalog.* TO 'ssp_catalog'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_blobstore CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_blobstore'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_blobstore.* TO 'ssp_blobstore'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_customers CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_customers'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_customers.* TO 'ssp_customers'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_request CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_request'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_request.* TO 'ssp_request'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_fulfill CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_fulfill'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_fulfill.* TO 'ssp_fulfill'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_svcinst CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_svcinst'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_svcinst.* TO 'ssp_svcinst'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_pricing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_pricing'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_pricing.* TO 'ssp_pricing'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_reporting CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_reporting'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_reporting.* TO 'ssp_reporting'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_config CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_config'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_config.* TO 'ssp_config'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_export CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_export'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_export.* TO 'ssp_export'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_ticketing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_ticketing'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_ticketing.* TO 'ssp_ticketing'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_event CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_event'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_event.* TO 'ssp_event'@'%';
+
+      CREATE DATABASE IF NOT EXISTS ssp_extevt CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+      CREATE USER IF NOT EXISTS 'ssp_extevt'@'%' IDENTIFIED WITH mysql_native_password BY '{{ ssp_password }}';
+      GRANT ALL ON ssp_extevt.* TO 'ssp_extevt'@'%';
+
+      CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH mysql_native_password BY '{{ root_password }}';
+      GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+      SQL
+      {% else %}
+      SEED_HOST=$(echo "{{ group_seeds }}" | cut -d: -f1)
+      for i in $(seq 1 180); do
+        if mysql -h "$SEED_HOST" -u repl -p'{{ repl_password }}' -N -e \
+             "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_STATE='ONLINE'" \
+             2>/dev/null | grep -q ONLINE; then
+          break
+        fi
+        sleep 5
+      done
+
+      mysql -u root -e "START GROUP_REPLICATION;"
+      {% endif %}
+
+  - path: /usr/local/sbin/quorum-watchdog.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      import subprocess
+
+      EXPECTED_MEMBERS = 3
+      MAJORITY = EXPECTED_MEMBERS // 2 + 1
+
+
+      def run_sql(sql):
+          cmd = ["mysql", "-u", "root", "-N", "-B", "-e", sql]
+          try:
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+          except Exception:
+              return None
+          if r.returncode != 0:
+              return None
+          return r.stdout
+
+
+      def main():
+          out = run_sql(
+              "SELECT MEMBER_STATE, MEMBER_ROLE FROM "
+              "performance_schema.replication_group_members "
+              "WHERE MEMBER_ID = @@server_uuid;"
+          )
+          if not out:
+              return
+          parts = out.strip().split("\t")
+          if len(parts) != 2:
+              return
+          my_state, my_role = parts
+          if my_state != "ONLINE" or my_role != "PRIMARY":
+              return
+
+          out = run_sql(
+              "SELECT COUNT(*) FROM performance_schema.replication_group_members "
+              "WHERE MEMBER_STATE='ONLINE';"
+          )
+          online_count = int(out.strip()) if out and out.strip().isdigit() else 0
+
+          if online_count < MAJORITY:
+              run_sql("SET GLOBAL super_read_only = ON;")
+          else:
+              run_sql("SET GLOBAL super_read_only = OFF;")
+              run_sql("SET GLOBAL read_only = OFF;")
+
+
+      if __name__ == "__main__":
+          main()
+
+  - path: /etc/systemd/system/quorum-watchdog.service
+    content: |
+      [Unit]
+      Description=Enforce read-only below cluster majority
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/quorum-watchdog.py
+
+  - path: /etc/systemd/system/quorum-watchdog.timer
+    content: |
+      [Unit]
+      Description=Run quorum-watchdog.service every 3s
+
+      [Timer]
+      OnBootSec=10s
+      OnUnitActiveSec=3s
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - /usr/local/sbin/setup-mysql-tls-certs.sh
+  - /usr/local/sbin/setup-group-replication.sh
+  - /usr/local/sbin/setup-mysql-tls-accounts.sh
+  - systemctl daemon-reload
+  - systemctl enable --now quorum-watchdog.timer

@@ -1,0 +1,119 @@
+---
+# 12-teardown.yml
+# Idempotent teardown for 12-ha-frontend-lb.yml — deletes every resource
+# matching this build's name prefix. Safe to run multiple times; missing
+# resources are silently skipped. Unlike 07-teardown.yml (which this
+# mirrors), also deletes the NFS server — 12-ha-frontend-lb.yml is the
+# first example in this collection to actually create one.
+# Run: ansible-playbook -i ../inventory.ini 12-teardown.yml -e build_suffix=<same-suffix-used-to-build>
+- name: "Example 12 — Teardown HA Frontend Load Balancer"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env:     "{{ default_environment }}"
+    project: "{{ default_project }}"
+    pfx:     "{{ project }}-{{ env }}-{{ build_suffix }}"
+    name_pattern: "{{ pfx }}-.*"
+
+  tasks:
+    # ── Instances (all 15 compute nodes) ────────────────────────────────────
+    - name: List instances
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: instance_list
+
+    - name: Delete stack instances
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ instance_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── NFS server ───────────────────────────────────────────────────────────
+    - name: List NFS servers
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/nfs-servers"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: nfs_list
+
+    - name: Delete stack NFS server
+      cloudcore.cloudcore.nfs_server:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ nfs_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── DNS records ──────────────────────────────────────────────────────────
+    # No dns_zones_to_delete here, unlike 07-teardown.yml — this stack
+    # never creates a zone, only records within the pre-existing builtin
+    # "instances.cloudcore.internal" zone, which is a platform fixture
+    # (present before this or any other example ever runs) and must not
+    # be deleted.
+    - name: List DNS records in the builtin instances zone
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/dns/zones/instances.cloudcore.internal/records"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: dns_list
+
+    - name: Delete stack DNS records
+      cloudcore.cloudcore.dns_record:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        zone: instances.cloudcore.internal
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ dns_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── Security groups (must run after instance deletion — DELETE
+    # /v1/vpcs/{id} rejects with 409 if the VPC still has an attached SG) ────
+    - name: List security groups
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/security-groups"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: sg_list
+
+    - name: Delete stack security groups
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ sg_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── VPC ──────────────────────────────────────────────────────────────────
+    - name: List VPCs
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/vpcs"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: vpc_list
+
+    - name: Delete stack VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ vpc_list.json['items'] | selectattr('name', 'match', name_pattern) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Teardown complete
+      ansible.builtin.debug:
+        msg: "All {{ pfx }}-* resources removed."
