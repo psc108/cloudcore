@@ -93,7 +93,7 @@ module "security_groups" {
     "keystone${local.sfx}" = {
       description = "Keystone identity tier — API (TLS-only) from the NGINX nodes' subnet only, plus SSH"
       ingress_rules = {
-        api_tls = { ip_protocol = "tcp", from_port = 5443, to_port = 5443, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS — the only listener, per direct instruction (haFullStack-LLD.md §5.3.1)" }
+        api_admin = { ip_protocol = "tcp", from_port = 35357, to_port = 35357, cidr = local.bridge_cidr, description = "Apache mod_ssl + mTLS, classic OpenStack admin-port convention (keystone-wsgi-admin, /api/idm) — the only listener, per direct instruction (haFullStack-LLD.md §5.3.1). Not :443 — that's the frontend tier's own client-facing port on this same VIP." }
         ssh     = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
       }
       egress_rules = {

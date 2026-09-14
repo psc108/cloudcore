@@ -359,10 +359,13 @@ write_files:
       HISTORY_FILE = "/var/log/keystone-cluster-status-history.json"
       MAX_HISTORY = 60
 
-      # Keystone's only listener is now :5443 (mTLS) — :5000 is gone. Reuses
-      # this same node's own CA-issued client identity that tls-status.py
-      # already holds (setup-frontend-tls.sh), rather than issuing a
-      # second one just for this script.
+      # Keystone's only listener is now :35357, /api/idm (mTLS, this
+      # project's real-world admin-port convention) — :5000 is gone, and
+      # :443 was never an option (already the frontend tier's own
+      # client-facing port on this same VIP). Reuses this same node's own
+      # CA-issued client identity that tls-status.py already holds
+      # (setup-frontend-tls.sh), rather than issuing a second one just
+      # for this script.
       CA_PEM = "/etc/frontend/tls/ca.pem"
       CLIENT_CERT = "/etc/frontend/tls/cert.pem"
       CLIENT_KEY = "/etc/frontend/tls/key.pem"
@@ -396,7 +399,7 @@ write_files:
                   "scope": {"project": {"name": "admin", "domain": {"id": "default"}}},
               }
           }
-          status, headers, raw = request(f"https://{VIP}:5443/v3/auth/tokens",
+          status, headers, raw = request(f"https://{VIP}:35357/api/idm/v3/auth/tokens",
                                           method="POST", body=body)
           if status != 201:
               return None, f"issuance failed (HTTP {status}): {raw[:200].decode(errors='replace')}"
@@ -407,7 +410,7 @@ write_files:
 
       def validate_against(node_ip, token):
           status, _, raw = request(
-              f"https://{node_ip}:5443/v3/auth/tokens",
+              f"https://{node_ip}:35357/api/idm/v3/auth/tokens",
               headers={"X-Auth-Token": token, "X-Subject-Token": token},
           )
           if status == 200:
@@ -752,7 +755,7 @@ write_files:
       SOCKET_TARGETS = [
           {"name": "NGINX (client-facing :443)", "port": 443},
           {"name": "RabbitMQ (:5671, mTLS)", "port": 5671},
-          {"name": "Keystone (:5443, mTLS)", "port": 5443},
+          {"name": "Keystone (:35357, mTLS)", "port": 35357},
       ]
 
       def check_tls_socket(port, timeout=5):

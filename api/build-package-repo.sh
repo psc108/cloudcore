@@ -37,7 +37,7 @@ if [ ${#PACKAGES[@]} -eq 0 ]; then
     # ha-frontend-lb
     curl ca-certificates dpkg-dev mysql-server mysql-client nginx keepalived \
     keystone python3-pymysql python3-memcache python3 rabbitmq-server \
-    python3-requests python3-yaml \
+    python3-requests python3-yaml python3-openstackclient \
     # full-stack, load-balanced-web (nginx already listed above)
     # ghidra-workstation
     xfce4 xfce4-terminal tigervnc-standalone-server tigervnc-common novnc websockify unzip gnupg \

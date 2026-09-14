@@ -39,6 +39,7 @@ packages:
   - ca-certificates
   - python3-requests
   - python3-yaml
+  - python3-openstackclient
 
 write_files:
   # Identical Fernet key material on both nodes, generated once in
@@ -310,7 +311,7 @@ write_files:
       # SESSION.cert assignment in __main__ below are the only additions
       # to the original script, needed once Keystone's plain :5000 (which
       # this originally ran against) closed and everything moved onto the
-      # :5443 mTLS listener. Every requests.get/post/put/patch/delete call
+      # :35357 mTLS listener. Every requests.get/post/put/patch/delete call
       # already threaded a `ca` (server CA) argument through by hand — a
       # client cert only needs to be supplied once, on a shared Session,
       # rather than threading a second argument through the same ~20
@@ -1570,14 +1571,14 @@ write_files:
 
   # No WSGIDaemonProcess/service pool involved here — this is a one-shot
   # API client, not a listener, so none of F-051's memory concerns apply.
-  # Runs against Keystone's own local :5443 (mTLS — :5000 no longer
+  # Runs against Keystone's own local :35357 (mTLS — :5000 no longer
   # exists, per direct instruction to close every plaintext Keystone
   # listener, including boot-time tooling). import_p3.py's SESSION.cert
   # (requests/urllib3) can't load a passphrase-protected key directly, so
   # this script decrypts a throwaway, root-only copy of this node's own
   # already-issued key into /run (tmpfs, never touches persistent disk)
   # right before the import and removes it immediately after — the
-  # encrypted original on /etc/keystone/ssl/key.pem is untouched.
+  # encrypted original on /etc/keystone/server.key is untouched.
   # Retries each import a few times: both Keystone nodes run this same
   # script concurrently, and import_p3.py's own "does this already
   # exist" check has a real (if narrow) race window between the two
@@ -1626,24 +1627,24 @@ write_files:
       # reliably.
       TMP_KEY=$(mktemp /run/keystone-import-key.XXXXXX)
       trap 'rm -f "$TMP_KEY"' EXIT
-      openssl pkey -in /etc/keystone/ssl/key.pem -passin pass:'${admin_password}' -out "$TMP_KEY"
+      openssl pkey -in /etc/keystone/server.key -passin pass:'${admin_password}' -out "$TMP_KEY"
       chmod 600 "$TMP_KEY"
 
       for i in $(seq 1 60); do
-        curl -sf --cacert /etc/keystone/ssl/ca.pem --cert /etc/keystone/ssl/cert.pem --key "$TMP_KEY" \
-          "https://$LOCAL_IP:5443/v3" >/dev/null 2>&1 && break
+        curl -sf --cacert /etc/keystone/ca.crt --cert /etc/keystone/server.crt --key "$TMP_KEY" \
+          "https://$LOCAL_IP:35357/api/idm/v3" >/dev/null 2>&1 && break
         sleep 5
       done
 
-      export OS_AUTH_URL="https://$LOCAL_IP:5443/v3"
+      export OS_AUTH_URL="https://$LOCAL_IP:35357/api/idm/v3"
       export OS_USERNAME=admin
       export OS_PASSWORD='${admin_password}'
 
       roles_ok=false
       for i in 1 2 3; do
         python3 import_p3.py -i roles.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
-          -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem \
-          -C /etc/keystone/ssl/cert.pem -K "$TMP_KEY" && { roles_ok=true; break; }
+          -p "$OS_PASSWORD" -c /etc/keystone/root_ca.crt \
+          -C /etc/keystone/server.crt -K "$TMP_KEY" && { roles_ok=true; break; }
         sleep 10
       done
       $roles_ok || echo "setup-keystone-roles.sh: roles.yml import did not complete after 3 attempts" >&2
@@ -1651,8 +1652,8 @@ write_files:
       domain_ok=false
       for i in 1 2 3; do
         python3 import_p3.py -i system_domain.yml -k "$OS_AUTH_URL" -u "$OS_USERNAME" \
-          -p "$OS_PASSWORD" -c /etc/keystone/ssl/root_ca.pem \
-          -C /etc/keystone/ssl/cert.pem -K "$TMP_KEY" \
+          -p "$OS_PASSWORD" -c /etc/keystone/root_ca.crt \
+          -C /etc/keystone/server.crt -K "$TMP_KEY" \
           -e password,${keystone_system_domain_password} && { domain_ok=true; break; }
         sleep 10
       done
@@ -1723,22 +1724,22 @@ write_files:
 
       # admin/var.admin_password — this stack's shared admin/service
       # credential (haFullStack-LLD.md §3.3.1, variables.tf). Per direct
-      # instruction, every plaintext Keystone listener closes — public,
-      # internal, and admin catalog URLs all now point at the same :5443
-      # mTLS listener instead of the old plain :5000/:35357 split. Modern
-      # Keystone has no separate admin WSGI app anyway (same
-      # keystone-wsgi-public script every vhost already pointed at), so
-      # this loses no real capability, just the "classic OpenStack admin
-      # port" convention/port-number distinction, which existed only
-      # because this Lab has no distinct admin/internal network to
-      # separate them onto in the first place.
+      # instruction, every plaintext Keystone listener closes and the
+      # catalog now points at the real production convention: :35357,
+      # keystone-wsgi-admin, mounted at /api/idm — a genuinely separate
+      # WSGI app from keystone-wsgi-public, not just a port-number
+      # convention (confirmed directly against python3-keystone's own
+      # .deb). All three URLs point at the same listener — this Lab has
+      # no distinct admin/internal network to separate them onto, and
+      # :443 is already the frontend tier's own client-facing port on
+      # this same VIP, so it's not an option here regardless.
       keystone-manage bootstrap \
         --bootstrap-username admin --bootstrap-password '${admin_password}' \
         --bootstrap-project-name admin --bootstrap-role-name admin \
         --bootstrap-service-name keystone \
-        --bootstrap-admin-url "https://${vip_address}:5443/v3" \
-        --bootstrap-public-url "https://${vip_address}:5443/v3" \
-        --bootstrap-internal-url "https://${vip_address}:5443/v3"
+        --bootstrap-admin-url "https://${vip_address}:35357/api/idm/v3" \
+        --bootstrap-public-url "https://${vip_address}:35357/api/idm/v3" \
+        --bootstrap-internal-url "https://${vip_address}:35357/api/idm/v3"
 
   # env.sh — OpenStack CLI client environment, sourced by root/ecs/ubuntu
   # (runcmd below symlinks it into each user's home directory). Lives
@@ -1746,17 +1747,17 @@ write_files:
   # keystone:keystone 0750 (package default), so non-keystone-group users
   # like ecs can't even traverse into it to reach a 0644 file inside,
   # confirmed directly ("Permission denied" sourcing the symlink as ecs).
-  # OS_AUTH_URL points at the VIP's :5443 mTLS listener, not any one
-  # keystone node's own IP — the VIP is already a static value known at
-  # Terraform-render time (var.vip_address), so no runtime IP-discovery
-  # step (e.g. a systemd oneshot) is needed here; a fixed per-node IP
-  # would also break this file on failover, defeating the point of the HA
-  # VIP. OS_PASSWORD matches the bootstrap credential above (both
-  # var.admin_password) — this Lab's shared, documented placeholder, not
-  # a new secret. Since :5000/:35357 are gone, a plain-HTTP CLI path no
-  # longer exists — OS_CERT/OS_KEY point at a dedicated "ecs" client
-  # identity issued by the same CA (setup-keystone-tls.sh below), the
-  # same mechanism the backend tier already uses successfully against
+  # OS_AUTH_URL points at the VIP's :35357 mTLS listener (/api/idm path),
+  # not any one keystone node's own IP — the VIP is already a static
+  # value known at Terraform-render time (var.vip_address), so no
+  # runtime IP-discovery step (e.g. a systemd oneshot) is needed here; a
+  # fixed per-node IP would also break this file on failover, defeating
+  # the point of the HA VIP. OS_PASSWORD matches the bootstrap credential
+  # above (both var.admin_password) — this Lab's shared, documented
+  # placeholder, not a new secret. Since :5000 is gone, a plain-HTTP CLI
+  # path no longer exists — OS_CERT/OS_KEY point at a dedicated "ecs"
+  # client identity issued by the same CA (setup-keystone-tls.sh below),
+  # the same mechanism the backend tier already uses successfully against
   # this exact listener (haFullStack-LLD.md §5.7). Deliberately an
   # *unencrypted* key, unlike the node's own server key — this is read
   # directly by python-openstackclient/requests, which (like
@@ -1769,25 +1770,46 @@ write_files:
       export OS_PROJECT_NAME=admin
       export OS_USER_DOMAIN_NAME=Default
       export OS_PROJECT_DOMAIN_NAME=Default
-      export OS_AUTH_URL=https://${vip_address}:5443/v3
+      export OS_AUTH_URL=https://${vip_address}:35357/api/idm/v3
       export OS_IDENTITY_API_VERSION=3
       export OS_CACERT=/etc/openstack/ca.pem
       export OS_CERT=/etc/openstack/ecs-cert.pem
       export OS_KEY=/etc/openstack/ecs-key.pem
       export no_proxy=${vip_address}
 
-  # TLS/mTLS (haFullStack-LLD.md §5.3.1). Per direct instruction, this is
-  # now the ONLY Keystone listener — the package's own plain :5000 vhost
-  # is disabled below, and the :35357 admin port (setup-keystone-admin-
-  # port.sh) is gone entirely, not just closed at the network edge.
-  # Routed through NGINX's stream{} as a raw TCP passthrough (not http{} +
-  # proxy_ssl_*), keeping Keystone consistent with how MySQL/ProxySQL/
-  # RabbitMQ's TLS ports are fronted. SSLCACertificateFile is the
-  # root+intermediate chain concatenated, not just the root — confirmed
-  # necessary the same way RabbitMQ's Erlang SSL stack needed it (see
-  # haFullStack-Findings-Log.md); Apache/OpenSSL's own chain verification
-  # of the client cert needs the intermediate available locally too,
-  # mirroring that finding rather than assuming mod_ssl is exempt from it.
+  # TLS/mTLS (haFullStack-LLD.md §5.3.1). Per direct instruction, this
+  # matches this project's own real-world Keystone Apache convention —
+  # the classic OpenStack admin port (35357), keystone-wsgi-admin (a
+  # genuinely separate WSGI app from keystone-wsgi-public — confirmed
+  # directly by extracting python3-keystone's own .deb: it calls
+  # initialize_admin_application(), not initialize_public_application();
+  # an earlier assumption in this file that "modern Keystone has no
+  # separate admin WSGI script" was wrong), mounted at /api/idm rather
+  # than root, and flat /etc/keystone/server.{crt,key} cert paths (this
+  # project's own convention, not nested under ssl/) with a separate
+  # SSLCertificateChainFile. **Not** bound to :443 — confirmed directly
+  # that's already the frontend tier's own client-facing HTTPS port on
+  # this same VIP (nginx-frontend.conf.tftpl); binding a second, unrelated
+  # listener to the identical port on the same node would collide.
+  # :35357 alone serves the identical app/path either way, and per
+  # direct instruction this traffic (13 backend microservices talking to
+  # Keystone) never needs to be reachable on the same port real end
+  # users hit — it stays inside the backend's own bridge-subnet-scoped
+  # security group either way, same as every other east-west path in
+  # this stack.
+  #
+  # The package's own plain :5000 vhost is disabled below, per direct
+  # instruction to close every plaintext Keystone listener.
+  #
+  # SSLCACertificateFile is the root+intermediate chain concatenated,
+  # not just the root — confirmed necessary the same way RabbitMQ's
+  # Erlang SSL stack needed it (see haFullStack-Findings-Log.md);
+  # Apache/OpenSSL's own chain verification of the client cert needs the
+  # intermediate available locally too. SSLCertificateChainFile is a
+  # distinct directive serving a different purpose — the intermediate(s)
+  # completing *this node's own* certificate's chain of trust, sent to
+  # the client during the handshake — so it holds just the intermediate,
+  # not root+intermediate.
   #
   # The server key is passphrase-protected with var.admin_password (this
   # project's own real-world convention, per direct instruction — the
@@ -1816,16 +1838,16 @@ write_files:
         sleep 5
       done
 
-      mkdir -p /etc/keystone/ssl
-      step ca certificate "$LOCAL_IP" /etc/keystone/ssl/cert.pem /etc/keystone/ssl/key.pem \
+      step ca certificate "$LOCAL_IP" /etc/keystone/server.crt /etc/keystone/server.key \
         --san "$LOCAL_IP" --san "${vip_address}" \
         --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
         --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
         --force
-      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/keystone/ssl/ca.pem
-      cp /tmp/root_ca.crt /etc/keystone/ssl/root_ca.pem
-      chown -R keystone:keystone /etc/keystone/ssl
-      chmod 600 /etc/keystone/ssl/key.pem
+      cp /tmp/intermediate_ca.crt /etc/keystone/server_chain.crt
+      cat /tmp/root_ca.crt /tmp/intermediate_ca.crt > /etc/keystone/ca.crt
+      cp /tmp/root_ca.crt /etc/keystone/root_ca.crt
+      chown keystone:keystone /etc/keystone/server.crt /etc/keystone/server.key /etc/keystone/server_chain.crt /etc/keystone/ca.crt /etc/keystone/root_ca.crt
+      chmod 600 /etc/keystone/server.key
 
       # server.key -> `openssl pkey`, not the key-type-specific `openssl
       # rsa`/`openssl ec` — step-ca's default provisioner issues an EC
@@ -1834,11 +1856,11 @@ write_files:
       # before it's finished reading -in, corrupting the key (confirmed
       # directly, same failure mode as RabbitMQ's identical mistake).
       # Write to a temp file, then move it into place.
-      openssl pkey -aes256 -in /etc/keystone/ssl/key.pem -out /etc/keystone/ssl/key.pem.enc \
+      openssl pkey -aes256 -in /etc/keystone/server.key -out /etc/keystone/server.key.enc \
         -passout pass:'${admin_password}'
-      mv /etc/keystone/ssl/key.pem.enc /etc/keystone/ssl/key.pem
-      chown keystone:keystone /etc/keystone/ssl/key.pem
-      chmod 600 /etc/keystone/ssl/key.pem
+      mv /etc/keystone/server.key.enc /etc/keystone/server.key
+      chown keystone:keystone /etc/keystone/server.key
+      chmod 600 /etc/keystone/server.key
 
       cat > /etc/keystone/server.key.password.sh <<'EOF'
       #!/bin/sh
@@ -1858,7 +1880,7 @@ write_files:
         --ca-url "https://${ca_ip}:8443" --root /tmp/root_ca.crt \
         --provisioner admin --provisioner-password-file <(echo -n "${ca_provisioner_password}") \
         --force
-      cp /etc/keystone/ssl/ca.pem /etc/openstack/ca.pem
+      cp /etc/keystone/ca.crt /etc/openstack/ca.pem
       chmod 644 /etc/openstack/ecs-cert.pem /etc/openstack/ecs-key.pem /etc/openstack/ca.pem
 
       a2enmod ssl
@@ -1866,9 +1888,9 @@ write_files:
       # Ubuntu's keystone package enables its own plain :5000 vhost as a
       # SITE named "keystone" (/etc/apache2/sites-available/keystone.conf)
       # — confirmed directly (an earlier guess assuming a conf snippet
-      # named "wsgi-keystone" was wrong and silently disabled nothing,
-      # leaving :5000 enabled alongside :5443). Disabled here since :5443
-      # is now the only listener.
+      # named "wsgi-keystone" was wrong and silently disabled nothing).
+      # Disabled here since it's plaintext and every plaintext Keystone
+      # listener closes, per direct instruction.
       if [ -e /etc/apache2/sites-enabled/keystone.conf ]; then
         a2dissite keystone
       fi
@@ -1877,7 +1899,7 @@ write_files:
       # confirmed directly: Apache refuses to start with "SSLPassPhraseDialog
       # cannot occur within <VirtualHost> section" if placed inside one, so
       # it lives in its own conf-available fragment instead of inline in
-      # keystone-tls.conf below.
+      # keystone-admin.conf below.
       cat > /etc/apache2/conf-available/keystone-ssl-passphrase.conf <<'EOF'
       SSLPassPhraseDialog exec:/etc/keystone/server.key.password.sh
       EOF
@@ -1887,34 +1909,40 @@ write_files:
       # the doubled-up escapes below are for templatefile()'s own
       # interpolation syntax (this file is rendered by Terraform before
       # cloud-init ever sees it), so Apache's APACHE_LOG_DIR and
-      # mod_wsgi's GLOBAL group reach the actual config file intact.
-      cat > /etc/apache2/sites-available/keystone-tls.conf <<'EOF'
-      Listen 5443
+      # mod_wsgi's GLOBAL group reach the actual config file intact. No
+      # `Listen 443` here — mod_ssl's own ports.conf already declares
+      # that (guarded by <IfModule ssl_module>, active now that a2enmod
+      # ssl above has run); this vhost isn't bound to :443 anyway (see
+      # the port-conflict comment above), only :35357 needs its own
+      # explicit Listen.
+      cat > /etc/apache2/sites-available/keystone-admin.conf <<'EOF'
+      Listen 35357
 
-      <VirtualHost *:5443>
+      <VirtualHost *:35357>
         SSLEngine on
-        SSLCertificateFile /etc/keystone/ssl/cert.pem
-        SSLCertificateKeyFile /etc/keystone/ssl/key.pem
-        SSLCACertificateFile /etc/keystone/ssl/ca.pem
+        SSLCertificateFile /etc/keystone/server.crt
+        SSLCertificateChainFile /etc/keystone/server_chain.crt
+        SSLCertificateKeyFile /etc/keystone/server.key
+        SSLCACertificateFile /etc/keystone/ca.crt
         SSLVerifyClient require
         SSLVerifyDepth 2
         SSLProtocol -all +TLSv1.2 +TLSv1.3
 
-        WSGIDaemonProcess keystone-tls processes=3 threads=1 user=keystone group=keystone display-name=keystone-tls
-        WSGIProcessGroup keystone-tls
-        WSGIScriptAlias / /usr/bin/keystone-wsgi-public
+        WSGIDaemonProcess keystone-admin processes=3 threads=1 user=keystone group=keystone display-name=keystone-admin
+        WSGIProcessGroup keystone-admin
+        WSGIScriptAlias /api/idm /usr/bin/keystone-wsgi-admin
         WSGIApplicationGroup %%{GLOBAL}
 
         <Directory /usr/bin>
           Require all granted
         </Directory>
 
-        ErrorLog $${APACHE_LOG_DIR}/keystone-tls-error.log
+        ErrorLog $${APACHE_LOG_DIR}/keystone-admin-error.log
         LogLevel warn
-        CustomLog $${APACHE_LOG_DIR}/keystone-tls-access.log combined
+        CustomLog $${APACHE_LOG_DIR}/keystone-admin-access.log combined
       </VirtualHost>
       EOF
-      a2ensite keystone-tls
+      a2ensite keystone-admin
 
       # Positional <crt> <key> must come immediately after the subcommand,
       # before any flags — confirmed directly: flags-then-positional
@@ -1927,7 +1955,7 @@ write_files:
       [Unit]
       Description=step-ca certificate auto-renewal daemon
       [Service]
-      ExecStart=/usr/bin/step ca renew /etc/keystone/ssl/cert.pem /etc/keystone/ssl/key.pem --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/keystone/ssl/root_ca.pem --exec "openssl pkey -aes256 -in /etc/keystone/ssl/key.pem -out /etc/keystone/ssl/key.pem.enc -passout pass:'${admin_password}' && mv /etc/keystone/ssl/key.pem.enc /etc/keystone/ssl/key.pem && systemctl restart apache2"
+      ExecStart=/usr/bin/step ca renew /etc/keystone/server.crt /etc/keystone/server.key --daemon --force --ca-url "https://${ca_ip}:8443" --root /etc/keystone/root_ca.crt --exec "openssl pkey -aes256 -in /etc/keystone/server.key -out /etc/keystone/server.key.enc -passout pass:'${admin_password}' && mv /etc/keystone/server.key.enc /etc/keystone/server.key && systemctl restart apache2"
       Restart=always
       EOF
       systemctl daemon-reload
@@ -1937,11 +1965,11 @@ write_files:
       # the next start/reload — they don't touch the apache2 process the
       # packages: stage already auto-started (still serving the OLD,
       # now-disabled :5000-only config). Without this restart here,
-      # setup-keystone-roles.sh (next in runcmd) hits :5443 with nothing
+      # setup-keystone-roles.sh (next in runcmd) hits :35357 with nothing
       # listening yet — confirmed directly: "Connection refused" on every
       # one of its 60 retries, since nothing in this boot ever reloads
       # apache2 before that script's own readiness loop gives up. Restart
-      # here, not just once at the very end of runcmd, so :5443 is
+      # here, not just once at the very end of runcmd, so :35357 is
       # actually live before anything downstream depends on it.
       systemctl restart apache2
 

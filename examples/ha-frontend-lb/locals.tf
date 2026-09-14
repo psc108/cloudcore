@@ -58,11 +58,13 @@ locals {
     keystone_tls_ips = values(module.keystone.private_ips_by_key)
   })
 
-  # Keystone no longer has an http{}-context vhost of its own — :5000/
-  # :35357 both closed, per direct instruction, leaving only the :5443
-  # mTLS listener, which is a stream{} passthrough (nginx_stream_conf
-  # above, keystone_tls_ips) like every other TLS port in this stack.
-  # nginx-keystone.conf.tftpl (the file that used to hold this) is
+  # Keystone no longer has an http{}-context vhost of its own — :5000 is
+  # closed, per direct instruction, leaving only :35357 (this project's
+  # real-world admin-port convention: keystone-wsgi-admin, /api/idm),
+  # which is a stream{} passthrough (nginx_stream_conf above,
+  # keystone_tls_ips) like every other TLS port in this stack. Not :443
+  # — that's the frontend tier's own client-facing port on this same
+  # VIP. nginx-keystone.conf.tftpl (the file that used to hold this) is
   # deleted, not just unreferenced.
 
   # Dedicated port (8080), not vhost routing — same reasoning and same
