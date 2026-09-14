@@ -381,6 +381,46 @@
   .ssh-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
   .ssh-note code { font-family: monospace; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; }
 
+  /* ── NFS share files (drag-and-drop upload) ── */
+  .files-row td { padding: 0; background: var(--bg); }
+  .files-panel { padding: 16px 24px; border-top: 1px solid var(--border); }
+  .files-panel .files-table { font-size: 12px; margin-top: 12px; }
+  .files-panel .files-table th { color: var(--text-muted); padding: 4px 8px; }
+  .files-panel .files-table td { padding: 6px 8px; }
+  .dropzone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 24px;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--surface2);
+    color: var(--text-muted);
+    font-size: 13px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone.drag-over { border-color: var(--accent); background: var(--surface); color: var(--text); }
+  .file-picker-btn { cursor: pointer; }
+  .upload-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .upload-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 12px;
+  }
+  .upload-row.upload-error { border-color: var(--danger); }
+  .upload-name { flex: 0 0 auto; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upload-bar { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .upload-bar-fill { height: 100%; background: var(--accent); transition: width 0.15s; }
+  .upload-pct { flex: 0 0 44px; text-align: right; color: var(--text-muted); }
+  .upload-row.upload-error .upload-pct { color: var(--danger); }
+
   /* ── Dashboard ── */
   .dash-stats {
     display: grid;

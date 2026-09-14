@@ -176,7 +176,7 @@ Twelve ready-to-run configurations in `examples/`:
 | `examples/full-stack/` | VPC + 3 instances + ALB |
 | `examples/nfs-shared-storage/` | VPC + NFS server + 2 instances with shared mount |
 | `examples/openstack-services/` | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
-| `examples/ha-frontend-lb/` | VPC + HA frontend instance-group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone |
+| `examples/ha-frontend-lb/` | VPC + HA frontend instance-group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend tier + shared NFS storage |
 | `examples/ghidra-workstation/` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
 | `examples/kiwix-library/` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `examples/wifi-sniffer/` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
@@ -206,6 +206,22 @@ Or run them end-to-end from the UI via **Builds → OpenTofu**.
 | `cloudcore_dns_record` | `cloudcore_dns_record` | `/v1/dns/zones/{zone}/records` |
 | `cloudcore_lb_target_group` | — | `/v1/load-balancers/{id}/target-groups` |
 | `cloudcore_lb_listener` | — | `/v1/load-balancers/{id}/listeners` |
+
+Dashboard-only, no Terraform resource behind them — moving files onto an
+NFS share's export directory (e.g. a large tarball ahead of an app
+install) via the same SSH channel the platform already uses to manage
+`cloudcore_nfs_server` itself, not a new listener on the NFS server VM:
+
+| Purpose | API path |
+|---|---|
+| List a share's files | `GET /v1/nfs-servers/{id}/shares/{name}/files` |
+| Upload a file (raw body, `Content-Type: application/octet-stream`) | `PUT /v1/nfs-servers/{id}/shares/{name}/files/{filename}` |
+| Delete a file | `DELETE /v1/nfs-servers/{id}/shares/{name}/files/{filename}` |
+
+The Dashboard's **NFS Servers** page exposes this as a drag-and-drop
+upload zone under each share's "Files" panel. `filename` is restricted
+to a single path segment (letters, digits, `.`, `_`, `-`) — no
+subdirectories, no traversal.
 
 ## Ansible Collection
 

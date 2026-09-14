@@ -2445,6 +2445,33 @@ is built this slice.
   it — every fresh node's apt install failed outright ("not found by
   APT"), not a transient mirror hiccup. Fixed and the repo cache
   rebuilt.
+- **Getting data onto the share** — a real gap this section originally
+  left unanswered: infrastructure existed to mount `/mnt/shared`, but
+  nothing to actually put a large tarball on it from a local machine.
+  Two options now exist, per direct instruction ("both 1 and browser"):
+  - **CloudCore Dashboard drag-and-drop** — a new "Files" panel per
+    share (Dashboard's NFS Servers page), plus the `GET`/`PUT`/`DELETE
+    .../shares/{name}/files...` API it's built on (`api/nfs.py`,
+    `api/nfs_routes.py`, generic — not ha-frontend-lb-specific).
+    Uploads relay through the same SSH channel the platform already
+    uses to manage the NFS server VM (`ubuntu`, the platform's own
+    `cloudcore_ed25519` key) — no new listener on the NFS server, no
+    new SG rule (there is nowhere to add one — see above). One real
+    bug found and fixed: F-068 (`haFullStack-Findings-Log.md`) — a
+    freshly `running` NFS server's export directory can still not
+    exist yet, since cloud-init's own LVM/mkdir/exportfs steps take
+    real, measurable time beyond when the libvirt domain itself
+    reports `running`; fixed with a defensive `mkdir -p` on every
+    list/upload call.
+  - **SFTP to an already-mounting instance** — zero new infrastructure:
+    any frontend or backend node already has `/mnt/shared` mounted and
+    already has SSH (`ecs` user, the same key every other operational
+    task in this stack uses). Point a native SFTP-capable file manager
+    (WinSCP, Cyberduck, Nautilus/Finder's own "Connect to Server") at
+    that node and the mount point directly — no Dashboard, no new API
+    surface, the same drag-and-drop experience as any other network
+    drive. Documented in the searchable help system's "NFS Servers"
+    article, not repeated here in full.
 
 ### 10.4 On-Prem Environment
 
@@ -2521,3 +2548,4 @@ afterward.
 | v0.20 | 2026-09-12 | Paul Scott | New §9, Operational Access (cross-cutting) — every instance gets an `ecs` NOPASSWD-sudo account (reusing the existing CloudCore inter-instance keypair, no new key to manage) and a short-hostname `cloudcore_dns_record`. Required real platform-layer fixes, not just Terraform: `POST /v1/instances` never read a `users` key at all despite the compute layer already fully supporting it, and the API's own DNS resolver never reloaded after startup (F-049); once fixed, cloud-init's `users:` semantics (replaces the image's own default user unless `"default"` is explicitly listed) broke `ubuntu` SSH stack-wide the first time an extra user was actually created at launch (F-050) — both found and fixed live across a real three-iteration build/destroy cycle against the full 15-node stack, final iteration clean end-to-end. |
 | v0.21 | 2026-09-13 | Paul Scott | §5 updated — RabbitMQ AMQP+management and Keystone's identity API closed to TLS-only, per direct instruction, superseding this section's original "kept alongside, not removed" framing for both. Plain `5672`/`15672` and `:5000`/`:35357` are gone entirely; both services' server keys are now passphrase-protected with `var.admin_password` (a pattern other services will need later); `keystone-status.py`/`rabbitmq-status.py` now use real client certificates instead of plain HTTP, closing the "mechanical follow-up if ever needed" this section had deferred. MySQL deliberately untouched — already effectively TLS-only via per-account `REQUIRE X509`. Seven real bugs found and fixed across several full destroy/rebuild cycles (F-058–F-065, `haFullStack-Findings-Log.md`): an `openssl` same-path in/out key corruption; RabbitMQ's actual (non-obvious) listener-disable syntax; `management.ssl.*`'s independent mTLS directives; Apache's `SSLPassPhraseDialog` scope; a wrong assumed Keystone site name; a certificate-SAN/hostname mismatch in the boot-time role-import script; an Apache-reload ordering gap; and — caught by direct question rather than an error — both Keystone nodes racing to import the same role/user data into the one shared MySQL database they already use, fixed by restricting the import to the `-01` node only. |
 | v0.22 | 2026-09-14 | Paul Scott | New §10, Shared Application Storage — a single NFS export (`module.nfs`, `modules/nfs-server`, `var.nfs_disk_gb` default 10GB) mounted read/write at `/mnt/shared` on every frontend and backend node, per direct instruction ahead of the pending application install. Not a revival of §6's superseded per-project NFS design (§7/v0.17) — an unrelated new use of the same module. Noted that `cloudcore_nfs_server` has no security-group attachment point in this provider at all; access control is entirely the export's own `clients = "vpc"` setting, which resolves to the real bridge subnet per the already-established F-041 platform behavior. One real bug found and fixed (F-067, `haFullStack-Findings-Log.md`): `nfs-common` was added to both tiers' `packages:` list but not to the host-level package repo's own build script, so it was never actually cached and apt genuinely couldn't find it. Verified across two full destroy/rebuild cycles — the second showing a real cross-node read/write round-trip through the live NFS export. |
+| v0.23 | 2026-09-14 | Paul Scott | §10.3 — resolved this section's own open gap: infrastructure to mount the share existed, but nothing to actually get data onto it from a local machine. Two options built/documented, per direct instruction: a new CloudCore Dashboard "Files" drag-and-drop panel per NFS share (generic platform capability, `api/nfs.py`/`api/nfs_routes.py`, relayed through the platform's own existing SSH channel to the NFS server VM — no new listener, no new SG rule), and SFTP directly to an already-mounting frontend/backend node (zero new infrastructure, reuses the existing `ecs` key). One real bug found and fixed (F-068, `haFullStack-Findings-Log.md`): a freshly `running` NFS server's export directory can still not exist yet, since cloud-init's LVM/mkdir/exportfs steps genuinely lag the libvirt domain's own `running` state — fixed with a defensive `mkdir -p` on every list/upload call. Verified with a real 50MB upload, SHA-256-confirmed byte-identical on the export. |

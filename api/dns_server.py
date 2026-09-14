@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -87,11 +88,64 @@ def _is_running() -> bool:
         return False
 
 
+def _terminate_pid(pid: int, label: str) -> None:
+    """SIGTERM, then verify it actually died — escalating to SIGKILL after
+    a short grace period rather than trusting a single best-effort signal.
+
+    Added after a real orphan was found holding port 5353 for two days
+    straight: some earlier stop()/reload() cycle sent SIGTERM to a dnsmasq
+    process that didn't die (daemonized children don't always react to
+    SIGTERM from a non-parent the way a foreground process would), then
+    unconditionally deleted the pidfile anyway — leaving every subsequent
+    start() unable to find *or* explain why binding port 5353 kept
+    failing, since _is_running() only ever trusts the pidfile.
+    """
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    for _ in range(10):
+        time.sleep(0.2)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+    log.warning("dns_server: pid %d (%s) ignored SIGTERM, sending SIGKILL", pid, label)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _reap_orphans() -> None:
+    """Find and kill any dnsmasq process using our own conf file, even one
+    _is_running() doesn't know about because its pidfile is gone (see
+    _terminate_pid's docstring for how that happens). Safe to target
+    unconditionally — the match is our own generated --conf-file path, so
+    it can only ever be a process this module itself started in some
+    earlier, uncleanly-ended run, never an unrelated service."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", f"dnsmasq.*--conf-file={_CONF_PATH}"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return  # pgrep not installed — best-effort only
+    tracked = _current_pid()
+    for line in result.stdout.split():
+        pid = int(line)
+        if pid == tracked:
+            continue  # already handled by the normal stop() path
+        log.warning("dns_server: reaping orphaned dnsmasq pid %d (no pidfile tracked it)", pid)
+        _terminate_pid(pid, "orphan")
+
+
 def start() -> None:
     """Write config and start dnsmasq. If already running, reload instead."""
     if _is_running():
         reload()
         return
+    _reap_orphans()
     _CONF_PATH.write_text(_generate_config())
     try:
         # dnsmasq's argv parser rejects "--conf-file <path>" as two separate
@@ -136,8 +190,5 @@ def reload() -> None:
 def stop() -> None:
     pid = _current_pid()
     if pid:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        _terminate_pid(pid, "tracked")
     _PID_PATH.unlink(missing_ok=True)

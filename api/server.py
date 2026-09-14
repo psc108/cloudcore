@@ -1439,4 +1439,8 @@ if __name__ == "__main__":
     dns_store.load()
     reconcile()
     dns_server.start()
-    app.run(host="127.0.0.1", port=8080, debug=False)
+    # threaded=True: an NFS file upload (api/nfs.py's upload_file) holds
+    # its request open for as long as the transfer takes — without this,
+    # Werkzeug's single-threaded dev server would stall every other
+    # request (dashboard polling included) for the whole duration.
+    app.run(host="127.0.0.1", port=8080, debug=False, threaded=True)

@@ -199,6 +199,56 @@ def remove_share(nfs_id, share_name):
 # Mount info helper — returns cloud-init snippet for an instance
 # ---------------------------------------------------------------------------
 
+@nfs_bp.get("/v1/nfs-servers/<nfs_id>/shares/<share_name>/files")
+def list_share_files(nfs_id, share_name):
+    nfs = nfs_store.get(nfs_id)
+    if not nfs:
+        return _problem(404, "Not Found", f"NFS server '{nfs_id}' not found")
+    if not any(s["name"] == share_name for s in nfs.shares):
+        return _problem(404, "Not Found", f"Share '{share_name}' not found")
+    try:
+        files = nfs_compute.list_files(nfs, share_name)
+    except Exception as e:
+        return _problem(502, "Bad Gateway", str(e))
+    return jsonify({"items": files})
+
+
+@nfs_bp.put("/v1/nfs-servers/<nfs_id>/shares/<share_name>/files/<filename>")
+def upload_share_file(nfs_id, share_name, filename):
+    """Streams the raw request body onto the export over SSH — send with
+    Content-Type: application/octet-stream (not multipart/form-data),
+    so Werkzeug hands back request.stream untouched rather than trying
+    to parse it as form data."""
+    nfs = nfs_store.get(nfs_id)
+    if not nfs:
+        return _problem(404, "Not Found", f"NFS server '{nfs_id}' not found")
+    if not any(s["name"] == share_name for s in nfs.shares):
+        return _problem(404, "Not Found", f"Share '{share_name}' not found")
+    try:
+        size = nfs_compute.upload_file(nfs, share_name, filename, request.stream)
+    except ValueError as e:
+        return _problem(400, "Bad Request", str(e))
+    except Exception as e:
+        return _problem(502, "Bad Gateway", str(e))
+    return jsonify({"name": filename, "size": size}), 201
+
+
+@nfs_bp.delete("/v1/nfs-servers/<nfs_id>/shares/<share_name>/files/<filename>")
+def delete_share_file(nfs_id, share_name, filename):
+    nfs = nfs_store.get(nfs_id)
+    if not nfs:
+        return _problem(404, "Not Found", f"NFS server '{nfs_id}' not found")
+    if not any(s["name"] == share_name for s in nfs.shares):
+        return _problem(404, "Not Found", f"Share '{share_name}' not found")
+    try:
+        nfs_compute.delete_file(nfs, share_name, filename)
+    except ValueError as e:
+        return _problem(400, "Bad Request", str(e))
+    except Exception as e:
+        return _problem(502, "Bad Gateway", str(e))
+    return "", 204
+
+
 @nfs_bp.get("/v1/nfs-servers/<nfs_id>/shares/<share_name>/mount-config")
 def mount_config(nfs_id, share_name):
     nfs = nfs_store.get(nfs_id)

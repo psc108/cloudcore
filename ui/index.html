@@ -398,6 +398,46 @@
   .ssh-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
   .ssh-note code { font-family: monospace; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; }
 
+  /* ── NFS share files (drag-and-drop upload) ── */
+  .files-row td { padding: 0; background: var(--bg); }
+  .files-panel { padding: 16px 24px; border-top: 1px solid var(--border); }
+  .files-panel .files-table { font-size: 12px; margin-top: 12px; }
+  .files-panel .files-table th { color: var(--text-muted); padding: 4px 8px; }
+  .files-panel .files-table td { padding: 6px 8px; }
+  .dropzone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 24px;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--surface2);
+    color: var(--text-muted);
+    font-size: 13px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone.drag-over { border-color: var(--accent); background: var(--surface); color: var(--text); }
+  .file-picker-btn { cursor: pointer; }
+  .upload-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .upload-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 12px;
+  }
+  .upload-row.upload-error { border-color: var(--danger); }
+  .upload-name { flex: 0 0 auto; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upload-bar { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .upload-bar-fill { height: 100%; background: var(--accent); transition: width 0.15s; }
+  .upload-pct { flex: 0 0 44px; text-align: right; color: var(--text-muted); }
+  .upload-row.upload-error .upload-pct { color: var(--danger); }
+
   /* ── Dashboard ── */
   .dash-stats {
     display: grid;
@@ -3926,8 +3966,142 @@ function _renderShareRows(s) {
       <td>${sh.name}</td>
       <td class="mono text-muted">${sh.path || '/exports/' + sh.name}</td>
       <td class="text-muted">${sh.clients || 'vpc'}</td>
-      <td><button class="btn btn-danger btn-sm" onclick="removeNFSShare('${s.id}','${sh.name}')">Remove</button></td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="toggleShareFiles('${s.id}','${sh.name}')">Files ▾</button>
+        <button class="btn btn-danger btn-sm" onclick="removeNFSShare('${s.id}','${sh.name}')">Remove</button>
+      </td>
+    </tr>
+    <tr id="nfs-files-row-${s.id}-${sh.name}" class="files-row" style="display:none">
+      <td colspan="4">${_filesPanel(s.id, sh.name)}</td>
     </tr>`).join('');
+}
+
+// ── Share files — drag-and-drop upload/browse/delete ───────────────────────
+
+function _filesPanel(nfsId, shareName) {
+  return `<div class="files-panel">
+    <div class="dropzone"
+         ondragover="event.preventDefault(); this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="handleFileDrop(event, '${nfsId}', '${shareName}')">
+      <span>Drag &amp; drop files here to upload, or</span>
+      <label class="btn btn-ghost btn-sm file-picker-btn">
+        Browse…
+        <input type="file" multiple style="display:none" onchange="handleFilePick(event, '${nfsId}', '${shareName}')">
+      </label>
+    </div>
+    <div class="upload-list" id="upload-list-${nfsId}-${shareName}"></div>
+    <table class="files-table">
+      <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+      <tbody id="files-rows-${nfsId}-${shareName}"><tr><td colspan="4" style="color:var(--text-muted);padding:8px">Loading…</td></tr></tbody>
+    </table>
+  </div>`;
+}
+
+function toggleShareFiles(nfsId, shareName) {
+  const row = document.getElementById(`nfs-files-row-${nfsId}-${shareName}`);
+  const nowVisible = row.style.display === 'none';
+  row.style.display = nowVisible ? 'table-row' : 'none';
+  if (nowVisible) loadShareFiles(nfsId, shareName);
+}
+
+async function loadShareFiles(nfsId, shareName) {
+  const tbody = document.getElementById(`files-rows-${nfsId}-${shareName}`);
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-muted);padding:8px">Loading…</td></tr>';
+  try {
+    const data  = await api('GET', `/v1/nfs-servers/${nfsId}/shares/${shareName}/files`);
+    const items = data.items || [];
+    tbody.innerHTML = items.length
+      ? items.map(f => `
+        <tr>
+          <td class="mono">${f.name}</td>
+          <td class="text-muted">${formatBytes(f.size)}</td>
+          <td class="text-muted">${new Date(f.modified * 1000).toLocaleString()}</td>
+          <td><button class="btn btn-danger btn-sm" onclick="deleteShareFile('${nfsId}','${shareName}','${f.name}')">Delete</button></td>
+        </tr>`).join('')
+      : '<tr><td colspan="4" style="color:var(--text-muted);padding:8px">No files yet — drag some in above.</td></tr>';
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+  return `${n.toFixed(1)} ${units[i]}`;
+}
+
+function handleFileDrop(event, nfsId, shareName) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  uploadFiles(event.dataTransfer.files, nfsId, shareName);
+}
+
+function handleFilePick(event, nfsId, shareName) {
+  uploadFiles(event.target.files, nfsId, shareName);
+  event.target.value = '';
+}
+
+function uploadFiles(fileList, nfsId, shareName) {
+  Array.from(fileList).forEach(file => uploadOneFile(file, nfsId, shareName));
+}
+
+function uploadOneFile(file, nfsId, shareName) {
+  const host = document.getElementById(`upload-list-${nfsId}-${shareName}`);
+  if (!host) return;
+  const rowId = `up-${nfsId}-${shareName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  host.insertAdjacentHTML('beforeend', `
+    <div class="upload-row" id="${rowId}">
+      <span class="upload-name">${file.name}</span>
+      <div class="upload-bar"><div class="upload-bar-fill" style="width:0%"></div></div>
+      <span class="upload-pct">0%</span>
+    </div>`);
+  const row  = document.getElementById(rowId);
+  const fill = row.querySelector('.upload-bar-fill');
+  const pct  = row.querySelector('.upload-pct');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('PUT', `${API_BASE}/v1/nfs-servers/${nfsId}/shares/${shareName}/files/${encodeURIComponent(file.name)}`);
+  xhr.setRequestHeader('Authorization', `Bearer ${API_TOKEN}`);
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const p = Math.round((e.loaded / e.total) * 100);
+    fill.style.width = `${p}%`;
+    pct.textContent = `${p}%`;
+  };
+  xhr.onload = () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      pct.textContent = 'Done';
+      toast(`Uploaded "${file.name}"`, 'success');
+      loadShareFiles(nfsId, shareName);
+      setTimeout(() => row.remove(), 2000);
+    } else {
+      let detail = `HTTP ${xhr.status}`;
+      try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
+      pct.textContent = 'Failed';
+      row.classList.add('upload-error');
+      toast(`Upload of "${file.name}" failed: ${detail}`, 'error');
+    }
+  };
+  xhr.onerror = () => {
+    pct.textContent = 'Failed';
+    row.classList.add('upload-error');
+    toast(`Upload of "${file.name}" failed: network error`, 'error');
+  };
+  xhr.send(file);
+}
+
+async function deleteShareFile(nfsId, shareName, filename) {
+  if (!confirm(`Delete "${filename}"?`)) return;
+  try {
+    await api('DELETE', `/v1/nfs-servers/${nfsId}/shares/${shareName}/files/${encodeURIComponent(filename)}`);
+    toast(`Deleted "${filename}"`, 'success');
+    loadShareFiles(nfsId, shareName);
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
 }
 
 function _nfsSSHPanel(s) {

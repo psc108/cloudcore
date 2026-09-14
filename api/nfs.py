@@ -1,6 +1,8 @@
 """NFS server provisioning — KVM VM with a dedicated data disk."""
 from __future__ import annotations
 
+import re
+import shlex
 import subprocess
 import textwrap
 from pathlib import Path
@@ -304,27 +306,132 @@ def get_nfs_server_status(domain_name: str) -> NfsServerStatus:
     return mapping.get(s, NfsServerStatus.ERROR)
 
 
-def reload_exports(nfs: NfsServer) -> None:
-    """Re-write /etc/exports and reload on a running NFS server via SSH."""
+def _ssh_target(nfs: NfsServer) -> tuple[str, str, int]:
+    """(key_path, host, port) for the already-proven SSH channel to an NFS
+    server VM — same SLIRP-vs-bridge branching reload_exports always used."""
     if not nfs.ssh_host_port and not nfs.private_ip:
         raise RuntimeError("NFS server has no reachable SSH endpoint")
-
-    vpc_cidr = _get_vpc_cidr(nfs.vpc_id)
-    exports_content = "\n".join(_export_line(s, vpc_cidr) for s in nfs.shares) + "\n"
-
     key = compute.get_cc_privkey_path()
     port = nfs.ssh_host_port if nfs.ssh_host_port else 22
     host = "127.0.0.1" if nfs.ssh_host_port else nfs.private_ip
+    return key, host, port
 
-    import subprocess
-    cmd = [
+
+def _ssh_base_cmd(nfs: NfsServer) -> list[str]:
+    key, host, port = _ssh_target(nfs)
+    return [
         "ssh", "-i", key, "-p", str(port),
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ConnectTimeout=10",
         f"ubuntu@{host}",
+    ]
+
+
+def reload_exports(nfs: NfsServer) -> None:
+    """Re-write /etc/exports and reload on a running NFS server via SSH."""
+    vpc_cidr = _get_vpc_cidr(nfs.vpc_id)
+    exports_content = "\n".join(_export_line(s, vpc_cidr) for s in nfs.shares) + "\n"
+
+    cmd = _ssh_base_cmd(nfs) + [
         f"echo '{exports_content}' | sudo tee /etc/exports > /dev/null && sudo exportfs -ra",
     ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+
+
+# ---------------------------------------------------------------------------
+# File transfer — drag-and-drop upload support (Dashboard "Files" panel)
+# ---------------------------------------------------------------------------
+# The NFS server VM itself has no user-facing SSH account (only `ubuntu`,
+# holding the platform's own cloudcore_ed25519 keypair — see
+# _cloud_init_iso above) and no CloudCore security-group concept at all
+# (§10, haFullStack-LLD.md). So uploads are relayed through the same
+# already-proven SSH channel reload_exports() uses, not a new listener on
+# the NFS server — no new attack surface, no new SG rule.
+
+_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+
+
+def _validate_filename(filename: str) -> None:
+    """Single path segment only — no subdirectories, no traversal, no
+    leading dot/dash (shell-flag-injection safety, belt-and-braces
+    alongside the shlex.quote() every caller already applies)."""
+    if filename in (".", ".."):
+        raise ValueError(f"Invalid filename: {filename!r}")
+    if not _FILENAME_RE.match(filename):
+        raise ValueError(
+            f"Invalid filename: {filename!r} — letters, digits, '.', '_', "
+            "'-' only, no path separators"
+        )
+
+
+def list_files(nfs: NfsServer, share_name: str) -> list[dict]:
+    """Flat (non-recursive) listing of a share's export directory.
+
+    `mkdir -p` first, same reasoning as upload_file below — a share
+    added at creation time exists in nfs.shares (and so is listable/
+    uploadable through the Dashboard) well before cloud-init's own
+    LVM+mkdir+exportfs runcmd steps actually finish on a freshly booted
+    NFS server VM (status flips to "running" once the libvirt domain
+    itself starts, not once cloud-init completes) — confirmed directly:
+    a real upload attempt ~90s after "running" hit `tee: ... No such
+    file or directory`. Self-healing and idempotent either way."""
+    remote_dir = f"/exports/{share_name}"
+    cmd = _ssh_base_cmd(nfs) + [
+        f"sudo mkdir -p {shlex.quote(remote_dir)} && "
+        f"find {shlex.quote(remote_dir)} -mindepth 1 -maxdepth 1 "
+        f"-printf '%f\\t%s\\t%T@\\n' 2>/dev/null | sort"
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"listing failed (exit {result.returncode})")
+    files = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        name, size, mtime = parts
+        files.append({"name": name, "size": int(size), "modified": float(mtime)})
+    return files
+
+
+def upload_file(nfs: NfsServer, share_name: str, filename: str, stream) -> int:
+    """Stream an HTTP request body straight onto the export over SSH — no
+    intermediate temp file on the API host, so a multi-GB tarball is never
+    buffered in full anywhere but the wire. Returns bytes written."""
+    _validate_filename(filename)
+    remote_dir = f"/exports/{share_name}"
+    remote_path = f"{remote_dir}/{filename}"
+    cmd = _ssh_base_cmd(nfs) + [
+        f"sudo mkdir -p {shlex.quote(remote_dir)} && "
+        f"sudo tee {shlex.quote(remote_path)} > /dev/null"
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE)
+    total = 0
+    try:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            proc.stdin.write(chunk)
+            total += len(chunk)
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
+    returncode = proc.wait(timeout=3600)
+    if returncode != 0:
+        stderr = proc.stderr.read().decode(errors="replace").strip()
+        raise RuntimeError(stderr or f"upload failed (ssh exit {returncode})")
+    return total
+
+
+def delete_file(nfs: NfsServer, share_name: str, filename: str) -> None:
+    _validate_filename(filename)
+    remote_path = f"/exports/{share_name}/{filename}"
+    cmd = _ssh_base_cmd(nfs) + [f"sudo rm -f {shlex.quote(remote_path)}"]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())

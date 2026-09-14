@@ -72,8 +72,8 @@ _TEMPLATE_META = {
     },
     "ha-frontend-lb": {
         "title": "HA Frontend Load Balancer",
-        "description": "VPC + subnets + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + DNS records.",
-        "resources": ["vpc", "subnet", "security_group", "instance", "dns_record"],
+        "description": "VPC + subnets + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + DNS records.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "nfs_server", "dns_record"],
     },
     "ghidra-workstation": {
         "title": "Ghidra Workstation",
