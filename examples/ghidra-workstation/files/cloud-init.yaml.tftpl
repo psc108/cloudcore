@@ -35,12 +35,21 @@ packages:
   - gnupg
   - ca-certificates
   - temurin-21-jdk
+  - promtail
 
 # No `owner:` on any /home/ubuntu/... entry below: the write_files module
 # runs before users-groups creates that account, so an owner referencing it
 # fails with "Unknown user or group". Files land root-owned; runcmd chowns
 # them once ubuntu exists (see the "Desktop ownership" step below).
 write_files:
+  # Centralized logging (haFullStack-LLD.md §12) — ships this node's own
+  # journal + cloud-init-output.log to the host-level Loki service.
+  # __HOSTNAME__ fixed up in runcmd below, same sed-substitution idiom
+  # this platform already uses for other __-wrapped placeholders.
+  - path: /etc/promtail/config.yml
+    content: |
+      ${indent(6, promtail_config)}
+
   - path: /var/www/placeholder/index.html
     content: |
       <!doctype html>
@@ -136,6 +145,20 @@ write_files:
       Categories=Development;
 
 runcmd:
+  # F-073/F-072 promtail fix, first, before any other service on this
+  # node starts (F-076, haFullStack-Findings-Log.md — running this
+  # after other service-setup steps left a real window where
+  # promtail's still-__HOSTNAME__-labeled, postinst-started instance
+  # could ship log content under the wrong host label). promtail's own
+  # package postinst auto-starts it immediately once installed, before
+  # this runcmd block gets a chance to fix up __HOSTNAME__ or grant
+  # the "adm" group needed to read root:adm 0640
+  # /var/log/cloud-init-output.log.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
+
   # /home/ubuntu itself ships root:root on this base image (only
   # subdirectories we explicitly created come out ubuntu-owned), which
   # breaks XFCE writing .Xauthority/.ICEauthority/.dbus straight into
