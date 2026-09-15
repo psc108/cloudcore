@@ -54,6 +54,45 @@ CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \
 Takes 15-20+ minutes. Only needs re-running when the target Ubuntu release
 changes or a cached package needs a security update — not on every build.
 
+### Set up centralized logging (Loki + Grafana)
+
+Every example template ships its guest instances' logs to a host-level
+Loki + Grafana service — one always-on install, not tied to any
+specific build, so any example (not just one) gets real log coverage.
+Like the package repo above, it isn't installed by `scripts/install.sh`
+itself: it needs the `grafana`/`loki` `.deb`s the step above just
+cached, and it's a materially different class of action (installing
+real packages and starting new systemd services **on this host**, not
+inside a disposable guest VM) — worth a deliberate, separate step
+rather than something a one-time install script does unattended.
+
+```bash
+sudo bash api/setup-logging-service.sh
+```
+
+Grafana's admin password comes from `CLOUDCORE_LOGGING_ADMIN_PASSWORD`
+(default `changeme-admin` if unset) — set it first if you want a real
+one:
+
+```bash
+CLOUDCORE_LOGGING_ADMIN_PASSWORD=yourpassword sudo -E bash api/setup-logging-service.sh
+```
+
+(`-E` so `sudo` preserves the env var — plain `sudo` drops it, and the
+default fires silently otherwise.)
+
+Once it's running:
+
+| Setting | Value |
+|---|---|
+| Loki | `http://192.168.100.1:3100` |
+| Grafana | `http://192.168.100.1:3000` (Loki pre-provisioned as its datasource) |
+
+One-time — only needs re-running if the `loki`/`grafana-server`
+services are ever removed. `systemctl is-active loki grafana-server`
+confirms it's up; the [Sentinel](#optional-sentinel-log-intelligence-advisor)
+section below depends on this being done first.
+
 ### Default credentials
 
 | Setting | Value |
@@ -86,19 +125,35 @@ journalctl --user -u cloudcore-terminal -f
 systemctl --user restart cloudcore-api
 ```
 
+Tearing down the bridge network itself (`ccbr0`) is a separate, rarely-needed
+step — most people never need this:
+
+```bash
+sudo bash api/teardown-network.sh
+```
+
+Refuses if `cloudcore-repo`, `loki`, or `grafana-server` are still active on
+it (tearing the bridge down wouldn't stop them, just silently cut every guest
+off from them) — stop those first, or pass `--force` to proceed anyway.
+
 ### Optional: Sentinel (log-intelligence advisor)
 
 [Sentinel](https://github.com/psc108/sentinel) is a standalone
 companion tool, in its own repo — it watches this platform's
-host-level Loki service (`api/setup-logging-service.sh`,
-`haFullStack-LLD.md` §12), flags log activity that looks like real
-trouble, and matches it against a knowledge base seeded from
-`haFullStack-Findings-Log.md` — surfacing suggestions through its own
-web UI. Since Loki is always-on and shared by every example template,
-not tied to any one build, Sentinel watches from the moment it starts
-regardless of what's currently built. It has no source dependency on
-CloudCore (only Loki's own HTTP query API), so it's entirely optional
-and safe to skip — nothing here requires it.
+host-level Loki service (set up above, "Set up centralized logging"),
+flags log activity that looks like real trouble, and matches it
+against a knowledge base seeded from `haFullStack-Findings-Log.md` —
+surfacing suggestions through its own web UI. Since Loki is always-on
+and shared by every example template, not tied to any one build,
+Sentinel watches from the moment it starts regardless of what's
+currently built. It has no source dependency on CloudCore (only
+Loki's own HTTP query API), so it's entirely optional and safe to
+skip — nothing here requires it.
+
+**Requires the logging service above to already be running** —
+Sentinel's own `install.sh` checks Loki's reachability at the end and
+tells you exactly which step is missing if it isn't, but there's
+nothing to watch either way until `setup-logging-service.sh` has run.
 
 ```bash
 git clone https://github.com/psc108/sentinel.git ../sentinel
