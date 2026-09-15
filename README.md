@@ -101,8 +101,15 @@ Loki's own HTTP endpoints), so it's entirely optional and safe to skip
 ```bash
 git clone https://github.com/psc108/sentinel.git ../sentinel
 cd ../sentinel
-bash install.sh ../CloudProject/haFullStack-Findings-Log.md
+bash install.sh
 ```
+
+`install.sh` auto-detects a sibling CloudCore checkout (whatever its
+local directory is actually named — it isn't assumed to be `cloudcore`
+or anything else) and seeds Sentinel's knowledge base from its
+`haFullStack-Findings-Log.md` automatically. Pass a path explicitly
+(`bash install.sh /path/to/haFullStack-Findings-Log.md`) if this repo
+lives somewhere the auto-detection won't find.
 
 Installs itself as two always-on systemd user services and seeds its
 knowledge base from this repo's own findings log in one step (also
