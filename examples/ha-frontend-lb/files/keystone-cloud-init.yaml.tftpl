@@ -44,7 +44,7 @@ packages:
 
 write_files:
   # Centralized logging (haFullStack-LLD.md §12) — ships this node's own
-  # journal + cloud-init-output.log to the logging node. __HOSTNAME__
+  # journal + cloud-init-output.log to the host-level Loki service. __HOSTNAME__
   # fixed up in runcmd below, same sed-substitution idiom this stack
   # already uses for __IFACE__/__HOSTNAME__ elsewhere.
   - path: /etc/promtail/config.yml
@@ -2008,6 +2008,17 @@ write_files:
       systemctl restart apache2
 
 runcmd:
+  # F-073/F-072 promtail fix, first — before setup-keystone.sh starts
+  # Apache. See ca-cloud-init.yaml.tftpl's own runcmd comment for the
+  # full reasoning (F-076, haFullStack-Findings-Log.md): running this
+  # after a tier's own service-setup steps left a real window where
+  # promtail's still-__HOSTNAME__-labeled postinst-started instance
+  # could already be shipping that service's own log file (here,
+  # Apache's) under the wrong label.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
   - /usr/local/sbin/setup-keystone.sh
   - /usr/local/sbin/setup-keystone-tls.sh
   - /usr/local/sbin/setup-keystone-roles.sh
@@ -2017,17 +2028,3 @@ runcmd:
       [ -d "$home" ] || continue
       ln -sf /etc/openstack/env.sh "$home/env.sh"
     done
-  # F-073: promtail's own package postinst auto-starts the
-  # service immediately after install, before this runcmd
-  # block gets a chance to fix up __HOSTNAME__ or grant the
-  # "adm" group — stop it first so the only real start
-  # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yaml.tftpl).
-  - systemctl stop promtail || true
-  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
-  # F-072: promtail's own user isn't a member of "adm" by
-  # default, needed to read root:adm 0640
-  # /var/log/cloud-init-output.log.
-  - usermod -aG adm promtail
-  - systemctl enable --now promtail

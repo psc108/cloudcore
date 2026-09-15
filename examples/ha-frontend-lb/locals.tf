@@ -127,41 +127,29 @@ locals {
   ca_ip                   = values(module.ca.private_ips_by_key)[0]
   ca_provisioner_password = random_id.ca_provisioner_password.hex
 
-  # Centralized logging (Loki + Grafana) — a Lab debugging aid
-  # (haFullStack-LLD.md §12), single node, created alongside the CA for
-  # the same reason: every other tier's own promtail config needs its
-  # IP already known.
-  logging_instance = {
-    "logging-a${local.sfx}" = {
-      image_id           = "ubuntu-22.04"
-      flavor             = var.logging_flavor
-      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
-      security_group_ids = [module.security_groups.security_group_ids_by_key["logging${local.sfx}"]]
-      users              = local.ecs_user
-      user_data = templatefile("${path.module}/files/logging-cloud-init.yaml.tftpl", {
-        admin_password = var.admin_password
-      })
-      # Deliberately no promtail on this node itself — it's the
-      # logging destination, not a source; shipping its own journal to
-      # itself would be redundant (already locally inspectable) and,
-      # more importantly, the promtail_config local below needs
-      # logging_ip, which needs this very node to exist first —
-      # referencing it here would be a circular dependency.
-    }
-  }
-
-  logging_ip = values(module.logging.private_ips_by_key)[0]
-
-  # Shared promtail agent config, rendered once and embedded (via
-  # indent(), same reuse pattern as nginx_conf/nginx_stream_conf above)
-  # into every other tier's own write_files — see
-  # files/promtail-config.yml.tftpl for what it actually ships (journal
-  # + cloud-init-output.log, both labeled by this node's own hostname,
-  # fixed up at boot the same way frontend's own index.html is).
-  promtail_config = templatefile("${path.module}/files/promtail-config.yml.tftpl", {
-    logging_ip = local.logging_ip
-  })
+  # Centralized logging (Loki + Grafana, haFullStack-LLD.md §12) is a
+  # host-level, always-on platform capability now
+  # (api/setup-logging-service.sh), not a per-example node — every
+  # example's own promtail ships to the same fixed address
+  # (192.168.100.1:3100), the same pattern already used for the
+  # host-level package repo (192.168.100.1:8090, §7). This stack used
+  # to run its own dedicated "logging" node purely so every other
+  # tier's promtail had somewhere to point — no longer needed, and
+  # removing it drops this stack back to 16 nodes.
+  #
+  # Genuinely static now — no templatefile() interpolation needed at
+  # all, since the address is a fixed constant rather than a
+  # discovered per-build IP (which is also what retired the circular-
+  # dependency workaround this stack briefly needed for the logging
+  # node to watch itself: the host-level service doesn't have that
+  # problem, since it was never a guest instance in the first place).
+  # Rendered once and embedded (via indent(), same reuse pattern as
+  # nginx_conf/nginx_stream_conf above) into every tier's own
+  # write_files — see files/promtail-config.yml for what it actually
+  # ships (journal + cloud-init-output.log + per-service log files,
+  # all labeled by this node's own hostname, fixed up at boot the same
+  # way frontend's own index.html is).
+  promtail_config = file("${path.module}/files/promtail-config.yml")
 
   # Frontend + backend both mount this share at boot — see
   # setup-nfs-mount.sh in each tier's own cloud-init. api/nfs.py's
@@ -454,7 +442,6 @@ locals {
   # need their group name prefixed back on here.
   dns_records = merge(
     { for k, ip in module.ca.private_ips_by_key : k => ip },
-    { for k, ip in module.logging.private_ips_by_key : k => ip },
     { for k, ip in module.nfs.private_ips_by_key : k => ip },
     { for k, ip in module.mysql_bootstrap.private_ips_by_key : k => ip },
     { for k, ip in module.mysql_replicas.private_ips_by_key : k => ip },

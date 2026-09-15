@@ -58,7 +58,6 @@
     backend_flavor: standard.medium
     nfs_flavor: standard.small
     nfs_disk_gb: 10
-    logging_flavor: standard.small
 
     nfs_share: shared
     nfs_mount_dir: /mnt/shared
@@ -129,17 +128,6 @@
         ingress_rules:
           - { protocol: tcp, from_port: 8443, to_port: 8443, cidr: "{{ bridge_cidr }}" }
           - { protocol: tcp, from_port: 8080, to_port: 8080, cidr: "{{ bridge_cidr }}" }
-          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
-      # Centralized logging (Loki + Grafana) — a Lab debugging aid, per
-      # direct instruction, not part of the application's own critical
-      # path. Deliberately no TLS: internal-only, bridge-subnet-scoped
-      # traffic between a debugging tool and the nodes it watches, same
-      # trust boundary this stack already draws for memcached above.
-      - name: logging
-        description: "Centralized logging — Loki's push API from every other tier, Grafana's UI for human access, plus SSH"
-        ingress_rules:
-          - { protocol: tcp, from_port: 3100, to_port: 3100, cidr: "{{ bridge_cidr }}" }
-          - { protocol: tcp, from_port: 3000, to_port: 3000, cidr: "{{ admin_cidr }}" }
           - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
 
   tasks:
@@ -231,42 +219,24 @@
         fernet_key1: "{{ lookup('file', secrets_dir + '/fernet_key1') }}"
 
     # ── step-ca ──────────────────────────────────────────────────────────────
-    # ── Centralized logging (Loki + Grafana) — created before the CA
-    # (and everything else): every other tier's own promtail config
-    # needs this node's IP already known, same reasoning as the CA's
-    # own early creation. ─────────────────────────────────────────────
-    - name: Create logging instance
-      cloudcore.cloudcore.instance:
-        api_url: "{{ cloudcore_api_url }}"
-        api_token: "{{ cloudcore_api_token }}"
-        name: "{{ pfx }}-logging-a"
-        image_id: ubuntu-22.04
-        flavor: "{{ logging_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.logging }}"]
-        users: "{{ ecs_user }}"
-        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/logging-cloud-init.yml.j2', template_vars={
-          'admin_password': admin_password }) }}"
-        tags: { <<: *common_tags, Role: logging }
-      register: logging_instance
-
-    - name: Wait for logging instance to reach running
-      ansible.builtin.uri:
-        url: "{{ cloudcore_api_url }}/v1/instances/{{ logging_instance.instance.id }}"
-        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
-      register: logging_poll
-      until: logging_poll.json.status == "running" and logging_poll.json.private_ip != ""
-      retries: 60
-      delay: 5
-
-    - name: Record logging IP and render the shared promtail config
-      ansible.builtin.set_fact:
-        logging_ip: "{{ logging_poll.json.private_ip }}"
-
+    # Centralized logging (Loki + Grafana, haFullStack-LLD.md §12) is a
+    # host-level, always-on platform capability now
+    # (api/setup-logging-service.sh), not a per-example node — every
+    # example's own promtail ships to the same fixed address
+    # (192.168.100.1:3100), the same pattern already used for the
+    # host-level package repo (192.168.100.1:8090, §7). This stack used
+    # to run its own dedicated "logging" node purely so every other
+    # tier's promtail had somewhere to point — no longer needed, and
+    # removing it drops this stack back to 16 nodes. Genuinely static
+    # now — no lookup('template', ..., template_vars={...}) needed at
+    # all, since the address is a fixed constant rather than a
+    # discovered per-build IP (which is also what retired the circular-
+    # dependency workaround this stack briefly needed for the logging
+    # node to watch itself: the host-level service doesn't have that
+    # problem, since it was never a guest instance in the first place).
     - name: Render promtail_config fragment
       ansible.builtin.set_fact:
-        promtail_config: "{{ lookup('template', 'templates/ha-frontend-lb/promtail-config.yml.j2', template_vars={'logging_ip': logging_ip}) }}"
+        promtail_config: "{{ lookup('file', 'templates/ha-frontend-lb/promtail-config.yml.j2') }}"
 
     - name: Create CA instance
       cloudcore.cloudcore.instance:
@@ -693,7 +663,6 @@
       ansible.builtin.set_fact:
         dns_entries:
           - { name: ca-a, ip: "{{ ca_ip }}" }
-          - { name: logging-a, ip: "{{ logging_ip }}" }
           - { name: nfs, ip: "{{ nfs_ip }}" }
           - { name: mysql-a, ip: "{{ mysql_a_poll.json.private_ip }}" }
           - { name: mysql-b, ip: "{{ mysql_replicas_poll.results[0].json.private_ip }}" }
@@ -737,4 +706,4 @@
           - "Backend: {{ backend_ips }}"
           - "NFS shared export: {{ nfs_ip }}:/exports/{{ nfs_share }} (mounted at {{ nfs_mount_dir }} on frontend+backend)"
           - "Status pages: http://{{ vip_address }}/{mysql,keystone,rabbitmq,tls}-status.html"
-          - "Grafana: http://{{ logging_ip }}:3000/ (admin / your admin_password), Loki pre-provisioned as its datasource"
+          - "Grafana: http://192.168.100.1:3000/ (host-level, admin / setup-logging-service.sh's CLOUDCORE_LOGGING_ADMIN_PASSWORD), Loki pre-provisioned as its datasource"

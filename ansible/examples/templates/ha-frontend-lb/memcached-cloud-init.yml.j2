@@ -31,18 +31,11 @@ write_files:
       {{ promtail_config | indent(6) }}
 
 runcmd:
-  - systemctl restart memcached
-  # F-073: promtail's own package postinst auto-starts the
-  # service immediately after install, before this runcmd
-  # block gets a chance to fix up __HOSTNAME__ or grant the
-  # "adm" group — stop it first so the only real start
-  # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yml.j2).
+  # F-073/F-072 promtail fix, first. See ca-cloud-init.yml.j2's own
+  # runcmd comment for the full reasoning (F-076,
+  # haFullStack-Findings-Log.md).
   - systemctl stop promtail || true
   - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
-  # F-072: promtail's own user isn't a member of "adm" by
-  # default, needed to read root:adm 0640
-  # /var/log/cloud-init-output.log.
   - usermod -aG adm promtail
   - systemctl enable --now promtail
+  - systemctl restart memcached

@@ -278,19 +278,22 @@ write_files:
       systemctl enable --now step-renew
 
 runcmd:
-  - /usr/local/sbin/setup-rabbitmq.sh
-  - /usr/local/sbin/setup-rabbitmq-tls.sh
-  # F-073: promtail's own package postinst auto-starts the
-  # service immediately after install, before this runcmd
-  # block gets a chance to fix up __HOSTNAME__ or grant the
-  # "adm" group — stop it first so the only real start
-  # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yml.j2).
+  # F-073/F-072 promtail fix, first — before setup-rabbitmq.sh starts
+  # rabbitmq-server. See ca-cloud-init.yml.j2's own runcmd comment for
+  # the full reasoning (F-076, haFullStack-Findings-Log.md). The
+  # "rabbitmq" group already exists at this point — created by the
+  # rabbitmq-server package's own postinst during cloud-init's earlier
+  # packages: phase, well before runcmd ever starts — so usermod
+  # doesn't need the service itself running first.
   - systemctl stop promtail || true
   - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
-  # F-072: promtail's own user isn't a member of "adm" by
-  # default, needed to read root:adm 0640
-  # /var/log/cloud-init-output.log.
   - usermod -aG adm promtail
+  # RabbitMQ's own log files (/var/log/rabbitmq/rabbit@*.log) are
+  # group-owned "rabbitmq", not "adm" — confirmed live via a real
+  # "permission denied" from promtail without this. No credential
+  # material lives in this directory (unlike proxysql's own datadir),
+  # so group membership is a fine, simple fix here.
+  - usermod -aG rabbitmq promtail
   - systemctl enable --now promtail
+  - /usr/local/sbin/setup-rabbitmq.sh
+  - /usr/local/sbin/setup-rabbitmq-tls.sh

@@ -40,7 +40,7 @@ packages:
 
 write_files:
   # Centralized logging (haFullStack-LLD.md §12) — ships this node's own
-  # journal + cloud-init-output.log to the logging node. __HOSTNAME__
+  # journal + cloud-init-output.log to the host-level Loki service. __HOSTNAME__
   # fixed up in runcmd below, same sed-substitution idiom this file
   # already uses for its own index.html.
   - path: /etc/promtail/config.yml
@@ -947,8 +947,8 @@ runcmd:
   # block gets a chance to fix up __HOSTNAME__ or grant the
   # "adm" group — stop it first so the only real start
   # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yaml.tftpl).
+  # first-boot race already handled for grafana-server by
+  # api/setup-logging-service.sh at the host level.
   - systemctl stop promtail || true
   - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html /etc/promtail/config.yml
   - /usr/local/sbin/setup-frontend-tls.sh

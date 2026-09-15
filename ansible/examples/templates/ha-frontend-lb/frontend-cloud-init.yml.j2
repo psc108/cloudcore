@@ -954,8 +954,8 @@ runcmd:
   # block gets a chance to fix up __HOSTNAME__ or grant the
   # "adm" group — stop it first so the only real start
   # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yml.j2).
+  # first-boot race already handled for grafana-server by
+  # api/setup-logging-service.sh at the host level.
   - systemctl stop promtail || true
   - sed "s/__HOSTNAME__/$(hostname)/" -i /var/www/html/index.html /etc/promtail/config.yml
   - /usr/local/sbin/setup-frontend-tls.sh

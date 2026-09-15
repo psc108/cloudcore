@@ -2681,37 +2681,74 @@ and its Ansible parity port are built this slice.
 
 ### 12.3 Lab Environment (CloudCore)
 
-- **`module.logging`** — one new node, `var.logging_flavor` (default
-  `standard.small`, matching this stack's other lightweight support
-  nodes — Keystone, RabbitMQ). Deliberately single-node, not HA — same
-  precedent as the CA (§5.1) — a Lab debugging aid, not part of the
-  application's own critical path. Created early, alongside the CA
-  node, since every other tier's own promtail config needs this node's
-  IP before it can render — the same reasoning as the CA's own early
-  creation.
+- **Host-level platform capability, not a per-example node.** Originally
+  built (v0.25 below) as `module.logging` — a dedicated node inside
+  `ha-frontend-lb`'s own VPC, created early alongside the CA since every
+  other tier's own promtail config needed its IP before rendering.
+  Retired once it became clear (asked directly: "are we watching all
+  templates, so no matter what template we build we'll gather logs?")
+  that a per-example node meant every OTHER example template — and
+  Sentinel, the separate log-review tool consuming this data — saw
+  nothing at all unless that one specific example happened to be built.
+  Loki + Grafana now run once, host-side, via `api/setup-logging-service.sh`
+  (sudo, one-time, idempotent) — the exact same platform-capability
+  pattern already established for the host-level package repo
+  (`api/setup-package-repo.sh`, `cloudcore-repo.service`,
+  `192.168.100.1:8090`, §7): installed from the already-cached
+  `grafana`/`loki` `.deb`s (no network call), enabled as the packages'
+  own `loki.service`/`grafana-server.service` systemd units (no
+  hand-written unit file needed, unlike `cloudcore-repo`'s own), and
+  reachable at the host's bridge-gateway address
+  (`192.168.100.1:3100`/`:3000`) with zero additional firewall or
+  security-group work — confirmed directly against `api/setup-network.sh`
+  that no `INPUT`-chain rule restricts guest→host-gateway traffic on any
+  port, the same fact that already made `cloudcore-repo` reachable.
+  `scripts/install.sh` prints (does not auto-run, same reasoning as the
+  package-repo step) the one command to set this up from a fresh
+  install. Every example's own promtail now points at this one fixed
+  address instead of a discovered per-build IP — `ha-frontend-lb`'s own
+  `promtail-config.yml` dropped its `${logging_ip}` templating entirely,
+  becoming a plain static file reused byte-for-byte, and the
+  circular-dependency workaround the retired logging node briefly
+  needed to watch itself (a second, `localhost`-pointed render of the
+  same template) is gone too — the host-level service was never a guest
+  instance in the first place, so it never had that problem.
 - **Loki** (log storage + query API) and **Grafana** (UI) both run on
-  that one node — filesystem-backed storage (TSDB schema v13, no
+  the host itself now — filesystem-backed storage (TSDB schema v13, no
   S3/GCS needed at Lab scale), Grafana pre-provisioned with Loki as its
   datasource (`/etc/grafana/provisioning/datasources/loki.yaml`) so
   there's no manual "Add data source" step standing between a fresh
   build and a working Explore view.
 - **Promtail** (Loki's own standard shipping agent — not a custom
-  script) runs on every OTHER node in the stack, shipping two things:
-  the systemd journal (covers every service already running as a unit
-  — nginx, mysql, apache2, rabbitmq-server, keepalived, proxysql,
-  memcached, every `*-status.timer`, `step-renew`, `quorum-watchdog` —
-  with zero per-service enumeration needed, journald already captures
-  all of it) and `/var/log/cloud-init-output.log` specifically — not
-  journal-backed the same way, and the single file this whole
-  document's own debugging has repeatedly reached for.
-- **Grafana's admin login reuses `var.admin_password`** — the same
-  single-shared-credential convention already used for every other
-  admin/service account in this stack (§5.3's own passphrase-protected
-  server keys, first established there), not a new secret. Forcing it
-  in required the same
-  first-boot-race defensive pattern already established elsewhere in
-  this document (§2's MySQL root bootstrap, §3's Fernet-key staging):
-  `setup-logging.sh` stops the package's own auto-started
+  script) runs on every guest node any example template creates,
+  shipping: the systemd journal (covers every service already running
+  as a unit — nginx, mysql, apache2, rabbitmq-server, keepalived,
+  proxysql, memcached, every `*-status.timer`, `step-renew`,
+  `quorum-watchdog` — with zero per-service enumeration needed, journald
+  already captures all of it); `/var/log/cloud-init-output.log`
+  specifically — not journal-backed the same way, and the single file
+  this whole document's own debugging has repeatedly reached for; and,
+  added in the same slice that asked "are we watching everything?", the
+  per-service log FILES a systemd unit's own stdout/stderr capture
+  doesn't include: nginx, MySQL's `error.log`, RabbitMQ, Apache2, and
+  ProxySQL's own `proxysql.log` — plus the logging node itself, a real
+  blind spot until then (nothing was watching the thing doing the
+  watching). Two real permission bugs found fixing this (F-074/F-075,
+  `haFullStack-Findings-Log.md`): RabbitMQ's log files are group-owned
+  `rabbitmq`, not `adm`, so group membership was the fix; ProxySQL's log
+  file shares its directory, owner, group, and mode with that node's own
+  TLS private key, so a file-specific ACL (`setfacl`) was used instead
+  of group membership, to avoid also granting promtail's OS user read
+  access to the key.
+- **Grafana's admin login** is set via `CLOUDCORE_LOGGING_ADMIN_PASSWORD`
+  (default `changeme-admin`), an env var read by
+  `api/setup-logging-service.sh` — a host-level service isn't scoped to
+  any one example's own `var.admin_password`, so it gets its own
+  independent credential instead (same non-interactive-script
+  convention already used for `build-package-repo.sh`). Forcing it in
+  needs the same first-boot-race defensive pattern already established
+  elsewhere in this document (§2's MySQL root bootstrap, §3's
+  Fernet-key staging): the script stops the package's own auto-started
   `grafana-server`, deletes the freshly-created `grafana.db` (Grafana
   only ever applies `grafana.ini`'s configured admin password when it
   creates the admin user on its *own* genuinely first start), edits
@@ -2722,17 +2759,22 @@ and its Ansible parity port are built this slice.
   SG-scoped, never TLS'd" reasoning), not the application's own
   east-west path that earned the strict TLS-everywhere treatment in
   §5. Reversible later via the same step-ca mesh if ever wanted.
-- **Security group** — `3100` (Loki's push API, `local.bridge_cidr`,
-  since every other node needs to reach it), `3000` (Grafana's UI,
-  `var.admin_cidr` — human access only, the same trust boundary as
-  SSH), `22` (`var.admin_cidr`).
+- **No security group.** Not a CloudCore-managed resource at all now —
+  a plain host-level systemd service, reachable at the bridge-gateway
+  address the same way `cloudcore-repo` already is, with no `tofu
+  destroy`/teardown able to reach it either (matching §7's own framing
+  for the package repo). The two ports (`3100` Loki push, `3000`
+  Grafana UI) are simply open on the host itself, same trust boundary
+  as SSH into the host.
 - **Three real first-boot bugs found and fixed** (all in
   `haFullStack-Findings-Log.md`, all fixed identically on both IaC
-  front-ends): **F-071** — the `loki` .deb never creates or owns its
+  front-ends, F-071 now applying at the host level rather than to a
+  guest node): **F-071** — the `loki` .deb never creates or owns its
   own `/var/lib/loki` data directory (confirmed via `dpkg -L loki`, no
   `var/lib` entries at all, unlike Grafana's own package), so the
-  service crash-looped on every single boot until `setup-logging.sh`
-  was made to `mkdir -p`/`chown -R loki:nogroup` it first. **F-072** —
+  service crash-looped on every single boot until
+  `api/setup-logging-service.sh` was made to `mkdir -p`/`chown -R
+  loki:nogroup` it first. **F-072** —
   `promtail`'s own service user was never added to the `adm` group
   needed to read root:adm 0640 `/var/log/cloud-init-output.log`, so
   only the journal-scrape stage was ever actually shipping logs;
@@ -2860,3 +2902,4 @@ finish, rather than a code or template issue.
 | v0.23 | 2026-09-14 | Paul Scott | §10.3 — resolved this section's own open gap: infrastructure to mount the share existed, but nothing to actually get data onto it from a local machine. Two options built/documented, per direct instruction: a new CloudCore Dashboard "Files" drag-and-drop panel per NFS share (generic platform capability, `api/nfs.py`/`api/nfs_routes.py`, relayed through the platform's own existing SSH channel to the NFS server VM — no new listener, no new SG rule), and SFTP directly to an already-mounting frontend/backend node (zero new infrastructure, reuses the existing `ecs` key). One real bug found and fixed (F-068, `haFullStack-Findings-Log.md`): a freshly `running` NFS server's export directory can still not exist yet, since cloud-init's LVM/mkdir/exportfs steps genuinely lag the libvirt domain's own `running` state — fixed with a defensive `mkdir -p` on every list/upload call. Verified with a real 50MB upload, SHA-256-confirmed byte-identical on the export. |
 | v0.24 | 2026-09-14 | Paul Scott | New §11, Ansible Port — `ansible/examples/12-ha-frontend-lb.yml`, a full port of §1–§10 to Ansible (all 9 tiers, 17 instances + NFS), matching every other OpenTofu example's existing Ansible equivalent. Pure orchestration translation, not a redesign — true dependency order (not the OpenTofu file's textual module order, which would have created ProxySQL before the frontend/backend/keystone/rabbitmq IPs its own nginx config fragments need), one collection gap fixed (`instance` module had no `users` parameter despite the API supporting it). Live verification (a full run, zero task failures) surfaced a real, previously-latent bug shared by both IaC front-ends — F-070 (`haFullStack-Findings-Log.md`): RabbitMQ's and Keystone's `step-renew.service` has crash-looped to `failed` on every boot since their keys were first passphrase-protected (v0.21/v0.29), `step ca renew` never having been given a way to decrypt the key it was renewing. Fixed in both the OpenTofu `.tftpl` source and the new Ansible templates, verified live on real nodes (§5.3.3, §11.4). |
 | v0.25 | 2026-09-15 | Paul Scott | New §12, Centralized Logging — one single-node Loki+Grafana tier (same non-HA precedent as the CA, §5.1) with promtail shipping the systemd journal plus `/var/log/cloud-init-output.log` from every other node in the stack, per direct request for a Lab-friendly, real (not bespoke) log-search UI. Three real first-boot bugs found and fixed identically on both IaC front-ends (F-071/F-072/F-073, `haFullStack-Findings-Log.md`): Loki's own `.deb` never creates or owns `/var/lib/loki`, crash-looping the service every boot; promtail's service user was never in the `adm` group, so `cloud-init-output.log` was silently never actually shipped despite the journal stage working fine; and promtail's package postinst auto-starts against the unsubstituted `__HOSTNAME__` placeholder before this stack's own `sed` fixup runs — the same first-boot race class already known from Grafana's own admin password. All three verified clean from a genuinely cold rebuild on both stacks, with real cross-tier queries proving MySQL's `mysqld`, Keystone's `apache2`, the CA's `step-ca`, and a frontend/backend node's `cloud-init-output.log` stream all genuinely reach Grafana's Explore view. Running both 17-node stacks concurrently during verification pushed the Lab build host to 1.8GB free RAM / 87% swap used — flagged and resolved by tearing down the already-verified OpenTofu stack mid-session, a host-capacity lesson rather than a code finding. |
+| v0.26 | 2026-09-15 | Paul Scott | §12.3 updated twice more, both driven by direct requests to close real coverage gaps rather than planned scope. First, per-service log-FILE coverage (nginx, MySQL, RabbitMQ, Apache2, ProxySQL) plus the logging node watching itself, after asking "are we watching all templates... in fact all logs we can?" surfaced that only journal + `cloud-init-output.log` were ever covered — two real permission bugs found and fixed (F-074, F-075). Second — and the more structural change — Loki + Grafana generalized from a per-example dedicated node into a host-level, always-on platform capability (`api/setup-logging-service.sh`), mirroring §7's own host-level package-repo pattern exactly, after asking "are we watching all templates, so no matter what template we build we'll gather logs?" got an honest "no": every example except `ha-frontend-lb` shipped nothing at all. `module.logging` and its security group retired; every tier's `promtail-config.yml` is now a plain static file pointed at the fixed `192.168.100.1:3100` address, and the logging node's own circular-dependency self-watch workaround is gone entirely — the host-level service was never a guest instance in the first place. One real regression (F-076) found during the live re-verification this migration required: F-073's own promtail fix ran too late in most tiers' `runcmd` (after that tier's own service-setup steps), leaving a real exposure window that ProxySQL's own ~30s gap made visible in a time-bounded Loki query — fixed by moving that whole fix to the very first steps of every tier's `runcmd`. Verified via two full cold `tofu destroy`/`apply` cycles plus real cross-tier Loki queries confirming genuine per-service content, zero `__HOSTNAME__` pollution, `NRestarts=0` for `loki`/`promtail`, and the F-075 ProxySQL key-safety property held throughout. `ansible/examples/12-ha-frontend-lb.yml` and its templates mirrored identically on both changes, then independently verified with a real `ansible-playbook` run of its own (`failed=0`, 48/48 tasks) — the same F-076 window shrank from ProxySQL's ~30s on the OpenTofu build to ~16s here, still fully closed by the same reordering fix, with zero `__HOSTNAME__` rows and the F-075 key-safety property both confirmed independently on the Ansible-built nodes too. |

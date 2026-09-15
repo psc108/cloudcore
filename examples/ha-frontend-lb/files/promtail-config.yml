@@ -59,7 +59,7 @@ scrape_configs:
   # service. /var/lib/proxysql is intentionally NOT glob-matched
   # (*.log only) — that directory also holds this node's own TLS
   # private key material (proxysql-key.pem); see
-  # proxysql-cloud-init.yml.j2's own setfacl step for exactly how
+  # proxysql-cloud-init.yaml.tftpl's own setfacl step for exactly how
   # promtail is granted access to proxysql.log specifically without
   # touching those files' own permissions at all.
   - job_name: nginx
@@ -80,7 +80,7 @@ scrape_configs:
 
   # rabbitmq's own log files are group-owned "rabbitmq", not "adm" —
   # confirmed live (real "permission denied" until promtail was also
-  # added to that group; see rabbitmq-cloud-init.yml.j2's own
+  # added to that group; see rabbitmq-cloud-init.yaml.tftpl's own
   # runcmd).
   - job_name: rabbitmq
     static_configs:

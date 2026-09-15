@@ -20,6 +20,7 @@ packages:
   - nginx
   - keepalived
   - promtail
+  - acl
 
 write_files:
   # Centralized logging (haFullStack-LLD.md §12) — see
@@ -201,25 +202,45 @@ write_files:
       systemctl enable --now step-renew-nginx
 
 runcmd:
+  # F-073/F-072 promtail fix, first — before install-proxysql.sh even
+  # runs, not after. This tier is the one that actually caught this
+  # live (F-076, haFullStack-Findings-Log.md): proxysql used to
+  # install+start (step 1) several steps before this fix ran (it used
+  # to sit at the very end, after setup-proxysql-tls.sh,
+  # render-keepalived-conf.sh, setup-nginx-tls.sh, and the nginx/
+  # keepalived restarts — real wall-clock time, not a race measured in
+  # milliseconds), so promtail's still-__HOSTNAME__-labeled,
+  # postinst-started instance had a genuinely long window to already
+  # be shipping proxysql.log under the wrong host label — confirmed
+  # directly via a real Loki query returning `host="__HOSTNAME__"`
+  # rows for `job="proxysql"` (and only that job) after a live rebuild.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
   - /usr/local/sbin/install-proxysql.sh
   - /usr/local/sbin/setup-proxysql-tls.sh
+  # promtail.log's own directory (/var/lib/proxysql) also holds this
+  # node's TLS private key material (proxysql-key.pem, set up by
+  # setup-proxysql-tls.sh above) — group membership (usermod -aG
+  # proxysql promtail, the fix used for rabbitmq's own log directory
+  # in rabbitmq-cloud-init.yml.j2) would ALSO grant promtail's OS user
+  # read access to that key, since it's owned by the same group at the
+  # same 660 permissions. A file-specific ACL avoids that entirely:
+  # promtail's user gains read access to proxysql.log alone, nothing
+  # else in this directory, regardless of what its own config is ever
+  # pointed at. Confirmed live that plain group access to this
+  # specific file is otherwise denied ("permission denied" from
+  # promtail without this). Placed after setup-proxysql-tls.sh's own
+  # proxysql restart so the ACL is applied to the file proxysql is
+  # actually running against — no promtail restart needed for the
+  # grant to take effect, since promtail (already running
+  # correctly-labeled, above) re-polls its file targets on its own and
+  # simply starts succeeding once the ACL exists.
+  - setfacl -m u:promtail:r /var/lib/proxysql/proxysql.log
   - /usr/local/sbin/render-keepalived-conf.sh
   - /usr/local/sbin/setup-nginx-tls.sh
   - echo "include /etc/nginx/stream.conf;" >> /etc/nginx/nginx.conf
   - nginx -t
   - systemctl restart nginx
   - systemctl enable --now keepalived
-  # F-073: promtail's own package postinst auto-starts the
-  # service immediately after install, before this runcmd
-  # block gets a chance to fix up __HOSTNAME__ or grant the
-  # "adm" group — stop it first so the only real start
-  # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yml.j2).
-  - systemctl stop promtail || true
-  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
-  # F-072: promtail's own user isn't a member of "adm" by
-  # default, needed to read root:adm 0640
-  # /var/log/cloud-init-output.log.
-  - usermod -aG adm promtail
-  - systemctl enable --now promtail

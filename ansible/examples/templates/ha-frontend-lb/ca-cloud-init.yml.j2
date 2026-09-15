@@ -126,21 +126,19 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  # F-073/F-072 promtail fix, first, before any other service on this
+  # node starts — found live (F-076, haFullStack-Findings-Log.md) that
+  # leaving this until after a tier's own service-setup steps left a
+  # real window during which promtail's still-__HOSTNAME__-labeled,
+  # postinst-started instance had already started shipping that
+  # service's own per-service log file (e.g. proxysql.log) under the
+  # wrong host label — journal scraping alone never showed this, only
+  # the newer per-service file targets.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
   - /usr/local/sbin/setup-ca.sh
   - systemctl daemon-reload
   - systemctl enable --now step-ca
   - systemctl enable --now ca-certs-server
-  # F-073: promtail's own package postinst auto-starts the
-  # service immediately after install, before this runcmd
-  # block gets a chance to fix up __HOSTNAME__ or grant the
-  # "adm" group — stop it first so the only real start
-  # happens against the corrected config, same class of
-  # first-boot race already handled for Grafana's own admin
-  # password (logging-cloud-init.yml.j2).
-  - systemctl stop promtail || true
-  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
-  # F-072: promtail's own user isn't a member of "adm" by
-  # default, needed to read root:adm 0640
-  # /var/log/cloud-init-output.log.
-  - usermod -aG adm promtail
-  - systemctl enable --now promtail

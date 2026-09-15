@@ -155,24 +155,6 @@ module "security_groups" {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
       }
     }
-    # Centralized logging (Loki + Grafana) — a Lab debugging aid, per
-    # direct instruction, not part of the application's own critical
-    # path. Deliberately no TLS: internal-only, bridge-subnet-scoped
-    # traffic between a debugging tool and the nodes it watches, same
-    # trust boundary this stack already draws for memcached above, not
-    # the application's own east-west path that earned the strict
-    # TLS-everywhere treatment elsewhere in this stack.
-    "logging${local.sfx}" = {
-      description = "Centralized logging — Loki's push API from every other tier, Grafana's UI for human access, plus SSH"
-      ingress_rules = {
-        loki    = { ip_protocol = "tcp", from_port = 3100, to_port = 3100, cidr = local.bridge_cidr, description = "Loki push API — every other tier's own promtail agent pushes here" }
-        grafana = { ip_protocol = "tcp", from_port = 3000, to_port = 3000, cidr = var.admin_cidr, description = "Grafana UI — human access only, same trust boundary as SSH" }
-        ssh     = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
-      }
-      egress_rules = {
-        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
-      }
-    }
   }
 }
 
@@ -217,19 +199,6 @@ module "ca" {
   owner       = var.owner
 
   instances = local.ca_instance
-}
-
-# Created alongside the CA node — every other tier's own promtail
-# config needs this node's IP, same reasoning as the CA's own early
-# creation (haFullStack-LLD.md §12).
-module "logging" {
-  source = "../../modules/compute"
-
-  project     = var.project
-  environment = var.environment
-  owner       = var.owner
-
-  instances = local.logging_instance
 }
 
 module "frontend" {
