@@ -113,3 +113,9 @@ variable "nfs_disk_gb" {
   default     = 10
 }
 
+variable "logging_flavor" {
+  description = "Compute flavor for the single centralized-logging node (Loki + Grafana) — a Lab debugging aid, same tier as this stack's other non-DB support nodes (keystone_flavor, rabbitmq_flavor)."
+  type        = string
+  default     = "standard.small"
+}
+

@@ -38,6 +38,7 @@ if [ ${#PACKAGES[@]} -eq 0 ]; then
     curl ca-certificates dpkg-dev mysql-server mysql-client nginx keepalived \
     keystone python3-pymysql python3-memcache python3 rabbitmq-server \
     python3-requests python3-yaml python3-openstackclient nfs-common \
+    grafana loki promtail \
     # full-stack, load-balanced-web (nginx already listed above)
     # ghidra-workstation
     xfce4 xfce4-terminal tigervnc-standalone-server tigervnc-common novnc websockify unzip gnupg \
@@ -55,7 +56,9 @@ fi
 # years-old 12.x, nowhere near ha-frontend-lb's frontend tier's stated
 # "18.x minimum, prefer latest" — NodeSource's repo is the standard
 # current-version source, same pattern as Adoptium/Kismet below.
-THIRDPARTY_PACKAGES=(temurin-21-jdk kismet nodejs)
+# grafana/loki/promtail: Grafana Labs' own apt repo hosts all three —
+# none exist in Ubuntu's own archive.
+THIRDPARTY_PACKAGES=(temurin-21-jdk kismet nodejs grafana loki promtail)
 
 case "$CODENAME" in
   jammy) IMAGE_ID="ubuntu-22.04" ;;
@@ -195,9 +198,11 @@ ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
   # Third-party apt repos — ghidra-workstation needs temurin-21-jdk
   # (Adoptium), wifi-sniffer needs kismet (kismetwireless.net), the
   # frontend tier needs a current nodejs (NodeSource — Ubuntu 22.04's
-  # own archive only has an ancient 12.x). None of the three exist in
-  # Ubuntu's own archive, so these repos have to be trusted before the
-  # download step below can see them at all.
+  # own archive only has an ancient 12.x), and ha-frontend-lb's
+  # centralized-logging tier needs grafana/loki/promtail (Grafana Labs'
+  # own apt repo hosts all three). None of these exist in Ubuntu's own
+  # archive, so these repos have to be trusted before the download step
+  # below can see them at all.
   sudo mkdir -p /etc/apt/keyrings
   curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | sudo gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
   echo \"deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb \$(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/adoptium.list
@@ -205,6 +210,8 @@ ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
   echo \"deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/\$(lsb_release -cs) \$(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/kismet.list >/dev/null
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
   echo \"deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main\" | sudo tee /etc/apt/sources.list.d/nodesource.list
+  curl -fsSL https://apt.grafana.com/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+  echo \"deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main\" | sudo tee /etc/apt/sources.list.d/grafana.list
 
   sudo apt-get update
   sudo apt-get install -y dpkg-dev

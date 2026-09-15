@@ -14,8 +14,15 @@ package_update: true
 packages:
   - mysql-server
   - curl
+  - promtail
 
 write_files:
+  # Centralized logging (haFullStack-LLD.md §12) — see
+  # ca-cloud-init.yml.j2's own comment for why this uses the
+  # indent-filter pattern, not a raw include directive.
+  - path: /etc/promtail/config.yml
+    content: |
+      {{ promtail_config | indent(6) }}
   - path: /usr/local/sbin/setup-mysql-tls-certs.sh
     permissions: '0755'
     content: |
@@ -321,3 +328,17 @@ runcmd:
   - /usr/local/sbin/setup-mysql-tls-accounts.sh
   - systemctl daemon-reload
   - systemctl enable --now quorum-watchdog.timer
+  # F-073: promtail's own package postinst auto-starts the
+  # service immediately after install, before this runcmd
+  # block gets a chance to fix up __HOSTNAME__ or grant the
+  # "adm" group — stop it first so the only real start
+  # happens against the corrected config, same class of
+  # first-boot race already handled for Grafana's own admin
+  # password (logging-cloud-init.yml.j2).
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  # F-072: promtail's own user isn't a member of "adm" by
+  # default, needed to read root:adm 0640
+  # /var/log/cloud-init-output.log.
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail

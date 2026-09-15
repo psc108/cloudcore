@@ -34,8 +34,17 @@ packages:
   - rabbitmq-server
   - curl
   - ca-certificates
+  - promtail
 
 write_files:
+  # Centralized logging (haFullStack-LLD.md §12) — ships this node's own
+  # journal + cloud-init-output.log to the logging node. __HOSTNAME__
+  # fixed up in runcmd below, same sed-substitution idiom this stack
+  # already uses for __IFACE__/__HOSTNAME__ elsewhere.
+  - path: /etc/promtail/config.yml
+    content: |
+      ${indent(6, promtail_config)}
+
   # Every node in an Erlang cluster needs an identical cookie file, or
   # clustering is refused outright. Staged root-owned here, NOT written
   # directly to /var/lib/rabbitmq/ with owner: rabbitmq:rabbitmq —
@@ -272,3 +281,17 @@ write_files:
 runcmd:
   - /usr/local/sbin/setup-rabbitmq.sh
   - /usr/local/sbin/setup-rabbitmq-tls.sh
+  # F-073: promtail's own package postinst auto-starts the
+  # service immediately after install, before this runcmd
+  # block gets a chance to fix up __HOSTNAME__ or grant the
+  # "adm" group — stop it first so the only real start
+  # happens against the corrected config, same class of
+  # first-boot race already handled for Grafana's own admin
+  # password (logging-cloud-init.yaml.tftpl).
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  # F-072: promtail's own user isn't a member of "adm" by
+  # default, needed to read root:adm 0640
+  # /var/log/cloud-init-output.log.
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail

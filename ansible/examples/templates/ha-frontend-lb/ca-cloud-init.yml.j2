@@ -24,8 +24,20 @@ package_update: true
 packages:
   - curl
   - ca-certificates
+  - promtail
 
 write_files:
+  # Centralized logging (haFullStack-LLD.md §12) — ships this node's own
+  # journal + cloud-init-output.log to the logging node. __HOSTNAME__
+  # fixed up in runcmd below. promtail_config is rendered once in the
+  # playbook itself (same reuse pattern as nginx_conf/nginx_stream_conf)
+  # and passed in via template_vars — Jinja2's include directive doesn't
+  # auto-indent multi-line included content the way a YAML block scalar
+  # needs, confirmed directly, so this uses the same indent-filter
+  # pattern proxysql-cloud-init.yml.j2 already established instead.
+  - path: /etc/promtail/config.yml
+    content: |
+      {{ promtail_config | indent(6) }}
   - path: /usr/local/sbin/setup-ca.sh
     permissions: '0755'
     content: |
@@ -118,3 +130,17 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now step-ca
   - systemctl enable --now ca-certs-server
+  # F-073: promtail's own package postinst auto-starts the
+  # service immediately after install, before this runcmd
+  # block gets a chance to fix up __HOSTNAME__ or grant the
+  # "adm" group — stop it first so the only real start
+  # happens against the corrected config, same class of
+  # first-boot race already handled for Grafana's own admin
+  # password (logging-cloud-init.yml.j2).
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  # F-072: promtail's own user isn't a member of "adm" by
+  # default, needed to read root:adm 0640
+  # /var/log/cloud-init-output.log.
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail

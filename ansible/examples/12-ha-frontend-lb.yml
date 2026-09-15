@@ -58,6 +58,7 @@
     backend_flavor: standard.medium
     nfs_flavor: standard.small
     nfs_disk_gb: 10
+    logging_flavor: standard.small
 
     nfs_share: shared
     nfs_mount_dir: /mnt/shared
@@ -128,6 +129,17 @@
         ingress_rules:
           - { protocol: tcp, from_port: 8443, to_port: 8443, cidr: "{{ bridge_cidr }}" }
           - { protocol: tcp, from_port: 8080, to_port: 8080, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
+      # Centralized logging (Loki + Grafana) — a Lab debugging aid, per
+      # direct instruction, not part of the application's own critical
+      # path. Deliberately no TLS: internal-only, bridge-subnet-scoped
+      # traffic between a debugging tool and the nodes it watches, same
+      # trust boundary this stack already draws for memcached above.
+      - name: logging
+        description: "Centralized logging — Loki's push API from every other tier, Grafana's UI for human access, plus SSH"
+        ingress_rules:
+          - { protocol: tcp, from_port: 3100, to_port: 3100, cidr: "{{ bridge_cidr }}" }
+          - { protocol: tcp, from_port: 3000, to_port: 3000, cidr: "{{ admin_cidr }}" }
           - { protocol: tcp, from_port: 22, to_port: 22, cidr: "{{ admin_cidr }}" }
 
   tasks:
@@ -219,6 +231,43 @@
         fernet_key1: "{{ lookup('file', secrets_dir + '/fernet_key1') }}"
 
     # ── step-ca ──────────────────────────────────────────────────────────────
+    # ── Centralized logging (Loki + Grafana) — created before the CA
+    # (and everything else): every other tier's own promtail config
+    # needs this node's IP already known, same reasoning as the CA's
+    # own early creation. ─────────────────────────────────────────────
+    - name: Create logging instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ pfx }}-logging-a"
+        image_id: ubuntu-22.04
+        flavor: "{{ logging_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: "{{ subnet_id }}"
+        security_group_ids: ["{{ sg_ids.logging }}"]
+        users: "{{ ecs_user }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/logging-cloud-init.yml.j2', template_vars={
+          'admin_password': admin_password }) }}"
+        tags: { <<: *common_tags, Role: logging }
+      register: logging_instance
+
+    - name: Wait for logging instance to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ logging_instance.instance.id }}"
+        headers: { Authorization: "Bearer {{ cloudcore_api_token }}" }
+      register: logging_poll
+      until: logging_poll.json.status == "running" and logging_poll.json.private_ip != ""
+      retries: 60
+      delay: 5
+
+    - name: Record logging IP and render the shared promtail config
+      ansible.builtin.set_fact:
+        logging_ip: "{{ logging_poll.json.private_ip }}"
+
+    - name: Render promtail_config fragment
+      ansible.builtin.set_fact:
+        promtail_config: "{{ lookup('template', 'templates/ha-frontend-lb/promtail-config.yml.j2', template_vars={'logging_ip': logging_ip}) }}"
+
     - name: Create CA instance
       cloudcore.cloudcore.instance:
         api_url: "{{ cloudcore_api_url }}"
@@ -232,7 +281,7 @@
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/ca-cloud-init.yml.j2', template_vars={
           'step_ca_deb_sha256': step_ca_deb_sha256, 'step_cli_deb_sha256': step_cli_deb_sha256,
-          'provisioner_password': ca_provisioner_password }) }}"
+          'provisioner_password': ca_provisioner_password, 'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: ca }
       register: ca_instance
 
@@ -268,7 +317,8 @@
           'app_password': admin_password, 'keystone_password': admin_password,
           'ssp_password': admin_password, 'root_password': admin_password,
           'ca_ip': ca_ip, 'step_cli_deb_sha256': step_cli_deb_sha256,
-          'ca_provisioner_password': ca_provisioner_password, 'vip_address': vip_address }) }}"
+          'ca_provisioner_password': ca_provisioner_password, 'vip_address': vip_address,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: mysql-bootstrap }
       register: mysql_a
 
@@ -300,7 +350,8 @@
           'app_password': admin_password, 'keystone_password': admin_password,
           'ssp_password': admin_password, 'root_password': admin_password,
           'ca_ip': ca_ip, 'step_cli_deb_sha256': step_cli_deb_sha256,
-          'ca_provisioner_password': ca_provisioner_password, 'vip_address': vip_address }) }}"
+          'ca_provisioner_password': ca_provisioner_password, 'vip_address': vip_address,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: mysql-replica }
       loop:
         - { role: b, server_id: 2 }
@@ -338,7 +389,7 @@
         subnet_id: "{{ subnet_id }}"
         security_group_ids: ["{{ sg_ids.memcached }}"]
         users: "{{ ecs_user }}"
-        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/memcached-cloud-init.yml.j2') }}"
+        user_data: "{{ lookup('template', 'templates/ha-frontend-lb/memcached-cloud-init.yml.j2', template_vars={'promtail_config': promtail_config}) }}"
         tags: { <<: *common_tags, Role: memcached }
       loop: ["01", "02"]
       register: memcached_results
@@ -405,7 +456,7 @@
           'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
           'step_cli_deb_sha256': step_cli_deb_sha256,
           'keystone_system_domain_password': admin_password,
-          'admin_password': admin_password }) }}"
+          'admin_password': admin_password, 'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: keystone }
       loop: ["01", "02"]
       register: keystone_results
@@ -441,7 +492,8 @@
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/backend-cloud-init.yml.j2', template_vars={
           'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
           'step_cli_deb_sha256': step_cli_deb_sha256,
-          'nfs_ip': nfs_ip, 'nfs_share': nfs_share, 'nfs_mount_dir': nfs_mount_dir }) }}"
+          'nfs_ip': nfs_ip, 'nfs_share': nfs_share, 'nfs_mount_dir': nfs_mount_dir,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: backend }
       loop: ["01", "02"]
       register: backend_results
@@ -478,7 +530,8 @@
           'is_seed': true, 'seed_ip': '', 'erlang_cookie': erlang_cookie,
           'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
           'vip_address': vip_address, 'step_cli_deb_sha256': step_cli_deb_sha256,
-          'rabbitmq_services_password': admin_password, 'admin_password': admin_password }) }}"
+          'rabbitmq_services_password': admin_password, 'admin_password': admin_password,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: rabbitmq-seed }
       register: rabbitmq_a
 
@@ -506,7 +559,8 @@
           'is_seed': false, 'seed_ip': rabbitmq_a_poll.json.private_ip, 'erlang_cookie': erlang_cookie,
           'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
           'vip_address': vip_address, 'step_cli_deb_sha256': step_cli_deb_sha256,
-          'rabbitmq_services_password': admin_password, 'admin_password': admin_password }) }}"
+          'rabbitmq_services_password': admin_password, 'admin_password': admin_password,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: rabbitmq-joiner }
       loop: [b, c]
       register: rabbitmq_joiners_results
@@ -544,7 +598,8 @@
           'vip_address': vip_address, 'app_password': admin_password, 'admin_password': admin_password,
           'keystone_ips': keystone_ips, 'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
           'step_cli_deb_sha256': step_cli_deb_sha256,
-          'nfs_ip': nfs_ip, 'nfs_share': nfs_share, 'nfs_mount_dir': nfs_mount_dir }) }}"
+          'nfs_ip': nfs_ip, 'nfs_share': nfs_share, 'nfs_mount_dir': nfs_mount_dir,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: frontend }
       loop: ["01", "02"]
       register: frontend_results
@@ -610,7 +665,8 @@
           'vip_address': vip_address, 'step_cli_deb_sha256': step_cli_deb_sha256,
           'keepalived_state': item.state, 'keepalived_priority': item.priority,
           'vrrp_router_id': 51, 'vrrp_auth_pass': 'changeme-vrrp',
-          'nginx_conf': nginx_conf, 'nginx_stream_conf': nginx_stream_conf }) }}"
+          'nginx_conf': nginx_conf, 'nginx_stream_conf': nginx_stream_conf,
+          'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: proxysql }
       loop:
         - { role: a, state: MASTER, priority: 150 }
@@ -637,6 +693,7 @@
       ansible.builtin.set_fact:
         dns_entries:
           - { name: ca-a, ip: "{{ ca_ip }}" }
+          - { name: logging-a, ip: "{{ logging_ip }}" }
           - { name: nfs, ip: "{{ nfs_ip }}" }
           - { name: mysql-a, ip: "{{ mysql_a_poll.json.private_ip }}" }
           - { name: mysql-b, ip: "{{ mysql_replicas_poll.results[0].json.private_ip }}" }
@@ -680,3 +737,4 @@
           - "Backend: {{ backend_ips }}"
           - "NFS shared export: {{ nfs_ip }}:/exports/{{ nfs_share }} (mounted at {{ nfs_mount_dir }} on frontend+backend)"
           - "Status pages: http://{{ vip_address }}/{mysql,keystone,rabbitmq,tls}-status.html"
+          - "Grafana: http://{{ logging_ip }}:3000/ (admin / your admin_password), Loki pre-provisioned as its datasource"

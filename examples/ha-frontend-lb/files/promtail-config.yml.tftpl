@@ -1,0 +1,42 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://${logging_ip}:3100/loki/api/v1/push
+
+# __HOSTNAME__ is fixed up at boot (this node's real hostname isn't
+# known until runtime) via the same sed-substitution idiom this stack
+# already uses for frontend's own index.html (__HOSTNAME__) and
+# render-keepalived-conf.sh's __IFACE__ — see setup-promtail.sh's own
+# caller in each tier's cloud-init.
+scrape_configs:
+  # journald already captures every systemd-managed service on this
+  # node (nginx, mysql, apache2, rabbitmq-server, keepalived, proxysql,
+  # memcached, every *-status.timer, step-renew, quorum-watchdog) with
+  # zero per-service enumeration needed.
+  - job_name: journal
+    journal:
+      max_age: 12h
+      labels:
+        job: journal
+        host: __HOSTNAME__
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+
+  # Not journal-backed the same way — and the single most useful file
+  # this whole project's own debugging has repeatedly reached for (most
+  # of haFullStack-Findings-Log.md's real findings were first spotted
+  # here, not in journalctl).
+  - job_name: cloud-init-output
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: cloud-init-output
+          host: __HOSTNAME__
+          __path__: /var/log/cloud-init-output.log

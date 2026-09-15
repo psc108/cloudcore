@@ -176,7 +176,7 @@ Twelve ready-to-run configurations in `examples/`:
 | `examples/full-stack/` | VPC + 3 instances + ALB |
 | `examples/nfs-shared-storage/` | VPC + NFS server + 2 instances with shared mount |
 | `examples/openstack-services/` | VPC + 6 named instances + admin/NFS + frontend ALB + backend NLB |
-| `examples/ha-frontend-lb/` | VPC + HA frontend instance-group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend tier + shared NFS storage |
+| `examples/ha-frontend-lb/` | VPC + HA frontend instance-group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend tier + shared NFS storage + centralized logging (Loki/Grafana) |
 | `examples/ghidra-workstation/` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
 | `examples/kiwix-library/` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `examples/wifi-sniffer/` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
@@ -266,7 +266,7 @@ Twelve ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml` and
 | `09-ghidra-workstation.yml` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
 | `10-kiwix-library.yml` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `11-wifi-sniffer.yml` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
-| `12-ha-frontend-lb.yml` | VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + DNS records |
+| `12-ha-frontend-lb.yml` | VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + centralized logging (Loki/Grafana) + DNS records |
 
 Run directly:
 

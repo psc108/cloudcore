@@ -2652,6 +2652,185 @@ alone would never have caught.
 
 ---
 
+## 12. Centralized Logging
+
+### 12.1 Scope
+
+Per direct request, after a retrospective gap-check on the project as a
+whole: "given it's the lab and it's not likely anything built with this
+will last more than a day ~ few days then i'm not fussed over backups
+and certs. i do think though that centralized logging would be a really
+good implementation to help with peoples efforts in the lab." — real
+Grafana on top of Loki, specifically (not a lightweight rsyslog-to-flat-
+files setup, and not a bespoke Dashboard reimplementation), because part
+of the Lab's own purpose is exposing people to the actual industry-
+standard tool, not a custom stand-in for it. Backups and certificate-
+lifetime monitoring were explicitly ruled out of scope in the same
+conversation.
+
+Every debugging session across this whole document — F-028 through
+F-070 included — has meant SSH-hopping between individual nodes and
+grepping `journalctl`/`/var/log/cloud-init-output.log` by hand; that
+exact file is literally how most of the real bugs in this project were
+actually found. This section centralizes that.
+
+### 12.2 Environment and Tooling Matrix
+
+Same three-environment structure as every prior tier. Only Lab/OpenTofu
+and its Ansible parity port are built this slice.
+
+### 12.3 Lab Environment (CloudCore)
+
+- **`module.logging`** — one new node, `var.logging_flavor` (default
+  `standard.small`, matching this stack's other lightweight support
+  nodes — Keystone, RabbitMQ). Deliberately single-node, not HA — same
+  precedent as the CA (§5.1) — a Lab debugging aid, not part of the
+  application's own critical path. Created early, alongside the CA
+  node, since every other tier's own promtail config needs this node's
+  IP before it can render — the same reasoning as the CA's own early
+  creation.
+- **Loki** (log storage + query API) and **Grafana** (UI) both run on
+  that one node — filesystem-backed storage (TSDB schema v13, no
+  S3/GCS needed at Lab scale), Grafana pre-provisioned with Loki as its
+  datasource (`/etc/grafana/provisioning/datasources/loki.yaml`) so
+  there's no manual "Add data source" step standing between a fresh
+  build and a working Explore view.
+- **Promtail** (Loki's own standard shipping agent — not a custom
+  script) runs on every OTHER node in the stack, shipping two things:
+  the systemd journal (covers every service already running as a unit
+  — nginx, mysql, apache2, rabbitmq-server, keepalived, proxysql,
+  memcached, every `*-status.timer`, `step-renew`, `quorum-watchdog` —
+  with zero per-service enumeration needed, journald already captures
+  all of it) and `/var/log/cloud-init-output.log` specifically — not
+  journal-backed the same way, and the single file this whole
+  document's own debugging has repeatedly reached for.
+- **Grafana's admin login reuses `var.admin_password`** — the same
+  single-shared-credential convention already used for every other
+  admin/service account in this stack (§5.3's own passphrase-protected
+  server keys, first established there), not a new secret. Forcing it
+  in required the same
+  first-boot-race defensive pattern already established elsewhere in
+  this document (§2's MySQL root bootstrap, §3's Fernet-key staging):
+  `setup-logging.sh` stops the package's own auto-started
+  `grafana-server`, deletes the freshly-created `grafana.db` (Grafana
+  only ever applies `grafana.ini`'s configured admin password when it
+  creates the admin user on its *own* genuinely first start), edits
+  `grafana.ini`, then starts it once for real.
+- **No TLS.** Internal-only, bridge-subnet-scoped traffic between a Lab
+  debugging tool and the nodes it watches — the same trust boundary
+  this stack already draws for memcached (§3.3.1's "internal-only,
+  SG-scoped, never TLS'd" reasoning), not the application's own
+  east-west path that earned the strict TLS-everywhere treatment in
+  §5. Reversible later via the same step-ca mesh if ever wanted.
+- **Security group** — `3100` (Loki's push API, `local.bridge_cidr`,
+  since every other node needs to reach it), `3000` (Grafana's UI,
+  `var.admin_cidr` — human access only, the same trust boundary as
+  SSH), `22` (`var.admin_cidr`).
+- **Three real first-boot bugs found and fixed** (all in
+  `haFullStack-Findings-Log.md`, all fixed identically on both IaC
+  front-ends): **F-071** — the `loki` .deb never creates or owns its
+  own `/var/lib/loki` data directory (confirmed via `dpkg -L loki`, no
+  `var/lib` entries at all, unlike Grafana's own package), so the
+  service crash-looped on every single boot until `setup-logging.sh`
+  was made to `mkdir -p`/`chown -R loki:nogroup` it first. **F-072** —
+  `promtail`'s own service user was never added to the `adm` group
+  needed to read root:adm 0640 `/var/log/cloud-init-output.log`, so
+  only the journal-scrape stage was ever actually shipping logs;
+  fixed with `usermod -aG adm promtail` on every one of the 8 tier
+  templates. **F-073** — `promtail`'s package postinst auto-starts the
+  service with the unsubstituted `__HOSTNAME__` placeholder still in
+  its config, before this stack's own `runcmd`-driven `sed` fixup gets
+  a chance to run — the same first-boot race class already known from
+  Grafana's own admin password above — leaving a handful of stray
+  `__HOSTNAME__`-labeled log lines on every boot; fixed by stopping
+  promtail immediately before the `sed`, so the package's own
+  auto-started instance never survives to be queried.
+- **A real, structural, out-of-scope gap worth stating plainly**: the
+  NFS server (§10) has no cloud-init hook available at all —
+  `cloudcore_nfs_server`'s own cloud-init is entirely platform-managed
+  (the same fact §10.3 already notes as the reason it has no
+  security-group attachment point either, confirmed by reading
+  `api/nfs.py`'s `_cloud_init_iso()` directly). Its own logs
+  (`nfs-kernel-server`, `exportfs`) simply cannot be shipped by this
+  mechanism — a platform-level limitation, not something this slice can
+  reach, the same way §10.7 already flags "single node, not HA" for
+  the same resource.
+- **Package sourcing** — Grafana Labs' own apt repo
+  (`https://apt.grafana.com`) added to the host-level package repo
+  (§7) alongside Adoptium/Kismet/NodeSource, hosting `grafana`, `loki`,
+  and `promtail` together.
+
+### 12.4 On-Prem Environment
+
+Not started — same pattern as every other tier's own On-Prem section.
+
+### 12.5 AWS Environment
+
+Not started — Amazon Managed Grafana + Amazon Managed Service for
+Prometheus/Loki-equivalent (or a self-hosted Loki on a small EC2/Fargate
+task behind CloudWatch Logs' own subscription filters) are the natural
+analogues, rather than a self-managed single node.
+
+### 12.6 Cross-Environment Consistency
+
+The guest-level shipping mechanism (promtail, journal + file scrape)
+doesn't change with the provider — only where Loki/Grafana themselves
+run does.
+
+### 12.7 Open Items
+
+- **The NFS server's own logs** — genuinely unreachable by this
+  mechanism, per §12.3's own note. A platform-level cloud-init hook for
+  `cloudcore_nfs_server` would be required to close this, out of scope
+  here.
+- **On-Prem/AWS** — not started, per §12.4/§12.5.
+- **Single node, not HA** — same deliberately-flagged Lab
+  simplification as the CA (§5.1) and the NFS server (§10.7).
+- **No TLS** — deliberate, per §12.3; reversible later via the existing
+  step-ca mesh if ever wanted.
+- **Backups and certificate-renewal monitoring** — explicitly ruled out
+  of scope for this Lab per the direct instruction that opened §12.1;
+  not tracked as open items, since they were deliberately declined
+  rather than deferred.
+
+**Verification for this phase (Lab/OpenTofu + Ansible):** built and
+verified against real infrastructure across two full destroy/rebuild
+cycles per IaC front-end, not just the apply/playbook completing
+without error. The first OpenTofu cycle surfaced all three findings
+above (F-071/F-072/F-073); a second, genuinely cold `tofu
+destroy`/`apply` cycle confirmed all three fixed with zero manual
+intervention — `loki.service`/`grafana-server` both `NRestarts=0`,
+Grafana reachable on `:3000` and logging in with
+`admin`/`var.admin_password`, its Loki datasource testing healthy
+("Data source successfully connected"), and Loki's own `host` label
+values containing only real hostnames with no `__HOSTNAME__` entry
+anywhere. Real cross-tier log queries (not just "a stream exists")
+confirmed genuine content from four different node types: MySQL's
+`mysql.service` unit, Keystone's `apache2.service` unit, the CA's own
+`step-ca.service` unit, and a frontend/backend node's
+`cloud-init-output.log` file stream. The identical build, fix, and
+verification sequence was then repeated end-to-end on an independently
+prefixed Ansible-built stack (`cloudcore-examples-dev-log1`,
+`ansible-playbook 12-ha-frontend-lb.yml`, zero task failures,
+`failed=0`), confirming parity between the two IaC front-ends rather
+than leaving only one side fixed. Both stacks destroyed cleanly
+afterward (`tofu destroy` / `12-teardown.yml`).
+
+Two things observed along the way, neither a code defect: Grafana's
+first-boot migration (run every time, since `setup-logging.sh`
+deliberately deletes `grafana.db` to force the configured admin
+password) took roughly 6 minutes to complete on a `standard.small`
+node before the UI became reachable — worth knowing before assuming a
+node has failed to boot, not investigated further. And running both
+IaC front-ends' full 17-node stacks concurrently (34 VMs total) during
+this verification pushed the Lab build host down to 1.8GB free RAM and
+87% swap used — a real capacity lesson for this host, addressed by
+tearing down the already-verified OpenTofu stack before letting the
+Ansible build's own remaining, heavier tiers (Keystone in particular)
+finish, rather than a code or template issue.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2680,3 +2859,4 @@ alone would never have caught.
 | v0.22 | 2026-09-14 | Paul Scott | New §10, Shared Application Storage — a single NFS export (`module.nfs`, `modules/nfs-server`, `var.nfs_disk_gb` default 10GB) mounted read/write at `/mnt/shared` on every frontend and backend node, per direct instruction ahead of the pending application install. Not a revival of §6's superseded per-project NFS design (§7/v0.17) — an unrelated new use of the same module. Noted that `cloudcore_nfs_server` has no security-group attachment point in this provider at all; access control is entirely the export's own `clients = "vpc"` setting, which resolves to the real bridge subnet per the already-established F-041 platform behavior. One real bug found and fixed (F-067, `haFullStack-Findings-Log.md`): `nfs-common` was added to both tiers' `packages:` list but not to the host-level package repo's own build script, so it was never actually cached and apt genuinely couldn't find it. Verified across two full destroy/rebuild cycles — the second showing a real cross-node read/write round-trip through the live NFS export. |
 | v0.23 | 2026-09-14 | Paul Scott | §10.3 — resolved this section's own open gap: infrastructure to mount the share existed, but nothing to actually get data onto it from a local machine. Two options built/documented, per direct instruction: a new CloudCore Dashboard "Files" drag-and-drop panel per NFS share (generic platform capability, `api/nfs.py`/`api/nfs_routes.py`, relayed through the platform's own existing SSH channel to the NFS server VM — no new listener, no new SG rule), and SFTP directly to an already-mounting frontend/backend node (zero new infrastructure, reuses the existing `ecs` key). One real bug found and fixed (F-068, `haFullStack-Findings-Log.md`): a freshly `running` NFS server's export directory can still not exist yet, since cloud-init's LVM/mkdir/exportfs steps genuinely lag the libvirt domain's own `running` state — fixed with a defensive `mkdir -p` on every list/upload call. Verified with a real 50MB upload, SHA-256-confirmed byte-identical on the export. |
 | v0.24 | 2026-09-14 | Paul Scott | New §11, Ansible Port — `ansible/examples/12-ha-frontend-lb.yml`, a full port of §1–§10 to Ansible (all 9 tiers, 17 instances + NFS), matching every other OpenTofu example's existing Ansible equivalent. Pure orchestration translation, not a redesign — true dependency order (not the OpenTofu file's textual module order, which would have created ProxySQL before the frontend/backend/keystone/rabbitmq IPs its own nginx config fragments need), one collection gap fixed (`instance` module had no `users` parameter despite the API supporting it). Live verification (a full run, zero task failures) surfaced a real, previously-latent bug shared by both IaC front-ends — F-070 (`haFullStack-Findings-Log.md`): RabbitMQ's and Keystone's `step-renew.service` has crash-looped to `failed` on every boot since their keys were first passphrase-protected (v0.21/v0.29), `step ca renew` never having been given a way to decrypt the key it was renewing. Fixed in both the OpenTofu `.tftpl` source and the new Ansible templates, verified live on real nodes (§5.3.3, §11.4). |
+| v0.25 | 2026-09-15 | Paul Scott | New §12, Centralized Logging — one single-node Loki+Grafana tier (same non-HA precedent as the CA, §5.1) with promtail shipping the systemd journal plus `/var/log/cloud-init-output.log` from every other node in the stack, per direct request for a Lab-friendly, real (not bespoke) log-search UI. Three real first-boot bugs found and fixed identically on both IaC front-ends (F-071/F-072/F-073, `haFullStack-Findings-Log.md`): Loki's own `.deb` never creates or owns `/var/lib/loki`, crash-looping the service every boot; promtail's service user was never in the `adm` group, so `cloud-init-output.log` was silently never actually shipped despite the journal stage working fine; and promtail's package postinst auto-starts against the unsubstituted `__HOSTNAME__` placeholder before this stack's own `sed` fixup runs — the same first-boot race class already known from Grafana's own admin password. All three verified clean from a genuinely cold rebuild on both stacks, with real cross-tier queries proving MySQL's `mysqld`, Keystone's `apache2`, the CA's `step-ca`, and a frontend/backend node's `cloud-init-output.log` stream all genuinely reach Grafana's Explore view. Running both 17-node stacks concurrently during verification pushed the Lab build host to 1.8GB free RAM / 87% swap used — flagged and resolved by tearing down the already-verified OpenTofu stack mid-session, a host-capacity lesson rather than a code finding. |
