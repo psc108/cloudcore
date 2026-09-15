@@ -89,14 +89,16 @@ systemctl --user restart cloudcore-api
 ### Optional: Sentinel (log-intelligence advisor)
 
 [Sentinel](https://github.com/psc108/sentinel) is a standalone
-companion tool, in its own repo — it watches a running lab's
-centralized-logging tier (`examples/ha-frontend-lb`'s Loki/Grafana
-tier, `haFullStack-LLD.md` §12), flags log activity that looks like
-real trouble, and matches it against a knowledge base seeded from
+companion tool, in its own repo — it watches this platform's
+host-level Loki service (`api/setup-logging-service.sh`,
+`haFullStack-LLD.md` §12), flags log activity that looks like real
+trouble, and matches it against a knowledge base seeded from
 `haFullStack-Findings-Log.md` — surfacing suggestions through its own
-web UI. It has no source dependency on CloudCore (only the API and
-Loki's own HTTP endpoints), so it's entirely optional and safe to skip
-— nothing here requires it.
+web UI. Since Loki is always-on and shared by every example template,
+not tied to any one build, Sentinel watches from the moment it starts
+regardless of what's currently built. It has no source dependency on
+CloudCore (only Loki's own HTTP query API), so it's entirely optional
+and safe to skip — nothing here requires it.
 
 ```bash
 git clone https://github.com/psc108/sentinel.git ../sentinel
