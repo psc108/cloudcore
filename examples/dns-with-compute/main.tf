@@ -64,6 +64,7 @@ module "compute" {
       vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
       subnet_id          = module.subnets.subnet_ids_by_key["web${local.sfx}"]
       security_group_ids = module.security_groups.security_group_ids_list
+      user_data          = local.promtail_user_data
     }
   }
 }

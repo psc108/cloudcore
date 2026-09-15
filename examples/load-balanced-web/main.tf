@@ -23,7 +23,7 @@ module "subnets" {
   vpc_cidr_block = var.cidr_block
 
   subnets = {
-    "web${local.sfx}" = { newbits = 8, netnum = 1, public = true,  zone = "a" }
+    "web${local.sfx}"   = { newbits = 8, netnum = 1, public = true, zone = "a" }
     "web-b${local.sfx}" = { newbits = 8, netnum = 2, public = true, zone = "b" }
   }
 }
@@ -40,8 +40,8 @@ module "security_groups" {
     "web${local.sfx}" = {
       description = "Web tier — HTTP and SSH"
       ingress_rules = {
-        http = { ip_protocol = "tcp", from_port = 80,  to_port = 80,  cidr = "0.0.0.0/0" }
-        ssh  = { ip_protocol = "tcp", from_port = 22,  to_port = 22,  cidr = "0.0.0.0/0" }
+        http = { ip_protocol = "tcp", from_port = 80, to_port = 80, cidr = "0.0.0.0/0" }
+        ssh  = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = "0.0.0.0/0" }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -57,14 +57,14 @@ module "web" {
   environment = var.environment
   owner       = var.owner
 
-  name            = "web${local.sfx}"
-  image_id        = "ubuntu-22.04"
-  flavor          = var.instance_flavor
-  count_instances = var.instance_count
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["web${local.sfx}"]
+  name               = "web${local.sfx}"
+  image_id           = "ubuntu-22.04"
+  flavor             = var.instance_flavor
+  count_instances    = var.instance_count
+  vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id          = module.subnets.subnet_ids_by_key["web${local.sfx}"]
   security_group_ids = module.security_groups.security_group_ids_list
-  user_data       = local.nginx_user_data
+  user_data          = local.nginx_user_data
 }
 
 module "lb" {

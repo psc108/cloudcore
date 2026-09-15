@@ -1,0 +1,47 @@
+#cloud-config
+# MySQL: plain mysql-server, matching the Ansible port's own minimal
+# illustrative install (08-openstack-services.yml) — this OpenTofu
+# version previously created this instance with no cloud-init at all,
+# a real IaC-front-end parity gap fixed alongside the promtail
+# addition below, not a pre-existing design choice worth keeping.
+#
+# apt_preserve_sources_list + bootcmd point this guest at the
+# host-level package repo (api/build-package-repo.sh,
+# haFullStack.md §14) exclusively, the same pattern every other
+# example uses.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - mysql-server
+  - nfs-common
+  - promtail
+
+write_files:
+  # Centralized logging (haFullStack-LLD.md §12) — ships this node's
+  # own journal, cloud-init-output.log, and MySQL's own error.log to
+  # the host-level Loki service. __HOSTNAME__ fixed up in runcmd
+  # below, same sed-substitution idiom this platform already uses
+  # elsewhere.
+  - path: /etc/promtail/config.yml
+    content: |
+      ${indent(6, promtail_config)}
+
+runcmd:
+  # F-073/F-072 promtail fix, first, before mysql starts (F-076,
+  # haFullStack-Findings-Log.md — promtail's own package postinst
+  # auto-starts it immediately once installed, before this runcmd
+  # block gets a chance to fix up __HOSTNAME__ or grant the "adm"
+  # group needed to read root:adm 0640
+  # /var/log/cloud-init-output.log).
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
+  - mkdir -p /mnt/data
+  - systemctl enable --now mysql

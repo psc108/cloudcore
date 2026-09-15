@@ -29,7 +29,7 @@ module "subnets" {
   vpc_cidr_block = var.cidr_block
 
   subnets = {
-    "public${local.sfx}"  = { newbits = 8, netnum = 1, public = true,  zone = "a" }
+    "public${local.sfx}"  = { newbits = 8, netnum = 1, public = true, zone = "a" }
     "private${local.sfx}" = { newbits = 8, netnum = 2, public = false, zone = "a" }
   }
 }
@@ -46,8 +46,8 @@ module "security_groups" {
     "frontend${local.sfx}" = {
       description = "Frontend — HTTP public + SSH"
       ingress_rules = {
-        http = { ip_protocol = "tcp", from_port = 80,  to_port = 80,  cidr = "0.0.0.0/0" }
-        ssh  = { ip_protocol = "tcp", from_port = 22,  to_port = 22,  cidr = "0.0.0.0/0" }
+        http = { ip_protocol = "tcp", from_port = 80, to_port = 80, cidr = "0.0.0.0/0" }
+        ssh  = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = "0.0.0.0/0" }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -56,8 +56,8 @@ module "security_groups" {
     "backend${local.sfx}" = {
       description = "Backend services — internal only"
       ingress_rules = {
-        app  = { ip_protocol = "tcp", from_port = 8080, to_port = 8080, cidr = var.cidr_block }
-        ssh  = { ip_protocol = "tcp", from_port = 22,   to_port = 22,   cidr = var.cidr_block }
+        app = { ip_protocol = "tcp", from_port = 8080, to_port = 8080, cidr = var.cidr_block }
+        ssh = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.cidr_block }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -66,10 +66,10 @@ module "security_groups" {
     "data${local.sfx}" = {
       description = "Data tier — MySQL, RabbitMQ, NFS"
       ingress_rules = {
-        mysql   = { ip_protocol = "tcp", from_port = 3306,  to_port = 3306,  cidr = var.cidr_block }
-        amqp    = { ip_protocol = "tcp", from_port = 5672,  to_port = 5672,  cidr = var.cidr_block }
-        nfs     = { ip_protocol = "tcp", from_port = 2049,  to_port = 2049,  cidr = var.cidr_block }
-        ssh     = { ip_protocol = "tcp", from_port = 22,    to_port = 22,    cidr = var.cidr_block }
+        mysql = { ip_protocol = "tcp", from_port = 3306, to_port = 3306, cidr = var.cidr_block }
+        amqp  = { ip_protocol = "tcp", from_port = 5672, to_port = 5672, cidr = var.cidr_block }
+        nfs   = { ip_protocol = "tcp", from_port = 2049, to_port = 2049, cidr = var.cidr_block }
+        ssh   = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.cidr_block }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -78,9 +78,9 @@ module "security_groups" {
     "identity${local.sfx}" = {
       description = "Keystone identity service"
       ingress_rules = {
-        keystone_public  = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = var.cidr_block }
-        keystone_admin   = { ip_protocol = "tcp", from_port = 35357, to_port = 35357, cidr = var.cidr_block }
-        ssh              = { ip_protocol = "tcp", from_port = 22,   to_port = 22,   cidr = var.cidr_block }
+        keystone_public = { ip_protocol = "tcp", from_port = 5000, to_port = 5000, cidr = var.cidr_block }
+        keystone_admin  = { ip_protocol = "tcp", from_port = 35357, to_port = 35357, cidr = var.cidr_block }
+        ssh             = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.cidr_block }
       }
       egress_rules = {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
@@ -107,7 +107,8 @@ module "frontend" {
   security_group_ids = [
     module.security_groups.security_group_ids_by_key["frontend${local.sfx}"],
   ]
-  tags = { Role = "frontend" }
+  user_data = local.frontend_user_data
+  tags      = { Role = "frontend" }
 }
 
 module "backend" {
@@ -126,7 +127,8 @@ module "backend" {
   security_group_ids = [
     module.security_groups.security_group_ids_by_key["backend${local.sfx}"],
   ]
-  tags = { Role = "backend" }
+  user_data = local.backend_user_data
+  tags      = { Role = "backend" }
 }
 
 module "mysql" {
@@ -145,7 +147,8 @@ module "mysql" {
   security_group_ids = [
     module.security_groups.security_group_ids_by_key["data${local.sfx}"],
   ]
-  tags = { Role = "mysql" }
+  user_data = local.mysql_user_data
+  tags      = { Role = "mysql" }
 }
 
 module "keystone" {
@@ -164,7 +167,8 @@ module "keystone" {
   security_group_ids = [
     module.security_groups.security_group_ids_by_key["identity${local.sfx}"],
   ]
-  tags = { Role = "keystone" }
+  user_data = local.keystone_user_data
+  tags      = { Role = "keystone" }
 }
 
 module "rabbitmq" {
@@ -183,7 +187,8 @@ module "rabbitmq" {
   security_group_ids = [
     module.security_groups.security_group_ids_by_key["data${local.sfx}"],
   ]
-  tags = { Role = "rabbitmq" }
+  user_data = local.rabbitmq_user_data
+  tags      = { Role = "rabbitmq" }
 }
 
 # ── Admin / NFS server ───────────────────────────────────────────────────────
@@ -204,7 +209,7 @@ module "admin_nfs" {
       disk_gb = var.admin_disk_gb
       shares = [
         { name = "config", clients = "vpc" },
-        { name = "data",   clients = "vpc" },
+        { name = "data", clients = "vpc" },
       ]
     }
   }

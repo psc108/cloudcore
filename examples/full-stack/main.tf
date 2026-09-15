@@ -58,14 +58,14 @@ module "web" {
   environment = var.environment
   owner       = var.owner
 
-  name            = "web${local.sfx}"
-  image_id        = "ubuntu-22.04"
-  flavor          = var.instance_flavor
-  count_instances = var.instance_count
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["web-a${local.sfx}"]
+  name               = "web${local.sfx}"
+  image_id           = "ubuntu-22.04"
+  flavor             = var.instance_flavor
+  count_instances    = var.instance_count
+  vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id          = module.subnets.subnet_ids_by_key["web-a${local.sfx}"]
   security_group_ids = module.security_groups.security_group_ids_list
-  user_data       = local.nginx_user_data
+  user_data          = local.nginx_user_data
 }
 
 module "lb" {

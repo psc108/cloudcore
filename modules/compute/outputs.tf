@@ -12,3 +12,8 @@ output "public_ips_by_key" {
   description = "Public IP addresses keyed by the caller-supplied key from var.instances."
   value       = { for k, v in cloudcore_instance.this : k => v.public_ip }
 }
+
+output "ssh_commands_by_key" {
+  description = "Full SSH commands keyed by the caller-supplied key from var.instances. Run directly: $(tofu output -raw ssh_commands[\"key\"])"
+  value       = { for k, v in cloudcore_instance.this : k => "ssh ${v.ssh_endpoint}" }
+}
