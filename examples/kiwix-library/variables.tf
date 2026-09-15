@@ -62,9 +62,16 @@ variable "kiwix_tools_version" {
 }
 
 variable "kiwix_tools_url" {
-  description = "Download URL for the kiwix-tools Linux x86_64 release tarball above."
+  description = <<-EOT
+    Download URL for the kiwix-tools Linux x86_64 release tarball above.
+    Defaults to the host-level package repo's own pinned-artifact cache
+    (`api/build-package-repo.sh`, haFullStack.md §14) — already fetched
+    once from download.kiwix.org there, so the default build needs no
+    internet access. Point this at the real upstream URL (or anywhere
+    else) if you bump kiwix_tools_version to something not yet cached.
+  EOT
   type        = string
-  default     = "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-x86_64-3.8.2.tar.gz"
+  default     = "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
 }
 
 variable "kiwix_tools_sha256" {
@@ -75,16 +82,20 @@ variable "kiwix_tools_sha256" {
 
 variable "zim_url" {
   description = <<-EOT
-    Download URL for the ZIM content archive to serve. Defaults to
-    English Wikipedia's "top" (most significant) articles, text-only
-    (~2.2 GB) — the full-image version of the same set is 8+ GB, too much
-    for a template default. Point this at any other archive from
-    https://library.kiwix.org (Wiktionary, Project Gutenberg, Stack
-    Exchange, other languages, ...) to serve something else instead —
-    update zim_filename and zim_md5 to match.
+    Download URL for the ZIM content archive to serve. Defaults to the
+    host-level package repo's own pinned-artifact cache (`api/build-
+    package-repo.sh`, haFullStack.md §14) — English Wikipedia's "top"
+    (most significant) articles, text-only (~2.2 GB), already fetched
+    once from download.kiwix.org there, so the default build needs no
+    internet access. The full-image version of the same set is 8+ GB,
+    too much for a template default. Point this at any other archive
+    from https://library.kiwix.org (Wiktionary, Project Gutenberg,
+    Stack Exchange, other languages, ...) to serve something else
+    instead — a real internet download, since only the default ZIM
+    above is pre-cached — and update zim_filename/zim_md5 to match.
   EOT
   type        = string
-  default     = "https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_nopic_2026-06.zim"
+  default     = "http://192.168.100.1:8090/jammy/artifacts/wikipedia_en_top_nopic_2026-06.zim"
 }
 
 variable "zim_filename" {

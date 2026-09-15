@@ -68,6 +68,17 @@ def ui():
     return resp
 
 
+@app.get("/vendor/<path:filename>")
+def ui_vendor(filename):
+    # CodeMirror/xterm.js, vendored locally (ui/vendor/) rather than
+    # loaded from cdnjs.cloudflare.com/cdn.jsdelivr.net — the Dashboard
+    # itself must not need internet access any more than the example
+    # templates it drives do. Filenames are pinned, versioned release
+    # assets (e.g. codemirror.min.js), so the default long-lived cache
+    # is fine here, unlike index.html's own deliberate no-cache above.
+    return send_from_directory(os.path.join(UI_DIR, "vendor"), filename)
+
+
 def require_auth(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):

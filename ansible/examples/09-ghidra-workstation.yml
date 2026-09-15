@@ -105,6 +105,21 @@
           # itself (TigerVNC) stays loopback-only; websockify is the sole ingress.
           # --heartbeat sends a WebSocket ping periodically so an idle desktop doesn't
           # get dropped by the load balancer's fixed 30s idle timeout.
+          #
+          # Every package below (including temurin-21-jdk, only ever in a
+          # third-party Adoptium repo, not Ubuntu's own archive) and the
+          # Ghidra zip itself are pre-cached in the host-level package
+          # repo (`api/build-package-repo.sh`, haFullStack.md §14) —
+          # apt_preserve_sources_list + bootcmd below point this guest
+          # at it exclusively, the same pattern ha-frontend-lb's own
+          # tiers already use, so nothing here reaches the real
+          # internet at guest-boot time.
+          apt_preserve_sources_list: true
+          bootcmd:
+            - |
+              cat > /etc/apt/sources.list <<'EOF'
+              deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+              EOF
 
           package_update: true
           packages:
@@ -118,6 +133,7 @@
             - curl
             - gnupg
             - ca-certificates
+            - temurin-21-jdk
 
           # No `owner:` on any /home/ubuntu/... entry below: the write_files module
           # runs before users-groups creates that account, so an owner referencing it
@@ -239,31 +255,24 @@
             - [ systemctl, daemon-reload ]
             - [ systemctl, enable, --now, placeholder.service ]
 
-            # JDK 21 via Adoptium Temurin — Ubuntu 22.04's default repos don't
-            # reliably carry it, and Ghidra {{ ghidra_version }} requires it.
-            - [ sh, -c, "mkdir -p /etc/apt/keyrings && curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg" ]
-            - [ sh, -c, "echo \"deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo $VERSION_CODENAME) main\" > /etc/apt/sources.list.d/adoptium.list" ]
-            - [ apt-get, update ]
-            - [ apt-get, install, -y, temurin-21-jdk ]
-
             # VNC password (classic VNC auth truncates to 8 chars — expected).
             - [ sh, -c, "printf '%s\n' '{{ vnc_password }}' | vncpasswd -f > /home/ubuntu/.vnc/passwd" ]
             - [ chmod, "600", /home/ubuntu/.vnc/passwd ]
             - [ chown, "ubuntu:ubuntu", /home/ubuntu/.vnc/passwd ]
 
-            # Ghidra: download, verify checksum, unzip.
-            #
-            # --speed-limit/--speed-time/-C -: this platform's guest networking has
-            # been observed to occasionally stall completely mid-transfer (throughput
-            # decaying toward zero while the connection stays technically open) —
-            # plain `--retry` doesn't catch that, it only handles hard connection
-            # failures. Aborting after 20s under 50KB/s and resuming (-C -) rather
-            # than restarting turns a stall into a brief hiccup instead of a hang.
+            # Ghidra: download from the host-level package repo's
+            # pinned-artifact cache (already fetched once from
+            # {{ ghidra_release_tag }} on GitHub by
+            # `api/build-package-repo.sh` — see its own ARTIFACT_URLS),
+            # verify checksum, unzip. Same stall-tolerant retry loop as
+            # before even though this is now a same-host transfer, not
+            # a real internet fetch — cheap insurance, no reason to
+            # remove it.
             - |
               for attempt in 1 2 3 4 5 6 7 8 9 10; do
                 curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
                   -C - -o /tmp/{{ ghidra_zip_name }} \
-                  https://github.com/NationalSecurityAgency/ghidra/releases/download/{{ ghidra_release_tag }}/{{ ghidra_zip_name }} && break
+                  http://192.168.100.1:8090/jammy/artifacts/ghidra.zip && break
                 echo "Ghidra download attempt $attempt stalled/failed, retrying..." >&2
                 sleep 5
               done

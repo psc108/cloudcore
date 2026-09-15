@@ -20,6 +20,27 @@
 # entirely. These two are installed via runcmd instead, pinned to
 # $(uname -r) explicitly, so they always match whatever kernel this
 # instance actually boots.
+#
+# apt_preserve_sources_list + bootcmd point this guest at the host-level
+# package repo (`api/build-package-repo.sh`, haFullStack.md §14)
+# exclusively, the same pattern ha-frontend-lb's own tiers already use —
+# every package below (including kismet, only ever in a third-party
+# kismetwireless.net repo, not Ubuntu's own archive, and the exact
+# linux-headers-$(uname -r)/linux-modules-extra-$(uname -r) pair
+# runcmd installs further down) is pre-cached there, so nothing here
+# reaches the real internet at guest-boot time. kismet-common's
+# critical-priority debconf question has to be preseeded in bootcmd,
+# not runcmd — bootcmd is cloud-init's earliest hook, the only one
+# guaranteed to run before the packages: module below actually
+# installs kismet and trips that prompt.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+    echo 'kismet-common kismet-common/install-setuid boolean true' | debconf-set-selections
+
 package_update: true
 packages:
   - build-essential
@@ -34,6 +55,7 @@ packages:
   - hcxtools
   - hcxdumptool
   - tcpdump
+  - kismet
 
 write_files:
   - path: /var/www/placeholder/index.html
@@ -129,27 +151,10 @@ runcmd:
   - [ sh, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y tshark" ]
   - [ usermod, -aG, wireshark, ubuntu ]
 
-  # Kismet: official apt repo, modern keyring-based setup (no apt-key).
-  #
-  # kismet-common/install-setuid is a *critical*-priority debconf
-  # question ("should Kismet's capture helpers be installed suid-root?")
-  # asked by kismet-common AND separately by every one of the ~15
-  # kismet-capture-* sub-packages the metapackage pulls in — `apt-get
-  # install -y` only auto-confirms apt's own prompts, not debconf's, so
-  # without preseeding this, install hangs forever waiting for a terminal
-  # that will never answer it. Preseed the known answer (its own
-  # packaged default, "true" — the more secure option, capture helpers
-  # via capabilities rather than the whole daemon running full-root) and
-  # set noninteractive as a catch-all in case any sub-package asks
-  # something else this wasn't written against.
-  - |
-    echo 'kismet-common kismet-common/install-setuid boolean true' | debconf-set-selections
-    wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet \
-      | gpg --dearmor | tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null
-    echo 'deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/jammy jammy main' \
-      | tee /etc/apt/sources.list.d/kismet.list >/dev/null
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y kismet
+  # kismet itself now installs as part of the packages: list above (its
+  # debconf question was preseeded in bootcmd, before that install ever
+  # ran) — nothing left to do here but add ubuntu to the group its
+  # package creates.
   - [ usermod, -aG, kismet, ubuntu ]
 
   # RTL8812AU driver: the aircrack-ng-maintained fork is the only one
@@ -157,20 +162,26 @@ runcmd:
   # commonly-suggested morrownr fork is explicit in its own README that
   # it does NOT support monitor mode — wrong tool for this adapter).
   #
-  # git's own stall-detection flags (http.lowSpeedLimit/Time), same idea
-  # as the curl --speed-limit pattern the Ghidra/Kiwix templates use —
-  # this platform's guest networking has been observed to occasionally
-  # stall completely mid-transfer, which a plain `git clone` wouldn't
-  # detect since the connection stays technically open.
+  # Downloaded from the host-level package repo's pinned-artifact cache
+  # (`api/build-package-repo.sh` clones ${rtl8812au_driver_ref} from
+  # GitHub once and tars it up as rtl8812au-<ref>.tar.gz — see its own
+  # ARTIFACT_URLS-adjacent RTL8812AU_REF block), verified by checksum,
+  # not a live `git clone` from GitHub at every guest boot. Same
+  # stall-tolerant retry loop as before even though this is now a
+  # same-host transfer, not a real internet fetch — cheap insurance, no
+  # reason to remove it.
   - |
     for attempt in 1 2 3 4 5; do
-      rm -rf /opt/rtl8812au
-      git -c http.lowSpeedLimit=51200 -c http.lowSpeedTime=20 \
-        clone -b ${rtl8812au_driver_ref} --depth 1 \
-        https://github.com/aircrack-ng/rtl8812au.git /opt/rtl8812au && break
-      echo "rtl8812au clone attempt $attempt failed, retrying..." >&2
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/rtl8812au.tar.gz \
+        http://192.168.100.1:8090/jammy/artifacts/rtl8812au-${rtl8812au_driver_ref}.tar.gz && break
+      echo "rtl8812au download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done
+    echo '${rtl8812au_driver_sha256}  /tmp/rtl8812au.tar.gz' | sha256sum -c -
+    rm -rf /opt/rtl8812au
+    tar -xzf /tmp/rtl8812au.tar.gz -C /opt
+    rm -f /tmp/rtl8812au.tar.gz
     cd /opt/rtl8812au
     make dkms_install
     rmmod rtl8xxxu 2>/dev/null || true

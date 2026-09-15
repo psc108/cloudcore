@@ -85,3 +85,9 @@ variable "rtl8812au_driver_ref" {
   type        = string
   default     = "v5.6.4.2"
 }
+
+variable "rtl8812au_driver_sha256" {
+  description = "SHA-256 checksum of the rtl8812au_driver_ref source tree, tarred by `api/build-package-repo.sh` into its own pinned-artifact cache (haFullStack.md §14) at rtl8812au-<ref>.tar.gz — verified against that tarball before it's unpacked. Update alongside rtl8812au_driver_ref when bumping the version."
+  type        = string
+  default     = "114f0334f08612652e0d9f5dbf38359d894db26c75f210667cdec1800f805cec"
+}

@@ -4,6 +4,18 @@
 # already renders a normal browsable website, so the load balancer in front
 # of this can be plain "application" (HTTP) mode rather than the TCP
 # passthrough the Ghidra workstation template needs for its WebSocket.
+#
+# apt_preserve_sources_list + bootcmd point this guest at the host-level
+# package repo (`api/build-package-repo.sh`, haFullStack.md §14)
+# exclusively, the same pattern ha-frontend-lb's own tiers already use
+# — curl/ca-certificates install from there, not the real Ubuntu
+# archive.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
 
 package_update: true
 packages:
