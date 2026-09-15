@@ -105,7 +105,10 @@ bash install.sh ../CloudProject/haFullStack-Findings-Log.md
 ```
 
 Installs itself as two always-on systemd user services and seeds its
-knowledge base from this repo's own findings log in one step. UI at
+knowledge base from this repo's own findings log in one step (also
+downloads a small pretrained matching model, ~90MB one-time, cached
+locally afterward — same "download once, work offline forever after"
+pattern as this repo's own package repo). UI at
 **http://localhost:8900/**. Full setup, CLI reference, and how to
 (re)train it from real usage: see
 [Sentinel's own README](https://github.com/psc108/sentinel#readme).
