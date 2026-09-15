@@ -86,6 +86,30 @@ journalctl --user -u cloudcore-terminal -f
 systemctl --user restart cloudcore-api
 ```
 
+### Optional: Sentinel (log-intelligence advisor)
+
+[Sentinel](https://github.com/psc108/sentinel) is a standalone
+companion tool, in its own repo — it watches a running lab's
+centralized-logging tier (`examples/ha-frontend-lb`'s Loki/Grafana
+tier, `haFullStack-LLD.md` §12), flags log activity that looks like
+real trouble, and matches it against a knowledge base seeded from
+`haFullStack-Findings-Log.md` — surfacing suggestions through its own
+web UI. It has no source dependency on CloudCore (only the API and
+Loki's own HTTP endpoints), so it's entirely optional and safe to skip
+— nothing here requires it.
+
+```bash
+git clone https://github.com/psc108/sentinel.git ../sentinel
+cd ../sentinel
+bash install.sh ../CloudProject/haFullStack-Findings-Log.md
+```
+
+Installs itself as two always-on systemd user services and seeds its
+knowledge base from this repo's own findings log in one step. UI at
+**http://localhost:8900/**. Full setup, CLI reference, and how to
+(re)train it from real usage: see
+[Sentinel's own README](https://github.com/psc108/sentinel#readme).
+
 ---
 
 ## Artefacts
