@@ -21,6 +21,7 @@ package_update: true
 packages:
   - rabbitmq-server
   - promtail
+  - acl
 
 write_files:
   # Centralized logging (haFullStack-LLD.md §12) — ships this node's
@@ -50,3 +51,18 @@ runcmd:
   - usermod -aG rabbitmq promtail
   - systemctl enable --now promtail
   - systemctl enable --now rabbitmq-server
+  # rabbitmq-server's own systemd unit redirects its stdout/stderr
+  # directly to these two files (StandardOutput=append:.../
+  # rabbitmq-server.log, StandardError=append:.../rabbitmq-server.
+  # error.log) — unlike rabbit@*.log (written by RabbitMQ's own
+  # Erlang runtime as the rabbitmq user, covered by the usermod -aG
+  # rabbitmq above), systemd creates these as root:root 640 regardless
+  # of the unit's own User=/Group=, confirmed live (F-079,
+  # haFullStack-Findings-Log.md). No group covers "root" short of
+  # actually granting promtail root-adjacent access, so this is a
+  # file-specific ACL instead. No credential material lives here
+  # (confirmed directly: just RabbitMQ's own startup banner and
+  # feature-flag notices before it hands off to its own rabbit@*.log
+  # handler), so this is a plain read grant, nothing more sensitive to
+  # scope around.
+  - setfacl -m u:promtail:r /var/log/rabbitmq/rabbitmq-server.log /var/log/rabbitmq/rabbitmq-server.error.log

@@ -9,45 +9,21 @@ locals {
   # project's own each-example-is-self-contained convention.
   promtail_config = file("${path.module}/files/promtail-config.yml")
 
-  nginx_user_data = <<-EOT
-    #cloud-config
-    # apt_preserve_sources_list + bootcmd point this guest at the
-    # host-level package repo (api/build-package-repo.sh,
-    # haFullStack.md §14) exclusively, the same pattern every other
-    # example uses — promtail is only ever cached there (a third-party
-    # Grafana Labs package, never in the real Ubuntu archive), so this
-    # redirect is required, not optional, once it's in packages: below.
-    apt_preserve_sources_list: true
-    bootcmd:
-      - |
-        cat > /etc/apt/sources.list <<'EOF'
-        deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
-        EOF
-
-    package_update: true
-    packages: [nginx, promtail]
-
-    write_files:
-      # Centralized logging (haFullStack-LLD.md §12) — ships this
-      # node's own journal, cloud-init-output.log, and nginx's own
-      # access/error logs to the host-level Loki service. __HOSTNAME__
-      # fixed up in runcmd below, same sed-substitution idiom this
-      # platform already uses elsewhere.
-      - path: /etc/promtail/config.yml
-        content: |
-          ${indent(10, local.promtail_config)}
-
-    runcmd:
-      # F-073/F-072 promtail fix, first, before nginx starts (F-076,
-      # haFullStack-Findings-Log.md — promtail's own package postinst
-      # auto-starts it immediately once installed, before this runcmd
-      # block gets a chance to fix up __HOSTNAME__ or grant the "adm"
-      # group needed to read root:adm 0640
-      # /var/log/cloud-init-output.log).
-      - systemctl stop promtail || true
-      - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
-      - usermod -aG adm promtail
-      - systemctl enable --now promtail
-      - systemctl enable --now nginx
-  EOT
+  # Rendered via templatefile(), not an inline heredoc: an earlier
+  # version used `<<-EOT ... ${indent(N, local.promtail_config)} ...
+  # EOT` directly, which corrupted the embedded YAML's indentation —
+  # HCL heredocs' own `<<-` dedent (based on the closing marker's
+  # indentation) strips a uniform amount of leading whitespace from
+  # every line *after* indent() has already given line 1 zero and
+  # every other line N spaces, so the two don't compose correctly.
+  # Confirmed live (F-080, haFullStack-Findings-Log.md): promtail
+  # crash-looped (`yaml: line 4: did not find expected key`) on a
+  # real instance — `tofu validate` never catches this, since it only
+  # checks HCL syntax, not the interpolated YAML it produces.
+  # templatefile() against a real file doesn't have this interaction
+  # at all — same reliable pattern already used everywhere else in
+  # this repo.
+  nginx_user_data = templatefile("${path.module}/files/nginx-cloud-init.yaml.tftpl", {
+    promtail_config = local.promtail_config
+  })
 }
