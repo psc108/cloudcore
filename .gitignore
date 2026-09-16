@@ -28,8 +28,12 @@ api/instances/
 api/volumes/
 api/package-repo/*
 !api/package-repo/README.md
-api/keys/cloudcore_ed25519
-api/keys/cloudcore_ed25519.pub
+# Whole directory, not just the original SSH keypair's two filenames —
+# cross-host peering added its own ed25519 identity keypair and will add
+# a WireGuard keypair too (api/identity.py); every file generated here is
+# host-specific key material, never meant to be committed, regardless of
+# how many more get added over time.
+api/keys/
 *.migrated
 
 # Test results

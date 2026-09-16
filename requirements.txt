@@ -4,3 +4,8 @@ paramiko>=3.0
 websockets>=12.0
 pyyaml>=6.0
 ansible>=2.15
+# mDNS advertise/browse for cross-host peer discovery (api/discovery.py) —
+# pure-Python, no system avahi-daemon dependency. First new pip dependency
+# added since the original stack above; no cryptography/pynacl needed
+# alongside it — pairing signatures use ssh-keygen -Y, not a Python lib.
+zeroconf>=0.132

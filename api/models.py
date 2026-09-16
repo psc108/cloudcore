@@ -209,6 +209,9 @@ class Instance:
     ssh_user: str = "ubuntu"
     # [{username, sudo, ssh_keys: [], password_hash: ""}]
     users: list = field(default_factory=list)
+    # None = local (this host); otherwise a peers.id this instance was
+    # actually provisioned on — see api/peers_routes.py, api/peer_client.py.
+    host_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         # SLIRP instances are reachable at 127.0.0.1 via forwarded ports;
@@ -246,6 +249,7 @@ class Instance:
             "error_message": self.error_message,
             "created_at": self.created_at,
             "tags": self.tags,
+            "host_id": self.host_id,
         }
 
 

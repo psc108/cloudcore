@@ -13,6 +13,7 @@ import threading
 import libvirt
 
 import usb
+import settings_store
 from models import Instance, InstanceStatus
 
 _port_lock = threading.Lock()
@@ -104,7 +105,19 @@ def _allocate_slirp_ip(vpc_id: str, vpc_cidr: str) -> str:
 # (e.g. nfs.py's "vpc" share-client shorthand, F-041) should use this,
 # not a VPC's cidr_block.
 BRIDGE_NAME = "ccbr0"
-BRIDGE_CIDR = "192.168.100.0/24"
+
+
+def bridge_cidr() -> str:
+    """The real bridge subnet, e.g. "192.168.100.0/24" by default.
+
+    Per-host configurable (network.bridge_subnet_octet setting) so two
+    hosts paired for cross-host peering don't collide on the same
+    subnet — see setup-network.sh, which must be run with the same
+    octet for the two to actually agree. Read live (not cached) since
+    it can change via a settings PUT without an API restart.
+    """
+    octet = settings_store.get("network.bridge_subnet_octet", 100)
+    return f"192.168.{octet}.0/24"
 
 # Image catalogue — entries exist regardless of whether the file is downloaded.
 # 'available' is computed at runtime from disk presence.

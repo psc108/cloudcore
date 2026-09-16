@@ -35,6 +35,7 @@ def _inst_from_row(row) -> Instance:
         ssh_user=row["ssh_user"],
         users=json.loads(row["users"]),
         error_message=row["error_message"] if "error_message" in keys else "",
+        host_id=row["host_id"] if "host_id" in keys else None,
     )
     i.status = InstanceStatus(row["status"])
     return i
@@ -302,8 +303,8 @@ def put_instance(instance: Instance) -> None:
     db.get_db().execute("""INSERT INTO instances
         (id,name,image_id,flavor,vpc_id,subnet_id,security_group_ids,usb_device_ids,user_data,
          private_ip,public_ip,status,error_message,created_at,tags,domain_name,
-         ssh_host_port,http_host_port,ssh_user,users)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ssh_host_port,http_host_port,ssh_user,users,host_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, image_id=excluded.image_id, flavor=excluded.flavor,
             vpc_id=excluded.vpc_id, subnet_id=excluded.subnet_id,
@@ -313,7 +314,7 @@ def put_instance(instance: Instance) -> None:
             status=excluded.status, error_message=excluded.error_message,
             tags=excluded.tags, domain_name=excluded.domain_name,
             ssh_host_port=excluded.ssh_host_port, http_host_port=excluded.http_host_port,
-            ssh_user=excluded.ssh_user, users=excluded.users""",
+            ssh_user=excluded.ssh_user, users=excluded.users, host_id=excluded.host_id""",
         (instance.id, instance.name, instance.image_id, instance.flavor,
          instance.vpc_id, instance.subnet_id,
          json.dumps(instance.security_group_ids), json.dumps(instance.usb_device_ids),
@@ -322,7 +323,7 @@ def put_instance(instance: Instance) -> None:
          instance.error_message,
          instance.created_at, json.dumps(instance.tags), instance.domain_name,
          instance.ssh_host_port, instance.http_host_port,
-         instance.ssh_user, json.dumps(instance.users)))
+         instance.ssh_user, json.dumps(instance.users), instance.host_id))
     db.get_db().commit()
 
 

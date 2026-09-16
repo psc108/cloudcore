@@ -149,6 +149,20 @@ else
     echo "==> SSH keypair already exists, skipping."
 fi
 
+# Cross-host peering identity (api/identity.py) — deliberately a
+# *separate* keypair from the one above (that one's for SSHing into
+# guest VMs; this one's for proving this host's identity when pairing
+# with another CloudCore host). Also generated lazily at API startup
+# for upgraded checkouts, so this step is belt-and-suspenders, not the
+# only path — but doing it here too means a fresh install has it from
+# the first run, not just after the API's first launch.
+if [[ ! -f "$KEYS_DIR/cloudcore_peer_ed25519" ]]; then
+    echo "==> Generating CloudCore peer-identity keypair..."
+    ssh-keygen -t ed25519 -f "$KEYS_DIR/cloudcore_peer_ed25519" -N "" -C "cloudcore-peer@$(hostname)"
+else
+    echo "==> Peer-identity keypair already exists, skipping."
+fi
+
 # ---------------------------------------------------------------------------
 # 8. Bridge network (system-level service)
 # ---------------------------------------------------------------------------

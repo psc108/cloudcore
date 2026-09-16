@@ -21,8 +21,21 @@ if [ "${1:-}" != "--force" ] && [ -n "$ACTIVE_HOST_SERVICES" ]; then
   exit 1
 fi
 
+# Derive the actual subnet from the live bridge address rather than
+# assuming 192.168.100.0/24 — setup-network.sh accepts a different
+# octet per host (cross-host peering needs non-overlapping subnets), so
+# hardcoding the default here would silently leave a stale MASQUERADE
+# rule behind (or fail to remove one) on any host using a non-default
+# octet.
+BRIDGE_ADDR=$(ip -4 -o addr show "$BRIDGE" 2>/dev/null | awk '{print $4}' | head -1)
+if [ -n "$BRIDGE_ADDR" ]; then
+  SUBNET_CIDR="$(echo "$BRIDGE_ADDR" | cut -d. -f1-3).0/24"
+else
+  SUBNET_CIDR="192.168.100.0/24"
+fi
+
 [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null || true
 ip link set "$BRIDGE" down 2>/dev/null || true
 ip link del "$BRIDGE" 2>/dev/null || true
-iptables -t nat -D POSTROUTING -s 192.168.100.0/24 ! -d 192.168.100.0/24 -j MASQUERADE 2>/dev/null || true
+iptables -t nat -D POSTROUTING -s "$SUBNET_CIDR" ! -d "$SUBNET_CIDR" -j MASQUERADE 2>/dev/null || true
 echo "Bridge $BRIDGE removed."

@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 _DB_FILE = Path(__file__).parent / "cloudcore.db"
+_active_db_file: Path = _DB_FILE  # set for real by init(); see its own comment
 _conn: sqlite3.Connection | None = None
 _local = threading.local()
 _lock = threading.Lock()
@@ -309,6 +310,51 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- Cross-host peering (see api/peers_routes.py). A "peer" row only exists
+-- once pairing has actually started — direction/status track which side
+-- of the handshake this row represents and how far it's got.
+-- direction: 'outbound' (we initiated) | 'inbound' (they initiated).
+-- status:    pending_outbound | approved | rejected | revoked.
+-- local_token: minted by US, for THEM to present back to us.
+-- remote_token: minted by THEM, for US to present back to them.
+CREATE TABLE IF NOT EXISTS peers (
+    id                TEXT PRIMARY KEY,
+    hostname          TEXT NOT NULL,
+    pubkey            TEXT NOT NULL,
+    pubkey_fpr        TEXT NOT NULL,
+    api_url           TEXT NOT NULL,
+    direction         TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'pending_outbound',
+    local_token       TEXT,
+    remote_token      TEXT,
+    wg_pubkey         TEXT,
+    wg_endpoint       TEXT,
+    wg_bridge_subnet  TEXT,
+    wg_transit_ip     TEXT,
+    wg_tunnel_status  TEXT NOT NULL DEFAULT 'unknown',
+    created_at        TEXT NOT NULL,
+    approved_at       TEXT
+);
+
+-- An incoming pairing request awaiting this host's own human approval
+-- (POST /v1/peers/pairing-requests, the one intentionally unauthenticated
+-- bootstrap route — see api/peers_routes.py). Time-bounded (expires_at)
+-- so an unapproved request doesn't linger indefinitely in the UI.
+CREATE TABLE IF NOT EXISTS pairing_requests (
+    id              TEXT PRIMARY KEY,
+    hostname        TEXT NOT NULL,
+    pubkey          TEXT NOT NULL,
+    pubkey_fpr      TEXT NOT NULL,
+    signature       TEXT NOT NULL,
+    callback_token  TEXT NOT NULL,
+    wg_pubkey       TEXT NOT NULL,
+    wg_endpoint     TEXT NOT NULL,
+    wg_bridge_subnet TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    created_at      TEXT NOT NULL,
+    expires_at      TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
     content='help_articles', content_rowid='rowid'
@@ -335,8 +381,20 @@ END;
 
 def init(db_file: Path | None = None) -> None:
     """Open the database, apply schema, migrate from JSON if needed."""
-    global _conn
+    global _conn, _active_db_file
     path = db_file or _DB_FILE
+    # get_db() (every other module's own entry point — store.py,
+    # settings_store.py, etc.) opened its thread-local connections
+    # against the hardcoded _DB_FILE constant regardless of what path
+    # was actually passed here — invisible in production (init() is
+    # always called with no argument there, so the two already
+    # coincided), but it meant a test harness pointing init() at a
+    # scratch file had every actual read/write silently land on the
+    # real cloudcore.db instead, via any get_db() caller. Tracking the
+    # path actually in use and having get_db() (and _migrate_json()'s
+    # own JSON-sibling-file lookup, same bug) read it back closes that
+    # gap for good, not just for this feature's own tests.
+    _active_db_file = path
     _conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
     _conn.row_factory = sqlite3.Row
     _conn.executescript(_SCHEMA)
@@ -356,6 +414,11 @@ def _migrate_columns() -> None:
         _conn.execute("ALTER TABLE instances ADD COLUMN usb_device_ids TEXT NOT NULL DEFAULT '[]'")
     if "error_message" not in existing:
         _conn.execute("ALTER TABLE instances ADD COLUMN error_message TEXT NOT NULL DEFAULT ''")
+    if "host_id" not in existing:
+        # NULL = local (created on this host, the default for every
+        # instance before cross-host peering existed); non-NULL = the
+        # peers.id this instance actually lives on — see api/peers_routes.py.
+        _conn.execute("ALTER TABLE instances ADD COLUMN host_id TEXT")
 
     lb_cols = {row[1] for row in _conn.execute("PRAGMA table_info(load_balancers)").fetchall()}
     if "sticky_sessions" not in lb_cols:
@@ -457,7 +520,7 @@ def get_db() -> sqlite3.Connection:
     if _conn is None:
         raise RuntimeError("db.init() has not been called")
     if not hasattr(_local, "conn") or _local.conn is None:
-        _local.conn = _new_conn(_DB_FILE)
+        _local.conn = _new_conn(_active_db_file)
     return _local.conn
 
 
@@ -466,7 +529,7 @@ def get_db() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 def _migrate_json() -> None:
-    base = _DB_FILE.parent
+    base = _active_db_file.parent
 
     state_file = base / "state.json"
     if state_file.exists():

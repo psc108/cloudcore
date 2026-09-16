@@ -125,7 +125,7 @@ def _export_line_raw(share: dict, vpc_cidr: str) -> str:
         # instances have no real L2 peer connectivity between guests
         # regardless, so vpc_cidr is left as the (largely moot) fallback
         # there rather than guessing at a more "correct" value.
-        host_spec = compute.BRIDGE_CIDR if compute._bridge_usable() else vpc_cidr
+        host_spec = compute.bridge_cidr() if compute._bridge_usable() else vpc_cidr
     elif isinstance(clients, list):
         host_spec = " ".join(clients)
     else:

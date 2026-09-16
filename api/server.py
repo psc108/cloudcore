@@ -17,6 +17,7 @@ import sg_store
 import sg as sg_enforce
 import ipaddress
 import usb
+import identity
 from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
@@ -1447,6 +1448,7 @@ def reconcile():
 
 if __name__ == "__main__":
     db.init()
+    identity.ensure_peer_keypair()
     dns_store.load()
     reconcile()
     dns_server.start()

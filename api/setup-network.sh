@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # Run once with sudo to create the ccbr0 bridge and DHCP server.
 # After this, instances get real routable IPs instead of SLIRP 10.0.2.15.
+#
+# Usage: sudo bash setup-network.sh [octet]
+#   octet defaults to 100 (192.168.100.0/24, today's unchanged default).
+#   Pass a different octet (1-254) on a host that's being paired with
+#   another CloudCore host for cross-host peering — two paired hosts
+#   must NOT share the same octet, or WireGuard routing between them is
+#   undefined. Must match whatever's set via PUT /v1/settings/network
+#   (bridge_subnet_octet) on this host, since compute.py's own
+#   bridge_cidr() reads that setting independently — this script does
+#   not read or write the API's settings DB itself.
 set -euo pipefail
 
 BRIDGE=ccbr0
-SUBNET=192.168.100
+SUBNET=192.168.${1:-100}
 GW=${SUBNET}.1
 DHCP_START=${SUBNET}.10
 DHCP_END=${SUBNET}.254

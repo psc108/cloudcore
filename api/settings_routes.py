@@ -49,3 +49,41 @@ def update_tofu_settings():
         settings_store.set("tofu.parallelism", val)
 
     return jsonify(settings_store.get_prefixed("tofu"))
+
+
+@settings_bp.get("/v1/settings/network")
+def get_network_settings():
+    err = _auth()
+    if err: return err
+    settings = settings_store.get_prefixed("network")
+    settings.setdefault("bridge_subnet_octet", 100)
+    return jsonify(settings)
+
+
+@settings_bp.put("/v1/settings/network")
+def update_network_settings():
+    err = _auth()
+    if err: return err
+    body = request.get_json(force=True) or {}
+
+    if "bridge_subnet_octet" in body:
+        val = body["bridge_subnet_octet"]
+        try:
+            val = int(val)
+        except (TypeError, ValueError):
+            return jsonify({"status": 400, "title": "Bad Request",
+                             "detail": "bridge_subnet_octet must be an integer"}), 400
+        # 0 and 255 are broadcast/network-reserved for a /24; kept out of
+        # range rather than merely discouraged. Changing this only takes
+        # effect once setup-network.sh is re-run with the new octet (it's
+        # the actual owner of the bridge/dnsmasq state) — this just
+        # records the intended value for compute.py's own bridge_cidr()
+        # and for anything advertising this host's subnet to a peer.
+        if not (1 <= val <= 254):
+            return jsonify({"status": 400, "title": "Bad Request",
+                             "detail": "bridge_subnet_octet must be between 1 and 254"}), 400
+        settings_store.set("network.bridge_subnet_octet", val)
+
+    settings = settings_store.get_prefixed("network")
+    settings.setdefault("bridge_subnet_octet", 100)
+    return jsonify(settings)
