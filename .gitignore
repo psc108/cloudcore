@@ -34,6 +34,11 @@ api/package-repo/*
 # host-specific key material, never meant to be committed, regardless of
 # how many more get added over time.
 api/keys/
+# Rendered WireGuard config (api/wireguard.py) -- embeds this host's own
+# WireGuard private key in plain text (wg-quick/wg setconf format has
+# no separate keyfile option), regenerated on every peer approval/
+# revocation, never meant to be committed.
+api/wireguard/
 *.migrated
 
 # Test results

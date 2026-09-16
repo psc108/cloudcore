@@ -31,6 +31,7 @@ import peer_client
 import peer_crypto
 import peers_store
 import settings_store
+import wireguard
 from models import now_iso
 
 peers_bp = Blueprint("peers", __name__)
@@ -228,6 +229,8 @@ def approve_pairing_request(request_id: str):
         wg_bridge_subnet=row["wg_bridge_subnet"], wg_transit_ip=None,
         approved_at=now_iso(),
     )
+    wg_result = wireguard.on_peer_approved(peer_row, peers_store.list_peers(status="approved"))
+    peer_row = peers_store.update_peer(peer_row["id"], **wg_result)
 
     callback_delivered = False
     callback_error = None
@@ -287,12 +290,14 @@ def complete_pairing():
                          "detail": "pubkey and token_for_you are required"}), 400
 
     pubkey_fpr = peer_crypto.fingerprint_of(body["pubkey"])
-    peers_store.update_peer(
+    peer_row = peers_store.update_peer(
         row["id"], status="approved", pubkey=body["pubkey"], pubkey_fpr=pubkey_fpr,
         remote_token=body["token_for_you"],
         wg_pubkey=body.get("wg_pubkey", ""), wg_endpoint=body.get("wg_endpoint", ""),
         wg_bridge_subnet=body.get("wg_bridge_subnet", ""), approved_at=now_iso(),
     )
+    wg_result = wireguard.on_peer_approved(peer_row, peers_store.list_peers(status="approved"))
+    peers_store.update_peer(peer_row["id"], **wg_result)
     return jsonify({})
 
 
@@ -312,7 +317,6 @@ def revoke_peer(peer_id: str):
     row = peers_store.get_peer(peer_id)
     if row is None:
         return jsonify({"status": 404, "title": "Not Found"}), 404
-    # Stage 4 will also tear down this peer's WireGuard [Peer] block
-    # here once tunnels exist; nothing to tear down yet.
     peers_store.revoke_peer(peer_id)
+    wireguard.on_peer_revoked(peers_store.list_peers(status="approved"))
     return jsonify({"status": "revoked"})

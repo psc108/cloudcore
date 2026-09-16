@@ -188,6 +188,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now cloudcore-bridge.service
 
 # ---------------------------------------------------------------------------
+# 8b. WireGuard (cross-host peering tunnels)
+# ---------------------------------------------------------------------------
+# Only grants the sudoers rule api/wireguard.py needs later — doesn't bring
+# up any tunnel itself (nothing to bring up until a peer is actually
+# approved). Skipped gracefully if wireguard-tools isn't installed yet;
+# re-run this script (or just api/setup-wireguard.sh directly) once it is.
+if command -v wg &>/dev/null && command -v wg-quick &>/dev/null; then
+    echo "==> Granting WireGuard sudo access (cross-host peering)..."
+    CLOUDCORE_BRIDGE_USER="$CURRENT_USER" sudo -E bash "$REPO_DIR/api/setup-wireguard.sh"
+else
+    echo "==> wireguard-tools not installed — skipping WireGuard sudo grant."
+    echo "    Install it and re-run 'sudo bash api/setup-wireguard.sh' to enable"
+    echo "    cross-host peering's WireGuard tunnels: sudo apt-get install -y wireguard-tools"
+fi
+
+# ---------------------------------------------------------------------------
 # 9. Host-level package repo (system-level service, always-available)
 # ---------------------------------------------------------------------------
 # Only installs and starts the *serving* side (cloudcore-repo.service) —
