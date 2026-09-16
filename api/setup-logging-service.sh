@@ -83,10 +83,15 @@ chown -R loki:nogroup /var/lib/loki
 
 echo "==> Writing Grafana's Loki datasource provisioning..."
 mkdir -p /etc/grafana/provisioning/datasources
+# uid: loki is a fixed value, not Grafana's own auto-generated default —
+# without it, every install gets a different random uid, which breaks
+# any deep link built against a known uid (e.g. Sentinel's own
+# "View in Grafana" links, sentinel/ui/index.html).
 cat > /etc/grafana/provisioning/datasources/loki.yaml <<'EOF'
 apiVersion: 1
 datasources:
   - name: Loki
+    uid: loki
     type: loki
     access: proxy
     url: http://localhost:3100
