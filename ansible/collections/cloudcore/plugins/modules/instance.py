@@ -55,6 +55,19 @@ options:
   tags:
     type: dict
     default: {}
+  peer_id:
+    description: >-
+      ID of a paired remote peer (see the peer_info module) to create
+      this instance on instead of the local host, for cross-host
+      clustering. Must already be an approved pairing. api_url/api_token
+      here still target THIS host's own API, not the peer's directly —
+      the peer's own dashboard API is loopback-only by design, not
+      reachable from another host at all; the local API proxies the
+      request through the paired, network-reachable channel
+      established at pairing time. Immutable — changing it requires
+      recreating the instance (state=absent then present again), same
+      as vpc_id/subnet_id.
+    type: str
   state:
     type: str
     choices: [present, absent]
@@ -110,6 +123,7 @@ def run_module():
             users=dict(type="list", elements="dict", default=[]),
             user_data=dict(type="str", no_log=True),
             tags=dict(type="dict", default={}),
+            peer_id=dict(type="str"),
             state=dict(type="str", default="present", choices=["present", "absent"]),
         ),
         supports_check_mode=True,
@@ -147,7 +161,10 @@ def run_module():
     if not existing:
         if module.check_mode:
             module.exit_json(changed=True, instance={})
-        result = client.post("/v1/instances", body)
+        create_body = dict(body)
+        if module.params["peer_id"]:
+            create_body["peer_id"] = module.params["peer_id"]
+        result = client.post("/v1/instances", create_body)
         module.exit_json(changed=True, instance=result)
 
     # security_group_ids/usb_device_ids compared as sorted lists so

@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import os
 import threading
+import time
 from flask import Flask, request, jsonify, abort, send_from_directory, g
 
 import store
@@ -617,6 +618,49 @@ def _create_remote_instance(peer_id: str, body: dict):
     instance.private_ip = remote.get("private_ip", "")
     instance.public_ip = remote.get("public_ip", "")
     store.put_instance(instance)
+
+    # Local instances get their DB-stored status kept current by their own
+    # background _launch() thread, independent of anyone calling GET — the
+    # LIST endpoint (/v1/instances) just reads whatever's already in the DB,
+    # never live-refreshing on its own. Remote instances had no equivalent
+    # (only an individual GET on this exact id ever refreshed one), which a
+    # real Ansible run surfaced directly: its own idempotency/polling check
+    # goes through find_by_name() -> the LIST endpoint, so it never saw a
+    # remote instance leave "pending" no matter how long it waited. This
+    # mirrors the same background-refresh pattern for remote instances.
+    def _poll_remote():
+        for _ in range(24):  # ~2 minutes at 5s apart — generous, not indefinite
+            time.sleep(5)
+            current = store.get_instance(instance.id)
+            if current is None or current.status not in (InstanceStatus.PENDING, InstanceStatus.RUNNING):
+                return  # deleted locally, or already reached a genuinely terminal status
+            if current.status == InstanceStatus.RUNNING and current.private_ip:
+                return  # already fully settled — nothing left to refresh
+            try:
+                poll_resp = peer_client.get(peer["api_url"] + f"/v1/instances/{instance.id}", token=peer["remote_token"])
+            except peer_client.PeerUnreachable:
+                continue
+            if poll_resp.status != 200:
+                continue
+            poll_remote = poll_resp.body
+            try:
+                current.status = InstanceStatus(poll_remote.get("status", current.status.value))
+            except ValueError:
+                pass
+            current.private_ip = poll_remote.get("private_ip", current.private_ip)
+            current.public_ip = poll_remote.get("public_ip", current.public_ip)
+            current.error_message = poll_remote.get("error_message", current.error_message)
+            store.put_instance(current)
+            # Same race the Go provider's own Create() already guards
+            # against: a bridged instance can report status=running
+            # before its DHCP lease (and thus private_ip) is actually
+            # known — keep polling until both agree, not just status.
+            if current.status not in (InstanceStatus.PENDING, InstanceStatus.RUNNING):
+                return
+            if current.status == InstanceStatus.RUNNING and current.private_ip:
+                return
+
+    threading.Thread(target=_poll_remote, daemon=True).start()
     return jsonify(_instance_dict(instance)), 202
 
 
