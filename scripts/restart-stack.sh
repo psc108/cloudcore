@@ -65,9 +65,34 @@ if systemctl list-unit-files loki.service &>/dev/null; then
         curl -sf http://192.168.100.1:3000/api/health &>/dev/null && break
         sleep 1
     done
+elif ! compgen -G "$REPO_DIR/api/package-repo/*/apt-repo/grafana_*.deb" >/dev/null \
+  || ! compgen -G "$REPO_DIR/api/package-repo/*/apt-repo/loki_*.deb" >/dev/null; then
+    echo "    The host-level package repo hasn't cached grafana/loki yet:"
+    echo "      CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \\"
+    echo "        bash api/build-package-repo.sh jammy"
+    echo "    Takes 15-20+ minutes (one-time, real downloads) -- not something to"
+    echo "    fold into a routine restart, so this step is skipped for now."
 else
-    echo "    loki/grafana-server aren't installed here -- skipping."
-    echo "    (run 'sudo bash api/setup-logging-service.sh' first if you want them)"
+    echo "    grafana/loki are cached but the service was never installed."
+    # Fast (a few seconds) and low-risk -- worth offering to just do it,
+    # unlike the slow build-package-repo.sh case above. Only offer with
+    # a real terminal on the other end to answer it.
+    if [ -t 0 ]; then
+        read -r -p "    Set it up now? Needs sudo. [y/N] " REPLY
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            sudo bash "$REPO_DIR/api/setup-logging-service.sh"
+            echo "    Waiting for Grafana to come up..."
+            for i in $(seq 1 60); do
+                curl -sf http://192.168.100.1:3000/api/health &>/dev/null && break
+                sleep 1
+            done
+        else
+            echo "    Skipped. Run it yourself when ready:"
+            echo "      sudo bash api/setup-logging-service.sh"
+        fi
+    else
+        echo "      sudo bash api/setup-logging-service.sh"
+    fi
 fi
 
 # Sibling Sentinel checkout, detected by filename rather than an
