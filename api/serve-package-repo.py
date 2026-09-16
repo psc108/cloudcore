@@ -32,8 +32,15 @@ def _bind_addr() -> str:
     is read straight from the shared SQLite DB rather than in-process —
     falls back to the unchanged default if the DB/table isn't there yet
     (e.g. this service started before cloudcore-api has ever run once).
+
+    db.init() must be called before this (get_db() raises otherwise,
+    not silently falls back) — confirmed live as a real bug: without
+    it, this always hit the except branch and silently kept binding
+    192.168.100.1 regardless of the actual configured octet.
     """
     try:
+        import db
+        db.init()
         import settings_store
         return f"192.168.{settings_store.get('network.bridge_subnet_octet', 100)}.1"
     except Exception:
