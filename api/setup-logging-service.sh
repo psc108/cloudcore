@@ -127,6 +127,19 @@ c.read('/etc/grafana/grafana.ini')
 if 'security' not in c:
     c['security'] = {}
 c['security']['admin_password'] = sys.argv[1]
+# Anonymous Viewer access — this is a Lab debugging aid, per direct
+# instruction, not a multi-tenant install anyone needs to actually log
+# into: the login screen is pure friction for someone just clicking a
+# "View in Grafana" link (Sentinel's own UI, ui/index.html) to look at
+# logs. Viewer, not Editor/Admin — read-only, including Explore
+# (Viewer has Explore access by default), no ability to save/delete
+# anything. The admin login above still works independently for
+# anyone who actually needs to administer this Grafana instance.
+if 'auth.anonymous' not in c:
+    c['auth.anonymous'] = {}
+c['auth.anonymous']['enabled'] = 'true'
+c['auth.anonymous']['org_name'] = 'Main Org.'
+c['auth.anonymous']['org_role'] = 'Viewer'
 with open('/etc/grafana/grafana.ini', 'w') as f:
     c.write(f)
 PYEOF
@@ -139,5 +152,8 @@ systemctl restart grafana-server
 echo ""
 echo "cloudcore-logging is running:"
 echo "  Loki:    http://192.168.100.1:3100/ (every example's own promtail ships here)"
-echo "  Grafana: http://192.168.100.1:3000/ (admin / \$CLOUDCORE_LOGGING_ADMIN_PASSWORD, default changeme-admin)"
+echo "  Grafana: http://192.168.100.1:3000/ — opens straight to Explore/dashboards,"
+echo "           no login screen (anonymous Viewer access, read-only). Log in as"
+echo "           admin / \$CLOUDCORE_LOGGING_ADMIN_PASSWORD (default changeme-admin)"
+echo "           only if you need to actually administer this Grafana instance."
 echo "Remove with: sudo systemctl disable --now loki grafana-server"
