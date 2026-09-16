@@ -17,24 +17,33 @@ trip needed, and no separate "transit IP negotiation" step. A peer's
 own transit address is derived the same way from their advertised
 `wg_bridge_subnet` (e.g. "192.168.101.0/24" -> "10.99.101.1").
 
-Privileged operations (`wg-quick up/down`, `wg syncconf`, `wg show`)
-go through the same narrowly-scoped `sudo -n` NOPASSWD pattern
-api/sg.py already uses for iptables (api/setup-wireguard.sh installs
-the grant) — no new root daemon or IPC channel.
+The config always lives at the canonical /etc/wireguard/cc0.conf, not
+under this repo's own directory — confirmed live as a real, reliably
+reproducible requirement: `sudo -n wg-quick up <path-under-$HOME>`
+fails reading a config under a normal user's home directory (plain
+`sudo cat` on the identical file, same target user, succeeds — this
+is specific to wg-quick's own invocation, not a general permissions
+problem), while the exact same content at /etc/wireguard/cc0.conf
+works every time. Written there via a narrowly-scoped `sudo -n tee`
+grant rather than the unprivileged API process ever writing into
+/etc itself.
+
+Privileged operations (`wg-quick up/strip`, `wg syncconf/show`, that
+one `tee`) go through the same narrowly-scoped `sudo -n` NOPASSWD
+pattern api/sg.py already uses for iptables (api/setup-wireguard.sh
+installs the grant) — no new root daemon or IPC channel.
 """
 from __future__ import annotations
 
 import re
 import subprocess
 import time
-from pathlib import Path
 from typing import Optional
 
 import identity
 import settings_store
 
-WG_DIR = Path(__file__).parent / "wireguard"
-WG_CONF = WG_DIR / "cc0.conf"
+ETC_CONF = "/etc/wireguard/cc0.conf"
 IFACE = "cc0"
 
 
@@ -99,12 +108,13 @@ def apply(peers: list[dict]) -> tuple[bool, str]:
     first time cc0 doesn't exist yet, `syncconf` (hot add/remove,
     doesn't disturb other already-live peers) otherwise. Returns
     (ok, message)."""
-    WG_DIR.mkdir(exist_ok=True)
-    WG_CONF.write_text(render_config(peers))
-    WG_CONF.chmod(0o600)
+    config_text = render_config(peers)
+    write_result = _run(["tee", ETC_CONF], input=config_text)
+    if write_result.returncode != 0:
+        return False, (write_result.stderr or "could not write " + ETC_CONF).strip()
 
     if not _iface_exists():
-        result = _run(["wg-quick", "up", str(WG_CONF)])
+        result = _run(["wg-quick", "up", IFACE])
         if result.returncode != 0:
             return False, (result.stderr or result.stdout).strip()
         # Same FORWARD-accept reasoning as setup-network.sh's own ccbr0
@@ -123,16 +133,15 @@ def apply(peers: list[dict]) -> tuple[bool, str]:
     # wg-quick/`ip addr` concept the WireGuard kernel module itself has
     # no notion of. `wg-quick strip` does that translation; it also
     # unconditionally self-elevates via sudo for every subcommand
-    # (confirmed directly in its own source — not just for up/down),
-    # so this goes through the same sudo -n wrapper as everything else.
-    strip_result = _run(["wg-quick", "strip", str(WG_CONF)])
+    # (confirmed directly in its own source — not just for up/down).
+    # Piped straight into `wg syncconf`'s stdin (via /dev/stdin) rather
+    # than through a second on-disk file — one less thing to place at a
+    # privileged path.
+    strip_result = _run(["wg-quick", "strip", IFACE])
     if strip_result.returncode != 0:
         return False, (strip_result.stderr or strip_result.stdout).strip()
-    stripped_path = WG_DIR / "cc0.stripped.conf"
-    stripped_path.write_text(strip_result.stdout)
-    stripped_path.chmod(0o600)
 
-    result = _run(["wg", "syncconf", IFACE, str(stripped_path)])
+    result = _run(["wg", "syncconf", IFACE, "/dev/stdin"], input=strip_result.stdout)
     if result.returncode != 0:
         return False, (result.stderr or result.stdout).strip()
     return True, "cc0 synced"
@@ -165,7 +174,10 @@ def on_peer_approved(peer_row: dict, all_approved_peers: list[dict]) -> dict:
     if not peer_row.get("wg_pubkey"):
         return {"wg_tunnel_status": "unknown", "wg_transit_ip": None}
     transit_ip = peer_transit_ip(peer_row.get("wg_bridge_subnet"))
-    for _ in range(10):
+    # Capped well under peer_client.TIMEOUT so a slow handshake here
+    # can't itself be the reason a caller waiting on this (e.g. the
+    # /v1/peers/complete callback handler) times out.
+    for _ in range(6):
         if handshake_status(peer_row["wg_pubkey"]) == "up":
             return {"wg_tunnel_status": "up", "wg_transit_ip": transit_ip}
         time.sleep(1)

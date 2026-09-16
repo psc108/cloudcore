@@ -20,7 +20,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
-TIMEOUT = 8
+# The /v1/peers/complete callback specifically can take a few real
+# seconds on the receiving end (api/wireguard.py's own on_peer_approved()
+# polls for a handshake, capped at 6s, before that handler responds) —
+# comfortably under this so a slow-but-successful tunnel bring-up on
+# the other end isn't itself the reason this call times out.
+TIMEOUT = 15
 
 
 @dataclass

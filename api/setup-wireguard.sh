@@ -9,6 +9,16 @@
 # cc0 needs (same two binaries setup-network.sh already grants for
 # ccbr0 — no new iptables grant needed here).
 #
+# Also grants `tee /etc/wireguard/cc0.conf` specifically (exact path,
+# not a blanket tee grant) — confirmed live as a real requirement:
+# wg-quick reliably fails to read its own config from a path under a
+# normal user's home directory even as root via sudo (plain `sudo cat`
+# on the identical file works fine — this is specific to how wg-quick
+# itself opens the file, not a general permissions problem), while the
+# canonical /etc/wireguard/cc0.conf location works every time. The
+# unprivileged API process can't write into /etc/wireguard itself, so
+# it pipes the rendered config through this one exact `tee` instead.
+#
 # This script does NOT itself bring up cc0 — there's no config to
 # bring up until a peer is actually approved; api/wireguard.py handles
 # that once this grant exists.
@@ -16,6 +26,7 @@ set -euo pipefail
 
 WG_BIN=$(command -v wg || true)
 WG_QUICK_BIN=$(command -v wg-quick || true)
+TEE_BIN=$(command -v tee || true)
 if [ -z "$WG_BIN" ] || [ -z "$WG_QUICK_BIN" ]; then
     echo "wg/wg-quick not found — install wireguard-tools first: sudo apt-get install -y wireguard-tools" >&2
     exit 1
@@ -32,7 +43,10 @@ if [ -z "$WG_SUDOERS_USER" ]; then
     exit 1
 fi
 
-WG_SUDOERS_LINE="${WG_SUDOERS_USER} ALL=(root) NOPASSWD: ${WG_BIN}, ${WG_QUICK_BIN}"
+mkdir -p /etc/wireguard
+chmod 700 /etc/wireguard
+
+WG_SUDOERS_LINE="${WG_SUDOERS_USER} ALL=(root) NOPASSWD: ${WG_BIN}, ${WG_QUICK_BIN}, ${TEE_BIN} /etc/wireguard/cc0.conf"
 if [ -f "$WG_SUDOERS_FILE" ] && grep -qxF "$WG_SUDOERS_LINE" "$WG_SUDOERS_FILE" 2>/dev/null; then
     echo "WireGuard sudoers grant already present for $WG_SUDOERS_USER, skipping."
     exit 0
