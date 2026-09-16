@@ -1,6 +1,15 @@
 // ── Cross-host peering ──────────────────────────────────────────────────────
-let _peersPollTimer = null;
-let _lastDiscovered = [];
+// var, not let: ui/build.sh concatenates js/*.js in filename order, and
+// 15-init.js's own top-level showSection('dashboard', ...) call (which
+// reaches stopPeersPoll() via showSection's own unconditional cleanup)
+// executes before the parser reaches this file's own declarations — a
+// `let` here hits the temporal-dead-zone (confirmed live: "Uncaught
+// ReferenceError: can't access lexical declaration '_peersPollTimer'
+// before initialization", breaking every nav click, not just Peers,
+// since it aborted the rest of showSection() for every section). `var`
+// is hoisted with an initial `undefined` regardless of source position.
+var _peersPollTimer = null;
+var _lastDiscovered = [];
 
 function startPeersPoll() {
   if (_peersPollTimer) return;
