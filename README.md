@@ -127,6 +127,19 @@ journalctl --user -u cloudcore-terminal -f
 systemctl --user restart cloudcore-api
 ```
 
+To restart everything together — CloudCore, the host-level Loki/Grafana
+service, and (if a sibling checkout is found) Sentinel too, in the correct
+order, ending with a refreshed Sentinel knowledge base:
+
+```bash
+bash scripts/restart-stack.sh
+```
+
+Safe to re-run any time. Needs `sudo` for the Loki/Grafana restart step, so
+run it yourself in a real terminal rather than piping it through anything
+that can't answer a password prompt. Mirrored at Sentinel's own
+`restart-stack.sh`, usable from either repo.
+
 Tearing down the bridge network itself (`ccbr0`) is a separate, rarely-needed
 step — most people never need this:
 
