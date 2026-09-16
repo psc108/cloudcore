@@ -3,7 +3,7 @@ const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
   sgs: 'infrastructure',  subnets: 'infrastructure',
-  dns: 'networking',
+  dns: 'networking', peers: 'networking',
   nfs: 'storage',
   builds: 'builds', tofu: 'builds',
 };
@@ -30,6 +30,7 @@ function showSection(name, btn) {
   if (grp) document.getElementById('nav-grp-' + grp).classList.add('active');
   if (name !== 'instances') stopInstancePoll();
   if (name !== 'dashboard') stopDashPoll();
+  if (name !== 'peers') stopPeersPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
   if (name === 'subnets')       loadSubnets();
@@ -38,6 +39,7 @@ function showSection(name, btn) {
   if (name === 'sgs')           loadSecurityGroups();
   if (name === 'terminal')      loadTerminalInstances();
   if (name === 'dns')           loadDNS();
+  if (name === 'peers')         { loadPeers(); startPeersPoll(); }
   if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();

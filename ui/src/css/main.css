@@ -225,8 +225,14 @@
   .badge-running, .badge-active   { background: #1a3d2b; color: var(--success); }
   .badge-pending                  { background: #3a2e10; color: var(--warn); }
   .badge-stopped                  { background: #2a2a2a; color: var(--text-muted); }
-  .badge-error                    { background: #3d1a1a; color: var(--danger); }
+  .badge-error, .badge-unreachable { background: #3d1a1a; color: var(--danger); }
   .badge-deleted                  { background: #2a2a2a; color: var(--text-muted); }
+  /* Cross-host peering: peers.status / pairing_requests.status / wg_tunnel_status */
+  .badge-approved, .badge-up      { background: #1a3d2b; color: var(--success); }
+  .badge-pending_outbound         { background: #3a2e10; color: var(--warn); }
+  .badge-revoked, .badge-rejected,
+  .badge-expired, .badge-down     { background: #2a2a2a; color: var(--text-muted); }
+  .badge-unknown                  { background: #2a2a2a; color: var(--text-muted); }
 
   /* ── Forms ── */
   .form-grid {

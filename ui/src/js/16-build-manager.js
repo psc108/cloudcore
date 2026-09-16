@@ -45,12 +45,18 @@ async function bmSelectTemplate(filename) {
 
   // Load vars schema
   const data = await api('GET', `/v1/builds/templates/${filename}/vars`);
-  _bmRenderVarForm(filename, tpl, data.vars || {});
+  await _bmRenderVarForm(filename, tpl, data.vars || {});
   document.getElementById('bm-var-panel').style.display = 'block';
   document.getElementById('bm-var-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function _bmRenderVarForm(filename, tpl, schema) {
+// A variable named (or ending in) peer_id gets a real picker instead of a
+// plain text box — "in the template, be able to select from the agents
+// found" is what this delivers. Everything else stays a generic input;
+// this is the one deliberate special case.
+const _BM_PEER_ID_RE = /(^|_)peer_id$/i;
+
+async function _bmRenderVarForm(filename, tpl, schema) {
   document.getElementById('bm-form-title').textContent = tpl ? tpl.title : filename;
   document.getElementById('bm-submit-filename').value = filename;
 
@@ -62,7 +68,30 @@ function _bmRenderVarForm(filename, tpl, schema) {
     return;
   }
 
-  container.innerHTML = editable.map(([key, meta]) => `
+  let approvedPeers = [];
+  if (editable.some(([key]) => _BM_PEER_ID_RE.test(key))) {
+    try {
+      const peerData = await api('GET', '/v1/peers?status=approved');
+      approvedPeers = peerData.items;
+    } catch (e) { /* fall through — the field just renders with no options */ }
+  }
+
+  container.innerHTML = editable.map(([key, meta]) => {
+    if (_BM_PEER_ID_RE.test(key)) {
+      const options = approvedPeers.length
+        ? approvedPeers.map(p => `<option value="${p.id}">${_esc(p.hostname)} (${badge(p.wg_tunnel_status)})</option>`).join('')
+        : '';
+      return `
+        <div class="field">
+          <label>${key.replace(/_/g, ' ')}</label>
+          <select id="bm-var-${key}" data-key="${key}">
+            <option value="">— local (this host) —</option>
+            ${options}
+          </select>
+          ${!approvedPeers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
+        </div>`;
+    }
+    return `
     <div class="field">
       <label>${key.replace(/_/g, ' ')}</label>
       <input type="${key.includes('token') ? 'password' : 'text'}"
@@ -70,7 +99,8 @@ function _bmRenderVarForm(filename, tpl, schema) {
              data-key="${key}"
              value="${_esc(String(meta.default ?? ''))}">
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function bmSubmitBuild() {
@@ -78,7 +108,7 @@ async function bmSubmitBuild() {
   if (!filename) { toast('Select a template first', 'error'); return; }
 
   const vars = {};
-  document.querySelectorAll('#bm-var-fields input[data-key]').forEach(el => {
+  document.querySelectorAll('#bm-var-fields input[data-key], #bm-var-fields select[data-key]').forEach(el => {
     if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
   });
 

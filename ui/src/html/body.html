@@ -27,6 +27,7 @@
       <button class="nav-group-btn" id="nav-grp-networking">Networking <span class="caret">▼</span></button>
       <div class="nav-dropdown">
         <button id="nav-dns" onclick="showSection('dns', this)">DNS</button>
+        <button id="nav-peers" onclick="showSection('peers', this)">Peers</button>
       </div>
     </div>
     <div class="nav-group">
@@ -682,6 +683,77 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════ Peers ═══════════════════════════ -->
+  <div id="section-peers" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Pending Pairing Requests</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadPendingRequests()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Another host has asked to pair. Approve only a host you recognize — this is the one trust decision the whole cross-host peering feature depends on.
+      </p>
+      <div class="table-wrap">
+        <table id="pending-requests-table">
+          <thead><tr><th>Hostname</th><th>Fingerprint</th><th>Requested</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="pending-requests-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>My Peers</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadPeers()">↻</button>
+      </div>
+      <div class="table-wrap">
+        <table id="peers-table">
+          <thead><tr><th>Hostname</th><th>Status</th><th>Tunnel</th><th>Bridge Subnet</th><th>Direction</th><th></th></tr></thead>
+          <tbody id="peers-tbody"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Discover &amp; Pair</h2>
+        <button class="btn btn-primary" onclick="scanForPeers()">Scan LAN</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Finds other CloudCore hosts on the real network that have opted in to being discoverable (<a href="#" onclick="showSectionByName('settings');return false">Settings → Networking</a>). A host that hasn't opted in won't appear here even if it's paired-with-able by address — use the manual form below for that.
+      </p>
+      <div class="table-wrap">
+        <table id="discovered-table">
+          <thead><tr><th>Hostname</th><th>Address</th><th>Fingerprint</th><th></th></tr></thead>
+          <tbody id="discovered-tbody"><tr class="empty-row"><td colspan="4">Click "Scan LAN" to search.</td></tr></tbody>
+        </table>
+      </div>
+
+      <h3 class="about-heading" style="margin-top:24px">Pair Manually</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+        For a host that isn't advertising itself — you'll need its hostname, real LAN address, and peer-listener port (from its own Settings → Networking).
+      </p>
+      <div class="form-grid">
+        <div class="field">
+          <label>Hostname *</label>
+          <input id="peer-manual-hostname" type="text" placeholder="other-machine">
+        </div>
+        <div class="field">
+          <label>Address *</label>
+          <input id="peer-manual-address" type="text" placeholder="192.168.0.31">
+        </div>
+        <div class="field">
+          <label>Port *</label>
+          <input id="peer-manual-port" type="number" placeholder="8082" value="8082">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="pairManual()">Pair</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══════════════════════════ Settings ═══════════════════════════ -->
   <div id="section-settings" class="section">
     <div class="card" style="max-width:680px">
@@ -701,6 +773,23 @@
           <span class="bm-field-hint">Max concurrent resource operations per <code>tofu apply</code>/<code>destroy</code>. Lower this on a host with limited CPU/RAM running a large template with many instances — a high default can starve slower-booting nodes' own dependency waits (e.g. a database node's own dependents timing out waiting for it). Leave blank for OpenTofu's own default (10).</span>
         </div>
       </div>
+
+      <h3 class="about-heading">Networking — Cross-Host Peering</h3>
+      <div class="form-grid">
+        <div class="field full">
+          <label for="settings-discovery-enabled">
+            <input type="checkbox" id="settings-discovery-enabled" style="width:auto;margin-right:8px">
+            Announce this host on the network
+          </label>
+          <span class="bm-field-hint">Off by default. Only when this is on does this host broadcast its presence (hostname + pairing fingerprint, nothing else) so other CloudCore hosts can find it under <a href="#" onclick="showSectionByName('peers');return false">Peers → Discover &amp; Pair</a> — and only then is the peer-facing port even open at all. Turning this off closes it again and stops all broadcasting immediately, no restart needed. A host can still be paired-with by address even while this is off (see Peers → Pair Manually) — this setting only controls whether it announces itself.</span>
+        </div>
+        <div class="field full">
+          <label for="settings-bridge-octet">Bridge subnet octet</label>
+          <input type="number" id="settings-bridge-octet" min="1" max="254" placeholder="100">
+          <span class="bm-field-hint">This host's guest VMs live on 192.168.&lt;octet&gt;.0/24. Two hosts you intend to pair must use <strong>different</strong> octets, or cross-host routing is ambiguous. Changing this only updates what this setting records — it does not itself move the live bridge; re-run <code>sudo bash api/setup-network.sh &lt;octet&gt;</code> afterward to actually apply it (see the README).</span>
+        </div>
+      </div>
+
       <div class="form-actions">
         <button class="btn btn-primary" onclick="saveSettings()">Save</button>
       </div>

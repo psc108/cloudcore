@@ -243,8 +243,14 @@
   .badge-running, .badge-active   { background: #1a3d2b; color: var(--success); }
   .badge-pending                  { background: #3a2e10; color: var(--warn); }
   .badge-stopped                  { background: #2a2a2a; color: var(--text-muted); }
-  .badge-error                    { background: #3d1a1a; color: var(--danger); }
+  .badge-error, .badge-unreachable { background: #3d1a1a; color: var(--danger); }
   .badge-deleted                  { background: #2a2a2a; color: var(--text-muted); }
+  /* Cross-host peering: peers.status / pairing_requests.status / wg_tunnel_status */
+  .badge-approved, .badge-up      { background: #1a3d2b; color: var(--success); }
+  .badge-pending_outbound         { background: #3a2e10; color: var(--warn); }
+  .badge-revoked, .badge-rejected,
+  .badge-expired, .badge-down     { background: #2a2a2a; color: var(--text-muted); }
+  .badge-unknown                  { background: #2a2a2a; color: var(--text-muted); }
 
   /* ── Forms ── */
   .form-grid {
@@ -795,6 +801,7 @@
       <button class="nav-group-btn" id="nav-grp-networking">Networking <span class="caret">▼</span></button>
       <div class="nav-dropdown">
         <button id="nav-dns" onclick="showSection('dns', this)">DNS</button>
+        <button id="nav-peers" onclick="showSection('peers', this)">Peers</button>
       </div>
     </div>
     <div class="nav-group">
@@ -1450,6 +1457,77 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════ Peers ═══════════════════════════ -->
+  <div id="section-peers" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Pending Pairing Requests</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadPendingRequests()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Another host has asked to pair. Approve only a host you recognize — this is the one trust decision the whole cross-host peering feature depends on.
+      </p>
+      <div class="table-wrap">
+        <table id="pending-requests-table">
+          <thead><tr><th>Hostname</th><th>Fingerprint</th><th>Requested</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="pending-requests-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>My Peers</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadPeers()">↻</button>
+      </div>
+      <div class="table-wrap">
+        <table id="peers-table">
+          <thead><tr><th>Hostname</th><th>Status</th><th>Tunnel</th><th>Bridge Subnet</th><th>Direction</th><th></th></tr></thead>
+          <tbody id="peers-tbody"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Discover &amp; Pair</h2>
+        <button class="btn btn-primary" onclick="scanForPeers()">Scan LAN</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Finds other CloudCore hosts on the real network that have opted in to being discoverable (<a href="#" onclick="showSectionByName('settings');return false">Settings → Networking</a>). A host that hasn't opted in won't appear here even if it's paired-with-able by address — use the manual form below for that.
+      </p>
+      <div class="table-wrap">
+        <table id="discovered-table">
+          <thead><tr><th>Hostname</th><th>Address</th><th>Fingerprint</th><th></th></tr></thead>
+          <tbody id="discovered-tbody"><tr class="empty-row"><td colspan="4">Click "Scan LAN" to search.</td></tr></tbody>
+        </table>
+      </div>
+
+      <h3 class="about-heading" style="margin-top:24px">Pair Manually</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+        For a host that isn't advertising itself — you'll need its hostname, real LAN address, and peer-listener port (from its own Settings → Networking).
+      </p>
+      <div class="form-grid">
+        <div class="field">
+          <label>Hostname *</label>
+          <input id="peer-manual-hostname" type="text" placeholder="other-machine">
+        </div>
+        <div class="field">
+          <label>Address *</label>
+          <input id="peer-manual-address" type="text" placeholder="192.168.0.31">
+        </div>
+        <div class="field">
+          <label>Port *</label>
+          <input id="peer-manual-port" type="number" placeholder="8082" value="8082">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="pairManual()">Pair</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══════════════════════════ Settings ═══════════════════════════ -->
   <div id="section-settings" class="section">
     <div class="card" style="max-width:680px">
@@ -1469,6 +1547,23 @@
           <span class="bm-field-hint">Max concurrent resource operations per <code>tofu apply</code>/<code>destroy</code>. Lower this on a host with limited CPU/RAM running a large template with many instances — a high default can starve slower-booting nodes' own dependency waits (e.g. a database node's own dependents timing out waiting for it). Leave blank for OpenTofu's own default (10).</span>
         </div>
       </div>
+
+      <h3 class="about-heading">Networking — Cross-Host Peering</h3>
+      <div class="form-grid">
+        <div class="field full">
+          <label for="settings-discovery-enabled">
+            <input type="checkbox" id="settings-discovery-enabled" style="width:auto;margin-right:8px">
+            Announce this host on the network
+          </label>
+          <span class="bm-field-hint">Off by default. Only when this is on does this host broadcast its presence (hostname + pairing fingerprint, nothing else) so other CloudCore hosts can find it under <a href="#" onclick="showSectionByName('peers');return false">Peers → Discover &amp; Pair</a> — and only then is the peer-facing port even open at all. Turning this off closes it again and stops all broadcasting immediately, no restart needed. A host can still be paired-with by address even while this is off (see Peers → Pair Manually) — this setting only controls whether it announces itself.</span>
+        </div>
+        <div class="field full">
+          <label for="settings-bridge-octet">Bridge subnet octet</label>
+          <input type="number" id="settings-bridge-octet" min="1" max="254" placeholder="100">
+          <span class="bm-field-hint">This host's guest VMs live on 192.168.&lt;octet&gt;.0/24. Two hosts you intend to pair must use <strong>different</strong> octets, or cross-host routing is ambiguous. Changing this only updates what this setting records — it does not itself move the live bridge; re-run <code>sudo bash api/setup-network.sh &lt;octet&gt;</code> afterward to actually apply it (see the README).</span>
+        </div>
+      </div>
+
       <div class="form-actions">
         <button class="btn btn-primary" onclick="saveSettings()">Save</button>
       </div>
@@ -1721,7 +1816,7 @@ const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
   sgs: 'infrastructure',  subnets: 'infrastructure',
-  dns: 'networking',
+  dns: 'networking', peers: 'networking',
   nfs: 'storage',
   builds: 'builds', tofu: 'builds',
 };
@@ -1748,6 +1843,7 @@ function showSection(name, btn) {
   if (grp) document.getElementById('nav-grp-' + grp).classList.add('active');
   if (name !== 'instances') stopInstancePoll();
   if (name !== 'dashboard') stopDashPoll();
+  if (name !== 'peers') stopPeersPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
   if (name === 'subnets')       loadSubnets();
@@ -1756,6 +1852,7 @@ function showSection(name, btn) {
   if (name === 'sgs')           loadSecurityGroups();
   if (name === 'terminal')      loadTerminalInstances();
   if (name === 'dns')           loadDNS();
+  if (name === 'peers')         { loadPeers(); startPeersPoll(); }
   if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
@@ -2993,12 +3090,18 @@ async function bmSelectTemplate(filename) {
 
   // Load vars schema
   const data = await api('GET', `/v1/builds/templates/${filename}/vars`);
-  _bmRenderVarForm(filename, tpl, data.vars || {});
+  await _bmRenderVarForm(filename, tpl, data.vars || {});
   document.getElementById('bm-var-panel').style.display = 'block';
   document.getElementById('bm-var-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function _bmRenderVarForm(filename, tpl, schema) {
+// A variable named (or ending in) peer_id gets a real picker instead of a
+// plain text box — "in the template, be able to select from the agents
+// found" is what this delivers. Everything else stays a generic input;
+// this is the one deliberate special case.
+const _BM_PEER_ID_RE = /(^|_)peer_id$/i;
+
+async function _bmRenderVarForm(filename, tpl, schema) {
   document.getElementById('bm-form-title').textContent = tpl ? tpl.title : filename;
   document.getElementById('bm-submit-filename').value = filename;
 
@@ -3010,7 +3113,30 @@ function _bmRenderVarForm(filename, tpl, schema) {
     return;
   }
 
-  container.innerHTML = editable.map(([key, meta]) => `
+  let approvedPeers = [];
+  if (editable.some(([key]) => _BM_PEER_ID_RE.test(key))) {
+    try {
+      const peerData = await api('GET', '/v1/peers?status=approved');
+      approvedPeers = peerData.items;
+    } catch (e) { /* fall through — the field just renders with no options */ }
+  }
+
+  container.innerHTML = editable.map(([key, meta]) => {
+    if (_BM_PEER_ID_RE.test(key)) {
+      const options = approvedPeers.length
+        ? approvedPeers.map(p => `<option value="${p.id}">${_esc(p.hostname)} (${badge(p.wg_tunnel_status)})</option>`).join('')
+        : '';
+      return `
+        <div class="field">
+          <label>${key.replace(/_/g, ' ')}</label>
+          <select id="bm-var-${key}" data-key="${key}">
+            <option value="">— local (this host) —</option>
+            ${options}
+          </select>
+          ${!approvedPeers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
+        </div>`;
+    }
+    return `
     <div class="field">
       <label>${key.replace(/_/g, ' ')}</label>
       <input type="${key.includes('token') ? 'password' : 'text'}"
@@ -3018,7 +3144,8 @@ function _bmRenderVarForm(filename, tpl, schema) {
              data-key="${key}"
              value="${_esc(String(meta.default ?? ''))}">
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function bmSubmitBuild() {
@@ -3026,7 +3153,7 @@ async function bmSubmitBuild() {
   if (!filename) { toast('Select a template first', 'error'); return; }
 
   const vars = {};
-  document.querySelectorAll('#bm-var-fields input[data-key]').forEach(el => {
+  document.querySelectorAll('#bm-var-fields input[data-key], #bm-var-fields select[data-key]').forEach(el => {
     if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
   });
 
@@ -4677,16 +4804,31 @@ function _hmEsc(s) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 function loadSettings() {
-  api('GET', '/v1/settings/tofu').then(s => {
-    document.getElementById('settings-tofu-parallelism').value = s.parallelism ?? '';
+  Promise.all([
+    api('GET', '/v1/settings/tofu'),
+    api('GET', '/v1/settings/discovery'),
+    api('GET', '/v1/settings/network'),
+  ]).then(([tofu, discovery, network]) => {
+    document.getElementById('settings-tofu-parallelism').value = tofu.parallelism ?? '';
+    document.getElementById('settings-discovery-enabled').checked = !!discovery.enabled;
+    document.getElementById('settings-bridge-octet').value = network.bridge_subnet_octet ?? '';
   }).catch(() => toast('Failed to load settings', 'error'));
 }
 
 function saveSettings() {
   const raw = document.getElementById('settings-tofu-parallelism').value.trim();
   const parallelism = raw === '' ? null : Number(raw);
-  api('PUT', '/v1/settings/tofu', { parallelism }).then(s => {
-    document.getElementById('settings-tofu-parallelism').value = s.parallelism ?? '';
+  const discoveryEnabled = document.getElementById('settings-discovery-enabled').checked;
+  const octetRaw = document.getElementById('settings-bridge-octet').value.trim();
+
+  const saves = [api('PUT', '/v1/settings/tofu', { parallelism })];
+  saves.push(api('PUT', '/v1/settings/discovery', { enabled: discoveryEnabled }));
+  if (octetRaw !== '') {
+    saves.push(api('PUT', '/v1/settings/network', { bridge_subnet_octet: Number(octetRaw) }));
+  }
+
+  Promise.all(saves).then(([tofu]) => {
+    document.getElementById('settings-tofu-parallelism').value = tofu.parallelism ?? '';
     toast('Settings saved', 'success');
   }).catch(e => toast(`Failed to save settings: ${e.message}`, 'error'));
 }
@@ -4770,6 +4912,140 @@ async function deleteSubnet(id, name) {
     toast(`Subnet "${name}" deleted`, 'success');
     loadSubnets();
   } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// ── Cross-host peering ──────────────────────────────────────────────────────
+let _peersPollTimer = null;
+let _lastDiscovered = [];
+
+function startPeersPoll() {
+  if (_peersPollTimer) return;
+  // Pending requests are the one thing worth polling for on this page —
+  // another host's pairing request can arrive at any time, not just when
+  // this tab happens to be freshly opened.
+  _peersPollTimer = setInterval(loadPendingRequests, 15000);
+}
+
+function stopPeersPoll() {
+  clearInterval(_peersPollTimer);
+  _peersPollTimer = null;
+}
+
+function loadPeers() {
+  const tbody = document.getElementById('peers-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Loading…</td></tr>';
+  api('GET', '/v1/peers').then(data => {
+    const items = data.items.filter(p => p.status !== 'revoked');
+    if (!items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No peers yet — discover or pair with one below.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(p => `
+      <tr>
+        <td><strong>${p.hostname}</strong> <span class="mono text-muted" title="${p.pubkey_fpr}">${(p.pubkey_fpr || '').slice(0, 20)}…</span></td>
+        <td>${badge(p.status)}</td>
+        <td>${badge(p.wg_tunnel_status)}</td>
+        <td class="mono">${p.wg_bridge_subnet || '—'}</td>
+        <td>${p.direction}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="revokePeer('${p.id}','${p.hostname}')">Revoke</button></td>
+      </tr>`).join('');
+  }).catch(e => {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${e.message}</td></tr>`;
+  });
+}
+
+function loadPendingRequests() {
+  const tbody = document.getElementById('pending-requests-tbody');
+  api('GET', '/v1/peers/pairing-requests?status=pending').then(data => {
+    if (!data.items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No pending requests.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.items.map(r => `
+      <tr>
+        <td><strong>${r.hostname}</strong></td>
+        <td class="mono text-muted" title="${r.pubkey_fpr}">${(r.pubkey_fpr || '').slice(0, 20)}…</td>
+        <td>${new Date(r.created_at).toLocaleString()}</td>
+        <td>${new Date(r.expires_at).toLocaleString()}</td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-primary btn-sm" onclick="approveRequest('${r.id}','${r.hostname}')">Approve</button>
+          <button class="btn btn-danger btn-sm" onclick="rejectRequest('${r.id}','${r.hostname}')">Reject</button>
+        </td>
+      </tr>`).join('');
+  }).catch(() => {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">Error loading pending requests.</td></tr>';
+  });
+}
+
+function approveRequest(id, hostname) {
+  if (!confirm(`Approve pairing with "${hostname}"? This establishes trust — only approve a host you recognize.`)) return;
+  api('PUT', `/v1/peers/pairing-requests/${id}/approve`).then(result => {
+    if (result.callback_delivered === false) {
+      toast(`Paired with "${hostname}", but couldn't reach it to confirm — it may need to retry from its own side.`, 'error');
+    } else {
+      toast(`Paired with "${hostname}"`, 'success');
+    }
+    loadPendingRequests();
+    loadPeers();
+  }).catch(e => toast(`Failed to approve: ${e.message}`, 'error'));
+}
+
+function rejectRequest(id, hostname) {
+  if (!confirm(`Reject pairing request from "${hostname}"?`)) return;
+  api('PUT', `/v1/peers/pairing-requests/${id}/reject`).then(() => {
+    toast(`Rejected request from "${hostname}"`, 'success');
+    loadPendingRequests();
+  }).catch(e => toast(`Failed: ${e.message}`, 'error'));
+}
+
+function revokePeer(id, hostname) {
+  if (!confirm(`Revoke pairing with "${hostname}"? This tears down its tunnel and cross-host builds targeting it will stop working.`)) return;
+  api('DELETE', `/v1/peers/${id}`).then(() => {
+    toast(`Revoked "${hostname}"`, 'success');
+    loadPeers();
+  }).catch(e => toast(`Failed: ${e.message}`, 'error'));
+}
+
+function scanForPeers() {
+  const tbody = document.getElementById('discovered-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Scanning…</td></tr>';
+  api('GET', '/v1/peers/discovered').then(data => {
+    _lastDiscovered = data.items;
+    if (!data.items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Nothing found — the other host may not have discovery turned on.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.items.map((d, i) => `
+      <tr>
+        <td><strong>${d.hostname}</strong></td>
+        <td class="mono">${d.address}:${d.port}</td>
+        <td class="mono text-muted" title="${d.pubkey_fpr}">${(d.pubkey_fpr || '').slice(0, 20)}…</td>
+        <td><button class="btn btn-primary btn-sm" onclick="pairWithDiscovered(${i})">Pair</button></td>
+      </tr>`).join('');
+  }).catch(e => {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">Error: ${e.message}</td></tr>`;
+  });
+}
+
+function pairWithDiscovered(index) {
+  const d = _lastDiscovered[index];
+  if (!d) return;
+  _requestPairing(d.hostname, d.address, d.port);
+}
+
+function pairManual() {
+  const hostname = document.getElementById('peer-manual-hostname').value.trim();
+  const address = document.getElementById('peer-manual-address').value.trim();
+  const port = Number(document.getElementById('peer-manual-port').value);
+  if (!hostname || !address || !port) { toast('Hostname, address, and port are required', 'error'); return; }
+  _requestPairing(hostname, address, port);
+}
+
+function _requestPairing(hostname, address, port) {
+  api('POST', '/v1/peers', { hostname, address, port }).then(() => {
+    toast(`Pairing request sent to "${hostname}" — it needs to approve on its own dashboard before this is usable.`, 'success');
+    loadPeers();
+  }).catch(e => toast(`Failed to reach "${hostname}": ${e.message}`, 'error'));
 }
 
 </script>
