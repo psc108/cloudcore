@@ -234,7 +234,16 @@ if [[ "$NEWLY_ADDED_LIBVIRT" -eq 1 ]]; then
     echo "    skipped; it'll just start the API correctly this time."
     exit 0
 fi
-systemctl --user start cloudcore-api.service
+# restart, not start — on a fresh install this behaves identically (no
+# unit was running to restart), but on a re-run after a `git pull`
+# (this project's own actual usage pattern for install.sh — it's
+# documented as idempotent and safe to re-run) `start` is a no-op
+# against an already-running unit, same class of gap PartOf= above was
+# added to guard cloudcore-terminal against, just hit here instead:
+# confirmed directly, a real 404 on a route that existed on disk but
+# not in the still-running process's own memory, since Python doesn't
+# hot-reload its own imports (F-057).
+systemctl --user restart cloudcore-api.service
 
 # ---------------------------------------------------------------------------
 # 11. Verify
