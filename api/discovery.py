@@ -33,6 +33,23 @@ _lock = threading.Lock()
 _zc: Zeroconf | None = None
 _service_info: ServiceInfo | None = None
 
+# Separate lazy singleton for browse() — deliberately never a fresh
+# Zeroconf() per call. Each Zeroconf() instance spins up its own
+# background engine thread and its own socket(s); confirmed live as a
+# real, serious bug (F-090): a long-running host that had browse()
+# called many times over one session's worth of testing exhausted its
+# process's open-file limit entirely (OSError: [Errno 24] Too many
+# open files), taking the whole API down with it, including — visible
+# in `lsof` — a large pile of leftover thread-pool-associated file
+# descriptors, one generation per browse() call whose Zeroconf.close()
+# apparently never fully released everything it opened. One shared
+# instance, created once and reused for the life of the process,
+# removes the repeated create/destroy cycle that actually caused it —
+# only the lightweight per-scan ServiceBrowser is still created and
+# cancelled each call.
+_browse_zc: Zeroconf | None = None
+_browse_lock = threading.Lock()
+
 
 def _local_ip() -> str:
     """This host's own real (non-loopback) LAN address. The
@@ -132,21 +149,30 @@ class _CollectingListener(ServiceListener):
         self.found.pop(name, None)
 
 
+def _get_browse_zc() -> Zeroconf:
+    global _browse_zc
+    with _browse_lock:
+        if _browse_zc is None:
+            _browse_zc = Zeroconf()
+        return _browse_zc
+
+
 def browse(timeout: float = 3.0) -> list[dict]:
     """One-shot scan for other CloudCore hosts currently advertising on
-    the real LAN. Not a persistent background browser — deliberately
-    on-demand only (the dashboard's own "Scan" button, api/peers_routes.py's
-    GET /v1/peers/discovered), so an opt-in feature's footprint stays
-    minimal when nobody's actively looking to pair. A separate Zeroconf
-    instance from advertise()'s own — browsing works independently of
-    whether this host is itself advertising."""
-    zc = Zeroconf()
+    the real LAN. Not a persistent *browser* — no ServiceBrowser is left
+    running between calls, keeping an opt-in feature's footprint minimal
+    when nobody's actively looking to pair — but the underlying Zeroconf
+    engine itself (_get_browse_zc()) is a long-lived singleton, not
+    recreated per call; see its own comment for why that distinction is
+    the actual fix for a real bug. A separate instance from advertise()'s
+    own — browsing works independently of whether this host is itself
+    advertising."""
+    zc = _get_browse_zc()
     listener = _CollectingListener()
     browser = ServiceBrowser(zc, SERVICE_TYPE, listener)
     try:
         threading.Event().wait(timeout)
     finally:
         browser.cancel()
-        zc.close()
     my_fpr = identity.peer_pubkey_fingerprint()
     return [v for v in listener.found.values() if v["pubkey_fpr"] != my_fpr]
