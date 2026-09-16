@@ -67,6 +67,10 @@ def post(url: str, json_body: dict, token: Optional[str] = None) -> PeerResponse
     return _request("POST", url, json_body, token)
 
 
+def put(url: str, json_body: dict, token: Optional[str] = None) -> PeerResponse:
+    return _request("PUT", url, json_body, token)
+
+
 def get(url: str, token: Optional[str] = None) -> PeerResponse:
     return _request("GET", url, None, token)
 

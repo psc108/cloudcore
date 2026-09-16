@@ -135,5 +135,6 @@ func (p *CloudCoreProvider) DataSources(_ context.Context) []func() datasource.D
 		datasources.NewDNSZoneDataSource,
 		datasources.NewDNSRecordDataSource,
 		datasources.NewUsbDevicesDataSource,
+		datasources.NewPeersDataSource,
 	}
 }

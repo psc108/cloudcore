@@ -53,6 +53,8 @@ type InstanceResourceModel struct {
 	Status           types.String   `tfsdk:"status"`
 	CreatedAt        types.String   `tfsdk:"created_at"`
 	Tags             types.Map      `tfsdk:"tags"`
+	PeerID           types.String   `tfsdk:"peer_id"`
+	HostHostname     types.String   `tfsdk:"host_hostname"`
 	Timeouts         timeouts.Value `tfsdk:"timeouts"`
 }
 
@@ -82,6 +84,15 @@ type instanceAPIModel struct {
 	Status           string                 `json:"status"`
 	CreatedAt        string                 `json:"created_at"`
 	Tags             map[string]string      `json:"tags"`
+	// PeerID is request-only (POST body field peer_id: which peer to
+	// create this instance on). The API echoes the same concept back on
+	// reads under a different key (host_id — which peer this instance
+	// actually lives on), plus a convenience host_hostname — kept as
+	// separate fields here rather than reusing PeerID for both
+	// directions, since a plain field can't have two JSON tags.
+	PeerID       string `json:"peer_id,omitempty"`
+	HostID       string `json:"host_id,omitempty"`
+	HostHostname string `json:"host_hostname,omitempty"`
 }
 
 func NewInstanceResource() resource.Resource { return &InstanceResource{} }
@@ -201,6 +212,20 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				ElementType: types.StringType,
 				Description: "Key/value tags to attach to the instance.",
 			},
+			"peer_id": schema.StringAttribute{
+				Optional:    true,
+				Description: "ID of a paired remote peer (see the cloudcore_peers data source) to create this instance on instead of the local host — for cross-host clustering. Must already be an approved pairing. Forces replacement on change, same as vpc_id/subnet_id: an existing instance can't be relocated to a different host.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"host_hostname": schema.StringAttribute{
+				Computed:    true,
+				Description: "Hostname of the physical host this instance actually lives on — the local host unless peer_id is set. Informational only, for plan/show output.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"timeouts": timeouts.Attributes(ctx, timeouts.Opts{
 				Create: true,
 				Delete: true,
@@ -276,6 +301,12 @@ func instanceMapToState(ctx context.Context, result instanceAPIModel, state *Ins
 		return fmt.Errorf("converting tags")
 	}
 	state.Tags = tags
+	if result.HostID != "" {
+		state.PeerID = types.StringValue(result.HostID)
+	} else {
+		state.PeerID = types.StringNull()
+	}
+	state.HostHostname = types.StringValue(result.HostHostname)
 	return nil
 }
 
@@ -317,6 +348,7 @@ func (r *InstanceResource) Create(ctx context.Context, req resource.CreateReques
 		UserData:         plan.UserData.ValueString(),
 		Users:            users,
 		Tags:             tags,
+		PeerID:           plan.PeerID.ValueString(),
 	}
 
 	var result instanceAPIModel

@@ -64,7 +64,7 @@ def _cors(response):
 # peers_routes.py's PEER_REACHABLE_ENDPOINTS (the pairing bootstrap
 # routes). Kept as a separate set here, close to the routes it actually
 # names, rather than folding into the peers blueprint's own set.
-_PEER_REACHABLE_LOCAL_ENDPOINTS = {"create_instance", "get_instance", "delete_instance"}
+_PEER_REACHABLE_LOCAL_ENDPOINTS = {"create_instance", "get_instance", "update_instance", "delete_instance"}
 
 
 @app.before_request
@@ -416,6 +416,18 @@ def get_route_table(rt_id):
     return jsonify(rt.to_dict())
 
 
+def _instance_dict(instance: Instance) -> dict:
+    """instance.to_dict() plus host_hostname when this instance lives
+    on a peer — a Terraform-plan-time convenience (so `plan`/`show`
+    output shows which physical host it landed on), not stored on the
+    Instance itself since models.py has no DB access of its own."""
+    d = instance.to_dict()
+    if instance.host_id:
+        peer = peers_store.get_peer(instance.host_id)
+        d["host_hostname"] = peer["hostname"] if peer else ""
+    return d
+
+
 @app.put("/v1/route-tables/<rt_id>")
 @require_auth
 def update_route_table(rt_id):
@@ -446,7 +458,7 @@ def delete_route_table(rt_id):
 @app.get("/v1/instances")
 @require_auth
 def list_instances():
-    return jsonify({"items": [i.to_dict() for i in store.list_instances()]})
+    return jsonify({"items": [_instance_dict(i) for i in store.list_instances()]})
 
 
 @app.post("/v1/instances")
@@ -565,7 +577,7 @@ def create_instance():
                     app.logger.warning("LB reload failed for %s: %s", lb.id, lb_err)
 
     threading.Thread(target=_launch, daemon=True).start()
-    return jsonify(instance.to_dict()), 202
+    return jsonify(_instance_dict(instance)), 202
 
 
 def _create_remote_instance(peer_id: str, body: dict):
@@ -605,7 +617,7 @@ def _create_remote_instance(peer_id: str, body: dict):
     instance.private_ip = remote.get("private_ip", "")
     instance.public_ip = remote.get("public_ip", "")
     store.put_instance(instance)
-    return jsonify(instance.to_dict()), 202
+    return jsonify(_instance_dict(instance)), 202
 
 
 @app.get("/v1/instances/<instance_id>")
@@ -637,7 +649,7 @@ def get_instance(instance_id):
                 )
                 dns_server.reload()
         store.put_instance(instance)
-    return jsonify(instance.to_dict())
+    return jsonify(_instance_dict(instance))
 
 
 def _get_remote_instance(instance: Instance):
@@ -651,21 +663,21 @@ def _get_remote_instance(instance: Instance):
     if not peer or peer["status"] != "approved":
         instance.status = InstanceStatus.UNREACHABLE
         store.put_instance(instance)
-        return jsonify(instance.to_dict())
+        return jsonify(_instance_dict(instance))
     try:
         resp = peer_client.get(peer["api_url"] + f"/v1/instances/{instance.id}", token=peer["remote_token"])
     except peer_client.PeerUnreachable:
         instance.status = InstanceStatus.UNREACHABLE
         store.put_instance(instance)
-        return jsonify(instance.to_dict())
+        return jsonify(_instance_dict(instance))
     if resp.status == 404:
         instance.status = InstanceStatus.DELETED
         store.put_instance(instance)
-        return jsonify(instance.to_dict())
+        return jsonify(_instance_dict(instance))
     if resp.status != 200:
         instance.status = InstanceStatus.UNREACHABLE
         store.put_instance(instance)
-        return jsonify(instance.to_dict())
+        return jsonify(_instance_dict(instance))
 
     remote = resp.body
     try:
@@ -676,7 +688,7 @@ def _get_remote_instance(instance: Instance):
     instance.public_ip = remote.get("public_ip", instance.public_ip)
     instance.error_message = remote.get("error_message", instance.error_message)
     store.put_instance(instance)
-    return jsonify(instance.to_dict())
+    return jsonify(_instance_dict(instance))
 
 
 @app.put("/v1/instances/<instance_id>")
@@ -685,6 +697,8 @@ def update_instance(instance_id):
     instance = store.get_instance(instance_id)
     if not instance:
         return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if instance.host_id:
+        return _update_remote_instance(instance, request.get_json(force=True) or {})
     body = request.get_json(force=True) or {}
     instance.name = body.get("name", instance.name)
     instance.tags = body.get("tags", instance.tags)
@@ -717,7 +731,35 @@ def update_instance(instance_id):
         except Exception as e:
             return problem(500, "Internal Server Error", str(e))
 
-    return jsonify(instance.to_dict())
+    return jsonify(_instance_dict(instance))
+
+
+def _update_remote_instance(instance: Instance, body: dict):
+    """Proxy name/tags/usb_device_ids updates to the peer this instance
+    actually lives on — without this, USB sync would silently no-op
+    (this wrapper row's own domain_name is always empty, so the local
+    update path's `if ... and instance.domain_name:` guard would never
+    fire) and name/tags edits would only ever touch the local wrapper,
+    never the real instance, a real state-drift bug."""
+    peer = peers_store.get_peer(instance.host_id)
+    if not peer or peer["status"] != "approved":
+        return problem(502, "Bad Gateway",
+                        "This instance's peer is not currently approved/reachable — update not applied.")
+    try:
+        resp = peer_client.put(peer["api_url"] + f"/v1/instances/{instance.id}", body, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway", f"Could not reach peer '{peer['hostname']}': {e} — update not applied.")
+    if resp.status != 200:
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the update: {detail.get('detail', resp.body)}")
+
+    remote = resp.body
+    instance.name = remote.get("name", instance.name)
+    instance.tags = remote.get("tags", instance.tags)
+    instance.usb_device_ids = remote.get("usb_device_ids", instance.usb_device_ids)
+    store.put_instance(instance)
+    return jsonify(_instance_dict(instance))
 
 
 @app.delete("/v1/instances/<instance_id>")
@@ -800,7 +842,7 @@ def stop_instance(instance_id):
                 lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(instance.vpc_id))
             except Exception as e:
                 app.logger.warning("LB reload after stop %s: %s", instance_id, e)
-    return jsonify(instance.to_dict())
+    return jsonify(_instance_dict(instance))
 
 
 @app.post("/v1/instances/<instance_id>/start")
@@ -826,7 +868,7 @@ def start_instance(instance_id):
                 lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(instance.vpc_id))
             except Exception as e:
                 app.logger.warning("LB reload after start %s: %s", instance_id, e)
-    return jsonify(instance.to_dict())
+    return jsonify(_instance_dict(instance))
 
 
 @app.post("/v1/instances/<instance_id>/reboot")
@@ -844,7 +886,7 @@ def reboot_instance(instance_id):
         compute.reboot_domain(instance.domain_name)
     except Exception as e:
         return problem(500, "Internal Server Error", str(e))
-    return jsonify(instance.to_dict())
+    return jsonify(_instance_dict(instance))
 
 
 @app.get("/v1/instances/<instance_id>/console")

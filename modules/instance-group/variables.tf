@@ -86,3 +86,9 @@ variable "users" {
   }))
   default = []
 }
+
+variable "peer_id" {
+  description = "Place the WHOLE group on a paired remote host instead of the local one (see the cloudcore_peers data source) — scalar, not per-instance: every instance in the group lands on the same host. Per-instance mixed placement within one group isn't supported; use separate cloudcore_instance/module.compute resources with different peer_id values if that's needed."
+  type        = string
+  default     = null
+}

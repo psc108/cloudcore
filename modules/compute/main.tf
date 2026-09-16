@@ -9,5 +9,6 @@ resource "cloudcore_instance" "this" {
   security_group_ids = each.value.security_group_ids
   user_data          = each.value.user_data
   users              = each.value.users
+  peer_id            = each.value.peer_id
   tags               = merge(local.common_tags, var.tags, { Name = "${var.project}-${var.environment}-${each.key}" })
 }

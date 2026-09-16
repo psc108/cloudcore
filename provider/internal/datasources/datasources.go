@@ -846,3 +846,108 @@ func (d *UsbDevicesDataSource) Read(ctx context.Context, _ datasource.ReadReques
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &UsbDevicesDataSourceModel{Items: items})...)
 }
+
+// ── Peers data source ────────────────────────────────────────────────────
+// List-everything, same pattern as UsbDevicesDataSource above (an
+// enumerable inventory, not a named lookup) — not the lookup-by-id-or-name
+// pattern every other data source in this file uses. Feeds a template's
+// own peer_id-selection UI/variable, see cloudcore_instance's peer_id.
+
+var _ datasource.DataSource = &PeersDataSource{}
+
+type PeersDataSource struct{ client *client.Client }
+
+type PeersDataSourceModel struct {
+	Items types.List `tfsdk:"items"`
+}
+
+type peerItemAPI struct {
+	ID             string `json:"id"`
+	Hostname       string `json:"hostname"`
+	Status         string `json:"status"`
+	PubkeyFpr      string `json:"pubkey_fpr"`
+	WgTunnelStatus string `json:"wg_tunnel_status"`
+	WgBridgeSubnet string `json:"wg_bridge_subnet"`
+}
+
+var peerAttrTypes = map[string]attr.Type{
+	"id":               types.StringType,
+	"hostname":         types.StringType,
+	"status":           types.StringType,
+	"pubkey_fpr":       types.StringType,
+	"wg_tunnel_status": types.StringType,
+	"bridge_subnet":    types.StringType,
+}
+
+func NewPeersDataSource() datasource.DataSource { return &PeersDataSource{} }
+
+func (d *PeersDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_peers"
+}
+
+func (d *PeersDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Lists other CloudCore hosts this one has paired with (see the dashboard's own Peers section for discovering and approving new pairings — this data source only lists already-established ones). Pass an item's `id` as `cloudcore_instance.peer_id` to place an instance on that host. API path: `/v1/peers`.",
+		Attributes: map[string]schema.Attribute{
+			"items": schema.ListNestedAttribute{
+				Computed:    true,
+				Description: "Every peer this host has ever paired with, any status — filter on `status == \"approved\"` for ones actually usable as a peer_id today.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"id":               schema.StringAttribute{Computed: true, Description: "Pass this as cloudcore_instance.peer_id."},
+						"hostname":         schema.StringAttribute{Computed: true},
+						"status":           schema.StringAttribute{Computed: true, Description: "pending_outbound | approved | rejected | revoked."},
+						"pubkey_fpr":       schema.StringAttribute{Computed: true, Description: "This peer's pairing-identity fingerprint."},
+						"wg_tunnel_status": schema.StringAttribute{Computed: true, Description: "up | down | unknown — whether the WireGuard tunnel to this peer currently has a live handshake."},
+						"bridge_subnet":    schema.StringAttribute{Computed: true, Description: "This peer's own bridge subnet (e.g. 192.168.101.0/24) — the range an instance placed there will get its address from."},
+					},
+				},
+			},
+		},
+	}
+}
+
+func (d *PeersDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	c, ok := req.ProviderData.(*client.Client)
+	if !ok {
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("got %T", req.ProviderData))
+		return
+	}
+	d.client = c
+}
+
+func (d *PeersDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var list struct {
+		Items []peerItemAPI `json:"items"`
+	}
+	if err := d.client.Get(ctx, "/v1/peers", &list); err != nil {
+		resp.Diagnostics.AddError("List peers failed", err.Error())
+		return
+	}
+
+	elems := make([]attr.Value, len(list.Items))
+	for i, p := range list.Items {
+		obj, diags := types.ObjectValue(peerAttrTypes, map[string]attr.Value{
+			"id":               types.StringValue(p.ID),
+			"hostname":         types.StringValue(p.Hostname),
+			"status":           types.StringValue(p.Status),
+			"pubkey_fpr":       types.StringValue(p.PubkeyFpr),
+			"wg_tunnel_status": types.StringValue(p.WgTunnelStatus),
+			"bridge_subnet":    types.StringValue(p.WgBridgeSubnet),
+		})
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		elems[i] = obj
+	}
+	items, diags := types.ListValue(types.ObjectType{AttrTypes: peerAttrTypes}, elems)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &PeersDataSourceModel{Items: items})...)
+}

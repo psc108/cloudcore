@@ -29,6 +29,8 @@ variable "instances" {
     subnet_id          = string
     security_group_ids = optional(list(string), [])
     user_data          = optional(string, null)
+    peer_id            = optional(string, null) # place this instance on a paired remote host instead of the local one — see the cloudcore_peers data source
+
     users = optional(list(object({
       username      = string
       sudo          = optional(bool, false)

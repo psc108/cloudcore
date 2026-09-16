@@ -26,6 +26,7 @@ resource "cloudcore_instance" "this" {
   usb_device_ids     = length(var.usb_device_ids) > 0 ? var.usb_device_ids : null
   user_data          = var.user_data
   users              = var.users
+  peer_id            = var.peer_id
   tags = merge(local.common_tags, var.tags, {
     Name          = "${var.project}-${var.environment}-${var.name}-${each.key}"
     InstanceGroup = var.name
