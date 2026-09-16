@@ -27,3 +27,8 @@ output "ssh_commands_by_key" {
   description = "Full SSH commands keyed by two-digit index. Run directly: $(tofu output -raw ssh_commands[\"01\"])"
   value       = { for k, v in cloudcore_instance.this : k => "ssh ${v.ssh_endpoint}" }
 }
+
+output "host_hostnames_by_key" {
+  description = "Which physical host each instance actually landed on, keyed by two-digit index — empty string for the local host, the peer's own hostname otherwise. Confirms peer_id/peer_id_overrides actually took effect."
+  value       = { for k, v in cloudcore_instance.this : k => v.host_hostname }
+}

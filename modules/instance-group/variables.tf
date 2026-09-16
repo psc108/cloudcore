@@ -88,7 +88,31 @@ variable "users" {
 }
 
 variable "peer_id" {
-  description = "Place the WHOLE group on a paired remote host instead of the local one (see the cloudcore_peers data source) — scalar, not per-instance: every instance in the group lands on the same host. Per-instance mixed placement within one group isn't supported; use separate cloudcore_instance/module.compute resources with different peer_id values if that's needed."
+  description = "Default host for every instance in the group (see the cloudcore_peers data source) — null means local. Overridden per-instance by placement_overrides below where a key is present there."
   type        = string
   default     = null
+}
+
+variable "placement_overrides" {
+  description = <<-EOT
+    Per-instance placement overrides, keyed by the same two-digit index
+    outputs.tf's own _by_key outputs use ("01", "02", ...) — e.g.
+    { "02" = { peer_id = "<peer-id>", vpc_id = "<peer's-vpc-id>", subnet_id = "<peer's-subnet-id>" } }
+    puts just the second instance on that peer, while the rest follow
+    var.peer_id/var.vpc_id/var.subnet_id (or stay local if peer_id is
+    also unset). vpc_id/subnet_id need overriding together with peer_id,
+    not just peer_id alone: a paired peer has its own separate VPC/
+    subnet catalogue, not the group's local one — the id the rest of
+    the group uses won't exist there. Any field left out of a given
+    entry falls back to the group's own default. This is what makes
+    real mixed-host clustering possible within one group: e.g. a
+    3-node tier with 2 nodes local and 1 on a paired remote host, to
+    actually demonstrate clustering across machines, not just within one.
+  EOT
+  type = map(object({
+    peer_id   = optional(string)
+    vpc_id    = optional(string)
+    subnet_id = optional(string)
+  }))
+  default = {}
 }
