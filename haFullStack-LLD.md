@@ -2904,6 +2904,285 @@ finish, rather than a code or template issue.
 
 ---
 
+## 13. Cross-Host Peering — Platform Capability (not project-scoped)
+
+### 13.1 Scope
+
+Per direct request: "it's time to look at being able to cross laptops
+for environment creation. the idea is that we can install an agent on
+another labtool installed machine and create a host/resource etc from
+the templates on that remote machine. this is to help out with
+resource issue but also to be able to assist in people using the labs
+understand true clustering (clustered instance created on other
+machines)." Three explicit requirements followed, all non-negotiable:
+(1) discovery of other CloudCore hosts on the real (not virtual)
+network; (2) trust handled "as secure as can be", since this means
+opening a port on someone's laptop; (3) picking a discovered host from
+within a template. A fourth was added directly: a host must default to
+*not* announcing itself — "only announce if the user purposely allows
+it" — closing the door on any silent, always-on discovery service.
+
+Distinct from every other section in this document: this is CloudCore
+host infrastructure, like §7, not part of `ha-frontend-lb` or any other
+project's own Terraform/Ansible. No example template uses it yet —
+what's built here is the *capability* (the API surface, the provider
+attribute, the Ansible parameter, the dashboard UI to discover/pair/
+select), verified with hand-written throwaway configs against two real,
+independent physical machines on the same LAN, not a retrofit of an
+existing example.
+
+### 13.2 Components
+
+**Identity (`api/identity.py`)** — each host generates its own ed25519
+pairing-identity keypair on first run, the same `ssh-keygen -t ed25519`
+convention as the platform's existing inter-instance keypair, but kept
+deliberately separate (different trust domain: one authenticates SSH
+*into* guest VMs, the other authenticates *this host itself* to another
+CloudCore install). A second keypair, X25519 via `wg genkey`/`wg
+pubkey`, is generated the same way once `wireguard-tools` is installed,
+for §13's own tunnel layer below.
+
+**Discovery (`api/discovery.py`)** — mDNS via the pure-Python `zeroconf`
+library (a new pip dependency; no `cryptography`/`pynacl` was needed
+alongside it, since pairing signatures use `ssh-keygen -Y` rather than
+a Python crypto library). Advertises only hostname and this host's own
+pairing-key fingerprint — nothing about capacity or what's running.
+Gated end-to-end by a single setting, `discovery.enabled` (default
+`false`, `GET`/`PUT /v1/settings/discovery`): while off, `advertise()`
+is never called by anything, so this host sends zero mDNS packets;
+turning it on starts broadcasting immediately, no restart needed, and
+also opens the peer-facing network listener below — one toggle
+controls both, matching "only announce if the user purposely allows
+it" as literally as the architecture allows.
+
+**Trust — the pairing handshake (`api/peers_routes.py`,
+`api/peer_crypto.py`, `api/peers_store.py`)** — human-approved, not
+silent TOFU. Host A calls `POST /v1/peers` (local-only), which signs a
+payload (hostname, pairing pubkey, a freshly minted callback token)
+with its own identity key and POSTs it, unauthenticated, to host B's
+bootstrap endpoint (`POST /v1/peers/pairing-requests` — the one
+deliberately unauthenticated route in the whole feature, protected by
+a rolling rate limit, a cap on total pending requests, and signature
+verification that proves the request is self-consistent with its own
+claimed key — not identity authority; that's what the next step is
+for). The request sits as `pending` until a human on B's own dashboard
+clicks Approve — the one non-negotiable trust decision this entire
+feature is built around. Approval mints a fresh per-peer bearer token
+for A to use calling B going forward, and calls back to A
+(authenticated with A's own callback token) so both sides converge on
+`approved` independently, each holding a token *for the other side to
+present*, never the shared `CLOUDCORE_API_TOKEN`.
+
+**A network-binding architecture change this required
+(`api/peer_listener.py`, `server.py`)** — `cloudcore-api` has only ever
+bound `127.0.0.1:8080` (the dashboard). The pairing bootstrap route
+must be reachable from another host, but exposing the *whole* dashboard
+API (protected only by the single shared token) to the LAN would have
+been a real security regression. The same Flask `app` is now also
+served on a second, network-reachable bind (`network.peer_listener_port`,
+default 8082 — only while `discovery.enabled` is true, tied to the same
+opt-in toggle), gated by a `before_request` hook that restricts *that*
+bind to an explicit route allowlist regardless of any token presented:
+the pairing bootstrap, the approval callback, and (for §13.2's
+provisioning piece below) instance create/read/update/delete.
+Everything else — settings, builds, NFS file upload, the rest of the
+dashboard API — 403s on that bind even with a perfectly valid token.
+`require_auth` was extended to accept a valid peer's own token
+alongside the shared one; this widens *who* can authenticate, not
+*what's reachable from the network*, which the gate still restricts
+independently.
+
+**WireGuard tunnels (`api/wireguard.py`, `api/setup-wireguard.sh`)** —
+one shared `cc0` interface per host, one `[Peer]` block per approved
+pairing (the idiomatic WireGuard mesh pattern — a single interface
+natively supports many peers; adding peer #3 hot-reloads via
+`wg syncconf` without bouncing #1/#2's live tunnels), created at
+pairing-approval time and torn down on revoke. Transit addressing needs
+no coordination round-trip: each host's own `cc0` address derives
+deterministically from its own `network.bridge_subnet_octet` setting
+(§13.2's own prerequisite below) as `10.99.<octet>.1` — already
+guaranteed unique across paired hosts, since that's the whole point of
+that setting. Privileged operations go through the same narrowly-scoped
+`sudo -n` NOPASSWD pattern `api/sg.py` already uses for iptables — no
+new root daemon or IPC channel. `AllowedIPs` per peer is that peer's
+own real bridge subnet plus its transit `/32`, which is what actually
+lets a guest VM on one host reach a guest VM on the other.
+
+**A prerequisite this all depends on: the bridge subnet is now
+per-host-configurable.** Every host previously hardcoded
+`192.168.100.0/24` for its guest bridge; two paired hosts sharing that
+subnet would make cross-host routing ambiguous. A new
+`network.bridge_subnet_octet` setting (default `100` — unchanged
+behavior until a host opts in) is read live by `compute.py`'s
+`bridge_cidr()`, and `setup-network.sh`/`teardown-network.sh` both
+accept an explicit octet argument.
+
+**Remote provisioning — the actual point of the feature.**
+`POST /v1/instances` gains an optional `peer_id`; when set, the local
+API proxies create/read/update/delete to that peer's own API using the
+per-peer token, keeping only a local wrapper row (`host_id` set, same
+id the peer assigned) rather than provisioning locally. Reads live-
+proxy on every `GET`, distinguishing a genuinely broken remote VM
+(whatever status the peer reports) from a merely-unreachable peer via a
+new `InstanceStatus.UNREACHABLE`; deletes refuse rather than silently
+discard the local record if the peer can't currently be reached, so a
+remote VM can't leak with no local pointer to it. The OpenTofu provider
+gains a matching `peer_id` (Optional, `RequiresReplace` — same
+treatment as `vpc_id`/`subnet_id`) and computed `host_hostname` on
+`cloudcore_instance`, plus a new `data "cloudcore_peers"` mirroring the
+existing list-everything `cloudcore_usb_devices` pattern; both
+`modules/compute` (per-key map) and `modules/instance-group` (scalar —
+the whole group lands on one host, not mixed per-instance in v1) wire
+it through. The provider's own single-`*Client`-built-once-in-
+`Configure` assumption needed **zero changes** — the proxying lives
+entirely server-side. The Ansible collection's `instance` module gained
+the same `peer_id` parameter plus a new `peer_info` module (mirrors the
+existing `usb_device_info` list pattern) — the collection's original
+"already supports remote targeting via per-task `api_url`" design
+premise no longer held once the loopback-only bind above was built, so
+this needed real code, not just documentation.
+
+**Dashboard UI (`ui/src/js/26-peers.js`)** — a new Peers section (nav
+under Networking): Pending Pairing Requests (approve/reject, polled
+every 15s), My Peers (status/tunnel/bridge-subnet, revoke), and
+Discover & Pair (LAN scan plus a manual hostname/address/port fallback
+for a host that isn't advertising). Settings gained a Networking
+subsection for the two settings above. The build manager's existing
+generic template-variable form (originally built for OpenTofu var
+overrides) now special-cases a variable named (or ending in) `peer_id`
+as a real `<select>` populated from live approved peers instead of a
+plain text box — the concrete delivery of requirement (3), "in the
+template, be able to select from the agents found."
+
+### 13.3 Protections
+
+- **Off by default, one toggle for both halves of exposure.**
+  `discovery.enabled=false` means zero mDNS packets sent *and* the
+  peer-facing network listener isn't even bound — there is no port to
+  scan or abuse on a host that hasn't opted in, not just "no response
+  to being found."
+- **The peer-bind gate is independent of authentication.** A leaked or
+  guessed peer token still can't reach anything off the explicit
+  allowlist through the network-facing bind — verified directly (see
+  §13.4) with both a valid token and no token at all against a
+  non-allowlisted route.
+- **The one unauthenticated route is deliberately narrow.** The
+  pairing-request bootstrap is rate-limited per source (5/hour) and
+  capped on total pending requests, and its signature check rejects
+  anything that doesn't match its own claimed key — it proves nothing
+  about *identity*, only that the request wasn't forged against a
+  wrong key; the human clicking Approve is the actual trust boundary.
+- **Every per-peer credential is independently minted, per direction,
+  never the shared token.** Revocation is a single `status='revoked'`
+  update that also clears both tokens — no separate CRL.
+- **A remote instance's delete is refused, not silently dropped, if its
+  peer is unreachable** — the alternative (quietly forgetting the local
+  pointer while a VM potentially still runs on someone else's laptop)
+  was judged the worse failure mode.
+- **`/etc/wireguard/cc0.conf`** (this host's own WireGuard private key,
+  in plain text — inherent to `wg setconf` format, no separate keyfile
+  option) is written via a single, exact-path-scoped `sudo -n tee`
+  grant, never a general write grant; `api/keys/` and `api/wireguard/`
+  are both fully gitignored as whole directories, not just their
+  original file names, specifically so a future key file added to
+  either never needs a separate `.gitignore` fix to stay out of commits
+  (confirmed live as a real near-miss — see §13.4/F-087's own note).
+
+### 13.4 Verified
+
+Every stage below was proven against two real, independent physical
+machines on the same LAN (`stourport`, `Llywyn-Y-Groes`) — not mocked,
+and not a single-host simulation:
+
+- **Discovery**: a real mDNS multicast round-trip — advertising on one
+  host, correctly discovered (hostname, address, port, fingerprint) by
+  the other; the two hosts' fingerprints confirmed distinct; the
+  advertising host confirmed to vanish from a re-scan within one poll
+  after opting back out; the non-advertising host's own silence
+  confirmed both by its live `advertising: false` API state and by
+  code inspection (`advertise()` has exactly two call sites, both
+  gated on the setting).
+- **The peer-bind gate**: a non-allowlisted route 403s on the peer port
+  with a valid token, and with no token at all (gate fires before
+  auth); the allowlisted routes reach their handlers; the dashboard
+  bind is completely unaffected.
+- **The pairing handshake**: a real signed bootstrap request, verified
+  and recorded on the target; human approval on the target's own
+  dashboard; the approval callback delivered back to the initiator;
+  both sides independently converged to `approved` with matching
+  fingerprints and correctly separate per-direction tokens. Also:
+  tampered-signature rejection, the rate limit and pending-request cap,
+  and the reject flow.
+- **WireGuard**: a genuine completed handshake with real data transfer
+  (`wg show cc0`), then a direct `ping` from one host across the tunnel
+  to both the other's transit IP and its real bridge gateway — the
+  actual subnet real guest VMs live on.
+- **Remote provisioning, all three front-ends** — API, OpenTofu
+  provider (`tofu plan`/`apply`/`refresh`/`destroy`), and Ansible (a
+  real hand-written playbook, `peer_info` → `instance` with `peer_id`
+  → poll → `state: absent`) — each independently created a genuine
+  libvirt VM on the *other* machine, watched it reach `running` with a
+  real DHCP-assigned IP, `ping`ed it successfully across the tunnel,
+  then deleted it and confirmed it gone from `virsh list --all` on the
+  remote host itself, not just the local record.
+- **The dashboard UI** against real live data and real live peer
+  state — see `haFullStack-Findings-Log.md` v0.52/F-089 for the one
+  bug a real browser caught that this session's headless-only
+  verification tooling structurally could not have (a `let`/temporal-
+  dead-zone ordering bug that broke every nav click, not just Peers').
+
+**Real bugs found and fixed building this** (full detail in
+`haFullStack-Findings-Log.md`, F-084 through F-089): a pre-existing
+`db.get_db()` bug that silently ignored `db.init()`'s own path argument,
+always reconnecting to the real production database regardless (F-084)
+— a testability gap with real teeth, caught before it could do any
+damage; `install.sh`'s own `cloudcore-api` start step being a no-op
+against an already-running unit, so a `git pull` re-run silently kept
+serving pre-pull code (F-085, the same gap class as the pre-existing
+F-057, just never applied to that specific step); `serve-package-repo.py`'s
+Stage-0 "dynamic bind address" fix never actually working on any host
+because the standalone script never called `db.init()` first (F-086);
+`wg-quick` reliably failing to read its own config from a path under a
+normal user's home directory even as root via `sudo -n` — root-caused
+by testing the identical content at the canonical `/etc/wireguard/`
+location, which worked every time (F-087); a real polling gap where
+remote instances never got their own background status-refresh thread
+the way local instances do, so anything relying on the instance list
+endpoint (Ansible's own idempotency check included) never saw one
+leave `pending` (F-088), which itself needed a second fix for the same
+running-before-DHCP-lease race the OpenTofu provider's own `Create()`
+polling already guarded against; and the dashboard `let`/TDZ bug above
+(F-089).
+
+### 13.5 Open Items
+
+- **No example template uses `peer_id` yet.** The capability is proven
+  with hand-written throwaway configs, not retrofitted into
+  `ha-frontend-lb` or any other example — a genuine, available next
+  step (same relationship §7 has to §6: the platform capability landed
+  first, adoption by existing examples is separate, deliberate work).
+- **`modules/instance-group` places a whole group on one host or the
+  local host — not mixed per-instance within one group.** Confirmed
+  sufficient for v1; per-instance mixed placement within a single group
+  would need its scalar variables to become per-key maps, a materially
+  bigger change than everything else in this section combined.
+- **Pairwise trust is intentionally non-transitive.** If host A pairs
+  with both B and C, B and C do not automatically trust each other —
+  each pairing needs its own explicit human approval. This is the
+  correct, agreed behavior, not a limitation to fix.
+- **On-Prem/AWS equivalents** — like §7.5, this section is Lab/bridge-
+  network specific (mDNS on a real LAN segment, a WireGuard tunnel
+  between two bridge networks); On-Prem/AWS environments would need
+  their own equivalent discovery/tunneling mechanism appropriate to
+  whatever networking is actually available there.
+- **A `cloudcore_peers` Ansible lookup plugin** (rather than the
+  `peer_info` module's own register-and-filter pattern) was considered
+  and deliberately deferred — the module-based path already works
+  end-to-end; a lookup plugin is a convenience layer on top, not a
+  capability gap.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2939,3 +3218,4 @@ finish, rather than a code or template issue.
 | v0.29 | 2026-09-15 | Paul Scott | Two real gaps found (F-077, `haFullStack-Findings-Log.md`) diagnosing "is Loki reachable?" on a separate, previously-set-up machine: `192.168.100.1:3000`/`:3100` were both unreachable because `sudo bash api/setup-logging-service.sh` (§12.3) had genuinely never been run there — the step existed only as `scripts/install.sh` terminal output and a passing mention, never its own rediscoverable README section the way `build-package-repo.sh` already had one. Fixed with a full "Set up centralized logging" section. Also found: `teardown-network.sh`'s own active-service guard, written for `cloudcore-repo` alone before the logging service existed, never learned that `loki`/`grafana-server` now share the same bridge gateway address — it would have let someone silently cut guests off from logging the same way it was built to prevent for the package repo. Now checks all three. Sentinel's own `install.sh` (separate repo) also gained an end-of-install Loki reachability check, diagnosing which of the three CloudCore-side steps is actually missing (bridge / package cache / `setup-logging-service.sh` itself) rather than a fresh install silently reporting "running" with nothing to watch — tested against both this machine's real reachable state and a deliberately-unreachable one. |
 | v0.30 | 2026-09-16 | Paul Scott | Grafana's Loki datasource provisioning pinned to `uid: loki` (F-078) — was left to Grafana's own random per-install default, unusable for Sentinel's new "View in Grafana" deep links (separate repo), which need a value stable across installs. Two more real findings, both surfaced investigating a stray `promtail` permission error found while testing that same feature: F-079 — RabbitMQ's own systemd unit redirects stdout/stderr to two `root:root`-owned files (`rabbitmq-server.log`/`.error.log`, distinct from the `rabbitmq:rabbitmq` files F-074 already covers), fixed with a file-specific ACL on both examples that install `rabbitmq-server`. F-080, the more significant one: all five of Stage 5's "brand-new minimal cloud-init" examples (`compute-basic`, `dns-with-compute`, `network-lb`, `load-balanced-web`, `full-stack`) shipped with genuinely broken, crash-looping promtail configs — Terraform's `indent()` function and an HCL `<<-` heredoc's own dedent don't compose correctly, producing structurally invalid YAML that `tofu validate` never renders far enough to catch. None of these five had actually been rebuilt and checked live during Stage 5; only `openstack-services` (a different, unaffected `templatefile()`-based pattern) was. Fixed by converting all five to that same safe pattern. Verified via real YAML parsing of all five rendered outputs plus a genuinely fresh `tofu destroy`/`apply` cycle on `compute-basic` (`NRestarts=0`, real journal content reaching Loki). Confirmed the Ansible side was never affected. |
 | v0.31 | 2026-09-16 | Paul Scott | Grafana's host-level instance opens straight to Explore/dashboards now, no login screen, per direct instruction — `[auth.anonymous]` enabled in `grafana.ini` (`org_name` matched exactly to the real default org, confirmed live via `GET /api/org`, or anonymous access silently falls back to requiring login). One real finding along the way (F-081): `org_role = Viewer` was tried first and doesn't actually get Explore access in this Grafana version — Grafana's own built-in Viewer fixed role lacks the `datasources:explore` RBAC action, confirmed directly (`302` redirect to a login wall on `/explore` for Viewer, `200 OK` for Editor). `Editor` is the least-privileged fixed role that works; OSS Grafana has no supported way to grant anonymous sessions anything narrower. A real capability increase (anonymous visitors can now save/edit dashboards, not just view) accepted as a Lab-only tradeoff given this instance never leaves the internal bridge network. `scripts/install.sh`'s printed summary and `README.md` updated to match — the admin password is now framed as "only needed to administer Grafana" (user/datasource management), not something a normal viewer needs at all. |
+| v0.32 | 2026-09-16 | Paul Scott | New §13, Cross-Host Peering — a full platform capability (discovery, human-approved pairing trust, WireGuard tunnels, and remote provisioning across the API, OpenTofu provider, Ansible collection, and dashboard UI), built and verified live end-to-end across two real, independent physical machines on the same LAN. Six real bugs found and fixed along the way (F-084–F-089, full detail in `haFullStack-Findings-Log.md`), including one a real browser caught within minutes of shipping that this session's headless-only verification tooling structurally could not have (F-089). |

@@ -95,6 +95,29 @@ services are ever removed. `systemctl is-active loki grafana-server`
 confirms it's up; the [Sentinel](#optional-sentinel-log-intelligence-advisor)
 section below depends on this being done first.
 
+### Cross-host peering (optional)
+
+Discover another CloudCore install on your real (physical) LAN, pair
+with it (a human click on *its* dashboard is required — never silent),
+and build instances on it from your own Terraform/Ansible/dashboard —
+real clustering across separate machines, connected by a WireGuard
+tunnel carrying the guest bridge traffic. Off by default and fully
+opt-in: a host announces nothing on the network until you explicitly
+turn it on.
+
+```bash
+sudo apt-get install -y wireguard-tools
+sudo bash api/setup-wireguard.sh
+```
+
+Then, in the Dashboard, **Settings → Networking**: turn on "Announce
+this host on the network" (and, if you intend to pair with a host that
+also uses the default bridge subnet, give this host a different
+**Bridge subnet octet** first, then re-run `sudo bash
+api/setup-network.sh <octet>` to apply it). Pairing, approval, and
+picking a peer inside a template all happen from the Dashboard's
+**Peers** section — see `haFullStack-LLD.md` §13 for the full design.
+
 ### Default credentials
 
 | Setting | Value |
