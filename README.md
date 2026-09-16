@@ -88,7 +88,7 @@ Once it's running:
 | Setting | Value |
 |---|---|
 | Loki | `http://192.168.100.1:3100` |
-| Grafana | `http://192.168.100.1:3000` (Loki pre-provisioned as its datasource, anonymous Viewer access — opens straight to Explore/dashboards, no login screen) |
+| Grafana | `http://192.168.100.1:3000` (Loki pre-provisioned as its datasource, anonymous Editor access — opens straight to Explore/dashboards, no login screen; `Viewer` doesn't get Explore access in this Grafana version, `Editor` is the least-privileged role that does) |
 
 One-time — only needs re-running if the `loki`/`grafana-server`
 services are ever removed. `systemctl is-active loki grafana-server`

@@ -127,19 +127,30 @@ c.read('/etc/grafana/grafana.ini')
 if 'security' not in c:
     c['security'] = {}
 c['security']['admin_password'] = sys.argv[1]
-# Anonymous Viewer access — this is a Lab debugging aid, per direct
+# Anonymous access — this is a Lab debugging aid, per direct
 # instruction, not a multi-tenant install anyone needs to actually log
 # into: the login screen is pure friction for someone just clicking a
 # "View in Grafana" link (Sentinel's own UI, ui/index.html) to look at
-# logs. Viewer, not Editor/Admin — read-only, including Explore
-# (Viewer has Explore access by default), no ability to save/delete
-# anything. The admin login above still works independently for
-# anyone who actually needs to administer this Grafana instance.
+# logs. org_role = Editor, not Viewer — confirmed live (F-081,
+# haFullStack-Findings-Log.md) that Grafana's own built-in "Viewer"
+# fixed role does not include the `datasources:explore` RBAC action in
+# this version, so anonymous Viewer sessions get a 302 redirect back
+# to a login wall the instant they open Explore — the entire point of
+# this. OSS Grafana has no supported way to grant an anonymous session
+# a custom, narrower permission set (that needs Enterprise); Editor is
+# the least-privileged fixed role that actually includes Explore
+# access. Real, accepted tradeoff, not an oversight: anonymous
+# visitors can now create/edit/save dashboards too, not just view —
+# still short of Admin (no user/datasource management) — judged
+# acceptable given this instance never leaves the Lab's own internal
+# bridge network (192.168.100.1, same trust boundary already used for
+# skipping TLS here). The admin login above still works independently
+# for anyone who actually needs to administer this Grafana instance.
 if 'auth.anonymous' not in c:
     c['auth.anonymous'] = {}
 c['auth.anonymous']['enabled'] = 'true'
 c['auth.anonymous']['org_name'] = 'Main Org.'
-c['auth.anonymous']['org_role'] = 'Viewer'
+c['auth.anonymous']['org_role'] = 'Editor'
 with open('/etc/grafana/grafana.ini', 'w') as f:
     c.write(f)
 PYEOF
@@ -153,7 +164,9 @@ echo ""
 echo "cloudcore-logging is running:"
 echo "  Loki:    http://192.168.100.1:3100/ (every example's own promtail ships here)"
 echo "  Grafana: http://192.168.100.1:3000/ — opens straight to Explore/dashboards,"
-echo "           no login screen (anonymous Viewer access, read-only). Log in as"
-echo "           admin / \$CLOUDCORE_LOGGING_ADMIN_PASSWORD (default changeme-admin)"
-echo "           only if you need to actually administer this Grafana instance."
+echo "           no login screen (anonymous Editor access — required for Explore"
+echo "           to work at all in this version, see setup-logging-service.sh's"
+echo "           own comment). Log in as admin / \$CLOUDCORE_LOGGING_ADMIN_PASSWORD"
+echo "           (default changeme-admin) only for actual instance administration"
+echo "           (user/datasource management) — anonymous access can't do that."
 echo "Remove with: sudo systemctl disable --now loki grafana-server"
