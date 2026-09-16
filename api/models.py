@@ -27,6 +27,11 @@ class InstanceStatus(str, Enum):
     STOPPED = "stopped"
     DELETED = "deleted"
     ERROR = "error"
+    # Only ever set locally about a *remote* instance (host_id set) when
+    # its peer can't currently be reached — distinct from ERROR (the VM
+    # itself is broken) so the dashboard can tell the two apart. Never
+    # sent by a peer about its own local instances.
+    UNREACHABLE = "unreachable"
 
 
 class VPCStatus(str, Enum):

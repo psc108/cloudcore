@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 import os
 import threading
-from flask import Flask, request, jsonify, abort, send_from_directory
+from flask import Flask, request, jsonify, abort, send_from_directory, g
 
 import store
 import compute
@@ -21,6 +21,8 @@ import identity
 import discovery
 import settings_store
 import peer_listener
+import peer_client
+import peers_store
 from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
@@ -56,6 +58,15 @@ def _cors(response):
     return response
 
 
+# Instance CRUD lives directly on `app` (not a blueprint), so its Flask
+# endpoint names are just the view function names — this is server.py's
+# own contribution to the peer-reachable allowlist, alongside
+# peers_routes.py's PEER_REACHABLE_ENDPOINTS (the pairing bootstrap
+# routes). Kept as a separate set here, close to the routes it actually
+# names, rather than folding into the peers blueprint's own set.
+_PEER_REACHABLE_LOCAL_ENDPOINTS = {"create_instance", "get_instance", "delete_instance"}
+
+
 @app.before_request
 def _peer_bind_gate():
     # This app is served on two binds: the original, dashboard-facing
@@ -64,14 +75,14 @@ def _peer_bind_gate():
     # second, network-reachable bind on network.peer_listener_port
     # (api/peer_listener.py). A request that actually arrived on that
     # second bind is only allowed through if its route is explicitly
-    # peer-reachable (api/peers_routes.py's own PEER_REACHABLE_ENDPOINTS)
+    # peer-reachable (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS)
     # — everything else 403s there, regardless of any token presented,
     # so a leaked/guessed peer token still can't reach settings, builds,
     # NFS file upload, or any other dashboard-only route through it.
     # SERVER_PORT comes from the accepting socket, not anything a
     # client can influence.
     if request.environ.get("SERVER_PORT") == str(discovery.peer_listener_port()):
-        if request.endpoint not in PEER_REACHABLE_ENDPOINTS:
+        if request.endpoint not in (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS):
             abort(403)
 
 
@@ -108,9 +119,20 @@ def require_auth(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {API_TOKEN}":
-            abort(401)
-        return f(*args, **kwargs)
+        if auth == f"Bearer {API_TOKEN}":
+            return f(*args, **kwargs)
+        # Also accept a valid approved peer's own token — this is what
+        # lets a remote peer call into the instance CRUD routes below on
+        # its own behalf (Stage 5 remote-instance proxying). Doesn't by
+        # itself widen what's *reachable*: the before_request gate below
+        # still restricts the network-facing peer bind to an explicit
+        # allowlist regardless of whether the token presented is valid.
+        token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+        peer = peers_store.find_peer_by_local_token(token) if token else None
+        if peer:
+            g.peer = peer
+            return f(*args, **kwargs)
+        abort(401)
     return wrapper
 
 
@@ -440,6 +462,10 @@ def create_instance():
     if store.find_instance_by_name(name):
         return problem(409, "Conflict", f"Instance '{name}' already exists")
 
+    peer_id = body.get("peer_id")
+    if peer_id:
+        return _create_remote_instance(peer_id, body)
+
     # `or []`, not `.get(key, [])`: Terraform sends an explicit JSON null
     # for an unset Optional list attribute, which a plain default doesn't
     # catch since the key is present — same bug class already fixed in
@@ -542,12 +568,54 @@ def create_instance():
     return jsonify(instance.to_dict()), 202
 
 
+def _create_remote_instance(peer_id: str, body: dict):
+    """peer_id was set on the create request — proxy to that peer's own
+    /v1/instances instead of provisioning locally, keeping only a local
+    wrapper row (host_id set) that later reads/deletes proxy through in
+    turn. vpc_id/subnet_id/image_id/etc are deliberately NOT validated
+    against this host's own catalogue here — they're opaque IDs the
+    peer's own API validates against its own catalogue, exactly as if a
+    normal local request had landed there directly."""
+    peer = peers_store.get_peer(peer_id)
+    if not peer or peer["status"] != "approved":
+        return problem(400, "Bad Request", f"'{peer_id}' is not an approved peer")
+
+    remote_body = {k: v for k, v in body.items() if k != "peer_id"}
+    try:
+        resp = peer_client.post(peer["api_url"] + "/v1/instances", remote_body, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway", f"Could not reach peer '{peer['hostname']}': {e}")
+    if resp.status not in (200, 202):
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the create: {detail.get('detail', resp.body)}")
+
+    remote = resp.body
+    instance = Instance(
+        id=remote["id"], name=remote.get("name", body.get("name", "")),
+        image_id=body.get("image_id", ""), flavor=body.get("flavor", ""),
+        vpc_id=body.get("vpc_id", ""), subnet_id=body.get("subnet_id", ""),
+        security_group_ids=body.get("security_group_ids") or [],
+        tags=body.get("tags") or {}, host_id=peer_id,
+    )
+    try:
+        instance.status = InstanceStatus(remote.get("status", "pending"))
+    except ValueError:
+        instance.status = InstanceStatus.PENDING
+    instance.private_ip = remote.get("private_ip", "")
+    instance.public_ip = remote.get("public_ip", "")
+    store.put_instance(instance)
+    return jsonify(instance.to_dict()), 202
+
+
 @app.get("/v1/instances/<instance_id>")
 @require_auth
 def get_instance(instance_id):
     instance = store.get_instance(instance_id)
     if not instance:
         return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if instance.host_id:
+        return _get_remote_instance(instance)
     # Refresh status and IP from libvirt, but only update — never auto-delete
     if instance.domain_name:
         live_status = compute.get_instance_status(instance.domain_name)
@@ -569,6 +637,45 @@ def get_instance(instance_id):
                 )
                 dns_server.reload()
         store.put_instance(instance)
+    return jsonify(instance.to_dict())
+
+
+def _get_remote_instance(instance: Instance):
+    """Live-proxy a read to the peer this instance actually lives on —
+    same "refresh from the real source of truth on every read" pattern
+    the local path already uses (compute.get_instance_status() there,
+    the peer's own API here). Distinguishes "the VM itself is broken"
+    (whatever status the peer reports) from "can't currently reach the
+    host it's on" (UNREACHABLE) — deliberately not the same thing."""
+    peer = peers_store.get_peer(instance.host_id)
+    if not peer or peer["status"] != "approved":
+        instance.status = InstanceStatus.UNREACHABLE
+        store.put_instance(instance)
+        return jsonify(instance.to_dict())
+    try:
+        resp = peer_client.get(peer["api_url"] + f"/v1/instances/{instance.id}", token=peer["remote_token"])
+    except peer_client.PeerUnreachable:
+        instance.status = InstanceStatus.UNREACHABLE
+        store.put_instance(instance)
+        return jsonify(instance.to_dict())
+    if resp.status == 404:
+        instance.status = InstanceStatus.DELETED
+        store.put_instance(instance)
+        return jsonify(instance.to_dict())
+    if resp.status != 200:
+        instance.status = InstanceStatus.UNREACHABLE
+        store.put_instance(instance)
+        return jsonify(instance.to_dict())
+
+    remote = resp.body
+    try:
+        instance.status = InstanceStatus(remote.get("status", instance.status.value))
+    except ValueError:
+        pass
+    instance.private_ip = remote.get("private_ip", instance.private_ip)
+    instance.public_ip = remote.get("public_ip", instance.public_ip)
+    instance.error_message = remote.get("error_message", instance.error_message)
+    store.put_instance(instance)
     return jsonify(instance.to_dict())
 
 
@@ -619,6 +726,8 @@ def delete_instance(instance_id):
     instance = store.get_instance(instance_id)
     if not instance:
         return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if instance.host_id:
+        return _delete_remote_instance(instance)
 
     # Mark deleted immediately so list excludes it before async teardown completes
     store.delete_instance_record(instance_id)
@@ -641,6 +750,30 @@ def delete_instance(instance_id):
             app.logger.error("Failed to delete instance %s: %s", instance_id, e)
 
     threading.Thread(target=_destroy, daemon=True).start()
+    return "", 204
+
+
+def _delete_remote_instance(instance: Instance):
+    """Proxy the delete to the peer this instance actually lives on.
+    Deliberately refuses (not silently discards the local record) if
+    the peer can't be reached right now — the alternative would let a
+    remote VM leak indefinitely with no local record pointing at it."""
+    peer = peers_store.get_peer(instance.host_id)
+    if not peer or peer["status"] != "approved":
+        return problem(502, "Bad Gateway",
+                        "This instance's peer is not currently approved/reachable — "
+                        "the remote instance was NOT deleted, local record kept.")
+    try:
+        resp = peer_client.delete(peer["api_url"] + f"/v1/instances/{instance.id}", token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway",
+                        f"Could not reach peer '{peer['hostname']}': {e} — "
+                        "the remote instance was NOT deleted, local record kept.")
+    if resp.status not in (204, 404):
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the delete: {detail.get('detail', resp.body)}")
+    store.delete_instance_record(instance.id)
     return "", 204
 
 
