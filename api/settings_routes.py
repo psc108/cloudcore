@@ -8,6 +8,7 @@ import os
 from flask import Blueprint, jsonify, request
 
 import settings_store
+import discovery
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -86,4 +87,38 @@ def update_network_settings():
 
     settings = settings_store.get_prefixed("network")
     settings.setdefault("bridge_subnet_octet", 100)
+    return jsonify(settings)
+
+
+@settings_bp.get("/v1/settings/discovery")
+def get_discovery_settings():
+    err = _auth()
+    if err: return err
+    settings = settings_store.get_prefixed("discovery")
+    settings.setdefault("enabled", False)
+    settings["advertising"] = discovery.is_advertising()
+    return jsonify(settings)
+
+
+@settings_bp.put("/v1/settings/discovery")
+def update_discovery_settings():
+    err = _auth()
+    if err: return err
+    body = request.get_json(force=True) or {}
+
+    if "enabled" in body:
+        enabled = bool(body["enabled"])
+        settings_store.set("discovery.enabled", enabled)
+        # Applied live, no restart needed — a host that just turned this
+        # off should go silent on the wire immediately, not at the next
+        # process restart; a host that just turned it on should start
+        # being discoverable right away.
+        if enabled:
+            discovery.advertise()
+        else:
+            discovery.stop_advertise()
+
+    settings = settings_store.get_prefixed("discovery")
+    settings.setdefault("enabled", False)
+    settings["advertising"] = discovery.is_advertising()
     return jsonify(settings)

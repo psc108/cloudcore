@@ -18,6 +18,8 @@ import sg as sg_enforce
 import ipaddress
 import usb
 import identity
+import discovery
+import settings_store
 from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
@@ -28,6 +30,7 @@ from tofu_routes import tofu_bp
 from usb_routes import usb_bp
 from help_routes import help_bp
 from settings_routes import settings_bp
+from peers_routes import peers_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -40,6 +43,7 @@ app.register_blueprint(tofu_bp)
 app.register_blueprint(usb_bp)
 app.register_blueprint(help_bp)
 app.register_blueprint(settings_bp)
+app.register_blueprint(peers_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -1449,6 +1453,12 @@ def reconcile():
 if __name__ == "__main__":
     db.init()
     identity.ensure_peer_keypair()
+    if settings_store.get("discovery.enabled", False):
+        # Resume advertising across a restart — a host that already
+        # opted in shouldn't silently go dark on the wire just because
+        # the process bounced; it only ever stops advertising via an
+        # explicit settings PUT, not implicitly.
+        discovery.advertise()
     dns_store.load()
     reconcile()
     dns_server.start()
