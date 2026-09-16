@@ -347,6 +347,10 @@ CREATE TABLE IF NOT EXISTS pairing_requests (
     pubkey_fpr      TEXT NOT NULL,
     signature       TEXT NOT NULL,
     callback_token  TEXT NOT NULL,
+    -- Built from the request's own actual TCP source address (never a
+    -- self-reported hostname/IP in the signed payload) + the claimed
+    -- peer-listener port — see api/peers_routes.py's bootstrap handler.
+    callback_url    TEXT NOT NULL DEFAULT '',
     wg_pubkey       TEXT NOT NULL,
     wg_endpoint     TEXT NOT NULL,
     wg_bridge_subnet TEXT NOT NULL,
@@ -419,6 +423,10 @@ def _migrate_columns() -> None:
         # instance before cross-host peering existed); non-NULL = the
         # peers.id this instance actually lives on — see api/peers_routes.py.
         _conn.execute("ALTER TABLE instances ADD COLUMN host_id TEXT")
+
+    pr_cols = {row[1] for row in _conn.execute("PRAGMA table_info(pairing_requests)").fetchall()}
+    if pr_cols and "callback_url" not in pr_cols:
+        _conn.execute("ALTER TABLE pairing_requests ADD COLUMN callback_url TEXT NOT NULL DEFAULT ''")
 
     lb_cols = {row[1] for row in _conn.execute("PRAGMA table_info(load_balancers)").fetchall()}
     if "sticky_sessions" not in lb_cols:

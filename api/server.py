@@ -20,6 +20,7 @@ import usb
 import identity
 import discovery
 import settings_store
+import peer_listener
 from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
@@ -30,7 +31,7 @@ from tofu_routes import tofu_bp
 from usb_routes import usb_bp
 from help_routes import help_bp
 from settings_routes import settings_bp
-from peers_routes import peers_bp
+from peers_routes import peers_bp, PEER_REACHABLE_ENDPOINTS
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -53,6 +54,25 @@ def _cors(response):
     response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
+
+
+@app.before_request
+def _peer_bind_gate():
+    # This app is served on two binds: the original, dashboard-facing
+    # 127.0.0.1:8080 (unaffected by this check — SERVER_PORT there is
+    # never the peer port) and, only while discovery.enabled is true, a
+    # second, network-reachable bind on network.peer_listener_port
+    # (api/peer_listener.py). A request that actually arrived on that
+    # second bind is only allowed through if its route is explicitly
+    # peer-reachable (api/peers_routes.py's own PEER_REACHABLE_ENDPOINTS)
+    # — everything else 403s there, regardless of any token presented,
+    # so a leaked/guessed peer token still can't reach settings, builds,
+    # NFS file upload, or any other dashboard-only route through it.
+    # SERVER_PORT comes from the accepting socket, not anything a
+    # client can influence.
+    if request.environ.get("SERVER_PORT") == str(discovery.peer_listener_port()):
+        if request.endpoint not in PEER_REACHABLE_ENDPOINTS:
+            abort(403)
 
 
 @app.get("/")
@@ -1453,12 +1473,14 @@ def reconcile():
 if __name__ == "__main__":
     db.init()
     identity.ensure_peer_keypair()
+    peer_listener.init(app)
     if settings_store.get("discovery.enabled", False):
-        # Resume advertising across a restart — a host that already
-        # opted in shouldn't silently go dark on the wire just because
-        # the process bounced; it only ever stops advertising via an
+        # Resume advertising (and the peer listener) across a restart —
+        # a host that already opted in shouldn't silently go dark just
+        # because the process bounced; both only ever stop via an
         # explicit settings PUT, not implicitly.
         discovery.advertise()
+        peer_listener.start(discovery.peer_listener_port())
     dns_store.load()
     reconcile()
     dns_server.start()

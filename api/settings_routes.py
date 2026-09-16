@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 
 import settings_store
 import discovery
+import peer_listener
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -112,11 +113,19 @@ def update_discovery_settings():
         # Applied live, no restart needed — a host that just turned this
         # off should go silent on the wire immediately, not at the next
         # process restart; a host that just turned it on should start
-        # being discoverable right away.
+        # being discoverable right away. The peer-facing listener
+        # (api/peer_listener.py) is tied to this same single toggle,
+        # not a separate one — "opt in to participate in peering" means
+        # the port doesn't even exist to scan or abuse until a human on
+        # this machine explicitly turns this on, matching the "we're
+        # opening a port on a laptop to abuse" concern this whole
+        # feature was designed around.
         if enabled:
             discovery.advertise()
+            peer_listener.start(discovery.peer_listener_port())
         else:
             discovery.stop_advertise()
+            peer_listener.stop()
 
     settings = settings_store.get_prefixed("discovery")
     settings.setdefault("enabled", False)
