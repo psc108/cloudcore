@@ -11,10 +11,12 @@ from models import (
 
 
 def _vpc_from_row(row) -> VPC:
+    keys = row.keys()
     v = VPC(
         id=row["id"], name=row["name"], cidr_block=row["cidr_block"],
         dns_support=bool(row["dns_support"]), created_at=row["created_at"],
         tags=json.loads(row["tags"]),
+        host_id=row["host_id"] if "host_id" in keys else None,
     )
     v.status = VPCStatus(row["status"])
     return v
@@ -62,11 +64,13 @@ def _lb_from_row(row) -> LoadBalancer:
 
 
 def _subnet_from_row(row) -> Subnet:
+    keys = row.keys()
     s = Subnet(
         id=row["id"], name=row["name"], vpc_id=row["vpc_id"],
         cidr_block=row["cidr_block"], public=bool(row["public"]),
         zone=row["zone"], created_at=row["created_at"],
         tags=json.loads(row["tags"]),
+        host_id=row["host_id"] if "host_id" in keys else None,
     )
     s.status = SubnetStatus(row["status"])
     return s
@@ -118,14 +122,14 @@ def find_vpc_by_name(name: str) -> Optional[VPC]:
 
 
 def put_vpc(vpc: VPC) -> None:
-    db.get_db().execute("""INSERT INTO vpcs (id,name,cidr_block,dns_support,status,created_at,tags)
-        VALUES (?,?,?,?,?,?,?)
+    db.get_db().execute("""INSERT INTO vpcs (id,name,cidr_block,dns_support,status,created_at,tags,host_id)
+        VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, cidr_block=excluded.cidr_block,
             dns_support=excluded.dns_support, status=excluded.status,
-            tags=excluded.tags""",
+            tags=excluded.tags, host_id=excluded.host_id""",
         (vpc.id, vpc.name, vpc.cidr_block, int(vpc.dns_support),
-         vpc.status.value, vpc.created_at, json.dumps(vpc.tags)))
+         vpc.status.value, vpc.created_at, json.dumps(vpc.tags), vpc.host_id))
     db.get_db().commit()
 
 
@@ -163,15 +167,15 @@ def find_subnet_by_name(name: str) -> Optional[Subnet]:
 
 def put_subnet(subnet: Subnet) -> None:
     db.get_db().execute("""INSERT INTO subnets
-        (id,name,vpc_id,cidr_block,public,zone,status,created_at,tags)
-        VALUES (?,?,?,?,?,?,?,?,?)
+        (id,name,vpc_id,cidr_block,public,zone,status,created_at,tags,host_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, vpc_id=excluded.vpc_id, cidr_block=excluded.cidr_block,
             public=excluded.public, zone=excluded.zone, status=excluded.status,
-            tags=excluded.tags""",
+            tags=excluded.tags, host_id=excluded.host_id""",
         (subnet.id, subnet.name, subnet.vpc_id, subnet.cidr_block,
          int(subnet.public), subnet.zone, subnet.status.value,
-         subnet.created_at, json.dumps(subnet.tags)))
+         subnet.created_at, json.dumps(subnet.tags), subnet.host_id))
     db.get_db().commit()
 
 

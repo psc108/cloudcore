@@ -83,6 +83,10 @@ class SecurityGroup:
     status: SecurityGroupStatus = SecurityGroupStatus.ACTIVE
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
+    # None = local (this host); otherwise a peers.id this security group
+    # actually lives on — see api/peers_routes.py, api/peer_client.py.
+    # Same field, same meaning as Instance.host_id.
+    host_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -95,6 +99,7 @@ class SecurityGroup:
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,
+            "host_id": self.host_id,
         }
 
 
@@ -107,6 +112,10 @@ class VPC:
     status: VPCStatus = VPCStatus.ACTIVE
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
+    # None = local (this host); otherwise a peers.id this VPC actually
+    # lives on — see api/peers_routes.py, api/peer_client.py. Same
+    # field, same meaning as Instance.host_id.
+    host_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -117,6 +126,7 @@ class VPC:
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,
+            "host_id": self.host_id,
         }
 
 
@@ -131,6 +141,10 @@ class Subnet:
     status: SubnetStatus = SubnetStatus.ACTIVE
     created_at: str = field(default_factory=now_iso)
     tags: dict = field(default_factory=dict)
+    # None = local (this host); otherwise a peers.id this subnet
+    # actually lives on — see api/peers_routes.py, api/peer_client.py.
+    # Same field, same meaning as Instance.host_id.
+    host_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -143,6 +157,7 @@ class Subnet:
             "status": self.status.value,
             "created_at": self.created_at,
             "tags": self.tags,
+            "host_id": self.host_id,
         }
 
 

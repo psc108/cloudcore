@@ -9,6 +9,7 @@ from models import SecurityGroup, SecurityGroupStatus
 
 
 def _from_row(row) -> SecurityGroup:
+    keys = row.keys()
     sg = SecurityGroup(
         id=row["id"], name=row["name"], description=row["description"],
         vpc_id=row["vpc_id"],
@@ -16,6 +17,7 @@ def _from_row(row) -> SecurityGroup:
         egress_rules=json.loads(row["egress_rules"]),
         created_at=row["created_at"],
         tags=json.loads(row["tags"]),
+        host_id=row["host_id"] if "host_id" in keys else None,
     )
     sg.status = SecurityGroupStatus(row["status"])
     return sg
@@ -43,17 +45,17 @@ def find_by_name(name: str) -> Optional[SecurityGroup]:
 
 def put(sg: SecurityGroup) -> None:
     db.get_db().execute("""INSERT INTO security_groups
-        (id,name,description,vpc_id,ingress_rules,egress_rules,status,created_at,tags)
-        VALUES (?,?,?,?,?,?,?,?,?)
+        (id,name,description,vpc_id,ingress_rules,egress_rules,status,created_at,tags,host_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, description=excluded.description,
             vpc_id=excluded.vpc_id,
             ingress_rules=excluded.ingress_rules,
             egress_rules=excluded.egress_rules,
-            status=excluded.status, tags=excluded.tags""",
+            status=excluded.status, tags=excluded.tags, host_id=excluded.host_id""",
         (sg.id, sg.name, sg.description, sg.vpc_id,
          json.dumps(sg.ingress_rules), json.dumps(sg.egress_rules),
-         sg.status.value, sg.created_at, json.dumps(sg.tags)))
+         sg.status.value, sg.created_at, json.dumps(sg.tags), sg.host_id))
     db.get_db().commit()
 
 

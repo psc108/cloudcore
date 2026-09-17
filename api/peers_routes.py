@@ -46,13 +46,16 @@ API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 PEER_REACHABLE_ENDPOINTS = {
     "peers.pairing_request_bootstrap",
     "peers.complete_pairing",
-    # Cross-blueprint exception, not this blueprint's own route: read-only
-    # security-group listing, same reasoning as server.py's own
-    # list_vpcs/list_subnets addition to _PEER_REACHABLE_LOCAL_ENDPOINTS —
-    # lets a peer's dashboard populate its peer_security_group_id picker
-    # from this host's real catalogue. Named here rather than adding a
-    # third tiny allowlist set just for one route from a different file.
-    "sg.list_sgs",
+    # Cross-blueprint exceptions, not this blueprint's own routes: same
+    # reasoning as server.py's own list_vpcs/list_subnets addition to
+    # _PEER_REACHABLE_LOCAL_ENDPOINTS — sg.list_sgs lets a peer's
+    # dashboard populate its peer_security_group_id picker from this
+    # host's real catalogue; the create/get/update/delete four let
+    # security groups be peer-placed themselves, not just referenced
+    # (per direct request — "do we have to limit resource placement to
+    # just instances?"). Named here rather than adding a third tiny
+    # allowlist set just for one file's own routes.
+    "sg.list_sgs", "sg.create_sg", "sg.get_sg", "sg.update_sg", "sg.delete_sg",
 }
 
 PAIRING_REQUEST_TTL_MINUTES = 15

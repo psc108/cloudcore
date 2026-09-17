@@ -424,6 +424,22 @@ def _migrate_columns() -> None:
         # peers.id this instance actually lives on — see api/peers_routes.py.
         _conn.execute("ALTER TABLE instances ADD COLUMN host_id TEXT")
 
+    vpc_cols = {row[1] for row in _conn.execute("PRAGMA table_info(vpcs)").fetchall()}
+    if "host_id" not in vpc_cols:
+        # Same field, same meaning as instances.host_id — VPCs, subnets,
+        # and security groups can now be peer-placed too, not just
+        # instances (per direct request — "do we have to limit resource
+        # placement to just instances?").
+        _conn.execute("ALTER TABLE vpcs ADD COLUMN host_id TEXT")
+
+    subnet_cols = {row[1] for row in _conn.execute("PRAGMA table_info(subnets)").fetchall()}
+    if "host_id" not in subnet_cols:
+        _conn.execute("ALTER TABLE subnets ADD COLUMN host_id TEXT")
+
+    sg_cols = {row[1] for row in _conn.execute("PRAGMA table_info(security_groups)").fetchall()}
+    if "host_id" not in sg_cols:
+        _conn.execute("ALTER TABLE security_groups ADD COLUMN host_id TEXT")
+
     pr_cols = {row[1] for row in _conn.execute("PRAGMA table_info(pairing_requests)").fetchall()}
     if pr_cols and "callback_url" not in pr_cols:
         _conn.execute("ALTER TABLE pairing_requests ADD COLUMN callback_url TEXT NOT NULL DEFAULT ''")

@@ -24,7 +24,10 @@ import settings_store
 import peer_listener
 import peer_client
 import peers_store
-from models import VPC, Instance, LoadBalancer, InstanceStatus, Subnet, InternetGateway, RouteTable
+from models import (
+    VPC, VPCStatus, Instance, LoadBalancer, InstanceStatus, Subnet, SubnetStatus,
+    InternetGateway, RouteTable, now_iso,
+)
 from build_manager_routes import bm as build_manager_blueprint
 from nfs_routes import nfs_bp
 from sg_routes import sg_bp
@@ -74,9 +77,18 @@ def _cors(response):
 # of this same proxy). No more sensitive than create_instance already
 # being reachable here — a leaked/guessed peer token could already
 # create/delete VMs through this same gate.
+#
+# create/get/update/delete_vpc, create/get/update/delete_subnet: VPCs
+# and subnets can now be peer-placed too, not just instances (per
+# direct request — "do we have to limit resource placement to just
+# instances?"), so a peer's proxied create/read/update/delete needs to
+# actually reach these on the executing host, same as instance CRUD
+# already does.
 _PEER_REACHABLE_LOCAL_ENDPOINTS = {
     "create_instance", "get_instance", "update_instance", "delete_instance",
     "list_vpcs", "list_subnets",
+    "create_vpc", "get_vpc", "update_vpc", "delete_vpc",
+    "create_subnet", "get_subnet", "update_subnet", "delete_subnet",
 }
 
 
@@ -157,10 +169,20 @@ def problem(status: int, title: str, detail: str):
 # VPCs
 # ---------------------------------------------------------------------------
 
+def _vpc_dict(vpc: VPC) -> dict:
+    """vpc.to_dict() plus host_hostname when this VPC lives on a peer —
+    same convenience _instance_dict() already provides for instances."""
+    d = vpc.to_dict()
+    if vpc.host_id:
+        peer = peers_store.get_peer(vpc.host_id)
+        d["host_hostname"] = peer["hostname"] if peer else ""
+    return d
+
+
 @app.get("/v1/vpcs")
 @require_auth
 def list_vpcs():
-    return jsonify({"items": [v.to_dict() for v in store.list_vpcs()]})
+    return jsonify({"items": [_vpc_dict(v) for v in store.list_vpcs()]})
 
 
 @app.post("/v1/vpcs")
@@ -170,6 +192,16 @@ def create_vpc():
     name = body.get("name", "").strip()
     if not name:
         return problem(400, "Bad Request", "name is required")
+
+    # Checked before the local name-uniqueness lookup below (unlike
+    # create_instance's own ordering) — a name collision only means
+    # anything against whichever host's catalogue the resource is
+    # actually landing in, and that's the peer's own create endpoint's
+    # job to enforce, not this host's.
+    peer_id = body.get("peer_id")
+    if peer_id:
+        return _create_remote_vpc(peer_id, body)
+
     if store.find_vpc_by_name(name):
         return problem(409, "Conflict", f"VPC '{name}' already exists")
 
@@ -180,7 +212,37 @@ def create_vpc():
         tags=body.get("tags", {}),
     )
     store.put_vpc(vpc)
-    return jsonify(vpc.to_dict()), 201
+    return jsonify(_vpc_dict(vpc)), 201
+
+
+def _create_remote_vpc(peer_id: str, body: dict):
+    """peer_id was set on the create request — proxy to that peer's own
+    /v1/vpcs instead of provisioning locally, keeping only a local
+    wrapper row (host_id set) that later reads/updates/deletes proxy
+    through in turn. Same pattern as _create_remote_instance."""
+    peer = peers_store.get_peer(peer_id)
+    if not peer or peer["status"] != "approved":
+        return problem(400, "Bad Request", f"'{peer_id}' is not an approved peer")
+
+    remote_body = {k: v for k, v in body.items() if k != "peer_id"}
+    try:
+        resp = peer_client.post(peer["api_url"] + "/v1/vpcs", remote_body, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway", f"Could not reach peer '{peer['hostname']}': {e}")
+    if resp.status != 201:
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the create: {detail.get('detail', resp.body)}")
+
+    remote = resp.body
+    vpc = VPC(
+        id=remote.get("id"), name=remote.get("name", body.get("name", "")),
+        cidr_block=remote.get("cidr_block", ""), dns_support=remote.get("dns_support", True),
+        created_at=remote.get("created_at", now_iso()), tags=remote.get("tags", {}),
+        host_id=peer_id,
+    )
+    store.put_vpc(vpc)
+    return jsonify(_vpc_dict(vpc)), 201
 
 
 @app.get("/v1/vpcs/<vpc_id>")
@@ -189,7 +251,39 @@ def get_vpc(vpc_id):
     vpc = store.get_vpc(vpc_id)
     if not vpc:
         return problem(404, "Not Found", f"VPC '{vpc_id}' not found")
-    return jsonify(vpc.to_dict())
+    if vpc.host_id:
+        _refresh_remote_vpc(vpc)
+    return jsonify(_vpc_dict(vpc))
+
+
+def _refresh_remote_vpc(vpc: VPC) -> None:
+    """Live-refresh a peer-placed VPC's mutable fields from the peer's
+    own record. Unlike instances, a VPC has no meaningfully distinct
+    "unreachable" operational state (its cidr_block/dns_support don't
+    drift the way a VM's status/IP do over its own boot lifecycle) — on
+    an unreachable peer this just silently keeps the last-known cached
+    values rather than inventing a new status value for every one of
+    VPC/Subnet/SecurityGroup's still-two-value status enums. A genuine
+    404 (deleted directly on the peer) still marks it DELETED here,
+    same as the local path's own deletion convention."""
+    peer = peers_store.get_peer(vpc.host_id)
+    if not peer or peer["status"] != "approved":
+        return
+    try:
+        resp = peer_client.get(peer["api_url"] + f"/v1/vpcs/{vpc.id}", token=peer["remote_token"])
+    except peer_client.PeerUnreachable:
+        return
+    if resp.status == 404:
+        vpc.status = VPCStatus.DELETED
+        store.put_vpc(vpc)
+        return
+    if resp.status != 200:
+        return
+    remote = resp.body
+    vpc.name = remote.get("name", vpc.name)
+    vpc.dns_support = remote.get("dns_support", vpc.dns_support)
+    vpc.tags = remote.get("tags", vpc.tags)
+    store.put_vpc(vpc)
 
 
 @app.put("/v1/vpcs/<vpc_id>")
@@ -199,16 +293,45 @@ def update_vpc(vpc_id):
     if not vpc:
         return problem(404, "Not Found", f"VPC '{vpc_id}' not found")
     body = request.get_json(force=True) or {}
+    if vpc.host_id:
+        return _update_remote_vpc(vpc, body)
     vpc.name = body.get("name", vpc.name)
     vpc.dns_support = body.get("dns_support", vpc.dns_support)
     vpc.tags = body.get("tags", vpc.tags)
     store.put_vpc(vpc)
-    return jsonify(vpc.to_dict())
+    return jsonify(_vpc_dict(vpc))
+
+
+def _update_remote_vpc(vpc: VPC, body: dict):
+    peer = peers_store.get_peer(vpc.host_id)
+    if not peer or peer["status"] != "approved":
+        return problem(502, "Bad Gateway",
+                        "This VPC's peer is not currently approved/reachable — update not applied.")
+    try:
+        resp = peer_client.put(peer["api_url"] + f"/v1/vpcs/{vpc.id}", body, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway", f"Could not reach peer '{peer['hostname']}': {e} — update not applied.")
+    if resp.status != 200:
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the update: {detail.get('detail', resp.body)}")
+    remote = resp.body
+    vpc.name = remote.get("name", vpc.name)
+    vpc.dns_support = remote.get("dns_support", vpc.dns_support)
+    vpc.tags = remote.get("tags", vpc.tags)
+    store.put_vpc(vpc)
+    return jsonify(_vpc_dict(vpc))
 
 
 @app.delete("/v1/vpcs/<vpc_id>")
 @require_auth
 def delete_vpc(vpc_id):
+    vpc = store.get_vpc(vpc_id)
+    if not vpc:
+        return problem(404, "Not Found", f"VPC '{vpc_id}' not found")
+    if vpc.host_id:
+        return _delete_remote_vpc(vpc)
+
     active_instances = store.list_instances_by_vpc(vpc_id)
     if active_instances:
         return problem(409, "Conflict",
@@ -231,6 +354,30 @@ def delete_vpc(vpc_id):
     return "", 204
 
 
+def _delete_remote_vpc(vpc: VPC):
+    """Proxy the delete to the peer this VPC actually lives on.
+    Deliberately refuses (not silently discards the local record) if
+    the peer can't be reached right now — same reasoning as
+    _delete_remote_instance."""
+    peer = peers_store.get_peer(vpc.host_id)
+    if not peer or peer["status"] != "approved":
+        return problem(502, "Bad Gateway",
+                        "This VPC's peer is not currently approved/reachable — "
+                        "the remote VPC was NOT deleted, local record kept.")
+    try:
+        resp = peer_client.delete(peer["api_url"] + f"/v1/vpcs/{vpc.id}", token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway",
+                        f"Could not reach peer '{peer['hostname']}': {e} — "
+                        "the remote VPC was NOT deleted, local record kept.")
+    if resp.status not in (204, 404):
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the delete: {detail.get('detail', resp.body)}")
+    store.delete_vpc(vpc.id)
+    return "", 204
+
+
 # ---------------------------------------------------------------------------
 # Subnets
 # ---------------------------------------------------------------------------
@@ -244,13 +391,21 @@ def _cidr_contained(parent_cidr: str, child_cidr: str) -> bool:
         return False
 
 
+def _subnet_dict(subnet: Subnet) -> dict:
+    d = subnet.to_dict()
+    if subnet.host_id:
+        peer = peers_store.get_peer(subnet.host_id)
+        d["host_hostname"] = peer["hostname"] if peer else ""
+    return d
+
+
 @app.get("/v1/subnets")
 @require_auth
 def list_subnets():
     vpc_id = request.args.get("vpc_id")
     if vpc_id:
-        return jsonify({"items": [s.to_dict() for s in store.list_subnets_by_vpc(vpc_id)]})
-    return jsonify({"items": [s.to_dict() for s in store.list_subnets()]})
+        return jsonify({"items": [_subnet_dict(s) for s in store.list_subnets_by_vpc(vpc_id)]})
+    return jsonify({"items": [_subnet_dict(s) for s in store.list_subnets()]})
 
 
 @app.post("/v1/subnets")
@@ -260,6 +415,15 @@ def create_subnet():
     for field in ("name", "vpc_id", "cidr_block"):
         if not body.get(field):
             return problem(400, "Bad Request", f"'{field}' is required")
+
+    # Checked before any local vpc_id/cidr-containment lookup below —
+    # a peer-placed subnet's own vpc_id is opaque to this host (it's
+    # either a pre-existing VPC on the peer, or one just peer-placed
+    # there in the same apply), same reasoning as create_vpc's own
+    # peer_id-first ordering.
+    peer_id = body.get("peer_id")
+    if peer_id:
+        return _create_remote_subnet(peer_id, body)
 
     vpc = store.get_vpc(body["vpc_id"])
     if not vpc:
@@ -281,7 +445,36 @@ def create_subnet():
         tags=body.get("tags", {}),
     )
     store.put_subnet(subnet)
-    return jsonify(subnet.to_dict()), 201
+    return jsonify(_subnet_dict(subnet)), 201
+
+
+def _create_remote_subnet(peer_id: str, body: dict):
+    peer = peers_store.get_peer(peer_id)
+    if not peer or peer["status"] != "approved":
+        return problem(400, "Bad Request", f"'{peer_id}' is not an approved peer")
+
+    remote_body = {k: v for k, v in body.items() if k != "peer_id"}
+    try:
+        resp = peer_client.post(peer["api_url"] + "/v1/subnets", remote_body, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway", f"Could not reach peer '{peer['hostname']}': {e}")
+    if resp.status != 201:
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the create: {detail.get('detail', resp.body)}")
+
+    remote = resp.body
+    subnet = Subnet(
+        id=remote.get("id"), name=remote.get("name", body.get("name", "")),
+        vpc_id=remote.get("vpc_id", body.get("vpc_id", "")),
+        cidr_block=remote.get("cidr_block", body.get("cidr_block", "")),
+        public=remote.get("public", bool(body.get("public", False))),
+        zone=remote.get("zone", body.get("zone", "a")),
+        created_at=remote.get("created_at", now_iso()), tags=remote.get("tags", {}),
+        host_id=peer_id,
+    )
+    store.put_subnet(subnet)
+    return jsonify(_subnet_dict(subnet)), 201
 
 
 @app.get("/v1/subnets/<subnet_id>")
@@ -290,7 +483,33 @@ def get_subnet(subnet_id):
     subnet = store.get_subnet(subnet_id)
     if not subnet:
         return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
-    return jsonify(subnet.to_dict())
+    if subnet.host_id:
+        _refresh_remote_subnet(subnet)
+    return jsonify(_subnet_dict(subnet))
+
+
+def _refresh_remote_subnet(subnet: Subnet) -> None:
+    """Same reasoning as _refresh_remote_vpc — no distinct "unreachable"
+    status, silently keeps cached values when the peer can't be reached."""
+    peer = peers_store.get_peer(subnet.host_id)
+    if not peer or peer["status"] != "approved":
+        return
+    try:
+        resp = peer_client.get(peer["api_url"] + f"/v1/subnets/{subnet.id}", token=peer["remote_token"])
+    except peer_client.PeerUnreachable:
+        return
+    if resp.status == 404:
+        subnet.status = SubnetStatus.DELETED
+        store.put_subnet(subnet)
+        return
+    if resp.status != 200:
+        return
+    remote = resp.body
+    subnet.name = remote.get("name", subnet.name)
+    subnet.public = remote.get("public", subnet.public)
+    subnet.zone = remote.get("zone", subnet.zone)
+    subnet.tags = remote.get("tags", subnet.tags)
+    store.put_subnet(subnet)
 
 
 @app.put("/v1/subnets/<subnet_id>")
@@ -300,12 +519,36 @@ def update_subnet(subnet_id):
     if not subnet:
         return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
     body = request.get_json(force=True) or {}
+    if subnet.host_id:
+        return _update_remote_subnet(subnet, body)
     subnet.name = body.get("name", subnet.name)
     subnet.public = bool(body.get("public", subnet.public))
     subnet.zone = body.get("zone", subnet.zone)
     subnet.tags = body.get("tags", subnet.tags)
     store.put_subnet(subnet)
-    return jsonify(subnet.to_dict())
+    return jsonify(_subnet_dict(subnet))
+
+
+def _update_remote_subnet(subnet: Subnet, body: dict):
+    peer = peers_store.get_peer(subnet.host_id)
+    if not peer or peer["status"] != "approved":
+        return problem(502, "Bad Gateway",
+                        "This subnet's peer is not currently approved/reachable — update not applied.")
+    try:
+        resp = peer_client.put(peer["api_url"] + f"/v1/subnets/{subnet.id}", body, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway", f"Could not reach peer '{peer['hostname']}': {e} — update not applied.")
+    if resp.status != 200:
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the update: {detail.get('detail', resp.body)}")
+    remote = resp.body
+    subnet.name = remote.get("name", subnet.name)
+    subnet.public = remote.get("public", subnet.public)
+    subnet.zone = remote.get("zone", subnet.zone)
+    subnet.tags = remote.get("tags", subnet.tags)
+    store.put_subnet(subnet)
+    return jsonify(_subnet_dict(subnet))
 
 
 @app.delete("/v1/subnets/<subnet_id>")
@@ -314,6 +557,8 @@ def delete_subnet(subnet_id):
     subnet = store.get_subnet(subnet_id)
     if not subnet:
         return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
+    if subnet.host_id:
+        return _delete_remote_subnet(subnet)
     active_instances = [i for i in store.list_instances_by_vpc(subnet.vpc_id)
                         if i.subnet_id == subnet_id]
     if active_instances:
@@ -321,6 +566,26 @@ def delete_subnet(subnet_id):
             f"Subnet '{subnet_id}' has {len(active_instances)} active instance(s) — delete them first")
     if not store.delete_subnet(subnet_id):
         return problem(404, "Not Found", f"Subnet '{subnet_id}' not found")
+    return "", 204
+
+
+def _delete_remote_subnet(subnet: Subnet):
+    peer = peers_store.get_peer(subnet.host_id)
+    if not peer or peer["status"] != "approved":
+        return problem(502, "Bad Gateway",
+                        "This subnet's peer is not currently approved/reachable — "
+                        "the remote subnet was NOT deleted, local record kept.")
+    try:
+        resp = peer_client.delete(peer["api_url"] + f"/v1/subnets/{subnet.id}", token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return problem(502, "Bad Gateway",
+                        f"Could not reach peer '{peer['hostname']}': {e} — "
+                        "the remote subnet was NOT deleted, local record kept.")
+    if resp.status not in (204, 404):
+        detail = resp.body if isinstance(resp.body, dict) else {}
+        return problem(resp.status, "Bad Gateway",
+                        f"Peer '{peer['hostname']}' rejected the delete: {detail.get('detail', resp.body)}")
+    store.delete_subnet(subnet.id)
     return "", 204
 
 
