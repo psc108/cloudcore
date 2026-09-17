@@ -56,6 +56,15 @@ PEER_REACHABLE_ENDPOINTS = {
     # just instances?"). Named here rather than adding a third tiny
     # allowlist set just for one file's own routes.
     "sg.list_sgs", "sg.create_sg", "sg.get_sg", "sg.update_sg", "sg.delete_sg",
+    # stats.get_system_stats: read-only host performance stats (CPU/
+    # memory/disk/instance count) — lets a peer's dashboard compare this
+    # host's current load against its own before deciding where to
+    # place a resource (per direct request — "collect performance
+    # statistics from each peer in order to understand which is
+    # overloaded... and which can tolerate it"). No secrets in the
+    # response, no more sensitive than any other read already reachable
+    # here.
+    "stats.get_system_stats",
 }
 
 PAIRING_REQUEST_TTL_MINUTES = 15
@@ -417,5 +426,18 @@ def list_peer_security_groups(peer_id: str):
     err = _auth()
     if err: return err
     resp, error = _peer_proxy_get(peer_id, "/v1/security-groups")
+    if error: return error
+    return jsonify(resp.body), resp.status
+
+
+@peers_bp.get("/v1/peers/<peer_id>/stats")
+def get_peer_stats(peer_id: str):
+    """This peer's own current CPU/memory/disk/instance-count stats —
+    backs the Resource Placement page's capacity comparison (per direct
+    request: "collect performance statistics from each peer in order to
+    understand which is overloaded... and which can tolerate it")."""
+    err = _auth()
+    if err: return err
+    resp, error = _peer_proxy_get(peer_id, "/v1/system/stats")
     if error: return error
     return jsonify(resp.body), resp.status

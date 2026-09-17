@@ -38,6 +38,7 @@ from usb_routes import usb_bp
 from help_routes import help_bp
 from settings_routes import settings_bp
 from peers_routes import peers_bp, PEER_REACHABLE_ENDPOINTS
+from stats_routes import stats_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -51,6 +52,7 @@ app.register_blueprint(usb_bp)
 app.register_blueprint(help_bp)
 app.register_blueprint(settings_bp)
 app.register_blueprint(peers_bp)
+app.register_blueprint(stats_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
