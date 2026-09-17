@@ -21,6 +21,7 @@ import socket
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request
 
@@ -45,6 +46,13 @@ API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 PEER_REACHABLE_ENDPOINTS = {
     "peers.pairing_request_bootstrap",
     "peers.complete_pairing",
+    # Cross-blueprint exception, not this blueprint's own route: read-only
+    # security-group listing, same reasoning as server.py's own
+    # list_vpcs/list_subnets addition to _PEER_REACHABLE_LOCAL_ENDPOINTS —
+    # lets a peer's dashboard populate its peer_security_group_id picker
+    # from this host's real catalogue. Named here rather than adding a
+    # third tiny allowlist set just for one route from a different file.
+    "sg.list_sgs",
 }
 
 PAIRING_REQUEST_TTL_MINUTES = 15
@@ -353,3 +361,58 @@ def revoke_peer(peer_id: str):
     peers_store.revoke_peer(peer_id)
     wireguard.on_peer_revoked(peers_store.list_peers(status="approved"))
     return jsonify({"status": "revoked"})
+
+
+def _peer_proxy_get(peer_id: str, path: str):
+    """GET `path` against `peer_id`'s own API using its stored remote_token.
+    Returns (PeerResponse, None) on success or (None, (jsonify(...), status))
+    on failure — lets each route below `return error` directly rather than
+    duplicating the not-approved/unreachable handling three times over."""
+    peer = peers_store.get_peer(peer_id)
+    if not peer or peer["status"] != "approved":
+        return None, (jsonify({"status": 400, "title": "Bad Request",
+                                "detail": f"'{peer_id}' is not an approved peer"}), 400)
+    try:
+        resp = peer_client.get(peer["api_url"] + path, token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return None, (jsonify({"status": 502, "title": "Bad Gateway",
+                                "detail": f"Could not reach peer '{peer['hostname']}': {e}"}), 502)
+    return resp, None
+
+
+# The three routes below back the Build Manager's cascading vpc/subnet/
+# security-group pickers for a peer-placed resource (per direct request:
+# "checking the current vpc id's on the localhost and connected peers"
+# rather than expecting a user to already know an id that exists on a
+# host they've never directly browsed) — plain reads proxied through to
+# the peer's own catalogue, same trust boundary as every other peer-proxy
+# call in this file (this host's own stored remote_token, never anything
+# the browser supplies).
+
+@peers_bp.get("/v1/peers/<peer_id>/vpcs")
+def list_peer_vpcs(peer_id: str):
+    err = _auth()
+    if err: return err
+    resp, error = _peer_proxy_get(peer_id, "/v1/vpcs")
+    if error: return error
+    return jsonify(resp.body), resp.status
+
+
+@peers_bp.get("/v1/peers/<peer_id>/subnets")
+def list_peer_subnets(peer_id: str):
+    err = _auth()
+    if err: return err
+    vpc_id = request.args.get("vpc_id", "")
+    path = "/v1/subnets" + (f"?vpc_id={quote(vpc_id)}" if vpc_id else "")
+    resp, error = _peer_proxy_get(peer_id, path)
+    if error: return error
+    return jsonify(resp.body), resp.status
+
+
+@peers_bp.get("/v1/peers/<peer_id>/security-groups")
+def list_peer_security_groups(peer_id: str):
+    err = _auth()
+    if err: return err
+    resp, error = _peer_proxy_get(peer_id, "/v1/security-groups")
+    if error: return error
+    return jsonify(resp.body), resp.status

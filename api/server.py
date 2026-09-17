@@ -65,7 +65,19 @@ def _cors(response):
 # peers_routes.py's PEER_REACHABLE_ENDPOINTS (the pairing bootstrap
 # routes). Kept as a separate set here, close to the routes it actually
 # names, rather than folding into the peers blueprint's own set.
-_PEER_REACHABLE_LOCAL_ENDPOINTS = {"create_instance", "get_instance", "update_instance", "delete_instance"}
+#
+# list_vpcs/list_subnets: read-only, added so a peer's own dashboard can
+# populate its Build Manager's peer_vpc_id/peer_subnet_id pickers from
+# this host's real catalogue instead of expecting a user to already
+# know an id that exists on a host they've never directly browsed (see
+# peers_routes.py's list_peer_vpcs/list_peer_subnets, the calling side
+# of this same proxy). No more sensitive than create_instance already
+# being reachable here — a leaked/guessed peer token could already
+# create/delete VMs through this same gate.
+_PEER_REACHABLE_LOCAL_ENDPOINTS = {
+    "create_instance", "get_instance", "update_instance", "delete_instance",
+    "list_vpcs", "list_subnets",
+}
 
 
 @app.before_request
