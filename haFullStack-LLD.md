@@ -3229,6 +3229,33 @@ polling already guarded against; and the dashboard `let`/TDZ bug above
   between two bridge networks); On-Prem/AWS environments would need
   their own equivalent discovery/tunneling mechanism appropriate to
   whatever networking is actually available there.
+- **Resolved, v0.35**: placement is now capacity-aware and
+  self-directing, not just informational — built across three direct
+  requests in one continuous arc. `api/host_stats.py` collects each
+  host's own CPU load (normalized by core count), memory, and disk
+  usage (pure stdlib — `/proc/loadavg`/`/proc/meminfo`/
+  `shutil.disk_usage()`, no new dependency), exposed locally
+  (`GET /v1/system/stats`) and proxied per-peer
+  (`GET /v1/peers/<id>/stats`) the same way the VPC/subnet/SG
+  catalogue routes already work. The Resource Placement page's new
+  Capacity card shows every host side by side with a traffic-light
+  Placement verdict (green/amber/red, worst of the three metrics, not
+  an average) — "green - use for resources, amber, risky but could
+  try, red - leave alone," the user's own framing verbatim. The actual
+  point of the arc: `GET /v1/peers/recommend-placement` picks the
+  best current candidate from that same verdict logic (host_stats.py's
+  thresholds made the single Python-side source of truth, hand-synced
+  with the dashboard's own JS copy — the one place this project's
+  Python/JS split couldn't avoid duplicating logic), and both Build
+  Managers now pre-select that peer in every `peer_id` field and
+  immediately cascade its vpc/subnet/security-group values — a
+  peer-placed resource's location and every ID it needs arrive
+  pre-filled, zero clicks, while the field itself stays a completely
+  normal editable dropdown ("we still need to allow the user to
+  override via the template"). Verified live throughout, including one
+  real, non-hypothetical finding along the way: this host was caught
+  genuinely at 138.4% CPU load from this session's own background
+  work, correctly driving the recommendation to the idle peer instead.
 - **A `cloudcore_peers` Ansible lookup plugin** (rather than the
   `peer_info` module's own register-and-filter pattern) was considered
   and deliberately deferred — the module-based path already works
@@ -3275,3 +3302,4 @@ polling already guarded against; and the dashboard `let`/TDZ bug above
 | v0.32 | 2026-09-16 | Paul Scott | New §13, Cross-Host Peering — a full platform capability (discovery, human-approved pairing trust, WireGuard tunnels, and remote provisioning across the API, OpenTofu provider, Ansible collection, and dashboard UI), built and verified live end-to-end across two real, independent physical machines on the same LAN. Six real bugs found and fixed along the way (F-084–F-089, full detail in `haFullStack-Findings-Log.md`), including one a real browser caught within minutes of shipping that this session's headless-only verification tooling structurally could not have (F-089). |
 | v0.33 | 2026-09-17 | Paul Scott | §13.5's two original open items resolved and closed out (see the updated §13.5 for the full detail) — per-instance mixed placement within one `modules/instance-group` (`placement_overrides`) and every example template wired for peer placement, both shipped rather than deferred. Searchable help updated to match: a new **Peers** article (Networking category) covering setup, discovery/pairing/approval, the My Peers panel, and the `_peer_id` template convention; **Builds — Ansible**/**Builds — OpenTofu** each gained a "Peer Placement" cross-reference; **Load Balancers** gained a short **Target Groups & Listeners** section (a real, separate documentation gap found alongside — that mechanism existed and was fully wired to real HAProxy config generation but had never been documented anywhere). Applied to both `api/help_seed.json` (fresh installs) and the live running instance directly via the Help API, confirmed searchable (`GET /v1/help/articles?q=peer` returns all three touched/added articles). |
 | v0.34 | 2026-09-17 | Paul Scott | Peer placement extended past instances to VPCs, subnets, and security groups (see the updated §13.5 for the full detail) — per direct request, "do we have to limit resource placement to just instances?" Same `host_id`/CRUD-proxy pattern as instances, across the API, the OpenTofu provider, the two Ansible modules that needed it, and the three reusable Terraform modules example templates actually call. Verified live end to end against the real paired peer through both IaC front-ends — a real VPC (and, via Ansible, a security group too) created on Llywyn-Y-Groes and confirmed via the peer's own catalogue independently, then destroyed cleanly. The Resource Placement dashboard page (v0.33) extended to show all four peer-placeable resource types instead of instances only. Also fixed in passing: a real version-numbering mistake in this document's own history — v0.32 had been duplicated by an earlier edit (once for the pre-existing "New §13" entry, once for what's now correctly v0.33); renumbered without changing either entry's actual content. |
+| v0.35 | 2026-09-17 | Paul Scott | Placement made capacity-aware and self-directing (see the updated §13.5 for the full detail) — three direct requests in one continuous arc: collect real CPU/memory/disk stats per host, show them as a green/amber/red traffic light, then use that traffic light to automatically pick and pre-fill the best current placement target while keeping the override. `api/host_stats.py`'s tier thresholds are now the single Python-side source of truth `GET /v1/peers/recommend-placement` reuses directly, hand-synced with the dashboard's own JS copy in `27-placement.js`. Verified live: real numbers from both real hosts (this one genuinely overloaded at times during this session's own background work, the peer idle), and both Build Managers correctly auto-filling a real template's `peer_id` and cascaded vpc/subnet/security-group fields with zero simulated interaction, confirmed via a DOM stub faithful enough to parse real `<select>` markup rather than just check strings. |
