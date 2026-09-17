@@ -17,6 +17,25 @@ Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 ExecStart=/usr/bin/python3 /home/scottp/IdeaProjects/CloudProject/api/server.py
 Restart=on-failure
 RestartSec=5
+# Found live: this service talks to libvirt via qemu:///session (see
+# api/compute.py's own QEMU_URI), which spawns every guest VM's own
+# qemu-system-x86_64 process as a child within THIS service's own
+# cgroup — same for libvirtd/virtlogd/dnsmasq/haproxy, everything
+# CloudCore itself starts. systemd's default KillMode (control-group)
+# sends its stop signal to every process in that cgroup, not just the
+# ExecStart one — so a completely routine `systemctl --user restart
+# cloudcore-api` (a code reload, nothing to do with any specific VM)
+# was silently SIGTERM-ing every currently-running guest VM along with
+# it, mid-session, with no warning. Confirmed directly: the exact
+# libvirt qemu log line "terminating on signal 15 from pid <systemd>"
+# for a real llm-chat coordinator VM, at the exact second of a
+# restart run for an unrelated code change, cutting off a real
+# in-progress chat reply. KillMode=process scopes the stop signal to
+# the main process only — every child CloudCore has ever spawned
+# keeps running across an API restart, which is what every "restart
+# to pick up a code change" throughout this project's own development
+# has always assumed was already true.
+KillMode=process
 
 [Install]
 WantedBy=default.target
