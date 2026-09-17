@@ -116,6 +116,25 @@ def initiate_pairing():
         return jsonify({"status": 400, "title": "Bad Request",
                          "detail": "hostname, address, and port are required"}), 400
 
+    # We don't know the target's own pubkey_fpr yet at this point (only
+    # learned once it replies via /v1/peers/complete), so this dedup is
+    # by api_url rather than identity — a reasonable proxy for "this is
+    # the same physical host" since address:port is what was actually
+    # used to reach it. The identity-based check (pubkey_fpr, stronger)
+    # lives on the *receiving* side, pairing_request_bootstrap() below,
+    # since that's the first point either side actually has it. Found
+    # live as a real gap: nothing previously stopped re-pairing with an
+    # already-paired host, leaving two fully-approved peers rows for
+    # the same physical machine — confusing in the UI (which one do you
+    # pick?) and, worse, both ended up in the rendered WireGuard config
+    # with the identical PublicKey.
+    existing = [p for p in peers_store.list_peers()
+                if p["api_url"] == f"http://{address}:{port}" and p["status"] in ("approved", "pending_outbound")]
+    if existing:
+        return jsonify({"status": 409, "title": "Conflict",
+                         "detail": f"Already {existing[0]['status']} with a peer at {address}:{port} "
+                                   f"(id {existing[0]['id']}) — revoke it first if you want to re-pair."}), 409
+
     callback_token = secrets.token_urlsafe(32)
     payload = {
         "hostname": socket.gethostname(),
@@ -181,6 +200,20 @@ def pairing_request_bootstrap():
                          "detail": "Signature does not match the claimed public key."}), 400
 
     pubkey_fpr = peer_crypto.fingerprint_of(payload["pubkey"])
+
+    # Identity-based dedup (stronger than initiate_pairing()'s own
+    # api_url-based check above — this is the first point either side
+    # actually knows the requester's real fingerprint) — refuse a
+    # second approved pairing with a host we already trust, rather
+    # than silently ending up with two fully-approved peers rows for
+    # the same physical machine.
+    already_approved = [p for p in peers_store.list_peers()
+                         if p["pubkey_fpr"] == pubkey_fpr and p["status"] == "approved"]
+    if already_approved:
+        return jsonify({"status": 409, "title": "Conflict",
+                         "detail": f"Already paired with this host (peer id {already_approved[0]['id']}) "
+                                   f"— revoke it first if you want to re-pair."}), 409
+
     callback_url = f"http://{request.remote_addr}:{payload['peer_port']}"
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=PAIRING_REQUEST_TTL_MINUTES)).isoformat()
 
