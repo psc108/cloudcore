@@ -3101,6 +3101,40 @@ async function bmSelectTemplate(filename) {
 // this is the one deliberate special case.
 const _BM_PEER_ID_RE = /(^|_)peer_id$/i;
 
+// A peer-placed resource's own peer_vpc_id/peer_subnet_id/
+// peer_security_group_id also get real pickers, cascading from their
+// sibling peer_id field — "checking the current vpc id's on the
+// localhost and connected peers" rather than expecting a user to
+// already know an id that exists on a host they've never directly
+// browsed. Same key-prefix convention as peer_id itself (bare or
+// slot-prefixed, e.g. peer_vpc_id / web_02_peer_vpc_id) — matched by
+// substituting the suffix onto each peer_id key's own prefix (below),
+// not a separate standalone regex, since a vpc/subnet/sg field only
+// ever makes sense paired with its own peer_id sibling.
+
+// Groups each peer_id key with whichever of its own vpc/subnet/sg
+// siblings this schema actually declares (04-load-balanced-web.yml's
+// web_02 family, for instance, has no sg var at all — it never attaches
+// one) — computed by substituting each suffix onto the peer_id key's own
+// prefix, not a fixed name, so this works for both bare (peer_id) and
+// slot-prefixed (web_02_peer_id) templates alike.
+function _bmPeerFamilies(editable) {
+  const keys = new Set(editable.map(([k]) => k));
+  const families = {};
+  for (const [key] of editable) {
+    if (!_BM_PEER_ID_RE.test(key)) continue;
+    const vpcKey = key.replace(/peer_id$/i, 'peer_vpc_id');
+    const subnetKey = key.replace(/peer_id$/i, 'peer_subnet_id');
+    const sgKey = key.replace(/peer_id$/i, 'peer_security_group_id');
+    families[key] = {
+      vpcKey: keys.has(vpcKey) ? vpcKey : null,
+      subnetKey: keys.has(subnetKey) ? subnetKey : null,
+      sgKey: keys.has(sgKey) ? sgKey : null,
+    };
+  }
+  return families;
+}
+
 async function _bmRenderVarForm(filename, tpl, schema) {
   document.getElementById('bm-form-title').textContent = tpl ? tpl.title : filename;
   document.getElementById('bm-submit-filename').value = filename;
@@ -3121,6 +3155,14 @@ async function _bmRenderVarForm(filename, tpl, schema) {
     } catch (e) { /* fall through — the field just renders with no options */ }
   }
 
+  const peerFamilies = _bmPeerFamilies(editable);
+  const cascadeTargetKeys = new Set();
+  Object.values(peerFamilies).forEach(f => {
+    if (f.vpcKey) cascadeTargetKeys.add(f.vpcKey);
+    if (f.subnetKey) cascadeTargetKeys.add(f.subnetKey);
+    if (f.sgKey) cascadeTargetKeys.add(f.sgKey);
+  });
+
   container.innerHTML = editable.map(([key, meta]) => {
     if (_BM_PEER_ID_RE.test(key)) {
       const options = approvedPeers.length
@@ -3136,6 +3178,15 @@ async function _bmRenderVarForm(filename, tpl, schema) {
           ${!approvedPeers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
         </div>`;
     }
+    if (cascadeTargetKeys.has(key)) {
+      return `
+        <div class="field">
+          <label>${key.replace(/_/g, ' ')}</label>
+          <select id="bm-var-${key}" data-key="${key}" disabled>
+            <option value="">— select a peer first —</option>
+          </select>
+        </div>`;
+    }
     return `
     <div class="field">
       <label>${key.replace(/_/g, ' ')}</label>
@@ -3146,6 +3197,95 @@ async function _bmRenderVarForm(filename, tpl, schema) {
     </div>
   `;
   }).join('');
+
+  _bmWirePeerCascades(peerFamilies);
+}
+
+function _bmWirePeerCascades(families) {
+  Object.entries(families).forEach(([peerKey, f]) => {
+    if (!f.vpcKey && !f.subnetKey && !f.sgKey) return;
+    const peerSel = document.getElementById(`bm-var-${peerKey}`);
+    if (peerSel) peerSel.addEventListener('change', () => _bmCascadeFromPeer(peerKey, f));
+  });
+}
+
+// Fetches the selected peer's own vpcs (+ security groups, unfiltered —
+// there's no server-side vpc filter for those, so they're filtered
+// client-side per vpc below) and populates the sibling vpc_id select,
+// auto-selecting its first entry (most labs have exactly one) rather
+// than leaving the user to guess an id — then cascades into subnet/sg.
+async function _bmCascadeFromPeer(peerKey, f) {
+  const peerId = document.getElementById(`bm-var-${peerKey}`).value;
+  const vpcSel = f.vpcKey && document.getElementById(`bm-var-${f.vpcKey}`);
+  const subnetSel = f.subnetKey && document.getElementById(`bm-var-${f.subnetKey}`);
+  const sgSel = f.sgKey && document.getElementById(`bm-var-${f.sgKey}`);
+
+  if (!peerId) {
+    [vpcSel, subnetSel, sgSel].forEach(sel => {
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— select a peer first —</option>';
+      sel.disabled = true;
+    });
+    return;
+  }
+
+  if (vpcSel) { vpcSel.innerHTML = '<option value="">Loading…</option>'; vpcSel.disabled = true; }
+  if (subnetSel) { subnetSel.innerHTML = '<option value="">— select a VPC first —</option>'; subnetSel.disabled = true; }
+  if (sgSel) { sgSel.innerHTML = '<option value="">Loading…</option>'; sgSel.disabled = true; }
+
+  let vpcs = [], sgs = [];
+  try {
+    const [vpcData, sgData] = await Promise.all([
+      api('GET', `/v1/peers/${peerId}/vpcs`),
+      sgSel ? api('GET', `/v1/peers/${peerId}/security-groups`) : Promise.resolve({ items: [] }),
+    ]);
+    vpcs = vpcData.items || [];
+    sgs = sgData.items || [];
+  } catch (e) { /* fall through — fields render with a "not found" hint below */ }
+
+  if (vpcSel) {
+    vpcSel.innerHTML = vpcs.length
+      ? vpcs.map(v => `<option value="${v.id}">${_esc(v.name)} (${_esc(v.cidr_block)})</option>`).join('')
+      : '<option value="">No VPCs found on this peer</option>';
+    vpcSel.disabled = !vpcs.length;
+    vpcSel.dataset.sgs = JSON.stringify(sgs);
+    vpcSel.onchange = () => _bmCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId);
+    if (vpcs.length) await _bmCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId);
+  } else if (sgSel) {
+    // No vpc field in this family — populate sg directly, unfiltered.
+    sgSel.innerHTML = sgs.length
+      ? sgs.map(s => `<option value="${s.id}">${_esc(s.name)}</option>`).join('')
+      : '<option value="">No security groups found on this peer</option>';
+    sgSel.disabled = !sgs.length;
+  }
+}
+
+async function _bmCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId) {
+  const vpcId = vpcSel.value;
+  const sgs = JSON.parse(vpcSel.dataset.sgs || '[]');
+
+  if (subnetSel) {
+    subnetSel.innerHTML = '<option value="">Loading…</option>';
+    subnetSel.disabled = true;
+    try {
+      const subnetData = await api('GET', `/v1/peers/${peerId}/subnets?vpc_id=${encodeURIComponent(vpcId)}`);
+      const subnets = subnetData.items || [];
+      subnetSel.innerHTML = subnets.length
+        ? subnets.map(s => `<option value="${s.id}">${_esc(s.name)} (${_esc(s.cidr_block)})</option>`).join('')
+        : '<option value="">No subnets found in this VPC</option>';
+      subnetSel.disabled = !subnets.length;
+    } catch (e) {
+      subnetSel.innerHTML = '<option value="">Failed to load subnets</option>';
+    }
+  }
+
+  if (sgSel) {
+    const vpcSgs = sgs.filter(s => s.vpc_id === vpcId);
+    sgSel.innerHTML = vpcSgs.length
+      ? vpcSgs.map(s => `<option value="${s.id}">${_esc(s.name)}</option>`).join('')
+      : '<option value="">No security groups found in this VPC</option>';
+    sgSel.disabled = !vpcSgs.length;
+  }
 }
 
 async function bmSubmitBuild() {
@@ -3728,6 +3868,32 @@ const _TF_USB_DEVICE_VAR = 'usb_device_id';
 // gets identical behavior regardless of which build system they used.
 const _TF_PEER_ID_RE = /(^|_)peer_id$/i;
 
+// A peer-placed resource's own peer_vpc_id/peer_subnet_id/
+// peer_security_group_id also get real pickers, cascading from their
+// sibling peer_id field — "checking the current vpc id's on the
+// localhost and connected peers" rather than expecting a user to
+// already know an id that exists on a host they've never directly
+// browsed. Matched by substituting each suffix onto a peer_id key's own
+// prefix (below), the same convention 16-build-manager.js's own
+// _bmPeerFamilies uses, not a shared function — see that file's own
+// comment for why these two renderers stay independent.
+function _tfPeerFamilies(editable) {
+  const keys = new Set(editable.map(([k]) => k));
+  const families = {};
+  for (const [key] of editable) {
+    if (!_TF_PEER_ID_RE.test(key)) continue;
+    const vpcKey = key.replace(/peer_id$/i, 'peer_vpc_id');
+    const subnetKey = key.replace(/peer_id$/i, 'peer_subnet_id');
+    const sgKey = key.replace(/peer_id$/i, 'peer_security_group_id');
+    families[key] = {
+      vpcKey: keys.has(vpcKey) ? vpcKey : null,
+      subnetKey: keys.has(subnetKey) ? subnetKey : null,
+      sgKey: keys.has(sgKey) ? sgKey : null,
+    };
+  }
+  return families;
+}
+
 async function _tfRenderVarForm(dirName, tpl, schema) {
   document.getElementById('tf-form-title').textContent = tpl ? tpl.title : dirName;
   document.getElementById('tf-submit-dirname').value = dirName;
@@ -3758,9 +3924,18 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
     } catch (e) { /* field just renders with no options */ }
   }
 
+  const peerFamilies = _tfPeerFamilies(editable);
+  const cascadeTargetKeys = new Set();
+  Object.values(peerFamilies).forEach(f => {
+    if (f.vpcKey) cascadeTargetKeys.add(f.vpcKey);
+    if (f.subnetKey) cascadeTargetKeys.add(f.subnetKey);
+    if (f.sgKey) cascadeTargetKeys.add(f.sgKey);
+  });
+
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
     if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers);
+    if (cascadeTargetKeys.has(key)) return _tfRenderPeerCascadeField(key, meta);
     return `
       <div class="field">
         <label>${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}</label>
@@ -3773,6 +3948,106 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
       </div>
     `;
   }).join('');
+
+  _tfWirePeerCascades(peerFamilies);
+}
+
+function _tfRenderPeerCascadeField(key, meta) {
+  return `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}</label>
+      <select id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}" disabled>
+        <option value="">— select a peer first —</option>
+      </select>
+    </div>
+  `;
+}
+
+function _tfWirePeerCascades(families) {
+  Object.entries(families).forEach(([peerKey, f]) => {
+    if (!f.vpcKey && !f.subnetKey && !f.sgKey) return;
+    const peerSel = document.getElementById(`tf-var-${peerKey}`);
+    if (peerSel) peerSel.addEventListener('change', () => _tfCascadeFromPeer(peerKey, f));
+  });
+}
+
+// Fetches the selected peer's own vpcs (+ security groups, unfiltered —
+// there's no server-side vpc filter for those, so they're filtered
+// client-side per vpc below) and populates the sibling vpc_id select,
+// auto-selecting its first entry (most labs have exactly one) rather
+// than leaving the user to guess an id — then cascades into subnet/sg.
+async function _tfCascadeFromPeer(peerKey, f) {
+  const peerId = document.getElementById(`tf-var-${peerKey}`).value;
+  const vpcSel = f.vpcKey && document.getElementById(`tf-var-${f.vpcKey}`);
+  const subnetSel = f.subnetKey && document.getElementById(`tf-var-${f.subnetKey}`);
+  const sgSel = f.sgKey && document.getElementById(`tf-var-${f.sgKey}`);
+
+  if (!peerId) {
+    [vpcSel, subnetSel, sgSel].forEach(sel => {
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— select a peer first —</option>';
+      sel.disabled = true;
+    });
+    return;
+  }
+
+  if (vpcSel) { vpcSel.innerHTML = '<option value="">Loading…</option>'; vpcSel.disabled = true; }
+  if (subnetSel) { subnetSel.innerHTML = '<option value="">— select a VPC first —</option>'; subnetSel.disabled = true; }
+  if (sgSel) { sgSel.innerHTML = '<option value="">Loading…</option>'; sgSel.disabled = true; }
+
+  let vpcs = [], sgs = [];
+  try {
+    const [vpcData, sgData] = await Promise.all([
+      api('GET', `/v1/peers/${peerId}/vpcs`),
+      sgSel ? api('GET', `/v1/peers/${peerId}/security-groups`) : Promise.resolve({ items: [] }),
+    ]);
+    vpcs = vpcData.items || [];
+    sgs = sgData.items || [];
+  } catch (e) { /* fall through — fields render with a "not found" hint below */ }
+
+  if (vpcSel) {
+    vpcSel.innerHTML = vpcs.length
+      ? vpcs.map(v => `<option value="${v.id}">${_esc(v.name)} (${_esc(v.cidr_block)})</option>`).join('')
+      : '<option value="">No VPCs found on this peer</option>';
+    vpcSel.disabled = !vpcs.length;
+    vpcSel.dataset.sgs = JSON.stringify(sgs);
+    vpcSel.onchange = () => _tfCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId);
+    if (vpcs.length) await _tfCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId);
+  } else if (sgSel) {
+    // No vpc field in this family — populate sg directly, unfiltered.
+    sgSel.innerHTML = sgs.length
+      ? sgs.map(s => `<option value="${s.id}">${_esc(s.name)}</option>`).join('')
+      : '<option value="">No security groups found on this peer</option>';
+    sgSel.disabled = !sgs.length;
+  }
+}
+
+async function _tfCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId) {
+  const vpcId = vpcSel.value;
+  const sgs = JSON.parse(vpcSel.dataset.sgs || '[]');
+
+  if (subnetSel) {
+    subnetSel.innerHTML = '<option value="">Loading…</option>';
+    subnetSel.disabled = true;
+    try {
+      const subnetData = await api('GET', `/v1/peers/${peerId}/subnets?vpc_id=${encodeURIComponent(vpcId)}`);
+      const subnets = subnetData.items || [];
+      subnetSel.innerHTML = subnets.length
+        ? subnets.map(s => `<option value="${s.id}">${_esc(s.name)} (${_esc(s.cidr_block)})</option>`).join('')
+        : '<option value="">No subnets found in this VPC</option>';
+      subnetSel.disabled = !subnets.length;
+    } catch (e) {
+      subnetSel.innerHTML = '<option value="">Failed to load subnets</option>';
+    }
+  }
+
+  if (sgSel) {
+    const vpcSgs = sgs.filter(s => s.vpc_id === vpcId);
+    sgSel.innerHTML = vpcSgs.length
+      ? vpcSgs.map(s => `<option value="${s.id}">${_esc(s.name)}</option>`).join('')
+      : '<option value="">No security groups found in this VPC</option>';
+    sgSel.disabled = !vpcSgs.length;
+  }
 }
 
 function _tfRenderPeerField(key, meta, peers) {
