@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 import build_engine
 import croncalc
 import db
+import failure_queue
 import host_stats
 import peer_client
 import peers_routes
@@ -350,21 +351,30 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
     _save_ingestion(status="running")
 
     # 1. Cheap pre-check — skip the whole cluster build if there's
-    # nothing new to ingest.
+    # nothing new to ingest from EITHER source. Sentinel events and
+    # queued failed-build logs (failure_queue.py) are independent: a
+    # failed build has nothing to do with Sentinel, so it's checked
+    # even when Sentinel itself is unreachable — only bail out entirely
+    # when both are empty.
+    new_events = []
     try:
         events = _sentinel_get(f"/api/events?limit=500")
+        new_events = [e for e in events if e["id"] > checkpoint]
     except (urllib.error.URLError, ConnectionError, OSError) as e:
-        _log(f"Sentinel unreachable at {SENTINEL_LOCAL_URL}: {e}")
-        _save_ingestion(finished_at=now_iso(), status="skipped-no-sentinel")
-        return "success", "Sentinel not running locally — nothing to ingest", log
+        _log(f"Sentinel unreachable at {SENTINEL_LOCAL_URL}: {e} — "
+             f"continuing with any queued failed-build analysis only.")
 
-    new_events = [e for e in events if e["id"] > checkpoint]
-    if not new_events:
-        _log("No new Sentinel activity since last checkpoint — skipping cluster build.")
+    pending_failures = failure_queue.list_pending()
+
+    if not new_events and not pending_failures:
+        _log("No new Sentinel activity and no queued failed-build logs — skipping cluster build.")
         _save_ingestion(finished_at=now_iso(), status="success", events_seen=0)
-        return "success", "No new Sentinel activity", log
+        return "success", "Nothing new to ingest", log
 
-    _log(f"{len(new_events)} new Sentinel event(s) since checkpoint {checkpoint}.")
+    if new_events:
+        _log(f"{len(new_events)} new Sentinel event(s) since checkpoint {checkpoint}.")
+    if pending_failures:
+        _log(f"{len(pending_failures)} queued failed-build log(s) to analyze.")
 
     # 2. Pick workers from the schedule's own candidate pool by CURRENT
     # traffic light, not whatever was true when the schedule was
@@ -459,35 +469,85 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
             if s is not None:
                 worker_stats.append({"peer_id": p["peer_id"], "stats": s})
 
-        # 5. Prompt the model.
-        inference_start = time.monotonic()
-        parsed, usage = _run_ingestion_prompt(coordinator_url, new_events)
-        inference_seconds = time.monotonic() - inference_start
-        completion_tokens = usage.get("completion_tokens")
-        if completion_tokens and inference_seconds > 0:
-            tokens_per_second = completion_tokens / inference_seconds
-        else:
-            tokens_per_second = None
-        _log(f"Inference took {inference_seconds:.1f}s"
-             + (f", {completion_tokens} completion tokens "
-                f"({tokens_per_second:.1f} tok/s)" if tokens_per_second else "") + ".")
-        summary_text = parsed.get("summary", "")
-        model_findings = parsed.get("findings", []) or []
-        model_suggestions = parsed.get("suggestions", []) or []
-        _log(f"Model returned {len(model_findings)} finding(s), "
-             f"{len(model_suggestions)} suggestion(s).")
-
-        # 6. Write back into this host's own Sentinel.
+        # 5. Prompt the model — Sentinel events and queued failed-build
+        # logs are two independent passes, not one merged prompt: their
+        # input shapes differ (an "event" the matcher may have already
+        # partially matched, vs. a raw failure log with no such
+        # context), and a build failure has no Sentinel event_id to
+        # attach a suggestion to. Both run against the same already-up
+        # cluster in this same wakeup — no extra build/teardown cost.
         source_doc = f"llm-ingest:{_HOSTNAME}"
-        codes = []
+        model_findings, model_suggestions, codes = [], [], []
+        failure_findings, failure_codes = [], []
+        total_inference_s = 0.0
+        total_completion_tokens = 0
+        total_prompt_tokens = 0
+        total_tokens_all = 0
+
+        if new_events:
+            inference_start = time.monotonic()
+            parsed, usage = _run_ingestion_prompt(coordinator_url, new_events)
+            total_inference_s += time.monotonic() - inference_start
+            total_completion_tokens += usage.get("completion_tokens") or 0
+            total_prompt_tokens += usage.get("prompt_tokens") or 0
+            total_tokens_all += usage.get("total_tokens") or 0
+            summary_text = parsed.get("summary", "")
+            model_findings = parsed.get("findings", []) or []
+            model_suggestions = parsed.get("suggestions", []) or []
+            _log(f"Sentinel analysis: model returned {len(model_findings)} finding(s), "
+                 f"{len(model_suggestions)} suggestion(s).")
+
+        if pending_failures:
+            inference_start = time.monotonic()
+            failure_parsed, failure_usage = _run_failure_analysis_prompt(coordinator_url, pending_failures)
+            total_inference_s += time.monotonic() - inference_start
+            total_completion_tokens += failure_usage.get("completion_tokens") or 0
+            total_prompt_tokens += failure_usage.get("prompt_tokens") or 0
+            total_tokens_all += failure_usage.get("total_tokens") or 0
+            failure_findings = failure_parsed.get("findings", []) or []
+            if not summary_text:
+                summary_text = failure_parsed.get("summary", "")
+            _log(f"Build-failure analysis: model drafted {len(failure_findings)} "
+                 f"finding(s) for {len(pending_failures)} queued failure(s).")
+
+        inference_seconds = total_inference_s if (new_events or pending_failures) else None
+        if total_completion_tokens and inference_seconds:
+            tokens_per_second = total_completion_tokens / inference_seconds
+        _log(f"Inference took {inference_seconds:.1f}s total"
+             + (f", {total_completion_tokens} completion tokens "
+                f"({tokens_per_second:.1f} tok/s)" if tokens_per_second else "") + ".")
+
+        # 6. Write back into this host's own Sentinel — two separate
+        # imports (distinct code namespaces/tags) so a build-failure
+        # finding is never mistaken for a Sentinel-log-derived one.
         if model_findings:
             for i, f in enumerate(model_findings):
                 f.setdefault("code", f"LLM-{schedule_id[:8]}-{int(time.time())}-{i}")
             resp = _sentinel_post("/api/kb/import",
                                    {"source_doc": source_doc, "findings": model_findings})
             codes = resp.get("codes", [])
-            findings_created = resp.get("imported", 0)
-            _log(f"Imported {findings_created} finding(s) into local Sentinel.")
+            findings_created += resp.get("imported", 0)
+            _log(f"Imported {len(codes)} Sentinel-derived finding(s) into local Sentinel.")
+
+        if failure_findings:
+            for i, f in enumerate(failure_findings):
+                f.setdefault("code", f"LLM-BUILDFAIL-{schedule_id[:8]}-{int(time.time())}-{i}")
+                tags = list(f.get("tags") or [])
+                if "build-failure" not in tags:
+                    tags.append("build-failure")
+                f["tags"] = tags
+            resp = _sentinel_post("/api/kb/import",
+                                   {"source_doc": source_doc, "findings": failure_findings})
+            failure_codes = resp.get("codes", [])
+            findings_created += resp.get("imported", 0)
+            _log(f"Imported {len(failure_codes)} build-failure finding(s) into local Sentinel.")
+            # The Finding is now the permanent record — the raw queued
+            # log it was drafted from has served its purpose.
+            for pf in pending_failures:
+                try:
+                    failure_queue.delete(pf["id"])
+                except Exception as e:
+                    _log(f"WARNING: failed to clear queued failure log {pf['id']}: {e}")
 
         if model_suggestions and codes:
             items = []
@@ -508,10 +568,17 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
                 _log(f"Imported {suggestions_created} suggestion(s) into local Sentinel.")
 
         # 7. Advance the checkpoint.
-        max_event_id = max(e["id"] for e in new_events)
+        if new_events:
+            max_event_id = max(e["id"] for e in new_events)
 
-        # 8. Distribute to online peers.
+        # 8. Distribute to online peers — two batches (Sentinel-derived
+        # findings/suggestions, then build-failure findings alone,
+        # which have no suggestions since they have no Sentinel event
+        # to attach one to), merged into one per-peer result.
         peers_synced = _distribute_to_peers(model_findings, model_suggestions, codes, source_doc, _log)
+        if failure_findings:
+            failure_synced = _distribute_to_peers(failure_findings, [], failure_codes, source_doc, _log)
+            peers_synced = _merge_peer_sync_results(peers_synced, failure_synced)
 
     except Exception as e:
         # Anything in steps 4-8 (most notably the coordinator health
@@ -545,11 +612,13 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
                      findings_created=findings_created, suggestions_created=suggestions_created,
                      peers_synced=peers_synced, summary_text=summary_text,
                      cluster_build_seconds=cluster_build_seconds, model_load_seconds=model_load_seconds,
-                     inference_seconds=inference_seconds, prompt_tokens=usage.get("prompt_tokens"),
-                     completion_tokens=usage.get("completion_tokens"), total_tokens=usage.get("total_tokens"),
+                     inference_seconds=inference_seconds, prompt_tokens=total_prompt_tokens or None,
+                     completion_tokens=total_completion_tokens or None, total_tokens=total_tokens_all or None,
                      tokens_per_second=tokens_per_second,
                      coordinator_stats=coordinator_stats, worker_stats=worker_stats)
-    return "success", summary_text or f"Ingested {len(new_events)} event(s)", log
+    return ("success",
+            summary_text or f"Ingested {len(new_events)} event(s), analyzed {len(pending_failures)} failed build(s)",
+            log)
 
 
 # ---------------------------------------------------------------------------
@@ -694,3 +763,65 @@ def _distribute_to_peers(findings: list[dict], suggestions: list[dict], codes: l
         results.append(entry)
         log_fn(f"Peer {peer['hostname']}: {entry['status']}")
     return results
+
+
+def _merge_peer_sync_results(a: list[dict], b: list[dict]) -> list[dict]:
+    """Combines two _distribute_to_peers() results (one per source —
+    Sentinel-derived, build-failure-derived) into one row per peer for
+    the llm_ingestions.peers_synced column, rather than showing the
+    same peer twice with two different partial results."""
+    by_peer: dict[str, dict] = {}
+    for entry in a:
+        by_peer[entry["peer_id"]] = dict(entry)
+    for entry in b:
+        existing = by_peer.get(entry["peer_id"])
+        if existing is None:
+            by_peer[entry["peer_id"]] = dict(entry)
+        elif existing["status"] != entry["status"]:
+            existing["status"] = f"{existing['status']}, {entry['status']}"
+    return list(by_peer.values())
+
+
+def _run_failure_analysis_prompt(coordinator_url: str, failures: list[dict]) -> tuple[dict, dict]:
+    """Same (parsed_response, usage) shape as _run_ingestion_prompt,
+    for queued failed-build logs (failure_queue.py) instead of
+    Sentinel events. No 'suggestions' half — a build failure has no
+    Sentinel event_id to attach one to, so this only ever asks for
+    findings."""
+    prompt_lines = [
+        "You are reviewing failed infrastructure build logs from CloudCore, "
+        "a small self-hosted lab virtualization platform that provisions "
+        "VMs/networks via Ansible playbooks or OpenTofu (Terraform) templates.",
+        "Each failure below includes the engine, template name, exit code, "
+        "and the tail of its own build log. Diagnose the real root cause "
+        "from the log where you can. If you're not confident, omit it "
+        "rather than guessing.",
+        "",
+        "Respond with EXACTLY one JSON object and nothing else — no prose "
+        "before or after, no markdown fence:",
+        '{"summary": "<1-3 sentence overview of what went wrong across these failures>",',
+        ' "findings": [{"title": "...", "symptom": "...", "root_cause": "...", "fix": "..."}]}',
+        "",
+        "Failures:",
+    ]
+    for f in failures:
+        log_tail = "\n".join((f.get("log") or [])[-60:])  # last 60 lines — keep the prompt bounded
+        prompt_lines.append(json.dumps({
+            "engine": f.get("engine", ""), "template": f.get("template", ""),
+            "exit_code": f.get("exit_code"), "log_tail": log_tail[:4000],
+        }))
+    prompt = "\n".join(prompt_lines)
+
+    body = {"model": "default", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        coordinator_url + "/v1/chat/completions", data=data,
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=180) as r:
+        resp = json.loads(r.read())
+    content = resp["choices"][0]["message"]["content"]
+    usage = resp.get("usage") or {}
+    try:
+        return _extract_json_object(content), usage
+    except (ValueError, json.JSONDecodeError):
+        return {"summary": content, "findings": []}, usage

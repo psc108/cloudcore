@@ -426,6 +426,25 @@ CREATE TABLE IF NOT EXISTS llm_ingestions (
     worker_stats          TEXT NOT NULL DEFAULT '[]'
 );
 
+-- A failed build's own log, queued for the next llm_ingest wakeup to
+-- analyze (api/failure_queue.py) — per direct request: "keep failed
+-- build logs, pass them through the llm, record the reasons and
+-- whatever the llm thinks might be a resolution and then remove the
+-- log(s)... it'll at the very least start collecting a good db of
+-- issues as we go along." Rows are deleted once analyzed — the drafted
+-- Finding in Sentinel's own KB becomes the permanent record, not this
+-- table; this is working material only, not history.
+CREATE TABLE IF NOT EXISTS failed_build_logs (
+    id            TEXT PRIMARY KEY,
+    engine        TEXT NOT NULL,
+    build_id      TEXT NOT NULL,
+    template      TEXT NOT NULL,
+    var_overrides TEXT NOT NULL DEFAULT '{}',
+    log           TEXT NOT NULL DEFAULT '[]',
+    exit_code     INTEGER,
+    created_at    TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
     content='help_articles', content_rowid='rowid'

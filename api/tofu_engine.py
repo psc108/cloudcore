@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import db
+import failure_queue
 import settings_store
 
 _running: dict[str, dict] = {}
@@ -336,7 +337,45 @@ def _run_build(build_id: str, var_overrides: dict) -> None:
                 build["provisioned"] = _diff_snapshots(snapshot_before, snapshot_after)
             except Exception:
                 pass
+        if build["status"] == "failed":
+            _cleanup_failed_build(build, var_overrides)
         _save_build(build)
+
+
+def _cleanup_failed_build(build: dict, var_overrides: dict) -> None:
+    """Auto-destroy whatever a failed apply managed to create before it
+    failed, and queue its own log for the next llm_ingest wakeup to
+    analyze — per direct request: "we need to look at removing
+    orphaned resources when we allow/commit a destroy. we leave too
+    many resources left over when builds fail." Uses tofu destroy
+    itself rather than replaying the snapshot-diff HTTP-DELETE approach
+    build_engine.py's own Ansible-side cleanup needs — OpenTofu's own
+    state already tracks exactly what exists and destroys it in the
+    correct dependency order automatically, so there's no reason to
+    reimplement that ordering by hand here."""
+    try:
+        src_dir = EXAMPLES_DIR / build["template"]
+        state_file = src_dir / "terraform.tfstate"
+        if not state_file.exists() or not json.loads(state_file.read_text()).get("resources"):
+            pass  # nothing was actually created — no cleanup needed
+        else:
+            _log(build, "Auto-destroying resources left by this failed build...")
+            env, _ = _build_env(var_overrides)
+            tofu = _find_tofu()
+            rc = _stream_cmd(
+                [tofu, "destroy", "-auto-approve", "-no-color", *_parallelism_args()],
+                env, str(src_dir), lambda line: _log(build, line))
+            if rc != 0:
+                _log(build, f"WARNING: auto-destroy exited {rc} — some resources may remain")
+    except Exception as e:
+        _log(build, f"WARNING: auto-destroy failed: {e}")
+
+    try:
+        failure_queue.queue_failure(
+            "tofu", build["id"], build["template"],
+            var_overrides, build.get("log", []), build.get("exit_code"))
+    except Exception as e:
+        _log(build, f"WARNING: failed to queue build log for LLM analysis: {e}")
 
 
 def _find_tofu() -> str:

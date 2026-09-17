@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +18,9 @@ import yaml
 
 import random
 import db
+import failure_queue
+
+API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 # In-memory cache for running builds (log lines appended live)
 # Completed builds are read back from SQLite
@@ -307,7 +313,60 @@ def _run_build(build_id: str, var_overrides: dict) -> None:
                 build["provisioned"] = _diff_snapshots(snapshot_before, snapshot_after)
             except Exception:
                 pass
+        if build["status"] == "failed":
+            _cleanup_failed_build(build, api_token)
         _save_build(build)
+
+
+# Deletion-safe ordering for auto-cleanup below — instances first (they
+# depend on the network scaffolding around them), then mid-tier
+# resources, then security groups, then the VPC last, since a VPC
+# delete is refused (409) while anything else inside it still exists.
+_DESTROY_ORDER = {"instance": 0, "lb": 1, "nfs_server": 1, "dns_zone": 1,
+                   "security_group": 2, "vpc": 3}
+_DESTROY_PATH = {
+    "vpc":            lambda i: f"/v1/vpcs/{i}",
+    "instance":       lambda i: f"/v1/instances/{i}",
+    "lb":             lambda i: f"/v1/load-balancers/{i}",
+    "dns_zone":       lambda i: f"/v1/dns/zones/{i}",
+    "nfs_server":     lambda i: f"/v1/nfs-servers/{i}",
+    "security_group": lambda i: f"/v1/security-groups/{i}",
+}
+
+
+def _cleanup_failed_build(build: dict, api_token: str) -> None:
+    """Auto-destroy whatever a failed build managed to create before
+    it failed, and queue its own log for the next llm_ingest wakeup to
+    analyze — per direct request: "we need to look at removing
+    orphaned resources when we allow/commit a destroy. we leave too
+    many resources left over when builds fail." Safe to destroy
+    immediately rather than waiting for a human to notice, since it's
+    the build's own LOG that actually gets inspected afterwards (kept
+    deliberately, queued for LLM analysis below), not live access to
+    whatever got created."""
+    provisioned = sorted(build.get("provisioned") or [],
+                          key=lambda r: _DESTROY_ORDER.get(r["type"], 1))
+    if provisioned:
+        _log(build, f"Auto-destroying {len(provisioned)} resource(s) left by this failed build...")
+        for r in provisioned:
+            path_fn = _DESTROY_PATH.get(r["type"])
+            if not path_fn:
+                continue
+            try:
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:8080{path_fn(r['id'])}",
+                    headers={"Authorization": f"Bearer {api_token or API_TOKEN}"}, method="DELETE")
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    _log(build, f"  destroyed {r['type']} {r['name']} ({resp.status})")
+            except Exception as e:
+                _log(build, f"  WARNING: failed to auto-destroy {r['type']} {r['name']}: {e}")
+
+    try:
+        failure_queue.queue_failure(
+            "ansible", build["id"], build["template"],
+            build.get("var_overrides", {}), build.get("log", []), build.get("exit_code"))
+    except Exception as e:
+        _log(build, f"WARNING: failed to queue build log for LLM analysis: {e}")
 
 
 def _build_extra_vars(var_overrides: dict) -> dict:
