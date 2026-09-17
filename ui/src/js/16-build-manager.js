@@ -56,6 +56,18 @@ async function bmSelectTemplate(filename) {
 // this is the one deliberate special case.
 const _BM_PEER_ID_RE = /(^|_)peer_id$/i;
 
+// A variable named exactly worker_peers (examples/distributed-llm and
+// examples/llm-chat's own list(object({peer_id, peer_vpc_id,
+// peer_subnet_id, peer_security_group_id})) variable) gets the same
+// checkbox-picker treatment the Scheduler's own worker-peer-pool field
+// already has (28-scheduler.js) — per direct request: "for llm chat
+// set the worker peers to be a pick list as well as being able to add
+// one free text." Exact-name match, not a suffix pattern like
+// peer_id — this is a different shape entirely (a JSON array, not a
+// single string), so it needs its own special case rather than fitting
+// the existing _BM_PEER_ID_RE family logic.
+const _BM_WORKER_PEERS_VAR = 'worker_peers';
+
 // A peer-placed resource's own peer_vpc_id/peer_subnet_id/
 // peer_security_group_id also get real pickers, cascading from their
 // sibling peer_id field — "checking the current vpc id's on the
@@ -104,7 +116,8 @@ async function _bmRenderVarForm(filename, tpl, schema) {
 
   let approvedPeers = [];
   let recommendation = null;
-  if (editable.some(([key]) => _BM_PEER_ID_RE.test(key))) {
+  const hasWorkerPeers = editable.some(([key]) => key === _BM_WORKER_PEERS_VAR);
+  if (editable.some(([key]) => _BM_PEER_ID_RE.test(key)) || hasWorkerPeers) {
     try {
       const peerData = await api('GET', '/v1/peers?status=approved');
       approvedPeers = peerData.items;
@@ -116,6 +129,10 @@ async function _bmRenderVarForm(filename, tpl, schema) {
       recommendation = await api('GET', '/v1/peers/recommend-placement');
     } catch (e) { /* fall through */ }
   }
+  let workerPeersVerdicts = {};
+  if (hasWorkerPeers && recommendation) {
+    (recommendation.hosts || []).forEach(h => { if (h.peer_id) workerPeersVerdicts[h.peer_id] = h.verdict; });
+  }
 
   const peerFamilies = _bmPeerFamilies(editable);
   const cascadeTargetKeys = new Set();
@@ -126,6 +143,7 @@ async function _bmRenderVarForm(filename, tpl, schema) {
   });
 
   container.innerHTML = editable.map(([key, meta]) => {
+    if (key === _BM_WORKER_PEERS_VAR) return _bmRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts);
     if (_BM_PEER_ID_RE.test(key)) {
       const rec = recommendation && recommendation.recommended;
       const recId = rec ? (rec.peer_id || '') : null;
@@ -164,6 +182,101 @@ async function _bmRenderVarForm(filename, tpl, schema) {
   }).join('');
 
   await _bmWirePeerCascades(peerFamilies);
+  if (hasWorkerPeers) await _bmWireWorkerPeersField(_BM_WORKER_PEERS_VAR);
+}
+
+// Checkbox picker (one row per approved peer, pre-checked by its
+// current traffic-light verdict — green starts checked, amber/red
+// shown but left unchecked, same convention 28-scheduler.js's own
+// worker-peer-pool picker already established) plus one manual
+// free-text entry for a peer that isn't in the approved list yet, or
+// to override the auto-resolved vpc/subnet/sg. The real value lives in
+// a hidden input (id bm-var-worker_peers) so bmSubmitBuild's existing
+// generic input[data-key] collection loop picks it up unchanged — see
+// that function's own JSON.parse() of this one field for why a hidden
+// input holding JSON-as-a-string is the bridge back to a real array.
+function _bmRenderWorkerPeersField(key, peers, verdicts) {
+  const rows = peers.length ? peers.map(p => {
+    const verdict = verdicts[p.id];
+    const checked = verdict === 'active' ? 'checked' : '';
+    const badgeHtml = verdict && typeof _PLACEMENT_VERDICTS !== 'undefined' && _PLACEMENT_VERDICTS[verdict]
+      ? `<span class="badge badge-${verdict}">${_PLACEMENT_VERDICTS[verdict].dot} ${_PLACEMENT_VERDICTS[verdict].label}</span>`
+      : '<span class="badge">⚪ Unknown</span>';
+    return `<tr>
+      <td><input type="checkbox" class="bm-worker-peer-cb" value="${p.id}" data-hostname="${_esc(p.hostname)}" ${checked}></td>
+      <td>${_esc(p.hostname)}</td>
+      <td>${badgeHtml}</td>
+    </tr>`;
+  }).join('') : '<tr class="empty-row"><td colspan="3">No approved peers — pair with one on the Peers page first.</td></tr>';
+
+  return `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')} <span class="bm-required">*</span></label>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Peer</th><th>Placement</th></tr></thead>
+          <tbody id="bm-worker-peers-tbody">${rows}</tbody>
+        </table>
+      </div>
+      <div class="bm-worker-manual" style="margin-top:8px">
+        <label style="font-size:12px">Add one manual entry (a peer not listed above, or override its ids)</label>
+        <div class="form-grid">
+          <input type="text" id="bm-worker-manual-peer_id" placeholder="peer_id">
+          <input type="text" id="bm-worker-manual-peer_vpc_id" placeholder="peer_vpc_id">
+          <input type="text" id="bm-worker-manual-peer_subnet_id" placeholder="peer_subnet_id">
+          <input type="text" id="bm-worker-manual-peer_security_group_id" placeholder="peer_security_group_id">
+        </div>
+      </div>
+      <input type="hidden" id="bm-var-${key}" data-key="${key}" data-required="1" value="">
+    </div>`;
+}
+
+async function _bmWireWorkerPeersField(key) {
+  document.querySelectorAll('.bm-worker-peer-cb').forEach(cb => cb.addEventListener('change', () => _bmUpdateWorkerPeersValue(key)));
+  ['peer_id', 'peer_vpc_id', 'peer_subnet_id', 'peer_security_group_id'].forEach(field => {
+    const el = document.getElementById(`bm-worker-manual-${field}`);
+    if (el) el.addEventListener('change', () => _bmUpdateWorkerPeersValue(key));
+  });
+  await _bmUpdateWorkerPeersValue(key);
+}
+
+// Resolves one peer's own vpc/subnet/security-group (first match — the
+// same "auto-select the first/only entry" convention _bmCascadeFromPeer
+// already uses below for a single peer_id field) so a checked worker
+// peer needs no further manual lookup.
+async function _bmResolvePeerPlacement(peerId) {
+  const [vpcData, sgData] = await Promise.all([
+    api('GET', `/v1/peers/${peerId}/vpcs`),
+    api('GET', `/v1/peers/${peerId}/security-groups`),
+  ]);
+  const vpc = (vpcData.items || [])[0];
+  if (!vpc) return null;
+  const subnetData = await api('GET', `/v1/peers/${peerId}/subnets?vpc_id=${encodeURIComponent(vpc.id)}`);
+  const subnet = (subnetData.items || [])[0];
+  const sg = (sgData.items || []).find(s => s.vpc_id === vpc.id);
+  if (!subnet || !sg) return null;
+  return { peer_id: peerId, peer_vpc_id: vpc.id, peer_subnet_id: subnet.id, peer_security_group_id: sg.id };
+}
+
+async function _bmUpdateWorkerPeersValue(key) {
+  const hidden = document.getElementById(`bm-var-${key}`);
+  if (!hidden) return;
+  const checked = Array.from(document.querySelectorAll('.bm-worker-peer-cb:checked')).map(cb => cb.value);
+  let entries = (await Promise.all(checked.map(_bmResolvePeerPlacement))).filter(Boolean);
+
+  const manual = {
+    peer_id: (document.getElementById('bm-worker-manual-peer_id') || {}).value?.trim(),
+    peer_vpc_id: (document.getElementById('bm-worker-manual-peer_vpc_id') || {}).value?.trim(),
+    peer_subnet_id: (document.getElementById('bm-worker-manual-peer_subnet_id') || {}).value?.trim(),
+    peer_security_group_id: (document.getElementById('bm-worker-manual-peer_security_group_id') || {}).value?.trim(),
+  };
+  const manualFilled = Object.values(manual).filter(Boolean).length;
+  // All 4 or none — a partial manual row would otherwise be silently
+  // dropped, which reads as "it worked" when it didn't.
+  hidden.dataset.manualPartial = (manualFilled > 0 && manualFilled < 4) ? '1' : '0';
+  if (manualFilled === 4) entries.push(manual);
+
+  hidden.value = entries.length ? JSON.stringify(entries) : '';
 }
 
 async function _bmWirePeerCascades(families) {
@@ -264,10 +377,17 @@ async function bmSubmitBuild() {
   const filename = document.getElementById('bm-submit-filename').value;
   if (!filename) { toast('Select a template first', 'error'); return; }
 
+  const manualPartial = document.querySelector('#bm-var-fields [data-manual-partial="1"]');
+  if (manualPartial) {
+    toast('Fill in all four manual worker_peers fields, or none of them.', 'error');
+    return;
+  }
+
   const vars = {};
   document.querySelectorAll('#bm-var-fields input[data-key], #bm-var-fields select[data-key]').forEach(el => {
     if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
   });
+  if (vars[_BM_WORKER_PEERS_VAR]) vars[_BM_WORKER_PEERS_VAR] = JSON.parse(vars[_BM_WORKER_PEERS_VAR]);
 
   const btn = document.getElementById('bm-submit-btn');
   btn.disabled = true;

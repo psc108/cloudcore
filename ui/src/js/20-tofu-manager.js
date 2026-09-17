@@ -63,6 +63,14 @@ const _TF_USB_DEVICE_VAR = 'usb_device_id';
 // gets identical behavior regardless of which build system they used.
 const _TF_PEER_ID_RE = /(^|_)peer_id$/i;
 
+// Same exact-name match as the Ansible build manager's own worker_peers
+// picker (16-build-manager.js's _BM_WORKER_PEERS_VAR) — per direct
+// request: "for llm chat set the worker peers to be a pick list as
+// well as being able to add one free text." Kept as its own constant
+// (not shared code) for the same reason _TF_PEER_ID_RE is duplicated
+// above rather than imported.
+const _TF_WORKER_PEERS_VAR = 'worker_peers';
+
 // A peer-placed resource's own peer_vpc_id/peer_subnet_id/
 // peer_security_group_id also get real pickers, cascading from their
 // sibling peer_id field — "checking the current vpc id's on the
@@ -113,7 +121,8 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
 
   let approvedPeers = [];
   let recommendation = null;
-  if (editable.some(([key]) => _TF_PEER_ID_RE.test(key))) {
+  const hasWorkerPeers = editable.some(([key]) => key === _TF_WORKER_PEERS_VAR);
+  if (editable.some(([key]) => _TF_PEER_ID_RE.test(key)) || hasWorkerPeers) {
     try {
       const peerData = await api('GET', '/v1/peers?status=approved');
       approvedPeers = peerData.items || [];
@@ -121,6 +130,10 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
     try {
       recommendation = await api('GET', '/v1/peers/recommend-placement');
     } catch (e) { /* fall through — fields fall back to the old local default */ }
+  }
+  let workerPeersVerdicts = {};
+  if (hasWorkerPeers && recommendation) {
+    (recommendation.hosts || []).forEach(h => { if (h.peer_id) workerPeersVerdicts[h.peer_id] = h.verdict; });
   }
 
   const peerFamilies = _tfPeerFamilies(editable);
@@ -133,6 +146,7 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
 
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
+    if (key === _TF_WORKER_PEERS_VAR) return _tfRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts);
     if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers, recommendation);
     if (cascadeTargetKeys.has(key)) return _tfRenderPeerCascadeField(key, meta);
     return `
@@ -149,6 +163,95 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
   }).join('');
 
   await _tfWirePeerCascades(peerFamilies);
+  if (hasWorkerPeers) await _tfWireWorkerPeersField(_TF_WORKER_PEERS_VAR);
+}
+
+// Checkbox picker (one row per approved peer, pre-checked by its
+// current traffic-light verdict) plus one manual free-text entry for a
+// peer that isn't in the approved list yet, or to override the
+// auto-resolved vpc/subnet/sg — same shape as
+// 16-build-manager.js's own _bmRenderWorkerPeersField, independently
+// implemented for the same reason every other peer-picker pair in
+// these two files is. The real value lives in a hidden input (id
+// tf-var-worker_peers) so tfSubmitBuild's existing generic
+// input[data-key] collection loop picks it up unchanged — see that
+// function's own JSON.parse() of this one field.
+function _tfRenderWorkerPeersField(key, peers, verdicts) {
+  const rows = peers.length ? peers.map(p => {
+    const verdict = verdicts[p.id];
+    const checked = verdict === 'active' ? 'checked' : '';
+    const badgeHtml = verdict && typeof _PLACEMENT_VERDICTS !== 'undefined' && _PLACEMENT_VERDICTS[verdict]
+      ? `<span class="badge badge-${verdict}">${_PLACEMENT_VERDICTS[verdict].dot} ${_PLACEMENT_VERDICTS[verdict].label}</span>`
+      : '<span class="badge">⚪ Unknown</span>';
+    return `<tr>
+      <td><input type="checkbox" class="tf-worker-peer-cb" value="${p.id}" data-hostname="${_esc(p.hostname)}" ${checked}></td>
+      <td>${_esc(p.hostname)}</td>
+      <td>${badgeHtml}</td>
+    </tr>`;
+  }).join('') : '<tr class="empty-row"><td colspan="3">No approved peers — pair with one on the Peers page first.</td></tr>';
+
+  return `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')} <span class="bm-required">*</span></label>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Peer</th><th>Placement</th></tr></thead>
+          <tbody id="tf-worker-peers-tbody">${rows}</tbody>
+        </table>
+      </div>
+      <div class="bm-worker-manual" style="margin-top:8px">
+        <label style="font-size:12px">Add one manual entry (a peer not listed above, or override its ids)</label>
+        <div class="form-grid">
+          <input type="text" id="tf-worker-manual-peer_id" placeholder="peer_id">
+          <input type="text" id="tf-worker-manual-peer_vpc_id" placeholder="peer_vpc_id">
+          <input type="text" id="tf-worker-manual-peer_subnet_id" placeholder="peer_subnet_id">
+          <input type="text" id="tf-worker-manual-peer_security_group_id" placeholder="peer_security_group_id">
+        </div>
+      </div>
+      <input type="hidden" id="tf-var-${key}" data-key="${key}" data-required="1" value="">
+    </div>`;
+}
+
+async function _tfWireWorkerPeersField(key) {
+  document.querySelectorAll('.tf-worker-peer-cb').forEach(cb => cb.addEventListener('change', () => _tfUpdateWorkerPeersValue(key)));
+  ['peer_id', 'peer_vpc_id', 'peer_subnet_id', 'peer_security_group_id'].forEach(field => {
+    const el = document.getElementById(`tf-worker-manual-${field}`);
+    if (el) el.addEventListener('change', () => _tfUpdateWorkerPeersValue(key));
+  });
+  await _tfUpdateWorkerPeersValue(key);
+}
+
+async function _tfResolvePeerPlacement(peerId) {
+  const [vpcData, sgData] = await Promise.all([
+    api('GET', `/v1/peers/${peerId}/vpcs`),
+    api('GET', `/v1/peers/${peerId}/security-groups`),
+  ]);
+  const vpc = (vpcData.items || [])[0];
+  if (!vpc) return null;
+  const subnetData = await api('GET', `/v1/peers/${peerId}/subnets?vpc_id=${encodeURIComponent(vpc.id)}`);
+  const subnet = (subnetData.items || [])[0];
+  const sg = (sgData.items || []).find(s => s.vpc_id === vpc.id);
+  if (!subnet || !sg) return null;
+  return { peer_id: peerId, peer_vpc_id: vpc.id, peer_subnet_id: subnet.id, peer_security_group_id: sg.id };
+}
+
+async function _tfUpdateWorkerPeersValue(key) {
+  const hidden = document.getElementById(`tf-var-${key}`);
+  if (!hidden) return;
+  const checked = Array.from(document.querySelectorAll('.tf-worker-peer-cb:checked')).map(cb => cb.value);
+  let entries = (await Promise.all(checked.map(_tfResolvePeerPlacement))).filter(Boolean);
+
+  const manual = {
+    peer_id: (document.getElementById('tf-worker-manual-peer_id') || {}).value?.trim(),
+    peer_vpc_id: (document.getElementById('tf-worker-manual-peer_vpc_id') || {}).value?.trim(),
+    peer_subnet_id: (document.getElementById('tf-worker-manual-peer_subnet_id') || {}).value?.trim(),
+    peer_security_group_id: (document.getElementById('tf-worker-manual-peer_security_group_id') || {}).value?.trim(),
+  };
+  const manualFilled = Object.values(manual).filter(Boolean).length;
+  hidden.dataset.manualPartial = (manualFilled > 0 && manualFilled < 4) ? '1' : '0';
+  if (manualFilled === 4) entries.push(manual);
+
+  hidden.value = entries.length ? JSON.stringify(entries) : '';
 }
 
 function _tfRenderPeerCascadeField(key, meta) {
@@ -341,6 +444,12 @@ async function tfSubmitBuild() {
   const dirName = document.getElementById('tf-submit-dirname').value;
   if (!dirName) { toast('Select a template first', 'error'); return; }
 
+  const manualPartial = document.querySelector('#tf-var-fields [data-manual-partial="1"]');
+  if (manualPartial) {
+    toast('Fill in all four manual worker_peers fields, or none of them.', 'error');
+    return;
+  }
+
   const vars = {};
   const missing = [];
   document.querySelectorAll('#tf-var-fields input[data-key], #tf-var-fields select[data-key]').forEach(el => {
@@ -358,6 +467,7 @@ async function tfSubmitBuild() {
     toast(`Missing required value${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`, 'error');
     return;
   }
+  if (vars[_TF_WORKER_PEERS_VAR]) vars[_TF_WORKER_PEERS_VAR] = JSON.parse(vars[_TF_WORKER_PEERS_VAR]);
 
   // Selecting a device outside "Likely WiFi adapters" is easy to do by
   // mistake (e.g. picking the host's own Bluetooth chip) and the failure
