@@ -3156,16 +3156,37 @@ polling already guarded against; and the dashboard `let`/TDZ bug above
 
 ### 13.5 Open Items
 
-- **No example template uses `peer_id` yet.** The capability is proven
-  with hand-written throwaway configs, not retrofitted into
-  `ha-frontend-lb` or any other example — a genuine, available next
-  step (same relationship §7 has to §6: the platform capability landed
-  first, adoption by existing examples is separate, deliberate work).
-- **`modules/instance-group` places a whole group on one host or the
-  local host — not mixed per-instance within one group.** Confirmed
-  sufficient for v1; per-instance mixed placement within a single group
-  would need its scalar variables to become per-key maps, a materially
-  bigger change than everything else in this section combined.
+- **Resolved, v0.32**: both of this subsection's original items are
+  now shipped, not open. `modules/instance-group` gained
+  `placement_overrides` — a real per-instance override map (`peer_id`,
+  `vpc_id`, `subnet_id`, `security_group_ids`, keyed by the same
+  two-digit index `outputs.tf` already uses), so a single group can
+  genuinely mix local and remote members rather than moving as one
+  unit. Every Terraform example and Ansible playbook that creates
+  instances now exposes this as ordinary `_peer_id`-suffixed template
+  variables (the Dashboard's existing picker logic already
+  special-cased that name pattern, so no UI changes were needed) —
+  single-instance templates get a bare `peer_id`, multi-instance
+  groups get per-node overrides for every node beyond the first/anchor
+  one, and `ha-frontend-lb`'s clustered tiers (MySQL replicas,
+  RabbitMQ joiners) get genuine per-node placement so individual
+  cluster members can split across hosts independently — the actual
+  point of this whole feature. See `haFullStack-Findings-Log.md`
+  v0.54–v0.58 for the full build/verify history, including three real
+  bugs found proving it live: F-092 (an unresolved cross-host security
+  group id silently produced a DROP-only iptables chain — now rejected
+  at create time instead), F-093 (a load balancer target group's
+  cross-host member was silently dropped by a VPC-filtered lookup),
+  and F-094 (an unconfigured `health_check` block could take an entire
+  load balancer down via the Terraform provider's own zero-value
+  defaults). One genuine operational constraint surfaced along the
+  way, not a bug: ProxySQL's keepalived VIP failover needs VRRP
+  multicast between its two nodes, which does not cross a WireGuard
+  peer tunnel onto a different physical bridge subnet — splitting
+  `proxysql_a`/`proxysql_b` across hosts would silently break VIP
+  failover even though both instances would come up fine, now flagged
+  with an explicit caution comment on that variable rather than left
+  as a trap.
 - **Pairwise trust is intentionally non-transitive.** If host A pairs
   with both B and C, B and C do not automatically trust each other —
   each pairing needs its own explicit human approval. This is the
@@ -3218,4 +3239,5 @@ polling already guarded against; and the dashboard `let`/TDZ bug above
 | v0.29 | 2026-09-15 | Paul Scott | Two real gaps found (F-077, `haFullStack-Findings-Log.md`) diagnosing "is Loki reachable?" on a separate, previously-set-up machine: `192.168.100.1:3000`/`:3100` were both unreachable because `sudo bash api/setup-logging-service.sh` (§12.3) had genuinely never been run there — the step existed only as `scripts/install.sh` terminal output and a passing mention, never its own rediscoverable README section the way `build-package-repo.sh` already had one. Fixed with a full "Set up centralized logging" section. Also found: `teardown-network.sh`'s own active-service guard, written for `cloudcore-repo` alone before the logging service existed, never learned that `loki`/`grafana-server` now share the same bridge gateway address — it would have let someone silently cut guests off from logging the same way it was built to prevent for the package repo. Now checks all three. Sentinel's own `install.sh` (separate repo) also gained an end-of-install Loki reachability check, diagnosing which of the three CloudCore-side steps is actually missing (bridge / package cache / `setup-logging-service.sh` itself) rather than a fresh install silently reporting "running" with nothing to watch — tested against both this machine's real reachable state and a deliberately-unreachable one. |
 | v0.30 | 2026-09-16 | Paul Scott | Grafana's Loki datasource provisioning pinned to `uid: loki` (F-078) — was left to Grafana's own random per-install default, unusable for Sentinel's new "View in Grafana" deep links (separate repo), which need a value stable across installs. Two more real findings, both surfaced investigating a stray `promtail` permission error found while testing that same feature: F-079 — RabbitMQ's own systemd unit redirects stdout/stderr to two `root:root`-owned files (`rabbitmq-server.log`/`.error.log`, distinct from the `rabbitmq:rabbitmq` files F-074 already covers), fixed with a file-specific ACL on both examples that install `rabbitmq-server`. F-080, the more significant one: all five of Stage 5's "brand-new minimal cloud-init" examples (`compute-basic`, `dns-with-compute`, `network-lb`, `load-balanced-web`, `full-stack`) shipped with genuinely broken, crash-looping promtail configs — Terraform's `indent()` function and an HCL `<<-` heredoc's own dedent don't compose correctly, producing structurally invalid YAML that `tofu validate` never renders far enough to catch. None of these five had actually been rebuilt and checked live during Stage 5; only `openstack-services` (a different, unaffected `templatefile()`-based pattern) was. Fixed by converting all five to that same safe pattern. Verified via real YAML parsing of all five rendered outputs plus a genuinely fresh `tofu destroy`/`apply` cycle on `compute-basic` (`NRestarts=0`, real journal content reaching Loki). Confirmed the Ansible side was never affected. |
 | v0.31 | 2026-09-16 | Paul Scott | Grafana's host-level instance opens straight to Explore/dashboards now, no login screen, per direct instruction — `[auth.anonymous]` enabled in `grafana.ini` (`org_name` matched exactly to the real default org, confirmed live via `GET /api/org`, or anonymous access silently falls back to requiring login). One real finding along the way (F-081): `org_role = Viewer` was tried first and doesn't actually get Explore access in this Grafana version — Grafana's own built-in Viewer fixed role lacks the `datasources:explore` RBAC action, confirmed directly (`302` redirect to a login wall on `/explore` for Viewer, `200 OK` for Editor). `Editor` is the least-privileged fixed role that works; OSS Grafana has no supported way to grant anonymous sessions anything narrower. A real capability increase (anonymous visitors can now save/edit dashboards, not just view) accepted as a Lab-only tradeoff given this instance never leaves the internal bridge network. `scripts/install.sh`'s printed summary and `README.md` updated to match — the admin password is now framed as "only needed to administer Grafana" (user/datasource management), not something a normal viewer needs at all. |
+| v0.32 | 2026-09-17 | Paul Scott | §13.5's two original open items resolved and closed out (see the updated §13.5 for the full detail) — per-instance mixed placement within one `modules/instance-group` (`placement_overrides`) and every example template wired for peer placement, both shipped rather than deferred. Searchable help updated to match: a new **Peers** article (Networking category) covering setup, discovery/pairing/approval, the My Peers panel, and the `_peer_id` template convention; **Builds — Ansible**/**Builds — OpenTofu** each gained a "Peer Placement" cross-reference; **Load Balancers** gained a short **Target Groups & Listeners** section (a real, separate documentation gap found alongside — that mechanism existed and was fully wired to real HAProxy config generation but had never been documented anywhere). Applied to both `api/help_seed.json` (fresh installs) and the live running instance directly via the Help API, confirmed searchable (`GET /v1/help/articles?q=peer` returns all three touched/added articles). |
 | v0.32 | 2026-09-16 | Paul Scott | New §13, Cross-Host Peering — a full platform capability (discovery, human-approved pairing trust, WireGuard tunnels, and remote provisioning across the API, OpenTofu provider, Ansible collection, and dashboard UI), built and verified live end-to-end across two real, independent physical machines on the same LAN. Six real bugs found and fixed along the way (F-084–F-089, full detail in `haFullStack-Findings-Log.md`), including one a real browser caught within minutes of shipping that this session's headless-only verification tooling structurally could not have (F-089). |
