@@ -206,6 +206,17 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
         block for tg_id, (_, block) in tg_sections.items() if tg_id in referenced_tgs
     )
 
+    # timeout client/server: 300s, not the original 30s — found live
+    # testing examples/llm-chat's own distributed inference through a
+    # real load balancer: a longer chat reply (generation genuinely
+    # taking 20-40s+ at this platform's own token-generation speeds)
+    # came back completely empty rather than erroring cleanly, because
+    # haproxy severed the still-in-progress backend connection at 30s.
+    # 300s covers any realistic single reply's generation time on this
+    # platform without making a genuinely hung backend hold a
+    # connection open indefinitely — timeout connect (TCP handshake to
+    # the backend) is unaffected, still 5s, since that should always be
+    # fast on a LAN regardless of workload.
     cfg = textwrap.dedent(f"""\
         global
             daemon
@@ -215,8 +226,8 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
         defaults
             mode {mode}
             timeout connect 5s
-            timeout client  30s
-            timeout server  30s
+            timeout client  300s
+            timeout server  300s
     """) + http_opts + frontend_blocks + (
         f"\nbackend {lb.name}-back\n"
         f"    balance roundrobin\n"
