@@ -118,6 +118,41 @@ api/setup-network.sh <octet>` to apply it). Pairing, approval, and
 picking a peer inside a template all happen from the Dashboard's
 **Peers** section — see `haFullStack-LLD.md` §13 for the full design.
 
+### Scheduler & 7B LLM ingestion (optional)
+
+Schedule any Terraform/Ansible example to build itself on a recurring
+or one-off basis — daily, weekly, every N minutes/hours, or a specific
+date/time — from the Dashboard's **Builds → Scheduler** page. The
+picker only ever exposes those simple options; full cron syntax runs
+underneath but is never something you type.
+
+One schedule *kind* is special: **7B LLM Sentinel Ingest**. Each
+wakeup it checks [Sentinel](#optional-sentinel-log-intelligence-advisor)
+for new events since the last check; if there's nothing new, it stops
+there (no cost). Otherwise it builds a real distributed-inference
+cluster (`examples/llm-chat`'s own coordinator + RPC worker mechanism,
+splitting a 7B model across this host and one or more paired peers —
+see "Cross-host peering" above), has the model draft an understanding
+of what Sentinel flagged, writes any new findings/suggestions back
+into Sentinel's own knowledge base, pushes the same findings to every
+currently-online peer's own Sentinel instance, and tears the cluster
+back down. Which peers actually get used each cycle is decided
+automatically from their current CPU/memory/disk load (the same
+green/amber/red traffic light the Resource Placement page shows) —
+you pick the *candidate pool* once, not which ones run each time.
+
+Every run's own timing (cluster build time, model load time, inference
+time), token counts, and per-host resource usage during the run are
+on the Dashboard's **Builds → LLM Performance** page — a history of
+real numbers from actual runs, not a live dashboard (the cluster is
+ephemeral, so there's usually nothing running to watch live).
+
+For a persistent, human-facing chat session instead of the automated
+ingestion above, build `examples/llm-chat` (or
+`ansible/examples/14-llm-chat.yml`) directly and open its own
+`chat_url` output in a real browser — llama-server's own built-in Web
+UI, not a custom frontend.
+
 ### Default credentials
 
 | Setting | Value |
@@ -226,7 +261,7 @@ pattern as this repo's own package repo). UI at
 | OpenTofu modules | `modules/` | HCL — composable module library |
 | OpenTofu examples | `examples/` | Ready-to-run configurations |
 | Ansible collection | `ansible/collections/cloudcore/` | Python — FQCN `cloudcore.cloudcore` |
-| Ansible examples | `ansible/examples/` | Ready-to-run playbooks (01–08) |
+| Ansible examples | `ansible/examples/` | Ready-to-run playbooks (01–14) |
 
 ## Requirements
 
@@ -293,7 +328,7 @@ All modules follow the standard argument contract:
 
 ### Examples
 
-Twelve ready-to-run configurations in `examples/`:
+Fourteen ready-to-run configurations in `examples/`:
 
 | Directory | Creates |
 |---|---|
@@ -309,6 +344,8 @@ Twelve ready-to-run configurations in `examples/`:
 | `examples/ghidra-workstation/` | VPC + security group + XFCE desktop with Ghidra, browser-accessible via noVNC through a network LB |
 | `examples/kiwix-library/` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `examples/wifi-sniffer/` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
+| `examples/distributed-llm/` | VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model across hosts via llama.cpp's RPC backend — built for the [Scheduler's own 7B LLM ingestion job](#scheduler--7b-llm-ingestion-optional), not usually built by hand |
+| `examples/llm-chat/` | Same distributed coordinator + RPC worker(s) as above, but for an interactive human chat session — open the `chat_url` output in a real browser |
 
 All examples accept a `suffix` variable to keep resource names unique across runs:
 
@@ -380,7 +417,7 @@ ansible-galaxy collection install cloudcore-cloudcore-*.tar.gz --force
 
 ### Examples
 
-Twelve ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml` and `12-teardown.yml`, which tear down everything their respective numbered playbooks create):
+Fourteen ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml` and `12-teardown.yml`, which tear down everything their respective numbered playbooks create):
 
 | Playbook | Creates |
 |---|---|
@@ -396,6 +433,8 @@ Twelve ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml` and
 | `10-kiwix-library.yml` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `11-wifi-sniffer.yml` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
 | `12-ha-frontend-lb.yml` | VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + centralized logging (Loki/Grafana) + DNS records |
+| `13-distributed-llm.yml` | VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model across hosts via llama.cpp's RPC backend — built for the [Scheduler's own 7B LLM ingestion job](#scheduler--7b-llm-ingestion-optional), not usually built by hand |
+| `14-llm-chat.yml` | Same distributed coordinator + RPC worker(s) as above, but for an interactive human chat session — open the printed chat URL in a real browser |
 
 Run directly:
 
