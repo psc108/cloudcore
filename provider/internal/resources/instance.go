@@ -116,9 +116,9 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			"image_id": schema.StringAttribute{Required: true, Description: "OS image identifier to boot from."},
 			"flavor": schema.StringAttribute{
 				Required:    true,
-				Description: "Compute flavor: standard.nano, standard.small, standard.medium, or standard.large.",
+				Description: "Compute flavor: standard.nano, standard.small, standard.medium, standard.large, or standard.xlarge.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large"),
+					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large", "standard.xlarge"),
 				},
 			},
 			"vpc_id": schema.StringAttribute{
@@ -272,6 +272,54 @@ func instanceUsersToAPI(ctx context.Context, list types.List) ([]instanceUserAPI
 	return out, nil
 }
 
+// instanceUserObjectType is the nested object type of the `users`
+// ListNestedAttribute (schema block above) — kept as a single source of
+// truth so instanceUsersFromAPI's null and non-null branches always agree
+// with each other and with the schema.
+var instanceUserObjectType = types.ObjectType{AttrTypes: map[string]attr.Type{
+	"username":      types.StringType,
+	"sudo":          types.BoolType,
+	"ssh_keys":      types.ListType{ElemType: types.StringType},
+	"password_hash": types.StringType,
+}}
+
+// instanceUsersFromAPI converts the API's []instanceUserAPIModel into the
+// `users` list's state representation — the reverse of instanceUsersToAPI
+// below. Needed by both Read and ImportState; ImportState previously never
+// called anything like this at all (state.Users was left at its Go zero
+// value), which the framework can't turn into a valid empty list on its own
+// since a bare empty slice carries no element-type information — every
+// import of a real instance with no extra `users` configured (the common
+// case) failed outright before this existed.
+func instanceUsersFromAPI(ctx context.Context, users []instanceUserAPIModel) (types.List, error) {
+	values := make([]attr.Value, len(users))
+	for i, u := range users {
+		sshKeys, diags := stringsToList(ctx, u.SSHKeys)
+		if diags.HasError() {
+			return types.ListNull(instanceUserObjectType), fmt.Errorf("converting ssh_keys for user %q", u.Username)
+		}
+		passwordHash := types.StringNull()
+		if u.PasswordHash != "" {
+			passwordHash = types.StringValue(u.PasswordHash)
+		}
+		obj, diags := types.ObjectValue(instanceUserObjectType.AttrTypes, map[string]attr.Value{
+			"username":      types.StringValue(u.Username),
+			"sudo":          types.BoolValue(u.Sudo),
+			"ssh_keys":      sshKeys,
+			"password_hash": passwordHash,
+		})
+		if diags.HasError() {
+			return types.ListNull(instanceUserObjectType), fmt.Errorf("building user object for %q", u.Username)
+		}
+		values[i] = obj
+	}
+	list, diags := objectsToList(instanceUserObjectType, values)
+	if diags.HasError() {
+		return types.ListNull(instanceUserObjectType), errors.New("building users list")
+	}
+	return list, nil
+}
+
 func instanceMapToState(ctx context.Context, result instanceAPIModel, state *InstanceResourceModel) error {
 	state.ID = types.StringValue(result.ID)
 	state.Name = types.StringValue(result.Name)
@@ -307,6 +355,11 @@ func instanceMapToState(ctx context.Context, result instanceAPIModel, state *Ins
 		state.PeerID = types.StringNull()
 	}
 	state.HostHostname = types.StringValue(result.HostHostname)
+	usersList, err := instanceUsersFromAPI(ctx, result.Users)
+	if err != nil {
+		return fmt.Errorf("converting users: %w", err)
+	}
+	state.Users = usersList
 	return nil
 }
 

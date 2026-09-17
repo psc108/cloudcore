@@ -151,7 +151,20 @@ For a persistent, human-facing chat session instead of the automated
 ingestion above, build `examples/llm-chat` (or
 `ansible/examples/14-llm-chat.yml`) directly and open its own
 `chat_url` output in a real browser — llama-server's own built-in Web
-UI, not a custom frontend.
+UI, not a custom frontend. A fresh chat session starts from technical,
+low-hallucination defaults out of the box (sampling temperature 0.2
+and a system prompt telling the model not to claim code does something
+it doesn't) — still fully editable per-session in the browser's own
+Settings panel via `webui_temperature`/`webui_system_message`.
+
+Both `llm-chat` and `distributed-llm` can also run the larger, higher-
+precision Q8_0 variant of the same model on the new `standard.xlarge`
+flavor (6 vCPU / 8GB RAM) instead of the default Q4_K_M/`standard.large`
+pairing — override `model_filename`/`model_sha256`/`coordinator_flavor`/
+`worker_flavor` when building. Whichever flavor you pick, every worker
+peer's own real available RAM is checked against it *before* the build
+is even submitted — an under-resourced peer is rejected with a clear
+message instead of silently OOM-killing partway through model load.
 
 ### Default credentials
 

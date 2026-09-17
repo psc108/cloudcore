@@ -180,11 +180,23 @@ def _free_port(start: int, end: int) -> int:
 
 
 # Flavors: (vcpus, memory_mb, disk_gb)
+# standard.xlarge added per direct request ("allow the use of a large
+# model with a larger vm") — sized for examples/llm-chat's/
+# distributed-llm's own Q8_0 pin (~7.17GB weights, split across a
+# coordinator+worker) rather than an arbitrary round number: 8192MB
+# leaves real headroom over "half the model + KV cache + RPC buffers"
+# per node, confirmed against this project's real paired hosts'
+# available RAM (~16GB / ~21GB via host_stats.py) at the time this was
+# sized — see api/capacity_gate.py, which checks a peer's actual
+# available RAM against a flavor's requirement before a build using it
+# is even submitted, rather than relying on this number being right
+# forever as hosts' other workloads change.
 FLAVORS = {
     "standard.nano":   (1, 512,  5),
     "standard.small":  (1, 1024, 10),
     "standard.medium": (2, 2048, 20),
     "standard.large":  (4, 4096, 40),
+    "standard.xlarge":  (6, 8192, 60),
 }
 
 

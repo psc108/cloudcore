@@ -26,6 +26,17 @@ write_files:
     content: |
       ${indent(6, promtail_config)}
 
+  # Read by llama-server's own --webui-config-file at startup and echoed
+  # back verbatim to the browser frontend via GET /props' ui_settings key
+  # (confirmed live against a real local instance) — sets the Web UI's
+  # default sampling temperature and system prompt so a fresh chat
+  # session starts from a technical/low-hallucination baseline without
+  # the user having to configure it by hand every time. Still fully
+  # user-editable per-session in the browser's own Settings panel.
+  - path: /opt/llama.cpp/webui-config.json
+    content: |
+      ${indent(6, webui_config_json)}
+
   - path: /etc/systemd/system/llama-server.service
     content: |
       [Unit]
@@ -36,7 +47,7 @@ write_files:
       [Service]
       WorkingDirectory=/opt/llama.cpp
       Environment=LD_LIBRARY_PATH=/opt/llama.cpp
-      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/${model_filename} --host 0.0.0.0 --port ${http_port} -c ${context_size} -ngl ${rpc_offload_layers} --rpc ${rpc_servers} -t ${threads}
+      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/${model_filename} --host 0.0.0.0 --port ${http_port} -c ${context_size} -ngl ${rpc_offload_layers} --rpc ${rpc_servers} -t ${threads} --webui-config-file /opt/llama.cpp/webui-config.json
       Restart=on-failure
       RestartSec=5
       User=root

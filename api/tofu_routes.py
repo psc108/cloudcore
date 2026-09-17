@@ -6,6 +6,7 @@ import json
 import os
 from flask import Blueprint, jsonify, request, Response
 
+import capacity_gate
 import idle_watcher
 import tofu_engine
 
@@ -61,6 +62,11 @@ def submit_build():
             "status": 400, "title": "Bad Request",
             "detail": f"Missing required variable(s): {', '.join(missing)}",
         }), 400
+
+    capacity_error = capacity_gate.check_worker_peers(var_overrides, schema)
+    if capacity_error:
+        return jsonify({"status": 400, "title": "Insufficient peer capacity",
+                         "detail": capacity_error}), 400
 
     idle_timeout_minutes = body.get("idle_timeout_minutes")
     if idle_timeout_minutes is not None:

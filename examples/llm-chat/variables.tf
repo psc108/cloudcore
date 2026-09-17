@@ -28,17 +28,29 @@ variable "cidr_block" {
   default     = "10.91.0.0/16"
 }
 
-# standard.large (4 vCPU / 4096MB / 40GB — api/compute.py's own biggest
-# flavor today) for both roles, deliberately: Mistral-7B-Instruct-v0.3's
-# Q4_K_M weights alone are ~4.37GB, which does not fit in ANY single
-# CloudCore instance flavor that exists right now. Splitting the model's
-# layers across the coordinator and every worker (roughly half each,
-# with exactly one worker) is not a proof-of-concept nicety here — it's
-# currently the only way this specific model runs on this platform at
-# all. See main.tf's own header comment for the fuller story, and
-# examples/distributed-llm (same underlying mechanism, built first,
-# for automated Sentinel-log-intelligence ingestion rather than a human
+# standard.large (4 vCPU / 4096MB / 40GB) by default for both roles:
+# Mistral-7B-Instruct-v0.3's Q4_K_M weights alone are ~4.37GB, which
+# does not fit in a single CloudCore instance flavor. Splitting the
+# model's layers across the coordinator and every worker (roughly half
+# each, with exactly one worker) is not a proof-of-concept nicety here
+# — it's the only way this default model runs on this platform at all.
+# See main.tf's own header comment for the fuller story, and
+# examples/distributed-llm (same underlying mechanism, built first, for
+# automated Sentinel-log-intelligence ingestion rather than a human
 # chat session).
+#
+# standard.xlarge (6 vCPU / 8192MB / 60GB) is also available — set
+# both to it (alongside model_filename/model_sha256 overridden to the
+# Q8_0 pin, api/build-package-repo.sh) to run the larger/higher-
+# precision variant, per direct request: "allow the use of a large
+# model with a larger vm (if the peer can afford the resources)." That
+# last clause is enforced server-side, not just documented here:
+# api/capacity_gate.py checks each worker_peers entry's own real
+# available RAM (via the same peers_routes.peer_stats() the traffic-
+# light system already uses) against the chosen worker_flavor's
+# requirement BEFORE the build is even submitted, and rejects it with
+# a clear "peer can't afford this" message rather than letting a
+# worker OOM partway through model load.
 variable "coordinator_flavor" {
   description = "Compute flavor for the coordinator instance."
   type        = string
@@ -144,6 +156,37 @@ variable "model_sha256" {
   description = "SHA-256 of model_filename — Hugging Face's own X-Linked-ETag header for the LFS-backed file (its authoritative server-side content hash for this exact object, not self-computed from a partial download)."
   type        = string
   default     = "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6"
+}
+
+# --- WebUI defaults ---------------------------------------------------
+# llama-server's own built-in Web UI reads its default sampling/system-
+# prompt settings from a JSON file passed via --webui-config-file —
+# confirmed live against a real local instance (GET /props' own
+# ui_settings key echoes this file's contents verbatim back to the
+# frontend at page load). Defaults below deliberately lower temperature
+# from llama-server's own built-in default (0.8) and add a system
+# prompt discouraging invented claims about code — per direct request:
+# "what can we do to help prevent hallucination and prevent claims
+# about code that doesn't actually exist in it's answer" followed by
+# "configure the web ui defaults to a more technical configuration (per
+# sampling temperature)." A real stress-test response at these defaults
+# is what actually surfaced the hallucination problem this is fixing
+# (wrong percentile math + a described-but-never-called sorted() call)
+# — this doesn't make the model incapable of being wrong, only less
+# likely to wander at the sampling level and more explicitly told not
+# to invent functionality. Still fully user-editable per-session in the
+# browser's own Settings panel — this only changes what a fresh session
+# starts from.
+variable "webui_temperature" {
+  description = "Default sampling temperature the coordinator's Web UI starts each new session with (llama-server's own built-in default is 0.8). Lower is more deterministic/less prone to invented detail — chosen for a 'technical' default per direct request, not because the model itself is unable to produce imprecise text at 0.2."
+  type        = number
+  default     = 0.2
+}
+
+variable "webui_system_message" {
+  description = "Default system prompt the coordinator's Web UI starts each new session with — sets ground rules the model doesn't always follow but is measurably steered by, aimed at the specific hallucination pattern found in a real stress-test response (claiming code does something the actual code shown doesn't do)."
+  type        = string
+  default     = "You are a technical assistant. Only describe what code actually does — never claim a function, sort, or check exists unless it is genuinely present in the code you just wrote or were shown. If you are not certain something is correct, say so explicitly rather than stating it as fact. Prefer precise, verifiable statements over confident-sounding guesses."
 }
 
 # One entry per RPC worker instance — the whole point of this template.

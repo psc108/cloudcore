@@ -43,6 +43,16 @@ locals {
   # user_data is even rendered).
   rpc_servers = join(",", [for ip in module.workers.private_ips_list : "${ip}:${var.rpc_port}"])
 
+  # JSON body of llama-server's own --webui-config-file — confirmed live
+  # that its keys are flat top-level settings names matching the
+  # frontend's own constants map (temperature/systemMessage/etc.), not
+  # nested. jsonencode() rather than hand-built string interpolation so
+  # webui_system_message's own free text is always safely escaped.
+  webui_config_json = jsonencode({
+    temperature   = var.webui_temperature
+    systemMessage = var.webui_system_message
+  })
+
   coordinator_user_data = templatefile("${path.module}/files/coordinator-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256
@@ -54,5 +64,6 @@ locals {
     rpc_offload_layers   = var.rpc_offload_layers
     rpc_servers          = local.rpc_servers
     promtail_config      = local.promtail_config
+    webui_config_json    = local.webui_config_json
   })
 }

@@ -82,6 +82,44 @@
     model_filename: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
     model_sha256: 1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6
 
+    # standard.xlarge (6 vCPU / 8192MB / 60GB, api/compute.py) is also
+    # available for coordinator_flavor/worker_flavor above — set both to
+    # it (alongside model_filename/model_sha256 overridden to the Q8_0
+    # pin below) to run the larger/higher-precision variant, per direct
+    # request: "allow the use of a large model with a larger vm (if the
+    # peer can afford the resources)." That last clause is enforced
+    # server-side: api/capacity_gate.py checks each worker_peers entry's
+    # own real available RAM against the chosen worker_flavor's
+    # requirement before this playbook's build is even submitted, and
+    # rejects it with a clear "peer can't afford this" message rather
+    # than letting a worker OOM partway through model load.
+    #   model_filename: Mistral-7B-Instruct-v0.3-Q8_0.gguf
+    #   model_sha256: 404857e776114baada71a08ebd3bba79d721ec7fca99705e7e7b892ae8bc583f
+
+    # llama-server's own built-in Web UI reads its default sampling/
+    # system-prompt settings from a JSON file passed via
+    # --webui-config-file — confirmed live that its keys are flat
+    # top-level settings names (temperature/systemMessage) matching the
+    # frontend's own constants map, and that GET /props' own
+    # ui_settings key echoes this file's contents verbatim back to the
+    # frontend at page load. Deliberately lower than llama-server's own
+    # built-in default (0.8) and paired with a system prompt
+    # discouraging invented claims about code — per direct request:
+    # "what can we do to help prevent hallucination and prevent claims
+    # about code that doesn't actually exist in it's answer" followed
+    # by "configure the web ui defaults to a more technical
+    # configuration (per sampling temperature)." Still fully
+    # user-editable per-session in the browser's own Settings panel —
+    # this only changes what a fresh session starts from.
+    webui_temperature: 0.2
+    webui_system_message: >-
+      You are a technical assistant. Only describe what code actually
+      does — never claim a function, sort, or check exists unless it is
+      genuinely present in the code you just wrote or were shown. If
+      you are not certain something is correct, say so explicitly
+      rather than stating it as fact. Prefer precise, verifiable
+      statements over confident-sounding guesses.
+
     # One entry per RPC worker instance — the whole point of this
     # playbook. Each worker is pinned to a specific paired peer (see the
     # Dashboard's Peers section, or the peer_info Ansible module, for
@@ -198,6 +236,10 @@
       ansible.builtin.set_fact:
         rpc_servers: "{{ worker_poll.results | map(attribute='json.private_ip') | map('regex_replace', '$', ':' + (rpc_port | string)) | join(',') }}"
 
+    - name: Build the Web UI defaults JSON (llama-server's own --webui-config-file)
+      ansible.builtin.set_fact:
+        webui_config_json: "{{ {'temperature': webui_temperature, 'systemMessage': webui_system_message} | to_nice_json }}"
+
     - name: Render coordinator user_data
       ansible.builtin.set_fact:
         coordinator_user_data: "{{ lookup('template', 'templates/llm-chat/coordinator-cloud-init.yml.j2', template_vars={
@@ -205,7 +247,8 @@
           'model_filename': model_filename, 'model_sha256': model_sha256,
           'http_port': http_port, 'context_size': context_size, 'threads': threads,
           'rpc_offload_layers': rpc_offload_layers,
-          'rpc_servers': rpc_servers, 'promtail_config': promtail_config }) }}"
+          'rpc_servers': rpc_servers, 'promtail_config': promtail_config,
+          'webui_config_json': webui_config_json }) }}"
 
     - name: Create coordinator instance
       cloudcore.cloudcore.instance:

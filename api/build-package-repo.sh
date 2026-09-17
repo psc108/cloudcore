@@ -138,12 +138,22 @@ declare -A ARTIFACT_URLS=(
   # exact LFS object (its authoritative server-side content hash), not
   # self-computed — confirmed directly via a HEAD request before use.
   [Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]="https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+  # llm-chat/distributed-llm — the higher-precision variant of the same
+  # already-trusted bartowski quantization (same repo, same uploader —
+  # deliberately not a different model/architecture, so no new chat
+  # template or tokenizer behaviour to verify), for the new
+  # standard.xlarge flavor per direct request ("allow the use of a
+  # large model with a larger vm"). ~7.17GB (Q8_0); model_sha256 is
+  # again Hugging Face's own X-Linked-ETag, confirmed via a real HEAD
+  # request before use, same as the Q4_K_M entry above.
+  [Mistral-7B-Instruct-v0.3-Q8_0.gguf]="https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q8_0.gguf"
 )
 if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"
 fi
 if [ "${SKIP_LLM_MODEL:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]"
+  unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q8_0.gguf]"
 fi
 for name in "${!ARTIFACT_URLS[@]}"; do
   curl -fL --speed-limit 1024 --speed-time 30 -C - -o "$REPO_DIR/artifacts/$name" "${ARTIFACT_URLS[$name]}"

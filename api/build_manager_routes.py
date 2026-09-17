@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request, Response
 import json
 
 import build_engine
+import capacity_gate
 
 bm = Blueprint("build_manager", __name__)
 
@@ -49,6 +50,16 @@ def submit_build():
         return jsonify({"status": 400, "title": "Bad Request", "detail": "template is required"}), 400
     var_overrides = body.get("vars", {})
     created_by = body.get("created_by", "ui")
+
+    try:
+        schema = build_engine.extract_template_vars(template)
+    except FileNotFoundError as e:
+        return jsonify({"status": 404, "title": "Not Found", "detail": str(e)}), 404
+    capacity_error = capacity_gate.check_worker_peers(var_overrides, schema)
+    if capacity_error:
+        return jsonify({"status": 400, "title": "Insufficient peer capacity",
+                         "detail": capacity_error}), 400
+
     build = build_engine.submit_build(template, var_overrides, created_by)
     return jsonify(_build_summary(build)), 202
 
