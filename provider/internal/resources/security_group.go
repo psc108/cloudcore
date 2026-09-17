@@ -43,6 +43,8 @@ type SecurityGroupResourceModel struct {
 	Status       types.String `tfsdk:"status"`
 	CreatedAt    types.String `tfsdk:"created_at"`
 	Tags         types.Map    `tfsdk:"tags"`
+	PeerID       types.String `tfsdk:"peer_id"`
+	HostHostname types.String `tfsdk:"host_hostname"`
 }
 
 type sgRuleAPIModel struct {
@@ -65,6 +67,16 @@ type sgAPIModel struct {
 	Status       string            `json:"status"`
 	CreatedAt    string            `json:"created_at"`
 	Tags         map[string]string `json:"tags"`
+	// PeerID is request-only (POST body field peer_id: which peer to
+	// create this security group on). The API echoes the same concept
+	// back on reads under a different key (host_id — which peer this
+	// security group actually lives on), plus a convenience
+	// host_hostname — kept as separate fields here rather than reusing
+	// PeerID for both directions, since a plain field can't have two
+	// JSON tags.
+	PeerID       string `json:"peer_id,omitempty"`
+	HostID       string `json:"host_id,omitempty"`
+	HostHostname string `json:"host_hostname,omitempty"`
 }
 
 var sgRuleAttrTypes = map[string]attr.Type{
@@ -130,13 +142,27 @@ func (r *SecurityGroupResource) Schema(_ context.Context, _ resource.SchemaReque
 				Description:  "Outbound traffic rules.",
 				NestedObject: ruleSchema,
 			},
-			"status":     schema.StringAttribute{Computed: true, Description: "Current security group status (API-assigned)."},
+			"status": schema.StringAttribute{Computed: true, Description: "Current security group status (API-assigned)."},
 			"created_at": schema.StringAttribute{
 				Computed:      true,
 				Description:   "ISO 8601 timestamp when the security group was created (API-assigned).",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"tags": schema.MapAttribute{Optional: true, ElementType: types.StringType, Description: "Key/value tags to attach to the security group."},
+			"peer_id": schema.StringAttribute{
+				Optional:    true,
+				Description: "ID of a paired remote peer (see the cloudcore_peers data source) to create this security group on instead of the local host — for cross-host clustering. Must already be an approved pairing. Forces replacement on change: an existing security group can't be relocated to a different host.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"host_hostname": schema.StringAttribute{
+				Computed:    true,
+				Description: "Hostname of the physical host this security group actually lives on — the local host unless peer_id is set. Informational only, for plan/show output.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
@@ -240,6 +266,12 @@ func (r *SecurityGroupResource) sgMapToState(ctx context.Context, result sgAPIMo
 		return fmt.Errorf("converting egress rules: %w", err)
 	}
 	state.EgressRules = egressList
+	if result.HostID != "" {
+		state.PeerID = types.StringValue(result.HostID)
+	} else {
+		state.PeerID = types.StringNull()
+	}
+	state.HostHostname = types.StringValue(result.HostHostname)
 	return nil
 }
 
@@ -270,6 +302,7 @@ func (r *SecurityGroupResource) Create(ctx context.Context, req resource.CreateR
 		IngressRules: ingress,
 		EgressRules:  egress,
 		Tags:         tags,
+		PeerID:       plan.PeerID.ValueString(),
 	}
 	var result sgAPIModel
 	if err := r.client.Post(ctx, "/v1/security-groups", body, &result); err != nil {

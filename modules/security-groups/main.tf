@@ -4,6 +4,7 @@ resource "cloudcore_security_group" "this" {
   name        = "${var.project}-${var.environment}-${each.key}"
   description = each.value.description
   vpc_id      = var.vpc_id
+  peer_id     = each.value.peer_id
   tags        = merge(local.common_tags, var.tags, { Name = "${var.project}-${var.environment}-${each.key}" })
 
   ingress_rules = [for k, r in each.value.ingress_rules : {

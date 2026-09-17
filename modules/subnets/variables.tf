@@ -44,6 +44,10 @@ variable "subnets" {
     - netnum     : subnet number within the extended prefix (cidrsubnet). Mutually exclusive with cidr_block.
     - zone       : logical zone label (e.g. "a", "b"). Used in naming only — CloudCore has no AZ concept.
     - public     : whether this is a public-facing subnet. Informational tag only.
+    - peer_id    : leave unset (the default) to create this subnet locally, unchanged
+                    default behavior. Set to a paired peer's own id to create it there
+                    instead — var.vpc_id must then be that SAME peer's own VPC id, not
+                    this build's local one, since a peer has its own separate catalogue.
   EOT
   type = map(object({
     cidr_block = optional(string)
@@ -52,6 +56,7 @@ variable "subnets" {
     zone       = optional(string, "a")
     public     = optional(bool, false)
     tags       = optional(map(string), {})
+    peer_id    = optional(string)
   }))
   default = {}
 }

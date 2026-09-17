@@ -21,13 +21,15 @@ type VPCResource struct {
 }
 
 type VPCResourceModel struct {
-	ID         types.String `tfsdk:"id"`
-	Name       types.String `tfsdk:"name"`
-	CIDRBlock  types.String `tfsdk:"cidr_block"`
-	DNSSupport types.Bool   `tfsdk:"dns_support"`
-	Status     types.String `tfsdk:"status"`
-	CreatedAt  types.String `tfsdk:"created_at"`
-	Tags       types.Map    `tfsdk:"tags"`
+	ID           types.String `tfsdk:"id"`
+	Name         types.String `tfsdk:"name"`
+	CIDRBlock    types.String `tfsdk:"cidr_block"`
+	DNSSupport   types.Bool   `tfsdk:"dns_support"`
+	Status       types.String `tfsdk:"status"`
+	CreatedAt    types.String `tfsdk:"created_at"`
+	Tags         types.Map    `tfsdk:"tags"`
+	PeerID       types.String `tfsdk:"peer_id"`
+	HostHostname types.String `tfsdk:"host_hostname"`
 }
 
 type vpcAPIModel struct {
@@ -38,6 +40,15 @@ type vpcAPIModel struct {
 	Status     string            `json:"status"`
 	CreatedAt  string            `json:"created_at"`
 	Tags       map[string]string `json:"tags"`
+	// PeerID is request-only (POST body field peer_id: which peer to
+	// create this VPC on). The API echoes the same concept back on
+	// reads under a different key (host_id — which peer this VPC
+	// actually lives on), plus a convenience host_hostname — kept as
+	// separate fields here rather than reusing PeerID for both
+	// directions, since a plain field can't have two JSON tags.
+	PeerID       string `json:"peer_id,omitempty"`
+	HostID       string `json:"host_id,omitempty"`
+	HostHostname string `json:"host_hostname,omitempty"`
 }
 
 func NewVPCResource() resource.Resource { return &VPCResource{} }
@@ -80,6 +91,20 @@ func (r *VPCResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				ElementType: types.StringType,
 				Description: "Key/value tags to attach to the VPC.",
 			},
+			"peer_id": schema.StringAttribute{
+				Optional:    true,
+				Description: "ID of a paired remote peer (see the cloudcore_peers data source) to create this VPC on instead of the local host — for cross-host clustering. Must already be an approved pairing. Forces replacement on change: an existing VPC can't be relocated to a different host.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"host_hostname": schema.StringAttribute{
+				Computed:    true,
+				Description: "Hostname of the physical host this VPC actually lives on — the local host unless peer_id is set. Informational only, for plan/show output.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
@@ -108,6 +133,12 @@ func vpcMapToState(ctx context.Context, result vpcAPIModel, state *VPCResourceMo
 		return fmt.Errorf("converting tags")
 	}
 	state.Tags = tags
+	if result.HostID != "" {
+		state.PeerID = types.StringValue(result.HostID)
+	} else {
+		state.PeerID = types.StringNull()
+	}
+	state.HostHostname = types.StringValue(result.HostHostname)
 	return nil
 }
 
@@ -126,6 +157,7 @@ func (r *VPCResource) Create(ctx context.Context, req resource.CreateRequest, re
 		CIDRBlock:  plan.CIDRBlock.ValueString(),
 		DNSSupport: plan.DNSSupport.ValueBool(),
 		Tags:       tags,
+		PeerID:     plan.PeerID.ValueString(),
 	}
 
 	var result vpcAPIModel

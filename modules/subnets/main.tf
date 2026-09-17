@@ -13,5 +13,6 @@ resource "cloudcore_subnet" "this" {
   cidr_block = each.value.cidr_block
   public     = each.value.public
   zone       = each.value.zone
+  peer_id    = each.value.peer_id
   tags       = merge(local.common_tags, each.value.tags)
 }

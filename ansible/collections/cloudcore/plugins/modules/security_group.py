@@ -44,6 +44,18 @@ options:
     description: Tags to apply to the security group.
     type: dict
     default: {}
+  peer_id:
+    description: >-
+      ID of a paired remote peer (see the peer_info module) to create
+      this security group on instead of the local host, for cross-host
+      clustering. Must already be an approved pairing. api_url/api_token
+      here still target THIS host's own API, not the peer's directly —
+      the local API proxies the request through the paired,
+      network-reachable channel established at pairing time. Immutable
+      — changing it requires recreating the security group (state=absent
+      then present again). vpc_id must be that SAME peer's own VPC id
+      when peer_id is set, not this build's local one.
+    type: str
   state:
     description: Desired state.
     type: str
@@ -98,6 +110,7 @@ def run_module():
             ingress_rules=dict(type="list", elements="dict", default=[]),
             egress_rules=dict(type="list", elements="dict", default=[]),
             tags=dict(type="dict", default={}),
+            peer_id=dict(type="str"),
             state=dict(type="str", default="present", choices=["present", "absent"]),
         ),
         supports_check_mode=True,
@@ -131,7 +144,10 @@ def run_module():
     if not existing:
         if module.check_mode:
             module.exit_json(changed=True, security_group={})
-        result = client.post("/v1/security-groups", body)
+        create_body = dict(body)
+        if module.params["peer_id"]:
+            create_body["peer_id"] = module.params["peer_id"]
+        result = client.post("/v1/security-groups", create_body)
         module.exit_json(changed=True, security_group=result)
 
     # Update if needed — compare relevant fields. Rule-list comparison is

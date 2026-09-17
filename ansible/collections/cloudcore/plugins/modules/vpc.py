@@ -29,6 +29,16 @@ options:
     description: Tags to apply to the VPC.
     type: dict
     default: {}
+  peer_id:
+    description: >-
+      ID of a paired remote peer (see the peer_info module) to create
+      this VPC on instead of the local host, for cross-host clustering.
+      Must already be an approved pairing. api_url/api_token here still
+      target THIS host's own API, not the peer's directly — the local
+      API proxies the request through the paired, network-reachable
+      channel established at pairing time. Immutable — changing it
+      requires recreating the VPC (state=absent then present again).
+    type: str
   state:
     description: Desired state.
     type: str
@@ -71,6 +81,7 @@ def run_module():
             cidr_block=dict(type="str"),
             dns_support=dict(type="bool", default=True),
             tags=dict(type="dict", default={}),
+            peer_id=dict(type="str"),
             state=dict(type="str", default="present", choices=["present", "absent"]),
         ),
         supports_check_mode=True,
@@ -102,7 +113,10 @@ def run_module():
     if not existing:
         if module.check_mode:
             module.exit_json(changed=True, vpc={})
-        result = client.post("/v1/vpcs", body)
+        create_body = dict(body)
+        if module.params["peer_id"]:
+            create_body["peer_id"] = module.params["peer_id"]
+        result = client.post("/v1/vpcs", create_body)
         module.exit_json(changed=True, vpc=result)
 
     # Update if needed — compare relevant fields

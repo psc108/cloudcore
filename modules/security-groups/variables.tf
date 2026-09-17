@@ -38,6 +38,10 @@ variable "security_groups" {
     - description   : human-readable description.
     - ingress_rules : map of ingress rule definitions.
     - egress_rules  : map of egress rule definitions.
+    - peer_id       : leave unset (the default) to create this security group locally,
+                       unchanged default behavior. Set to a paired peer's own id to
+                       create it there instead — var.vpc_id must then be that SAME
+                       peer's own VPC id, not this build's local one.
 
     Rule fields:
     - ip_protocol  : "tcp", "udp", "icmp", or "-1" (all traffic).
@@ -69,6 +73,7 @@ variable "security_groups" {
       source_sg_id = optional(string)
       description  = optional(string, "")
     })), {})
+    peer_id = optional(string)
   }))
   default = {}
 }

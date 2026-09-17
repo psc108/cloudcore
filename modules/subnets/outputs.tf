@@ -22,3 +22,8 @@ output "subnets" {
   description = "Full subnet resource objects keyed by caller-supplied key."
   value       = cloudcore_subnet.this
 }
+
+output "host_hostnames_by_key" {
+  description = "Which physical host each subnet actually landed on, keyed by the caller-supplied key — empty string for the local host, the peer's own hostname otherwise."
+  value       = { for k, v in cloudcore_subnet.this : k => v.host_hostname }
+}

@@ -23,15 +23,17 @@ type SubnetResource struct {
 }
 
 type SubnetResourceModel struct {
-	ID        types.String `tfsdk:"id"`
-	Name      types.String `tfsdk:"name"`
-	VPCID     types.String `tfsdk:"vpc_id"`
-	CIDRBlock types.String `tfsdk:"cidr_block"`
-	Public    types.Bool   `tfsdk:"public"`
-	Zone      types.String `tfsdk:"zone"`
-	Status    types.String `tfsdk:"status"`
-	CreatedAt types.String `tfsdk:"created_at"`
-	Tags      types.Map    `tfsdk:"tags"`
+	ID           types.String `tfsdk:"id"`
+	Name         types.String `tfsdk:"name"`
+	VPCID        types.String `tfsdk:"vpc_id"`
+	CIDRBlock    types.String `tfsdk:"cidr_block"`
+	Public       types.Bool   `tfsdk:"public"`
+	Zone         types.String `tfsdk:"zone"`
+	Status       types.String `tfsdk:"status"`
+	CreatedAt    types.String `tfsdk:"created_at"`
+	Tags         types.Map    `tfsdk:"tags"`
+	PeerID       types.String `tfsdk:"peer_id"`
+	HostHostname types.String `tfsdk:"host_hostname"`
 }
 
 type subnetAPIModel struct {
@@ -44,6 +46,15 @@ type subnetAPIModel struct {
 	Status    string            `json:"status"`
 	CreatedAt string            `json:"created_at"`
 	Tags      map[string]string `json:"tags"`
+	// PeerID is request-only (POST body field peer_id: which peer to
+	// create this subnet on). The API echoes the same concept back on
+	// reads under a different key (host_id — which peer this subnet
+	// actually lives on), plus a convenience host_hostname — kept as
+	// separate fields here rather than reusing PeerID for both
+	// directions, since a plain field can't have two JSON tags.
+	PeerID       string `json:"peer_id,omitempty"`
+	HostID       string `json:"host_id,omitempty"`
+	HostHostname string `json:"host_hostname,omitempty"`
 }
 
 func NewSubnetResource() resource.Resource { return &SubnetResource{} }
@@ -103,6 +114,20 @@ func (r *SubnetResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				ElementType: types.StringType,
 				Description: "Key/value tags to attach to the subnet.",
 			},
+			"peer_id": schema.StringAttribute{
+				Optional:    true,
+				Description: "ID of a paired remote peer (see the cloudcore_peers data source) to create this subnet on instead of the local host — for cross-host clustering. Must already be an approved pairing. Forces replacement on change: an existing subnet can't be relocated to a different host.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"host_hostname": schema.StringAttribute{
+				Computed:    true,
+				Description: "Hostname of the physical host this subnet actually lives on — the local host unless peer_id is set. Informational only, for plan/show output.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
@@ -133,6 +158,12 @@ func subnetMapToState(ctx context.Context, result subnetAPIModel, state *SubnetR
 		return fmt.Errorf("converting tags")
 	}
 	state.Tags = tags
+	if result.HostID != "" {
+		state.PeerID = types.StringValue(result.HostID)
+	} else {
+		state.PeerID = types.StringNull()
+	}
+	state.HostHostname = types.StringValue(result.HostHostname)
 	return nil
 }
 
@@ -153,6 +184,7 @@ func (r *SubnetResource) Create(ctx context.Context, req resource.CreateRequest,
 		Public:    plan.Public.ValueBool(),
 		Zone:      plan.Zone.ValueString(),
 		Tags:      tags,
+		PeerID:    plan.PeerID.ValueString(),
 	}
 
 	var result subnetAPIModel
