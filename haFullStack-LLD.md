@@ -3262,6 +3262,70 @@ polling already guarded against; and the dashboard `let`/TDZ bug above
   end-to-end; a lookup plugin is a convenience layer on top, not a
   capability gap.
 
+### 13.6 Distributed LLM Inference Example
+
+Per direct request — "now that we have an automatic discovery of
+resources to peer machines we can think about creating an automatic
+template for an ai model larger than we currently use. this way we
+can use resources across machines" — a new example,
+`examples/distributed-llm` (Terraform) and
+`ansible/examples/13-distributed-llm.yml` (Ansible), proves genuine
+distributed inference on top of everything §13 already built:
+discovery/pairing for finding a worker host, `peer_id` placement for
+landing worker instances on it, and (implicitly, by existing) the
+capacity stats from §13.5/v0.35 for judging whether a peer can take
+the load at all. It is the first capability in this project that
+needs *more than one machine's own resources for a single logical
+workload*, not just "spread independent things across machines" —
+every prior use of peering placed whole, independently-functioning
+resources on a peer; this one splits one model across two.
+
+**Why this model, deliberately, not just as a proof:** asked directly
+whether moving from Sentinel's existing tiny model to a 7B model
+across two machines was realistic, and warned more machines would be
+joining CloudCore later — confirmed "7B as a capability proof" over
+skipping straight to a model that only works multi-host. Mistral-7B-
+Instruct-v0.3 (Q4_K_M, ~4.37GB weights) was picked for a reason beyond
+convenience: `api/compute.py`'s own largest instance flavor
+(`standard.large`) is 4096MB RAM — *less* than this model's weights
+alone — so splitting it across a coordinator and at least one RPC
+worker is currently the only way it runs on this platform at all, not
+a nicety. The design generalizes to N workers (`var.worker_peers` /
+the playbook's own `worker_peers` list) rather than being hardcoded to
+exactly two hosts, per the same explicit requirement.
+
+**Mechanism:** llama.cpp's own RPC backend — `llama-server`
+(coordinator; loads the GGUF, serves an OpenAI-compatible HTTP API)
+plus `ggml-rpc-server` (worker; needs no model file on disk, only a
+matching-ABI build — the coordinator streams each worker's own share
+of tensor data over the network at model-load time via `--rpc
+host:port,...`). Pinned like every other example's third-party binary
+(`api/build-package-repo.sh`'s `ARTIFACT_URLS`, `SKIP_LLM_MODEL=1` to
+opt out) — the llama.cpp release archive's sha256 computed directly
+against the downloaded bytes (upstream publishes no checksum file for
+this asset), the GGUF's sha256 taken from Hugging Face's own
+authoritative `X-Linked-ETag` header for the LFS object.
+
+**SECURITY:** llama.cpp's own docs call the RPC backend a "proof-of-
+concept" that is "fragile and insecure," warning "Never run the RPC
+server on an open network." The worker's security group restricts the
+RPC port to the coordinator's own subnet, documented prominently in
+both templates — this cannot be enforced by the build itself since the
+peer-side security group exists outside it (the same structural
+limit as every other peer-placed resource referencing a
+pre-existing peer security group).
+
+**Verified live, real bugs found and fixed** (F-095–F-097, full detail
+in `haFullStack-Findings-Log.md` v0.62): a genuine end-to-end
+distributed inference request completed through the actual load
+balancer endpoint, Mistral-7B split across this host (coordinator) and
+Llywyn-Y-Groes (worker) via llama.cpp's RPC backend, after fixing a
+missing `libgomp1` shared library, a wrong `-ngl` split ratio that
+tried to push nearly the whole model onto the single worker, and a
+load-balancer health check pointed at a path llama-server doesn't
+serve a 2xx on. All three fixed permanently in both the Terraform and
+Ansible sides of the template, not just patched live.
+
 ---
 
 ## Document History
@@ -3303,3 +3367,4 @@ polling already guarded against; and the dashboard `let`/TDZ bug above
 | v0.33 | 2026-09-17 | Paul Scott | §13.5's two original open items resolved and closed out (see the updated §13.5 for the full detail) — per-instance mixed placement within one `modules/instance-group` (`placement_overrides`) and every example template wired for peer placement, both shipped rather than deferred. Searchable help updated to match: a new **Peers** article (Networking category) covering setup, discovery/pairing/approval, the My Peers panel, and the `_peer_id` template convention; **Builds — Ansible**/**Builds — OpenTofu** each gained a "Peer Placement" cross-reference; **Load Balancers** gained a short **Target Groups & Listeners** section (a real, separate documentation gap found alongside — that mechanism existed and was fully wired to real HAProxy config generation but had never been documented anywhere). Applied to both `api/help_seed.json` (fresh installs) and the live running instance directly via the Help API, confirmed searchable (`GET /v1/help/articles?q=peer` returns all three touched/added articles). |
 | v0.34 | 2026-09-17 | Paul Scott | Peer placement extended past instances to VPCs, subnets, and security groups (see the updated §13.5 for the full detail) — per direct request, "do we have to limit resource placement to just instances?" Same `host_id`/CRUD-proxy pattern as instances, across the API, the OpenTofu provider, the two Ansible modules that needed it, and the three reusable Terraform modules example templates actually call. Verified live end to end against the real paired peer through both IaC front-ends — a real VPC (and, via Ansible, a security group too) created on Llywyn-Y-Groes and confirmed via the peer's own catalogue independently, then destroyed cleanly. The Resource Placement dashboard page (v0.33) extended to show all four peer-placeable resource types instead of instances only. Also fixed in passing: a real version-numbering mistake in this document's own history — v0.32 had been duplicated by an earlier edit (once for the pre-existing "New §13" entry, once for what's now correctly v0.33); renumbered without changing either entry's actual content. |
 | v0.35 | 2026-09-17 | Paul Scott | Placement made capacity-aware and self-directing (see the updated §13.5 for the full detail) — three direct requests in one continuous arc: collect real CPU/memory/disk stats per host, show them as a green/amber/red traffic light, then use that traffic light to automatically pick and pre-fill the best current placement target while keeping the override. `api/host_stats.py`'s tier thresholds are now the single Python-side source of truth `GET /v1/peers/recommend-placement` reuses directly, hand-synced with the dashboard's own JS copy in `27-placement.js`. Verified live: real numbers from both real hosts (this one genuinely overloaded at times during this session's own background work, the peer idle), and both Build Managers correctly auto-filling a real template's `peer_id` and cascaded vpc/subnet/security-group fields with zero simulated interaction, confirmed via a DOM stub faithful enough to parse real `<select>` markup rather than just check strings. |
+| v0.36 | 2026-09-17 | Paul Scott | New §13.6, Distributed LLM Inference Example — a new `examples/distributed-llm` (Terraform) and `ansible/examples/13-distributed-llm.yml` (Ansible) proving genuine distributed inference (a 7B model's layers split across two real hosts via llama.cpp's RPC backend), the first capability built on §13's peering platform that needs more than one machine's resources for a single logical workload rather than just spreading independent resources across machines. Verified with a real end-to-end chat completion through the actual load-balancer endpoint after fixing three real bugs found live (F-095–F-097, full detail in `haFullStack-Findings-Log.md` v0.62). |
