@@ -52,8 +52,16 @@
     # below).
     context_size: 4096
     threads: 4
-    coordinator_flavor: standard.large
-    worker_flavor: standard.large
+    # Stepped up from standard.large after moving the default model from
+    # 7B to 14B (see model_filename below) — real testing found the 7B
+    # still hallucinated on non-trivial code tasks even with the system
+    # prompt genuinely reaching it, per direct request ("is there
+    # anything less likely to hallucinate... code is all i really care
+    # about"). Every worker peer's own real available RAM is still
+    # checked against whichever flavor is chosen BEFORE the build is
+    # even submitted (api/capacity_gate.py) regardless.
+    coordinator_flavor: standard.xlarge
+    worker_flavor: standard.xlarge
 
     # llama.cpp's own -ngl flag means "how many of the model's layers to
     # offload to non-CPU backends" (GPU normally, but --rpc's own workers
@@ -65,12 +73,25 @@
     # it with the coordinator's own local CPU -- found live building the
     # same underlying mechanism for 13-distributed-llm.yml: it tried to
     # allocate a ~4.3GB buffer on a worker with only 4096MB RAM and
-    # failed outright. Mistral-7B-Instruct-v0.3 has 32 transformer
-    # layers; 16 here gives a roughly even coordinator/worker split.
-    # Changing model_filename to a model with a different layer count
-    # (or adding more worker_peers entries) means re-tuning this by
-    # hand -- there's no automatic even-split behavior to rely on.
-    rpc_offload_layers: 16
+    # failed outright.
+    #
+    # This default (24, half of Qwen2.5-Coder-14B-Instruct's own real 48
+    # transformer layers) is only ever a FALLBACK for running this
+    # playbook directly (bypassing the CloudCore API entirely). A build
+    # submitted through the API instead (POST /v1/builds, what the
+    # Dashboard's own Build Manager and Scheduler both do) computes this
+    # fresh for every run: api/layer_split.py reads the chosen
+    # model_filename's own real layer count straight out of its GGUF
+    # header (api/gguf_meta.py — no more hand-maintained "model X has Y
+    # layers" comment to keep in sync across model swaps), weighs it
+    # against the coordinator's and every worker peer's *current* CPU
+    # cores and load, and skews the split toward whichever side has more
+    # real spare capacity right now — per direct request: "make it a
+    # dynamic calculation... so we constantly adjust resource allocation
+    # for wherever it might do the best." Setting rpc_offload_layers
+    # explicitly in a build request always wins — the dynamic
+    # calculation only fills in a value nobody asked for.
+    rpc_offload_layers: 24
 
     # Pinned artifacts (api/build-package-repo.sh) — exact values kept
     # in sync by hand with that script's own ARTIFACT_URLS, identical
@@ -79,22 +100,21 @@
     # with instead of only exposing the raw API).
     llama_archive_name: llama-b11025-bin-ubuntu-x64.tar.gz
     llama_sha256: bfdb3743f689bfe312f6c529908a09fb5ed1249c817b448e6a138ebb9dceb35d
-    model_filename: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
-    model_sha256: 1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6
-
-    # standard.xlarge (6 vCPU / 8192MB / 60GB, api/compute.py) is also
-    # available for coordinator_flavor/worker_flavor above — set both to
-    # it (alongside model_filename/model_sha256 overridden to the Q8_0
-    # pin below) to run the larger/higher-precision variant, per direct
-    # request: "allow the use of a large model with a larger vm (if the
-    # peer can afford the resources)." That last clause is enforced
-    # server-side: api/capacity_gate.py checks each worker_peers entry's
-    # own real available RAM against the chosen worker_flavor's
-    # requirement before this playbook's build is even submitted, and
-    # rejects it with a clear "peer can't afford this" message rather
-    # than letting a worker OOM partway through model load.
-    #   model_filename: Mistral-7B-Instruct-v0.3-Q8_0.gguf
-    #   model_sha256: 404857e776114baada71a08ebd3bba79d721ec7fca99705e7e7b892ae8bc583f
+    # Defaults to Qwen2.5-Coder-14B-Instruct rather than a general chat
+    # model or the smaller 7B — per direct request: "mistral itself
+    # isn't really the best... code/code production/correction/
+    # assistance is all i really care about", then, after the 7B still
+    # hallucinated in real testing, "is there anything less likely to
+    # hallucinate." Same bartowski quantizer already trusted for the
+    # Mistral/7B pins. Its ChatML template supports a real system role
+    # (confirmed live), unlike Mistral-7B-Instruct-v0.3's own template
+    # (confirmed live via GET /props' chat_template_caps.
+    # supports_system_role: false), so webui_system_message below
+    # actually reaches the model. 13-distributed-llm.yml keeps
+    # defaulting to Mistral — its job is Sentinel log summarization, a
+    # different task this switch wasn't asked to touch.
+    model_filename: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
+    model_sha256: 2946d28c9e1bb2bcae6d42e8678863a31775df6f740315c7d7e6d6b6411f5937
 
     # llama-server's own built-in Web UI reads its default sampling/
     # system-prompt settings from a JSON file passed via

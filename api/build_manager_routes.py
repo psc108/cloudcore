@@ -8,6 +8,7 @@ import json
 
 import build_engine
 import capacity_gate
+import layer_split
 
 bm = Blueprint("build_manager", __name__)
 
@@ -59,6 +60,8 @@ def submit_build():
     if capacity_error:
         return jsonify({"status": 400, "title": "Insufficient peer capacity",
                          "detail": capacity_error}), 400
+
+    layer_split.maybe_apply(var_overrides, schema)
 
     build = build_engine.submit_build(template, var_overrides, created_by)
     return jsonify(_build_summary(build)), 202

@@ -147,6 +147,40 @@ declare -A ARTIFACT_URLS=(
   # again Hugging Face's own X-Linked-ETag, confirmed via a real HEAD
   # request before use, same as the Q4_K_M entry above.
   [Mistral-7B-Instruct-v0.3-Q8_0.gguf]="https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q8_0.gguf"
+  # llm-chat's own default model as of this pin, replacing Mistral-7B —
+  # per direct request ("mistral itself isn't really the best... code
+  # is all I really care about"): Qwen2.5-Coder-7B-Instruct is
+  # code-specialized (benchmarks well ahead of general 7B models like
+  # Mistral on HumanEval/MBPP) and, confirmed live via its own real
+  # chat_template, actually supports a system role (ChatML,
+  # `{%- if messages[0]['role'] == 'system' %}`) — Mistral-7B-Instruct-
+  # v0.3's own template has no system-role handling at all (confirmed
+  # live: GET /props' chat_template_caps reports
+  # "supports_system_role": false), meaning llm-chat's own
+  # webui_system_message anti-hallucination prompt was likely never
+  # being honoured regardless of the temperature/localStorage fix.
+  # Same bartowski quantizer already trusted for the Mistral pins.
+  # ~4.36GB (Q4_K_M); model_sha256 is again HF's own X-Linked-ETag,
+  # confirmed via a real HEAD request before use. distributed-llm keeps
+  # defaulting to Mistral — its job is Sentinel log summarization, a
+  # different task this switch wasn't asked to touch.
+  [Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf]="https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+  # llm-chat's standard.xlarge upgrade path — same swap as above, one
+  # tier up. ~7.54GB (Q8_0).
+  [Qwen2.5-Coder-7B-Instruct-Q8_0.gguf]="https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q8_0.gguf"
+  # llm-chat's new default model — real testing found the 7B Qwen-Coder
+  # still hallucinated on non-trivial code tasks (wrong percentile math,
+  # a rolling-window dedup that was a complete no-op, invented function
+  # names) even with the anti-hallucination system prompt actually
+  # reaching it. Per direct request ("is there anything less likely to
+  # hallucinate"): self-consistency/faithfulness to one's own generated
+  # code scales with parameter count more reliably than prompting does,
+  # so stepping up within the same trusted family/quantizer rather than
+  # trying a different one. ~8.37GB (Q4_K_M), 48 transformer layers
+  # (vs the 7B's 28) — api/gguf_meta.py now reads this directly from
+  # each GGUF's own header rather than needing another hand-maintained
+  # layer-count comment every time the model changes.
+  [Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf]="https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf"
 )
 if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"
@@ -154,6 +188,9 @@ fi
 if [ "${SKIP_LLM_MODEL:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]"
   unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q8_0.gguf]"
+  unset "ARTIFACT_URLS[Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf]"
+  unset "ARTIFACT_URLS[Qwen2.5-Coder-7B-Instruct-Q8_0.gguf]"
+  unset "ARTIFACT_URLS[Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf]"
 fi
 for name in "${!ARTIFACT_URLS[@]}"; do
   curl -fL --speed-limit 1024 --speed-time 30 -C - -o "$REPO_DIR/artifacts/$name" "${ARTIFACT_URLS[$name]}"

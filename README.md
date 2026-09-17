@@ -151,20 +151,33 @@ For a persistent, human-facing chat session instead of the automated
 ingestion above, build `examples/llm-chat` (or
 `ansible/examples/14-llm-chat.yml`) directly and open its own
 `chat_url` output in a real browser — llama-server's own built-in Web
-UI, not a custom frontend. A fresh chat session starts from technical,
-low-hallucination defaults out of the box (sampling temperature 0.2
-and a system prompt telling the model not to claim code does something
-it doesn't) — still fully editable per-session in the browser's own
-Settings panel via `webui_temperature`/`webui_system_message`.
+UI, not a custom frontend. `llm-chat` defaults to **Qwen2.5-Coder-7B-
+Instruct** rather than a general chat model — it exists to encourage
+lab users to actually use the platform, but code generation/
+correction/assistance is the real job, not general conversation (`13-
+distributed-llm.yml`/`examples/distributed-llm` keep defaulting to
+Mistral-7B-Instruct-v0.3 for Sentinel log summarization, a different
+task). A fresh chat session starts from technical, low-hallucination
+defaults out of the box (sampling temperature 0.2 and a system prompt
+telling the model not to claim code does something it doesn't) — still
+fully editable per-session in the browser's own Settings panel via
+`webui_temperature`/`webui_system_message`. These defaults are only
+applied on a browser's genuine first visit to the coordinator's URL
+(llama-server's own webui seeds them into `localStorage` once, then
+prefers whatever's cached there forever after) — since `http_port` is
+fixed at `8620` across rebuilds, anyone who's opened that URL before
+won't pick up new defaults automatically; use a private/incognito
+window or clear that origin's site data to get a genuine first visit.
 
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
-precision Q8_0 variant of the same model on the new `standard.xlarge`
-flavor (6 vCPU / 8GB RAM) instead of the default Q4_K_M/`standard.large`
-pairing — override `model_filename`/`model_sha256`/`coordinator_flavor`/
-`worker_flavor` when building. Whichever flavor you pick, every worker
-peer's own real available RAM is checked against it *before* the build
-is even submitted — an under-resourced peer is rejected with a clear
-message instead of silently OOM-killing partway through model load.
+precision Q8_0 variant of their own default model on the new
+`standard.xlarge` flavor (6 vCPU / 8GB RAM) instead of the default
+Q4_K_M/`standard.large` pairing — override `model_filename`/
+`model_sha256`/`coordinator_flavor`/`worker_flavor` when building.
+Whichever flavor you pick, every worker peer's own real available RAM
+is checked against it *before* the build is even submitted — an
+under-resourced peer is rejected with a clear message instead of
+silently OOM-killing partway through model load.
 
 ### Default credentials
 
@@ -358,7 +371,7 @@ Fourteen ready-to-run configurations in `examples/`:
 | `examples/kiwix-library/` | VPC + security group + instance serving an offline Kiwix content library over HTTP through a load balancer |
 | `examples/wifi-sniffer/` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
 | `examples/distributed-llm/` | VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model across hosts via llama.cpp's RPC backend — built for the [Scheduler's own 7B LLM ingestion job](#scheduler--7b-llm-ingestion-optional), not usually built by hand |
-| `examples/llm-chat/` | Same distributed coordinator + RPC worker(s) as above, but for an interactive human chat session — open the `chat_url` output in a real browser |
+| `examples/llm-chat/` | Same distributed coordinator + RPC worker(s) as above, but for an interactive human chat session — open the `chat_url` output in a real browser. Defaults to Qwen2.5-Coder-7B-Instruct (code-focused), not Mistral |
 
 All examples accept a `suffix` variable to keep resource names unique across runs:
 
@@ -447,7 +460,7 @@ Fourteen ready-to-run playbooks in `ansible/examples/` (plus `07-teardown.yml` a
 | `11-wifi-sniffer.yml` | VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter, through a network LB |
 | `12-ha-frontend-lb.yml` | VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + centralized logging (Loki/Grafana) + DNS records |
 | `13-distributed-llm.yml` | VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model across hosts via llama.cpp's RPC backend — built for the [Scheduler's own 7B LLM ingestion job](#scheduler--7b-llm-ingestion-optional), not usually built by hand |
-| `14-llm-chat.yml` | Same distributed coordinator + RPC worker(s) as above, but for an interactive human chat session — open the printed chat URL in a real browser |
+| `14-llm-chat.yml` | Same distributed coordinator + RPC worker(s) as above, but for an interactive human chat session — open the printed chat URL in a real browser. Defaults to Qwen2.5-Coder-7B-Instruct (code-focused), not Mistral |
 
 Run directly:
 

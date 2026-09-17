@@ -22,13 +22,26 @@
 # upstream tool's own web interface through a load balancer, don't
 # write a new frontend.
 #
-# Built and proven at Mistral-7B-Instruct-v0.3 (Q4_K_M, ~4.37GB
-# weights) for the same reason examples/distributed-llm was: this
-# platform's own biggest instance flavor (standard.large) is 4096MB
-# RAM, less than this model's weights alone, so splitting across the
-# coordinator and at least one worker is currently the only way this
-# model runs here at all — not a nicety. Scales to more/bigger models
-# the same way as more machines join CloudCore.
+# Built and proven at Mistral-7B-Instruct-v0.3, then switched to
+# Qwen2.5-Coder — code generation/correction is this deployment's
+# actual job, not general chat, and Qwen2.5-Coder's own ChatML template
+# supports a real system role (confirmed live) where Mistral-7B-
+# Instruct-v0.3's own template does not (confirmed live via GET /props'
+# chat_template_caps.supports_system_role: false). Stepped up again
+# from the 7B to the 14B variant (Q4_K_M, ~8.37GB weights, default as
+# of this revision) after real testing found the 7B still hallucinated
+# on non-trivial code tasks even with the system prompt genuinely
+# reaching it — parameter count matters more than prompting for this
+# specific failure mode. For the same reason examples/distributed-llm
+# was built this way: no single CloudCore instance flavor has enough
+# RAM for this model's weights alone, so splitting across the
+# coordinator and at least one worker is currently the only way it runs
+# here at all — not a nicety. The coordinator/worker split itself is
+# computed fresh for every real build submitted through the CloudCore
+# API (api/layer_split.py, weighing each participant's own current CPU
+# headroom — see rpc_offload_layers' own comment in variables.tf),
+# rather than fixed at "roughly even." Scales to more/bigger models the
+# same way as more machines join CloudCore.
 #
 # SECURITY: llama.cpp's own RPC backend is explicitly documented as a
 # "proof-of-concept" that is "fragile and insecure," warning "Never run

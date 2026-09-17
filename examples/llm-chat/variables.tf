@@ -28,39 +28,37 @@ variable "cidr_block" {
   default     = "10.91.0.0/16"
 }
 
-# standard.large (4 vCPU / 4096MB / 40GB) by default for both roles:
-# Mistral-7B-Instruct-v0.3's Q4_K_M weights alone are ~4.37GB, which
+# standard.xlarge (6 vCPU / 8192MB / 60GB) by default for both roles:
+# Qwen2.5-Coder-14B-Instruct's Q4_K_M weights alone are ~8.37GB, which
 # does not fit in a single CloudCore instance flavor. Splitting the
-# model's layers across the coordinator and every worker (roughly half
-# each, with exactly one worker) is not a proof-of-concept nicety here
-# — it's the only way this default model runs on this platform at all.
-# See main.tf's own header comment for the fuller story, and
-# examples/distributed-llm (same underlying mechanism, built first, for
-# automated Sentinel-log-intelligence ingestion rather than a human
-# chat session).
+# model's layers across the coordinator and every worker is not a
+# proof-of-concept nicety here — it's the only way this default model
+# runs on this platform at all. See main.tf's own header comment for
+# the fuller story, and examples/distributed-llm (same underlying
+# mechanism, built first, for automated Sentinel-log-intelligence
+# ingestion rather than a human chat session).
 #
-# standard.xlarge (6 vCPU / 8192MB / 60GB) is also available — set
-# both to it (alongside model_filename/model_sha256 overridden to the
-# Q8_0 pin, api/build-package-repo.sh) to run the larger/higher-
-# precision variant, per direct request: "allow the use of a large
-# model with a larger vm (if the peer can afford the resources)." That
-# last clause is enforced server-side, not just documented here:
-# api/capacity_gate.py checks each worker_peers entry's own real
-# available RAM (via the same peers_routes.peer_stats() the traffic-
-# light system already uses) against the chosen worker_flavor's
-# requirement BEFORE the build is even submitted, and rejects it with
-# a clear "peer can't afford this" message rather than letting a
-# worker OOM partway through model load.
+# Stepped up from the 7B default to 14B, and standard.large to
+# standard.xlarge, after real testing found the 7B model still
+# hallucinated on non-trivial code tasks even with the anti-
+# hallucination system prompt genuinely reaching it — per direct
+# request ("is there anything less likely to hallucinate... code is
+# all I really care about"). Every worker peer's own real available
+# RAM is still checked against the chosen worker_flavor BEFORE the
+# build is even submitted (api/capacity_gate.py, reusing the same
+# peers_routes.peer_stats() the traffic-light system already uses) —
+# rejected with a clear message rather than letting a worker OOM
+# partway through model load, regardless of which flavor is chosen.
 variable "coordinator_flavor" {
   description = "Compute flavor for the coordinator instance."
   type        = string
-  default     = "standard.large"
+  default     = "standard.xlarge"
 }
 
 variable "worker_flavor" {
   description = "Compute flavor for each RPC worker instance."
   type        = string
-  default     = "standard.large"
+  default     = "standard.xlarge"
 }
 
 variable "admin_cidr" {
@@ -110,15 +108,30 @@ variable "threads" {
 # it with the coordinator's own local CPU -- found live building
 # examples/distributed-llm (same mechanism): it tried to allocate a
 # ~4.3GB buffer on a worker with only 4096MB RAM and failed outright.
-# Mistral-7B-Instruct-v0.3 has 32 transformer layers; 16 here gives a
-# roughly even coordinator/worker split. Changing model_filename to a
-# model with a different layer count (or adding more worker_peers
-# entries) means re-tuning this by hand -- there's no automatic
-# even-split behavior to rely on.
+#
+# This default (24, half of Qwen2.5-Coder-14B-Instruct's own real 48
+# transformer layers) is only ever a FALLBACK for building this
+# template directly (`tofu apply` from the CLI, bypassing the CloudCore
+# API entirely). Submitting a build through the API instead
+# (POST /v1/tofu/builds, which is what the Dashboard's own Build
+# Manager and Scheduler both do) computes this fresh for every single
+# run instead: api/layer_split.py reads the chosen model_filename's own
+# real layer count straight out of its GGUF header (api/gguf_meta.py —
+# no more hand-maintained "model X has Y layers" comment to keep in
+# sync, a real bug class this project hit three separate times tuning
+# this exact variable across model swaps), weighs it against the
+# coordinator's and every worker peer's *current* CPU cores and load
+# (the same host_stats.py numbers the Peers/Capacity traffic-light
+# already shows), and skews the split toward whichever side has more
+# real spare capacity right now — per direct request: "make it a
+# dynamic calculation... so we constantly adjust resource allocation
+# for wherever it might do the best." An explicit value passed in the
+# build request (this variable's own override) is always left alone —
+# the dynamic calculation only ever fills in a value nobody asked for.
 variable "rpc_offload_layers" {
-  description = "Number of model layers to offload to the RPC worker(s) via -ngl. Tune this alongside model_filename/worker_peers — see the comment above for why 99 (the usual GPU-offload convention) is wrong here."
+  description = "Number of model layers to offload to the RPC worker(s) via -ngl. Only a static fallback for a direct `tofu apply` — see the comment above for how a real API-submitted build computes this dynamically instead, and for why 99 (the usual GPU-offload convention) is wrong here regardless."
   type        = number
-  default     = 16
+  default     = 24
 }
 
 # --- Pinned artifacts (api/build-package-repo.sh) — exact values kept in
@@ -147,15 +160,15 @@ variable "llama_sha256" {
 }
 
 variable "model_filename" {
-  description = "GGUF model file the coordinator loads. Workers never need a copy of this — llama.cpp's RPC backend streams each worker its own share of tensor data over the network at load time, not a whole model file on disk (see module.workers' own comment in main.tf)."
+  description = "GGUF model file the coordinator loads. Workers never need a copy of this — llama.cpp's RPC backend streams each worker its own share of tensor data over the network at load time, not a whole model file on disk (see module.workers' own comment in main.tf). Defaults to Qwen2.5-Coder-14B-Instruct rather than a general chat model or the smaller 7B — per direct request: \"code/code production/correction/assistance is all i really care about\" and, after the 7B still hallucinated in real testing, \"is there anything less likely to hallucinate.\" Its ChatML template supports a real system role (confirmed live), unlike Mistral-7B-Instruct-v0.3's own template (confirmed live via GET /props' chat_template_caps.supports_system_role: false), so webui_system_message actually reaches the model."
   type        = string
-  default     = "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+  default     = "Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf"
 }
 
 variable "model_sha256" {
   description = "SHA-256 of model_filename — Hugging Face's own X-Linked-ETag header for the LFS-backed file (its authoritative server-side content hash for this exact object, not self-computed from a partial download)."
   type        = string
-  default     = "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6"
+  default     = "2946d28c9e1bb2bcae6d42e8678863a31775df6f740315c7d7e6d6b6411f5937"
 }
 
 # --- WebUI defaults ---------------------------------------------------

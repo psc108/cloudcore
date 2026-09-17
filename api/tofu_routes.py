@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request, Response
 
 import capacity_gate
 import idle_watcher
+import layer_split
 import tofu_engine
 
 tofu_bp = Blueprint("tofu", __name__)
@@ -67,6 +68,8 @@ def submit_build():
     if capacity_error:
         return jsonify({"status": 400, "title": "Insufficient peer capacity",
                          "detail": capacity_error}), 400
+
+    layer_split.maybe_apply(var_overrides, schema)
 
     idle_timeout_minutes = body.get("idle_timeout_minutes")
     if idle_timeout_minutes is not None:
