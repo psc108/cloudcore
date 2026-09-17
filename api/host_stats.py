@@ -101,3 +101,35 @@ def collect() -> dict:
         "instances": _instance_stats(),
         "collected_at": now_iso(),
     }
+
+
+# Same three-tier read and thresholds as the dashboard's own
+# ui/src/js/27-placement.js (_placementTier/_placementVerdict) — kept
+# in sync by hand, not shared code, since this is the one place a
+# Python/JS split genuinely can't avoid some duplication. Used by
+# GET /v1/peers/recommend-placement (api/peers_routes.py) to pick a
+# placement target automatically, and by 27-placement.js's own verdict
+# column — if either threshold set changes, change both. Public (not
+# underscore-prefixed) since peers_routes.py's own recommendation
+# ranking reuses it directly rather than keeping a second copy.
+TIER_SEVERITY = {"active": 0, "pending": 1, "error": 2}
+
+
+def _tier(pct: float, warn_at: float, hot_at: float) -> str:
+    if pct >= hot_at:
+        return "error"
+    if pct >= warn_at:
+        return "pending"
+    return "active"
+
+
+def verdict(stats: dict) -> str:
+    """Worst of CPU/memory/disk — deliberately not an average, so a host
+    that's fine on two metrics but critical on the third still isn't
+    recommended as a safe placement target."""
+    tiers = [
+        _tier(stats["cpu"]["load_pct_1m"], 70, 100),
+        _tier(stats["memory"]["used_pct"], 70, 90),
+        _tier(stats["disk"]["used_pct"], 70, 90),
+    ]
+    return max(tiers, key=lambda t: TIER_SEVERITY[t])

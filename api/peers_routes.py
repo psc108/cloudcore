@@ -27,6 +27,7 @@ from flask import Blueprint, jsonify, request
 
 import compute
 import discovery
+import host_stats
 import identity
 import peer_client
 import peer_crypto
@@ -441,3 +442,58 @@ def get_peer_stats(peer_id: str):
     resp, error = _peer_proxy_get(peer_id, "/v1/system/stats")
     if error: return error
     return jsonify(resp.body), resp.status
+
+
+@peers_bp.get("/v1/peers/recommend-placement")
+def recommend_placement():
+    """Automatic placement recommendation across this host and every
+    approved peer, using the same traffic-light verdict the dashboard's
+    Capacity card already shows — per direct request: "we need...to be
+    able to determine for ourselves (automatically), where to place
+    resource based on our traffic light system... we ought to autofill
+    the location for a resource based on our traffic lights." This only
+    ever suggests a default; the Build Manager's peer_id picker stays a
+    normal editable dropdown, so a user can always override it — "we
+    still need to allow the user to override via the template."
+
+    Best = lowest verdict severity (active < pending < error), tied
+    broken by lowest CPU load_pct_1m. A peer that can't be reached right
+    now is simply not a candidate — this host itself always is, so
+    there's always at least one result unless something is badly wrong
+    with this host's own stats collection."""
+    err = _auth()
+    if err: return err
+
+    candidates = []
+    try:
+        local_stats = host_stats.collect()
+        candidates.append({
+            "peer_id": None, "hostname": "This host (local)",
+            "verdict": host_stats.verdict(local_stats), "stats": local_stats,
+        })
+    except Exception:
+        # Don't let a recommendation-only endpoint fail the whole picker
+        # over this host's own stats being briefly unavailable — a peer
+        # candidate (if any) can still stand in below.
+        pass
+
+    for peer in peers_store.list_peers(status="approved"):
+        resp, error = _peer_proxy_get(peer["id"], "/v1/system/stats")
+        if error or resp.status != 200:
+            continue
+        candidates.append({
+            "peer_id": peer["id"], "hostname": peer["hostname"],
+            "verdict": host_stats.verdict(resp.body), "stats": resp.body,
+        })
+
+    if not candidates:
+        return jsonify({"recommended": None, "hosts": []})
+
+    best = min(candidates, key=lambda c: (
+        host_stats.TIER_SEVERITY[c["verdict"]], c["stats"]["cpu"]["load_pct_1m"],
+    ))
+
+    return jsonify({
+        "recommended": {"peer_id": best["peer_id"], "hostname": best["hostname"], "verdict": best["verdict"]},
+        "hosts": [{"peer_id": c["peer_id"], "hostname": c["hostname"], "verdict": c["verdict"]} for c in candidates],
+    })
