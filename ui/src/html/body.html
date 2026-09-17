@@ -28,6 +28,7 @@
       <div class="nav-dropdown">
         <button id="nav-dns" onclick="showSection('dns', this)">DNS</button>
         <button id="nav-peers" onclick="showSection('peers', this)">Peers</button>
+        <button id="nav-placement" onclick="showSection('placement', this)">Resource Placement</button>
       </div>
     </div>
     <div class="nav-group">
@@ -752,6 +753,41 @@
         <button class="btn btn-primary" onclick="pairManual()">Pair</button>
       </div>
     </div>
+  </div>
+
+  <div id="section-placement" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Peer Status</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadResourcePlacement()">↻</button>
+      </div>
+      <div class="table-wrap">
+        <table id="placement-peers-table">
+          <thead><tr><th>Hostname</th><th>Status</th><th>Tunnel</th><th>Bridge Subnet</th><th>Instances Here</th></tr></thead>
+          <tbody id="placement-peers-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Resource Placement</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadResourcePlacement()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Every instance across this host and every paired peer, and where each one actually lives. VPCs, subnets,
+        security groups, and load balancers are always local to the host that created them — an instance is the
+        only resource that can be placed on a peer, so it's the only one with a Location worth showing here.
+      </p>
+      <div class="table-wrap">
+        <table id="placement-table">
+          <thead><tr><th>Name</th><th>Location</th><th>Created</th><th>Instance Status</th><th>Peer Status</th></tr></thead>
+          <tbody id="placement-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
 
   <!-- ═══════════════════════════ Settings ═══════════════════════════ -->

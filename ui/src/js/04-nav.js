@@ -3,7 +3,7 @@ const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
   sgs: 'infrastructure',  subnets: 'infrastructure',
-  dns: 'networking', peers: 'networking',
+  dns: 'networking', peers: 'networking', placement: 'networking',
   nfs: 'storage',
   builds: 'builds', tofu: 'builds',
 };
@@ -40,6 +40,7 @@ function showSection(name, btn) {
   if (name === 'terminal')      loadTerminalInstances();
   if (name === 'dns')           loadDNS();
   if (name === 'peers')         { loadPeers(); startPeersPoll(); }
+  if (name === 'placement')      loadResourcePlacement();
   if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();

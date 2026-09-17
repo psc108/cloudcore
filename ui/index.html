@@ -802,6 +802,7 @@
       <div class="nav-dropdown">
         <button id="nav-dns" onclick="showSection('dns', this)">DNS</button>
         <button id="nav-peers" onclick="showSection('peers', this)">Peers</button>
+        <button id="nav-placement" onclick="showSection('placement', this)">Resource Placement</button>
       </div>
     </div>
     <div class="nav-group">
@@ -1528,6 +1529,41 @@
     </div>
   </div>
 
+  <div id="section-placement" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Peer Status</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadResourcePlacement()">↻</button>
+      </div>
+      <div class="table-wrap">
+        <table id="placement-peers-table">
+          <thead><tr><th>Hostname</th><th>Status</th><th>Tunnel</th><th>Bridge Subnet</th><th>Instances Here</th></tr></thead>
+          <tbody id="placement-peers-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Resource Placement</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadResourcePlacement()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Every instance across this host and every paired peer, and where each one actually lives. VPCs, subnets,
+        security groups, and load balancers are always local to the host that created them — an instance is the
+        only resource that can be placed on a peer, so it's the only one with a Location worth showing here.
+      </p>
+      <div class="table-wrap">
+        <table id="placement-table">
+          <thead><tr><th>Name</th><th>Location</th><th>Created</th><th>Instance Status</th><th>Peer Status</th></tr></thead>
+          <tbody id="placement-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
   <!-- ═══════════════════════════ Settings ═══════════════════════════ -->
   <div id="section-settings" class="section">
     <div class="card" style="max-width:680px">
@@ -1816,7 +1852,7 @@ const _sectionGroup = {
   vpcs: 'infrastructure', instances: 'infrastructure',
   lbs: 'infrastructure',  terminal: 'infrastructure',
   sgs: 'infrastructure',  subnets: 'infrastructure',
-  dns: 'networking', peers: 'networking',
+  dns: 'networking', peers: 'networking', placement: 'networking',
   nfs: 'storage',
   builds: 'builds', tofu: 'builds',
 };
@@ -1853,6 +1889,7 @@ function showSection(name, btn) {
   if (name === 'terminal')      loadTerminalInstances();
   if (name === 'dns')           loadDNS();
   if (name === 'peers')         { loadPeers(); startPeersPoll(); }
+  if (name === 'placement')      loadResourcePlacement();
   if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
@@ -5363,6 +5400,87 @@ function _requestPairing(hostname, address, port) {
     toast(`Pairing request sent to "${hostname}" — it needs to approve on its own dashboard before this is usable.`, 'success');
     loadPeers();
   }).catch(e => toast(`Failed to reach "${hostname}": ${e.message}`, 'error'));
+}
+
+// ── Resource Placement — read-only inspection, not management ──────────────
+// Where every instance actually lives (local or a named peer), when it was
+// created, and that peer's own current status — per direct request: "a
+// status page in the dashboard we can click to inspect that shows where all
+// resources are located (local or peer), when they were created and the
+// current peer status." Pairing/approve/revoke stays on the Peers page;
+// this page only ever reads.
+
+function loadResourcePlacement() {
+  const peersTbody = document.getElementById('placement-peers-tbody');
+  const tbody = document.getElementById('placement-tbody');
+  peersTbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
+
+  Promise.all([api('GET', '/v1/instances'), api('GET', '/v1/peers')]).then(([instData, peerData]) => {
+    const instances = instData.items || [];
+    const peers = peerData.items || [];
+    // All peers (including revoked) feed the by-id lookup below, so a
+    // peer-placed instance's row can still say *which* peer and that
+    // it's since been revoked, rather than just "unknown" — but the
+    // summary table only ever shows current, non-revoked peers, same
+    // filter loadPeers() already applies on the Peers page itself.
+    const peerById = {};
+    peers.forEach(p => { peerById[p.id] = p; });
+    const activePeers = peers.filter(p => p.status !== 'revoked');
+
+    if (!activePeers.length) {
+      peersTbody.innerHTML = '<tr class="empty-row"><td colspan="5">No paired peers yet — see the Peers section.</td></tr>';
+    } else {
+      peersTbody.innerHTML = activePeers.map(p => {
+        const count = instances.filter(i => i.host_id === p.id).length;
+        return `
+          <tr>
+            <td><strong>${_esc(p.hostname)}</strong></td>
+            <td>${badge(p.status)}</td>
+            <td>${badge(p.wg_tunnel_status || 'unknown')}</td>
+            <td class="mono">${_esc(p.wg_bridge_subnet || '—')}</td>
+            <td>${count}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    if (!instances.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No instances yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = instances.map(i => {
+      let location, peerStatus;
+      if (i.host_id) {
+        const peer = peerById[i.host_id];
+        if (peer) {
+          location = `<span class="mono">${_esc(i.host_hostname || peer.hostname)}</span>`;
+          peerStatus = `${badge(peer.status)} ${badge(peer.wg_tunnel_status || 'unknown')}`;
+        } else {
+          // The peer this instance was placed on has since been revoked
+          // (or its row is otherwise gone) — the instance record itself
+          // still exists locally, but there's no live peer to report a
+          // status for. Surfaced honestly rather than hidden.
+          location = `<span class="mono text-muted">${_esc(i.host_hostname || 'unknown peer')}</span>`;
+          peerStatus = '<span class="badge badge-error">peer no longer paired</span>';
+        }
+      } else {
+        location = 'Local (this host)';
+        peerStatus = '—';
+      }
+      return `
+        <tr>
+          <td><strong>${_esc(i.name)}</strong></td>
+          <td>${location}</td>
+          <td>${new Date(i.created_at).toLocaleString()}</td>
+          <td>${badge(i.status)}</td>
+          <td>${peerStatus}</td>
+        </tr>`;
+    }).join('');
+  }).catch(e => {
+    const msg = `<tr class="empty-row"><td colspan="5">Error: ${_esc(e.message)}</td></tr>`;
+    peersTbody.innerHTML = msg;
+    tbody.innerHTML = msg;
+  });
 }
 
 </script>
