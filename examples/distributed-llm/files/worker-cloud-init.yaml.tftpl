@@ -1,0 +1,82 @@
+#cloud-config
+# RPC worker for the distributed LLM coordinator template — runs only
+# ggml-rpc-server (part of the same llama.cpp CPU build the coordinator
+# uses), never the model file itself: llama.cpp's RPC backend streams
+# tensor data to this node over the network at load time. This node
+# just needs a matching-ABI llama.cpp build and enough RAM to hold
+# whatever share of the model the coordinator assigns it.
+#
+# SECURITY: llama.cpp's own docs call the RPC backend a "proof-of-
+# concept" that is "fragile and insecure" and warn "Never run the RPC
+# server on an open network." -H 0.0.0.0 below is required for the
+# coordinator (on a different host entirely) to reach it at all — the
+# actual access control is THIS instance's own security group, which
+# must restrict the RPC port to the coordinator's own subnet, never
+# 0.0.0.0/0 — see worker_peers' own variable comment in variables.tf.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - curl
+  - promtail
+
+write_files:
+  - path: /etc/promtail/config.yml
+    content: |
+      ${indent(6, promtail_config)}
+
+  - path: /etc/systemd/system/llama-rpc.service
+    content: |
+      [Unit]
+      Description=llama.cpp RPC worker
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      WorkingDirectory=/opt/llama.cpp
+      Environment=LD_LIBRARY_PATH=/opt/llama.cpp
+      ExecStart=/opt/llama.cpp/ggml-rpc-server -H 0.0.0.0 -p ${rpc_port} -t ${threads}
+      Restart=on-failure
+      RestartSec=5
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Promtail fix first, before any other service — same F-072/F-073
+  # ordering every other example in this project already follows.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
+
+  - mkdir -p /opt/llama.cpp
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/${llama_archive_name} \
+        http://192.168.100.1:8090/jammy/artifacts/${llama_archive_name} && break
+      echo "llama.cpp download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${llama_sha256}  /tmp/${llama_archive_name}' | sha256sum -c -
+  - tar -xzf /tmp/${llama_archive_name} -C /opt/llama.cpp --strip-components=1
+  - rm -f /tmp/${llama_archive_name}
+  - systemctl daemon-reload
+  # Restart=on-failure above is the deliberate mitigation for a real
+  # startup-order gap: the coordinator's own llama-server may attempt
+  # its first RPC connection to this worker before this service has
+  # finished coming up (both instances boot and run cloud-init
+  # concurrently — OpenTofu's own dependency ordering only guarantees
+  # this worker's IP is known before the coordinator's user_data is
+  # rendered, not that this worker is actually listening yet). systemd
+  # retries the coordinator's own service every 5s regardless, so this
+  # self-heals within one retry cycle rather than needing explicit
+  # cross-host readiness polling.
+  - systemctl enable --now llama-rpc

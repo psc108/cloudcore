@@ -125,9 +125,25 @@ declare -A ARTIFACT_URLS=(
   # This one dwarfs every other artifact in this list; skip it with
   # SKIP_ZIM=1 if disk space is a concern — everything else still builds.
   [wikipedia_en_top_nopic_2026-06.zim]="https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_nopic_2026-06.zim"
+  # distributed-llm — the llama.cpp CPU build (contains both llama-server,
+  # the coordinator's own OpenAI-compatible HTTP server, and
+  # ggml-rpc-server, the worker binary — one archive covers both roles).
+  # No checksums file is published for this asset; llama_sha256 was
+  # computed directly against the real downloaded archive instead.
+  [llama-b11025-bin-ubuntu-x64.tar.gz]="https://github.com/ggml-org/llama.cpp/releases/download/b11025/llama-b11025-bin-ubuntu-x64.tar.gz"
+  # distributed-llm — the GGUF model itself, ~4.37GB (Q4_K_M). Dwarfs
+  # every other artifact here except the ZIM above; skip it with
+  # SKIP_LLM_MODEL=1 if disk space is a concern — everything else still
+  # builds. model_sha256 is Hugging Face's own X-Linked-ETag for this
+  # exact LFS object (its authoritative server-side content hash), not
+  # self-computed — confirmed directly via a HEAD request before use.
+  [Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]="https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
 )
 if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"
+fi
+if [ "${SKIP_LLM_MODEL:-0}" = "1" ]; then
+  unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]"
 fi
 for name in "${!ARTIFACT_URLS[@]}"; do
   curl -fL --speed-limit 1024 --speed-time 30 -C - -o "$REPO_DIR/artifacts/$name" "${ARTIFACT_URLS[$name]}"

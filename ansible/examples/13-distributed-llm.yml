@@ -1,0 +1,244 @@
+---
+# 13-distributed-llm.yml
+# A llama.cpp coordinator (loads a GGUF model, runs llama-server, serves
+# an OpenAI-compatible HTTP API) plus one or more RPC worker instances,
+# each pinned to a different paired peer. The coordinator splits the
+# model's layers across itself and every worker (llama.cpp's own --rpc
+# mechanism) and streams each worker its own share of tensor data over
+# the network at load time — workers never need a copy of the model
+# file on disk, only a compatible llama.cpp build.
+#
+# Built and proven at Mistral-7B-Instruct-v0.3 (Q4_K_M, ~4.37GB weights)
+# deliberately, per direct request — and not just as a capability proof:
+# api/compute.py's own biggest instance flavor (standard.large) is
+# 4096MB RAM, which does not fit this model's weights alone on ANY
+# single CloudCore instance that exists today. Splitting across the
+# coordinator and one worker (roughly half the layers each) is
+# currently the only way this specific model runs on this platform at
+# all, not a nicety. The same playbook scales to a model that doesn't
+# fit even split across today's paired hosts (30B+) the same way —
+# bigger model_filename/model_sha256, more worker_peers entries — once
+# more machines join CloudCore.
+#
+# SECURITY: llama.cpp's own RPC backend is explicitly documented as a
+# "proof-of-concept" that is "fragile and insecure," warning "Never run
+# the RPC server on an open network." See worker_peers' own comment
+# below for what this means for each worker's own security group.
+#
+# Run: ansible-playbook -i ../inventory.ini 13-distributed-llm.yml
+- name: "Example 13 — Distributed LLM inference (llama.cpp RPC)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    sg_name: "{{ project }}-{{ env }}-{{ build_suffix }}-coordinator"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm"
+
+    admin_cidr: "0.0.0.0/0"
+    http_port: 8610
+    rpc_port: 50052
+    context_size: 2048
+    threads: 4
+    coordinator_flavor: standard.large
+    worker_flavor: standard.large
+
+    # Pinned artifacts (api/build-package-repo.sh) — exact values kept
+    # in sync by hand with that script's own ARTIFACT_URLS.
+    llama_archive_name: llama-b11025-bin-ubuntu-x64.tar.gz
+    llama_sha256: bfdb3743f689bfe312f6c529908a09fb5ed1249c817b448e6a138ebb9dceb35d
+    model_filename: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+    model_sha256: 1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6
+
+    # One entry per RPC worker instance — the whole point of this
+    # playbook. Each worker is pinned to a specific paired peer (see the
+    # Dashboard's Peers section, or the peer_info Ansible module, for
+    # available hosts) and that peer's own vpc_id/subnet_id/security
+    # group — a peer has its own separate catalogue, not this build's
+    # local one (see haFullStack-LLD.md §13). Empty by default (the
+    # build fails fast below rather than silently doing nothing) — this
+    # playbook only exists to prove cross-host distributed inference.
+    # Add more entries as more machines join CloudCore; nothing here is
+    # hardcoded to exactly two hosts.
+    #
+    # SECURITY: the worker's security group is an EXISTING one on the
+    # peer (peer_security_group_id below), created outside this
+    # playbook, so it cannot be enforced here. When creating it,
+    # restrict the RPC port (rpc_port above) to this build's own local
+    # subnet (where the coordinator lives) — never 0.0.0.0/0. Reusing a
+    # broader existing security group defeats the protection the
+    # upstream project's own docs explicitly call for.
+    worker_peers: []
+
+  tasks:
+    - name: Fail fast if worker_peers is empty
+      ansible.builtin.fail:
+        msg: >-
+          worker_peers is empty -- this playbook's whole purpose is
+          cross-host distributed inference. Set at least one entry
+          (peer_id/peer_vpc_id/peer_subnet_id/peer_security_group_id).
+      when: worker_peers | length == 0
+
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.90.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create coordinator security group (SSH + inference HTTP API)
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ sg_name }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        description: "Distributed LLM coordinator — SSH + inference HTTP API, scoped to admin_cidr"
+        ingress_rules:
+          - protocol: tcp
+            from_port: 22
+            to_port: 22
+            cidr: "{{ admin_cidr }}"
+          - protocol: tcp
+            from_port: "{{ http_port }}"
+            to_port: "{{ http_port }}"
+            cidr: "{{ admin_cidr }}"
+        egress_rules:
+          - protocol: "-1"
+            cidr: 0.0.0.0/0
+      register: sg
+
+    - name: Load shared promtail config
+      ansible.builtin.set_fact:
+        promtail_config: "{{ lookup('file', 'templates/distributed-llm/promtail-config.yml.j2') }}"
+
+    - name: Render worker user_data (identical for every worker)
+      ansible.builtin.set_fact:
+        worker_user_data: "{{ lookup('template', 'templates/distributed-llm/worker-cloud-init.yml.j2', template_vars={
+          'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
+          'rpc_port': rpc_port, 'threads': threads,
+          'promtail_config': promtail_config }) }}"
+
+    - name: Create RPC worker instances (one per worker_peers entry, each on its own peer)
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-worker-{{ idx }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ worker_flavor }}"
+        vpc_id: "{{ item.peer_vpc_id }}"
+        subnet_id: "{{ item.peer_subnet_id }}"
+        security_group_ids: ["{{ item.peer_security_group_id }}"]
+        peer_id: "{{ item.peer_id }}"
+        user_data: "{{ worker_user_data }}"
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: llm-worker
+      loop: "{{ worker_peers }}"
+      loop_control:
+        index_var: idx
+        label: "worker-{{ idx }} -> {{ item.peer_id }}"
+      register: created_workers
+
+    - name: Wait for all workers to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: worker_poll
+      until: worker_poll.json.status == "running"
+      retries: 30
+      delay: 5
+      loop: "{{ created_workers.results }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    - name: Build the coordinator's --rpc argument from real worker IPs
+      ansible.builtin.set_fact:
+        rpc_servers: "{{ worker_poll.results | map(attribute='json.private_ip') | map('regex_replace', '$', ':' + (rpc_port | string)) | join(',') }}"
+
+    - name: Render coordinator user_data
+      ansible.builtin.set_fact:
+        coordinator_user_data: "{{ lookup('template', 'templates/distributed-llm/coordinator-cloud-init.yml.j2', template_vars={
+          'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
+          'model_filename': model_filename, 'model_sha256': model_sha256,
+          'http_port': http_port, 'context_size': context_size, 'threads': threads,
+          'rpc_servers': rpc_servers, 'promtail_config': promtail_config }) }}"
+
+    - name: Create coordinator instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-coord"
+        image_id: ubuntu-22.04
+        flavor: "{{ coordinator_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        security_group_ids: ["{{ sg.security_group.id }}"]
+        user_data: "{{ coordinator_user_data }}"
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: llm-coordinator
+      register: coordinator
+
+    - name: Wait for coordinator to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ coordinator.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: coordinator_poll
+      until: coordinator_poll.json.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: Create application load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: application
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: false
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: ingress
+      register: lb
+
+    - name: Register coordinator as the LB backend
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "{{ coordinator.instance.name }}"
+          address: "{{ coordinator_poll.json.private_ip }}"
+          port: "{{ http_port }}"
+        status_code: 201
+
+    - name: Show inference endpoint
+      ansible.builtin.debug:
+        msg: >
+          Inference endpoint: http://127.0.0.1:{{ lb.load_balancer.listen_port }}
+          -- coordinator {{ coordinator.instance.name }}, {{ worker_peers | length }} worker(s).

@@ -1,0 +1,75 @@
+#cloud-config
+# Distributed LLM inference coordinator — loads the GGUF model and
+# splits its layers across itself plus every RPC worker in
+# {{ rpc_servers }} (llama.cpp's own --rpc mechanism), serving an
+# OpenAI-compatible HTTP API. See worker-cloud-init.yml.j2 for the
+# worker side and its own security note on the RPC backend.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - curl
+  - promtail
+
+write_files:
+  - path: /etc/promtail/config.yml
+    content: |
+      {{ promtail_config | indent(6) }}
+
+  - path: /etc/systemd/system/llama-server.service
+    content: |
+      [Unit]
+      Description=llama.cpp distributed inference coordinator
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      WorkingDirectory=/opt/llama.cpp
+      Environment=LD_LIBRARY_PATH=/opt/llama.cpp
+      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/{{ model_filename }} --host 0.0.0.0 --port {{ http_port }} -c {{ context_size }} -ngl 99 --rpc {{ rpc_servers }} -t {{ threads }}
+      Restart=on-failure
+      RestartSec=5
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Promtail fix first, before any other service — same F-072/F-073
+  # ordering every other example in this project already follows.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
+
+  - mkdir -p /opt/llama.cpp/models
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/{{ llama_archive_name }} \
+        http://192.168.100.1:8090/jammy/artifacts/{{ llama_archive_name }} && break
+      echo "llama.cpp download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ llama_sha256 }}  /tmp/{{ llama_archive_name }}' | sha256sum -c -
+  - tar -xzf /tmp/{{ llama_archive_name }} -C /opt/llama.cpp --strip-components=1
+  - rm -f /tmp/{{ llama_archive_name }}
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/llama.cpp/models/{{ model_filename }} \
+        http://192.168.100.1:8090/jammy/artifacts/{{ model_filename }} && break
+      echo "model download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ model_sha256 }}  /opt/llama.cpp/models/{{ model_filename }}' | sha256sum -c -
+  - systemctl daemon-reload
+  # See worker-cloud-init.yml.j2's own comment on Restart=on-failure —
+  # the same startup-order gap applies here in reverse, same
+  # self-healing mitigation.
+  - systemctl enable --now llama-server
