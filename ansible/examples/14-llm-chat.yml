@@ -1,0 +1,296 @@
+---
+# 14-llm-chat.yml
+# A llama.cpp coordinator (loads a GGUF model, runs llama-server) plus
+# one or more RPC worker instances, each pinned to a different paired
+# peer — same distributed-inference mechanism as
+# 13-distributed-llm.yml (built first, for automated Sentinel-log
+# ingestion), but this playbook exists purely to give a person a
+# browser tab to actually talk to the model. Per direct request:
+# "lets create a template thats built solely to provide a llm chat
+# interface to 7b or whichever llm we provide in the future... a
+# browser frontend for the moment (cli can wait)."
+#
+# The chat UI itself is NOT custom-built here — llama-server ships its
+# own compiled single-page Web UI, enabled by default (--webui,
+# confirmed via `llama-server --help` and a real local test: a plain
+# `curl` without gzip support gets a 415 on GET / — the same "415 on
+# GET /" behavior 13-distributed-llm.yml's own F-097 found and worked
+# around for its health check — but any real browser sends
+# Accept-Encoding: gzip automatically and gets the genuine chat page).
+# This matches the convention every other browser-facing example in
+# this project already follows (09-ghidra-workstation.yml,
+# 10-kiwix-library.yml): serve the upstream tool's own web interface
+# through a load balancer, don't write a new frontend.
+#
+# SECURITY: llama.cpp's own RPC backend is explicitly documented as a
+# "proof-of-concept" that is "fragile and insecure," warning "Never run
+# the RPC server on an open network." See worker_peers' own comment
+# below for what this means for each worker's own security group.
+#
+# Run: ansible-playbook -i ../inventory.ini 14-llm-chat.yml
+- name: "Example 14 — LLM Chat (llama.cpp RPC, browser Web UI)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    env: "{{ default_environment }}"
+    project: "{{ default_project }}"
+    vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
+    sg_name: "{{ project }}-{{ env }}-{{ build_suffix }}-coordinator"
+    lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat"
+
+    admin_cidr: "0.0.0.0/0"
+    # Deliberately different from 13-distributed-llm.yml's own default
+    # (8610) — both playbooks can be built on the same host at once
+    # without a port collision on the load balancer's own listener.
+    http_port: 8620
+    rpc_port: 50052
+    # Larger than 13-distributed-llm.yml's own default (2048) — an
+    # interactive chat session benefits from more room for conversation
+    # history than a single-shot log-ingestion prompt needs, within
+    # each participant's own tight RAM ceiling (see coordinator_flavor
+    # below).
+    context_size: 4096
+    threads: 4
+    coordinator_flavor: standard.large
+    worker_flavor: standard.large
+
+    # llama.cpp's own -ngl flag means "how many of the model's layers to
+    # offload to non-CPU backends" (GPU normally, but --rpc's own workers
+    # count the same way) -- NOT "how many layers per worker" and NOT a
+    # percentage. With exactly one RPC worker configured, every offloaded
+    # layer goes to that ONE worker; a high value like the GPU-offload
+    # convention's usual 99 ("offload everything possible") tries to push
+    # nearly the ENTIRE model onto that single worker instead of splitting
+    # it with the coordinator's own local CPU -- found live building the
+    # same underlying mechanism for 13-distributed-llm.yml: it tried to
+    # allocate a ~4.3GB buffer on a worker with only 4096MB RAM and
+    # failed outright. Mistral-7B-Instruct-v0.3 has 32 transformer
+    # layers; 16 here gives a roughly even coordinator/worker split.
+    # Changing model_filename to a model with a different layer count
+    # (or adding more worker_peers entries) means re-tuning this by
+    # hand -- there's no automatic even-split behavior to rely on.
+    rpc_offload_layers: 16
+
+    # Pinned artifacts (api/build-package-repo.sh) — exact values kept
+    # in sync by hand with that script's own ARTIFACT_URLS, identical
+    # to 13-distributed-llm.yml's own (same underlying binaries, this
+    # playbook just serves the interactive Web UI they already come
+    # with instead of only exposing the raw API).
+    llama_archive_name: llama-b11025-bin-ubuntu-x64.tar.gz
+    llama_sha256: bfdb3743f689bfe312f6c529908a09fb5ed1249c817b448e6a138ebb9dceb35d
+    model_filename: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+    model_sha256: 1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6
+
+    # One entry per RPC worker instance — the whole point of this
+    # playbook. Each worker is pinned to a specific paired peer (see the
+    # Dashboard's Peers section, or the peer_info Ansible module, for
+    # available hosts) and that peer's own vpc_id/subnet_id/security
+    # group — a peer has its own separate catalogue, not this build's
+    # local one (see haFullStack-LLD.md §13). Empty by default (the
+    # build fails fast below rather than silently doing nothing) — this
+    # playbook only exists to prove cross-host distributed inference.
+    # Add more entries as more machines join CloudCore; nothing here is
+    # hardcoded to exactly two hosts.
+    #
+    # SECURITY: the worker's security group is an EXISTING one on the
+    # peer (peer_security_group_id below), created outside this
+    # playbook, so it cannot be enforced here. When creating it,
+    # restrict the RPC port (rpc_port above) to this build's own local
+    # subnet (where the coordinator lives) — never 0.0.0.0/0. Reusing a
+    # broader existing security group defeats the protection the
+    # upstream project's own docs explicitly call for.
+    worker_peers: []
+
+  tasks:
+    - name: Fail fast if worker_peers is empty
+      ansible.builtin.fail:
+        msg: >-
+          worker_peers is empty -- this playbook's whole purpose is
+          cross-host distributed inference. Set at least one entry
+          (peer_id/peer_vpc_id/peer_subnet_id/peer_security_group_id).
+      when: worker_peers | length == 0
+
+    - name: Create VPC
+      cloudcore.cloudcore.vpc:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ vpc_name }}"
+        cidr_block: "10.91.0.0/16"
+        dns_support: true
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+      register: vpc
+
+    - name: Create coordinator security group (SSH + chat Web UI/API)
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ sg_name }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        description: "LLM chat coordinator — SSH + chat Web UI/API, scoped to admin_cidr"
+        ingress_rules:
+          - protocol: tcp
+            from_port: 22
+            to_port: 22
+            cidr: "{{ admin_cidr }}"
+          - protocol: tcp
+            from_port: "{{ http_port }}"
+            to_port: "{{ http_port }}"
+            cidr: "{{ admin_cidr }}"
+        egress_rules:
+          - protocol: "-1"
+            cidr: 0.0.0.0/0
+      register: sg
+
+    - name: Load shared promtail config
+      ansible.builtin.set_fact:
+        promtail_config: "{{ lookup('file', 'templates/llm-chat/promtail-config.yml.j2') }}"
+
+    - name: Render worker user_data (identical for every worker)
+      ansible.builtin.set_fact:
+        worker_user_data: "{{ lookup('template', 'templates/llm-chat/worker-cloud-init.yml.j2', template_vars={
+          'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
+          'rpc_port': rpc_port, 'threads': threads,
+          'promtail_config': promtail_config }) }}"
+
+    - name: Create RPC worker instances (one per worker_peers entry, each on its own peer)
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-worker-{{ idx }}"
+        image_id: ubuntu-22.04
+        flavor: "{{ worker_flavor }}"
+        vpc_id: "{{ item.peer_vpc_id }}"
+        subnet_id: "{{ item.peer_subnet_id }}"
+        security_group_ids: ["{{ item.peer_security_group_id }}"]
+        peer_id: "{{ item.peer_id }}"
+        user_data: "{{ worker_user_data }}"
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: llm-chat-worker
+      loop: "{{ worker_peers }}"
+      loop_control:
+        index_var: idx
+        label: "worker-{{ idx }} -> {{ item.peer_id }}"
+      register: created_workers
+
+    - name: Wait for all workers to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ item.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: worker_poll
+      until: worker_poll.json.status == "running"
+      retries: 30
+      delay: 5
+      loop: "{{ created_workers.results }}"
+      loop_control:
+        label: "{{ item.instance.name }}"
+
+    - name: Build the coordinator's --rpc argument from real worker IPs
+      ansible.builtin.set_fact:
+        rpc_servers: "{{ worker_poll.results | map(attribute='json.private_ip') | map('regex_replace', '$', ':' + (rpc_port | string)) | join(',') }}"
+
+    - name: Render coordinator user_data
+      ansible.builtin.set_fact:
+        coordinator_user_data: "{{ lookup('template', 'templates/llm-chat/coordinator-cloud-init.yml.j2', template_vars={
+          'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
+          'model_filename': model_filename, 'model_sha256': model_sha256,
+          'http_port': http_port, 'context_size': context_size, 'threads': threads,
+          'rpc_offload_layers': rpc_offload_layers,
+          'rpc_servers': rpc_servers, 'promtail_config': promtail_config }) }}"
+
+    - name: Create coordinator instance
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-coord"
+        image_id: ubuntu-22.04
+        flavor: "{{ coordinator_flavor }}"
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_id: subnet-local-01
+        security_group_ids: ["{{ sg.security_group.id }}"]
+        user_data: "{{ coordinator_user_data }}"
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: llm-chat-coordinator
+      register: coordinator
+
+    - name: Wait for coordinator to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ coordinator.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: coordinator_poll
+      until: coordinator_poll.json.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: Create application load balancer
+      cloudcore.cloudcore.load_balancer:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ lb_name }}"
+        type: application
+        vpc_id: "{{ vpc.vpc.id }}"
+        subnet_ids:
+          - subnet-local-01
+        internal: false
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: ingress
+      register: lb
+
+    - name: Register coordinator as the LB backend
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "{{ coordinator.instance.name }}"
+          address: "{{ coordinator_poll.json.private_ip }}"
+          port: "{{ http_port }}"
+        status_code: 201
+
+    - name: Set LB health check to llama-server's real liveness endpoint
+      # llama-server's own root path ("/") requires gzip-encoded
+      # responses (its embedded Web UI assets are pre-compressed) — a
+      # plain health check without Accept-Encoding: gzip gets a 415,
+      # exactly the same finding 13-distributed-llm.yml's own F-097
+      # made for the same binary. /health is llama-server's real
+      # liveness endpoint and needs no special headers.
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/health-check"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          protocol: HTTP
+          path: /health
+        status_code: 200
+
+    - name: Show chat URL
+      ansible.builtin.debug:
+        msg: >
+          Open this in a real browser (not curl -- llama-server's built-in
+          Web UI serves gzip-encoded assets, which curl doesn't request by
+          default): http://127.0.0.1:{{ lb.load_balancer.listen_port }}/
+          -- coordinator {{ coordinator.instance.name }}, {{ worker_peers | length }} worker(s).

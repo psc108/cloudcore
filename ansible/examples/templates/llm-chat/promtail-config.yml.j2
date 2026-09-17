@@ -1,0 +1,107 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  # Fixed address, not a discovered/templated one — Loki is a
+  # host-level, always-on service (api/setup-logging-service.sh,
+  # haFullStack-LLD.md §12), the same platform-capability pattern as
+  # the host-level package repo (192.168.100.1:8090, §7) rather than a
+  # dedicated per-example node. Every example's own promtail ships
+  # here, which is what makes log coverage apply no matter which
+  # example gets built, not just this one.
+  - url: http://192.168.100.1:3100/loki/api/v1/push
+
+# __HOSTNAME__ is fixed up at boot (this node's real hostname isn't
+# known until runtime) via the same sed-substitution idiom this stack
+# already uses for frontend's own index.html (__HOSTNAME__) and
+# render-keepalived-conf.sh's __IFACE__ — see each tier's own
+# cloud-init runcmd for the caller.
+scrape_configs:
+  # journald already captures every systemd-managed service on this
+  # node (nginx, mysql, apache2, rabbitmq-server, keepalived, proxysql,
+  # memcached, every *-status.timer, step-renew, quorum-watchdog) with
+  # zero per-service enumeration needed.
+  - job_name: journal
+    journal:
+      max_age: 12h
+      labels:
+        job: journal
+        host: __HOSTNAME__
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+
+  # Not journal-backed the same way — and the single most useful file
+  # this whole project's own debugging has repeatedly reached for (most
+  # of haFullStack-Findings-Log.md's real findings were first spotted
+  # here, not in journalctl).
+  - job_name: cloud-init-output
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: cloud-init-output
+          host: __HOSTNAME__
+          __path__: /var/log/cloud-init-output.log
+
+  # Per-service log FILES, not just what each service's own systemd
+  # unit happens to emit to stdout/stderr (journal, above) — a real
+  # gap noticed only once someone asked "are we watching everything?"
+  # directly. One shared config applied to every tier alike (same as
+  # every scrape_config above) rather than a per-tier variant — a path
+  # that doesn't exist on a given node (e.g. the nginx target on a
+  # MySQL node) is a harmless no-op for promtail's own file-target
+  # discovery, not an error, so there's no need to fork this file per
+  # service. /var/lib/proxysql is intentionally NOT glob-matched
+  # (*.log only) — that directory also holds this node's own TLS
+  # private key material (proxysql-key.pem); see
+  # proxysql-cloud-init.yml.j2's own setfacl step for exactly how
+  # promtail is granted access to proxysql.log specifically without
+  # touching those files' own permissions at all.
+  - job_name: nginx
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: nginx
+          host: __HOSTNAME__
+          __path__: /var/log/nginx/*.log
+
+  - job_name: mysql
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: mysql
+          host: __HOSTNAME__
+          __path__: /var/log/mysql/error.log
+
+  # rabbitmq's own log files are group-owned "rabbitmq", not "adm" —
+  # confirmed live (real "permission denied" until promtail was also
+  # added to that group; see rabbitmq-cloud-init.yml.j2's own
+  # runcmd).
+  - job_name: rabbitmq
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: rabbitmq
+          host: __HOSTNAME__
+          __path__: /var/log/rabbitmq/*.log
+
+  - job_name: apache2
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: apache2
+          host: __HOSTNAME__
+          __path__: /var/log/apache2/*.log
+
+  - job_name: proxysql
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: proxysql
+          host: __HOSTNAME__
+          __path__: /var/lib/proxysql/proxysql.log

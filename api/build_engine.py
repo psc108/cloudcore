@@ -86,6 +86,7 @@ _TEMPLATE_META = {
     "11-wifi-sniffer.yml":       {"title": "WiFi Sniffer",                 "description": "VPC + security group + instance running Kismet + aircrack-ng, driven by a passed-through USB WiFi adapter.", "resources": ["vpc", "security_group", "instance", "load_balancer"]},
     "12-ha-frontend-lb.yml":     {"title": "HA Frontend Load Balancer",    "description": "VPC + security groups + HA frontend instance group + 2 ProxySQL/NGINX/Keepalived nodes sharing a floating VIP + MySQL Group Replication + RabbitMQ + Keystone + backend application tier + shared NFS storage + DNS records.", "resources": ["vpc", "security_group", "instance", "nfs_server", "dns_record"]},
     "13-distributed-llm.yml":   {"title": "Distributed LLM Inference",   "description": "VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model's layers across hosts via llama.cpp's RPC backend, served through a load balancer.", "resources": ["vpc", "security_group", "instance", "load_balancer"]},
+    "14-llm-chat.yml":          {"title": "LLM Chat",                    "description": "Same distributed llama.cpp coordinator + RPC worker(s) as Distributed LLM Inference, but for an interactive human chat session — open the load balancer's own address in a browser for llama-server's own built-in chat Web UI.", "resources": ["vpc", "security_group", "instance", "load_balancer"]},
 }
 
 

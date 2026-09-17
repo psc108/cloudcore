@@ -95,6 +95,11 @@ _TEMPLATE_META = {
         "description": "VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model's layers across hosts via llama.cpp's RPC backend, served through a load balancer.",
         "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
     },
+    "llm-chat": {
+        "title": "LLM Chat",
+        "description": "Same distributed llama.cpp coordinator + RPC worker(s) as Distributed LLM Inference, but for an interactive human chat session — open the load balancer's own address in a browser for llama-server's own built-in chat Web UI.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
+    },
 }
 
 
