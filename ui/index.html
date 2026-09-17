@@ -816,6 +816,7 @@
       <div class="nav-dropdown">
         <button id="nav-builds" onclick="showSection('builds', this)">Ansible</button>
         <button id="nav-tofu" onclick="showSection('tofu', this)">OpenTofu</button>
+        <button id="nav-scheduler" onclick="showSection('scheduler', this)">Scheduler</button>
       </div>
     </div>
     <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
@@ -1529,6 +1530,127 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════ Scheduler ═══════════════════════════ -->
+  <div id="section-scheduler" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Schedules</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadScheduler()">↻</button>
+      </div>
+      <div class="table-wrap">
+        <table id="sched-table">
+          <thead><tr><th>Name</th><th>Kind</th><th>Next Run</th><th>Last Run</th><th>Enabled</th><th></th></tr></thead>
+          <tbody id="sched-tbody"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>New Schedule</h2>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Name *</label>
+          <input id="sched-name" type="text" placeholder="Nightly vpc-only build">
+        </div>
+        <div class="field">
+          <label>Kind *</label>
+          <select id="sched-kind" onchange="_schedOnKindChange()">
+            <option value="build">Generic Build</option>
+            <option value="llm_ingest">7B LLM Sentinel Ingest</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="sched-build-fields">
+        <div class="form-grid">
+          <div class="field">
+            <label>Engine</label>
+            <select id="sched-engine" onchange="_schedLoadTemplates()">
+              <option value="tofu">OpenTofu</option>
+              <option value="ansible">Ansible</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Template</label>
+            <select id="sched-template" onchange="_schedOnTemplateChange()"></select>
+          </div>
+        </div>
+        <div id="sched-var-form"></div>
+      </div>
+
+      <div id="sched-llm-fields" style="display:none">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+          Each wakeup checks Sentinel for new events since the last run; if there's nothing new, the ~4-minute cluster build is skipped entirely. Otherwise it builds the coordinator + one RPC worker per peer below, has the 7B model draft an understanding of what's new, writes it into this host's own Sentinel, relays the same findings to every peer below that's currently reachable and running Sentinel, then tears the cluster back down.
+        </p>
+        <div class="field">
+          <label>Worker Peers (JSON) *</label>
+          <textarea id="sched-worker-peers" rows="4" placeholder='[{"peer_id":"...","peer_vpc_id":"...","peer_subnet_id":"...","peer_security_group_id":"..."}]'></textarea>
+          <span class="bm-field-hint">One entry per RPC worker. Peer ids/vpc/subnet/security-group ids come from the Peers page and that peer's own catalogue (Resource Placement page).</span>
+        </div>
+      </div>
+
+      <h3 class="about-heading" style="margin-top:20px">Recurrence</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>Mode</label>
+          <select id="sched-mode" onchange="_schedOnModeChange()">
+            <option value="once">Once</option>
+            <option value="daily" selected>Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="interval_minutes">Every N minutes</option>
+            <option value="interval_hours">Every N hours</option>
+          </select>
+        </div>
+        <div class="field" id="sched-field-date" style="display:none">
+          <label>Date</label>
+          <input id="sched-date" type="date">
+        </div>
+        <div class="field" id="sched-field-weekday" style="display:none">
+          <label>Day of Week</label>
+          <select id="sched-weekday">
+            <option value="0">Sunday</option><option value="1">Monday</option>
+            <option value="2">Tuesday</option><option value="3">Wednesday</option>
+            <option value="4">Thursday</option><option value="5">Friday</option>
+            <option value="6">Saturday</option>
+          </select>
+        </div>
+        <div class="field" id="sched-field-hour">
+          <label>Hour</label>
+          <input id="sched-hour" type="number" min="0" max="23" value="3">
+        </div>
+        <div class="field" id="sched-field-minute">
+          <label>Minute</label>
+          <input id="sched-minute" type="number" min="0" max="59" value="0">
+        </div>
+        <div class="field" id="sched-field-n" style="display:none">
+          <label id="sched-n-label">N</label>
+          <input id="sched-n" type="number" min="1" value="15">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="schedCreate()">Create Schedule</button>
+      </div>
+    </div>
+
+    <div class="card" id="sched-runs-card" style="display:none">
+      <div class="card-header">
+        <h2 id="sched-runs-title">Run History</h2>
+        <button class="refresh-btn" title="Close" onclick="document.getElementById('sched-runs-card').style.display='none'">✕</button>
+      </div>
+      <div class="table-wrap">
+        <table id="sched-runs-table">
+          <thead><tr><th>Started</th><th>Status</th><th>Summary</th></tr></thead>
+          <tbody id="sched-runs-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="section-placement" class="section">
 
     <div class="card">
@@ -1874,7 +1996,7 @@ const _sectionGroup = {
   sgs: 'infrastructure',  subnets: 'infrastructure',
   dns: 'networking', peers: 'networking', placement: 'networking',
   nfs: 'storage',
-  builds: 'builds', tofu: 'builds',
+  builds: 'builds', tofu: 'builds', scheduler: 'builds',
 };
 
 // Click-toggle dropdowns; close when clicking outside
@@ -1900,6 +2022,7 @@ function showSection(name, btn) {
   if (name !== 'instances') stopInstancePoll();
   if (name !== 'dashboard') stopDashPoll();
   if (name !== 'peers') stopPeersPoll();
+  if (name !== 'scheduler') stopSchedulerPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
   if (name === 'subnets')       loadSubnets();
@@ -1913,6 +2036,7 @@ function showSection(name, btn) {
   if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
+  if (name === 'scheduler')     { loadScheduler(); startSchedulerPoll(); }
   if (name === 'editor')         loadEditor();
   if (name === 'settings')       loadSettings();
   if (name === 'about')          loadAbout();
@@ -5637,6 +5761,237 @@ function loadResourcePlacement() {
     peersTbody.innerHTML = `<tr class="empty-row"><td colspan="5">Error: ${_esc(e.message)}</td></tr>`;
     tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${_esc(e.message)}</td></tr>`;
   });
+}
+
+// ── Scheduler ────────────────────────────────────────────────────────────────
+// var, not let — see 26-peers.js's own comment on why (ui/build.sh
+// concatenation order + 15-init.js's early showSection() call means a
+// `let` here would hit the same temporal-dead-zone bug found live in
+// F-089).
+var _schedPollTimer = null;
+var _schedTemplates = [];
+var _schedCurrentSchema = null;
+
+function startSchedulerPoll() {
+  if (_schedPollTimer) return;
+  _schedPollTimer = setInterval(loadScheduler, 15000);
+}
+function stopSchedulerPoll() {
+  clearInterval(_schedPollTimer);
+  _schedPollTimer = null;
+}
+
+async function loadScheduler() {
+  const tbody = document.getElementById('sched-tbody');
+  try {
+    const data = await api('GET', '/v1/schedules');
+    if (!data.items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No schedules yet.</td></tr>';
+    } else {
+      tbody.innerHTML = data.items.map(s => `
+        <tr>
+          <td><strong>${_esc(s.name)}</strong></td>
+          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
+          <td class="mono">${s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—'}</td>
+          <td>${s.last_run_at ? new Date(s.last_run_at).toLocaleString() + ' ' + badge(s.last_status || 'pending') : '—'}</td>
+          <td>${s.enabled ? '✅' : '⏸️'}</td>
+          <td>
+            <button class="btn btn-sm" onclick="schedRunNow('${s.id}')">Run Now</button>
+            <button class="btn btn-sm" onclick="schedShowRuns('${s.id}','${_esc(s.name)}')">History</button>
+            <button class="btn btn-danger btn-sm" onclick="schedDelete('${s.id}','${_esc(s.name)}')">Delete</button>
+          </td>
+        </tr>`).join('');
+    }
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${e.message}</td></tr>`;
+  }
+  if (!_schedTemplates.length) await _schedLoadTemplates();
+}
+
+function _schedOnKindChange() {
+  const kind = document.getElementById('sched-kind').value;
+  document.getElementById('sched-build-fields').style.display = kind === 'build' ? '' : 'none';
+  document.getElementById('sched-llm-fields').style.display = kind === 'llm_ingest' ? '' : 'none';
+}
+
+function _schedOnModeChange() {
+  const mode = document.getElementById('sched-mode').value;
+  document.getElementById('sched-field-date').style.display = mode === 'once' ? '' : 'none';
+  document.getElementById('sched-field-weekday').style.display = mode === 'weekly' ? '' : 'none';
+  const isTimeOfDay = mode === 'once' || mode === 'daily' || mode === 'weekly';
+  document.getElementById('sched-field-hour').style.display = isTimeOfDay ? '' : 'none';
+  document.getElementById('sched-field-minute').style.display = isTimeOfDay ? '' : 'none';
+  const isInterval = mode === 'interval_minutes' || mode === 'interval_hours';
+  document.getElementById('sched-field-n').style.display = isInterval ? '' : 'none';
+  document.getElementById('sched-n-label').textContent = mode === 'interval_minutes' ? 'Minutes' : 'Hours';
+}
+
+async function _schedLoadTemplates() {
+  const sel = document.getElementById('sched-template');
+  const engine = document.getElementById('sched-engine').value;
+  try {
+    if (!_schedTemplates.length) {
+      const data = await api('GET', '/v1/schedules/templates');
+      _schedTemplates = data.items;
+    }
+    const items = _schedTemplates.filter(t => t.engine === engine);
+    sel.innerHTML = items.map(t => `<option value="${t.filename}">${_esc(t.title)}</option>`).join('');
+    await _schedOnTemplateChange();
+  } catch (e) {
+    sel.innerHTML = `<option>Error: ${e.message}</option>`;
+  }
+}
+
+async function _schedOnTemplateChange() {
+  const engine = document.getElementById('sched-engine').value;
+  const filename = document.getElementById('sched-template').value;
+  const form = document.getElementById('sched-var-form');
+  if (!filename) { form.innerHTML = ''; return; }
+  try {
+    const path = engine === 'tofu'
+      ? `/v1/tofu/templates/${filename}/vars`
+      : `/v1/builds/templates/${filename}/vars`;
+    const schema = await api('GET', path);
+    _schedCurrentSchema = schema;
+    form.innerHTML = Object.entries(schema).map(([key, meta]) => `
+      <div class="field">
+        <label>${_esc(key)}${meta.derived ? ' <span class="text-muted">(derived)</span>' : ''}</label>
+        <input id="sched-var-${_esc(key)}" type="text" value="${_esc(String(meta.default ?? ''))}">
+      </div>`).join('');
+  } catch (e) {
+    form.innerHTML = `<p class="text-muted">Error loading variables: ${e.message}</p>`;
+  }
+}
+
+function _schedBuildRecurrence() {
+  const mode = document.getElementById('sched-mode').value;
+  if (mode === 'once') {
+    const date = document.getElementById('sched-date').value;
+    const hour = document.getElementById('sched-hour').value;
+    const minute = document.getElementById('sched-minute').value;
+    if (!date) throw new Error('Pick a date for a one-off schedule.');
+    const run_at = `${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+    return { mode: 'once', run_at };
+  }
+  if (mode === 'daily') {
+    return { mode: 'daily', hour: Number(document.getElementById('sched-hour').value),
+              minute: Number(document.getElementById('sched-minute').value) };
+  }
+  if (mode === 'weekly') {
+    return { mode: 'weekly', hour: Number(document.getElementById('sched-hour').value),
+              minute: Number(document.getElementById('sched-minute').value),
+              weekday: Number(document.getElementById('sched-weekday').value) };
+  }
+  if (mode === 'interval_minutes') {
+    return { mode: 'interval_minutes', minutes: Number(document.getElementById('sched-n').value) };
+  }
+  return { mode: 'interval_hours', hours: Number(document.getElementById('sched-n').value) };
+}
+
+async function schedCreate() {
+  const name = document.getElementById('sched-name').value.trim();
+  const kind = document.getElementById('sched-kind').value;
+  if (!name) { toast('Name is required', 'error'); return; }
+
+  let recurrence;
+  try {
+    recurrence = _schedBuildRecurrence();
+  } catch (e) {
+    toast(e.message, 'error');
+    return;
+  }
+
+  const payload = { name, kind, recurrence };
+
+  if (kind === 'build') {
+    payload.engine = document.getElementById('sched-engine').value;
+    payload.template = document.getElementById('sched-template').value;
+    const var_overrides = {};
+    if (_schedCurrentSchema) {
+      for (const key of Object.keys(_schedCurrentSchema)) {
+        const el = document.getElementById(`sched-var-${key}`);
+        if (el && el.value !== '') var_overrides[key] = el.value;
+      }
+    }
+    payload.var_overrides = var_overrides;
+  } else {
+    const raw = document.getElementById('sched-worker-peers').value.trim();
+    let worker_peers;
+    try {
+      worker_peers = raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      toast('Worker Peers must be valid JSON: ' + e.message, 'error');
+      return;
+    }
+    if (!Array.isArray(worker_peers) || !worker_peers.length) {
+      toast('At least one worker peer is required for 7B LLM Ingest.', 'error');
+      return;
+    }
+    payload.var_overrides = { worker_peers };
+  }
+
+  try {
+    await api('POST', '/v1/schedules', payload);
+    toast('Schedule created', 'success');
+    document.getElementById('sched-name').value = '';
+    loadScheduler();
+  } catch (e) {
+    toast('Failed to create schedule: ' + e.message, 'error');
+  }
+}
+
+async function schedRunNow(id) {
+  try {
+    await api('POST', `/v1/schedules/${id}/run-now`);
+    toast('Triggered', 'success');
+    loadScheduler();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function schedDelete(id, name) {
+  if (!confirm(`Delete schedule "${name}"? This does not affect anything it already built.`)) return;
+  try {
+    await api('DELETE', `/v1/schedules/${id}`);
+    toast('Schedule deleted', 'success');
+    loadScheduler();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function schedShowRuns(id, name) {
+  const card = document.getElementById('sched-runs-card');
+  const tbody = document.getElementById('sched-runs-tbody');
+  document.getElementById('sched-runs-title').textContent = `Run History — ${name}`;
+  card.style.display = '';
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+  try {
+    const data = await api('GET', `/v1/schedules/${id}/runs`);
+    if (!data.items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">No runs yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.items.map(r => {
+      let extra = '';
+      if (r.llm_ingestion) {
+        const ing = r.llm_ingestion;
+        const peers = (ing.peers_synced || []).map(p => `${_esc(p.hostname)}: ${_esc(p.status)}`).join(', ');
+        extra = `<div class="text-muted" style="font-size:12px;margin-top:4px">
+          Events: ${ing.events_seen} · Findings: ${ing.findings_created} · Suggestions: ${ing.suggestions_created}
+          ${peers ? ' · Peers: ' + peers : ''}
+        </div>`;
+      }
+      return `<tr>
+        <td class="mono">${new Date(r.started_at).toLocaleString()}</td>
+        <td>${badge(r.status)}</td>
+        <td>${_esc(r.summary)}${extra}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Error: ${e.message}</td></tr>`;
+  }
 }
 
 </script>

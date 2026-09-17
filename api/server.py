@@ -39,6 +39,8 @@ from help_routes import help_bp
 from settings_routes import settings_bp
 from peers_routes import peers_bp, PEER_REACHABLE_ENDPOINTS
 from stats_routes import stats_bp
+from scheduler_routes import scheduler_bp
+import scheduler
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -53,6 +55,7 @@ app.register_blueprint(help_bp)
 app.register_blueprint(settings_bp)
 app.register_blueprint(peers_bp)
 app.register_blueprint(stats_bp)
+app.register_blueprint(scheduler_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -2024,6 +2027,7 @@ if __name__ == "__main__":
     dns_store.load()
     reconcile()
     dns_server.start()
+    scheduler.start()
     # threaded=True: an NFS file upload (api/nfs.py's upload_file) holds
     # its request open for as long as the transfer takes — without this,
     # Werkzeug's single-threaded dev server would stall every other

@@ -5,7 +5,7 @@ const _sectionGroup = {
   sgs: 'infrastructure',  subnets: 'infrastructure',
   dns: 'networking', peers: 'networking', placement: 'networking',
   nfs: 'storage',
-  builds: 'builds', tofu: 'builds',
+  builds: 'builds', tofu: 'builds', scheduler: 'builds',
 };
 
 // Click-toggle dropdowns; close when clicking outside
@@ -31,6 +31,7 @@ function showSection(name, btn) {
   if (name !== 'instances') stopInstancePoll();
   if (name !== 'dashboard') stopDashPoll();
   if (name !== 'peers') stopPeersPoll();
+  if (name !== 'scheduler') stopSchedulerPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
   if (name === 'subnets')       loadSubnets();
@@ -44,6 +45,7 @@ function showSection(name, btn) {
   if (name === 'nfs')           loadNFS();
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
+  if (name === 'scheduler')     { loadScheduler(); startSchedulerPoll(); }
   if (name === 'editor')         loadEditor();
   if (name === 'settings')       loadSettings();
   if (name === 'about')          loadAbout();

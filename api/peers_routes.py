@@ -16,10 +16,13 @@ Two trust tiers in this one blueprint:
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import secrets
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -66,7 +69,16 @@ PEER_REACHABLE_ENDPOINTS = {
     # response, no more sensitive than any other read already reachable
     # here.
     "stats.get_system_stats",
+    # peers.sentinel_relay: lets an approved peer push newly-LLM-
+    # generated Sentinel findings/suggestions to THIS host's own local
+    # Sentinel — per direct request ("distribute to the peers that are
+    # online"). See its own docstring below for the trust boundary.
+    "peers.sentinel_relay",
 }
+
+# Sentinel is a separate, sibling project — a fixed, well-known local
+# address (same convention Sentinel's own config.py uses for Loki).
+SENTINEL_LOCAL_URL = os.environ.get("SENTINEL_LOCAL_URL", "http://127.0.0.1:8900")
 
 PAIRING_REQUEST_TTL_MINUTES = 15
 MAX_PENDING_PAIRING_REQUESTS = 20
@@ -497,3 +509,62 @@ def recommend_placement():
         "recommended": {"peer_id": best["peer_id"], "hostname": best["hostname"], "verdict": best["verdict"]},
         "hosts": [{"peer_id": c["peer_id"], "hostname": c["hostname"], "verdict": c["verdict"]} for c in candidates],
     })
+
+
+def _peer_inbound_auth() -> bool:
+    """True if the request carries either the shared dev token or a
+    valid approved peer's own local_token. Duplicated here rather than
+    imported from server.py's require_auth — this module is imported
+    by server.py before require_auth is defined there, so importing it
+    back would be circular (same reasoning usb_routes.py's own
+    require_auth duplication documents)."""
+    auth = request.headers.get("Authorization", "")
+    if auth == f"Bearer {API_TOKEN}":
+        return True
+    token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+    return bool(token and peers_store.find_peer_by_local_token(token))
+
+
+@peers_bp.post("/v1/peers/sentinel-relay")
+def sentinel_relay():
+    """Receives newly-LLM-generated Sentinel findings/suggestions from
+    an approved peer's own scheduler (api/scheduler.py's llm_ingest
+    job — see its own module docstring) and forwards them to THIS
+    host's own *local* Sentinel only (127.0.0.1, never re-relayed
+    further) — never accepts or acts on a network address supplied in
+    the payload itself.
+
+    Sentinel's own API has zero auth by design (its README states its
+    trust model is local-only, not hostile-network-safe) — writes only
+    ever arrive here via CloudCore's already-authenticated peer
+    channel, exactly the same trust boundary every other peer
+    capability in this file uses. If this host doesn't run Sentinel at
+    all (connection refused), that's a normal, expected outcome for a
+    peer that hasn't installed it — reported back as 'no-sentinel',
+    not an error the caller needs to treat specially."""
+    if not _peer_inbound_auth():
+        return jsonify({"status": 401, "title": "Unauthorized"}), 401
+
+    body = request.get_json(force=True) or {}
+    source_doc = body.get("source_doc") or "llm-ingest:unknown-peer"
+    findings = body.get("findings") or []
+    suggestions = body.get("suggestions") or []
+
+    def _post(path: str, payload: dict) -> dict:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            SENTINEL_LOCAL_URL + path, data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+
+    try:
+        imported = 0
+        if findings:
+            resp = _post("/api/kb/import", {"source_doc": source_doc, "findings": findings})
+            imported = resp.get("imported", 0)
+        if suggestions:
+            _post("/api/suggestions/import", {"items": suggestions})
+        return jsonify({"status": "synced", "findings_imported": imported}), 200
+    except (urllib.error.URLError, ConnectionError, OSError):
+        return jsonify({"status": "no-sentinel"}), 200

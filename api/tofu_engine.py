@@ -90,6 +90,11 @@ _TEMPLATE_META = {
         "description": "VPC + security group + 1 instance running Kismet + the aircrack-ng suite, driven by a passed-through USB WiFi adapter, through a network load balancer.",
         "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
     },
+    "distributed-llm": {
+        "title": "Distributed LLM Inference",
+        "description": "VPC + coordinator instance + one RPC worker per peer, splitting a 7B GGUF model's layers across hosts via llama.cpp's RPC backend, served through a load balancer.",
+        "resources": ["vpc", "subnet", "security_group", "instance", "load_balancer"],
+    },
 }
 
 
@@ -355,7 +360,19 @@ def _build_env(var_overrides: dict) -> tuple[dict, Path]:
         env["TF_CLI_CONFIG_FILE"] = str(tofurc)
     for k, v in var_overrides.items():
         if k not in ("cloudcore_api_url", "cloudcore_api_token"):
-            env[f"TF_VAR_{k}"] = str(v)
+            # A plain str is passed through raw (Terraform's own
+            # TF_VAR_x handling treats it as a literal string value for
+            # a string-typed variable) — every peer-placement var in
+            # production use today is a string, so this is the
+            # long-standing working case. Anything else (bool/int/list/
+            # dict — e.g. distributed-llm's own worker_peers, a
+            # list(object(...))) needs json.dumps(): Python's str() of
+            # a list of dicts produces single-quoted repr syntax, not
+            # valid HCL/JSON, which tofu apply would reject outright.
+            # json.dumps() output is valid HCL for every type Terraform
+            # itself supports, since HCL's own expression syntax is a
+            # superset of JSON.
+            env[f"TF_VAR_{k}"] = v if isinstance(v, str) else json.dumps(v)
     return env, tofurc
 
 

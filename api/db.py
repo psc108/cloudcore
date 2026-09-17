@@ -359,6 +359,59 @@ CREATE TABLE IF NOT EXISTS pairing_requests (
     expires_at      TEXT NOT NULL
 );
 
+-- Scheduler (api/scheduler.py). recurrence_type 'once' uses run_at (an
+-- explicit ISO timestamp — a calendar date has no cron field); 'cron'
+-- uses cron_expr, built server-side from the dashboard's simple
+-- picker (api/croncalc.py's build_cron()) — no raw cron ever accepted
+-- from a client. kind 'llm_ingest' is the only kind that uses
+-- sentinel_checkpoint_event_id; ignored for kind 'build'.
+CREATE TABLE IF NOT EXISTS schedules (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    engine            TEXT NOT NULL DEFAULT '',
+    template          TEXT NOT NULL DEFAULT '',
+    var_overrides     TEXT NOT NULL DEFAULT '{}',
+    recurrence_type   TEXT NOT NULL,
+    run_at            TEXT,
+    cron_expr         TEXT NOT NULL DEFAULT '',
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    next_run_at       TEXT,
+    last_run_at       TEXT,
+    last_status       TEXT NOT NULL DEFAULT '',
+    sentinel_checkpoint_event_id INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL,
+    created_by        TEXT NOT NULL DEFAULT 'ui'
+);
+
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id            TEXT PRIMARY KEY,
+    schedule_id   TEXT NOT NULL REFERENCES schedules(id),
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT,
+    status        TEXT NOT NULL DEFAULT 'running',
+    summary       TEXT NOT NULL DEFAULT '',
+    log           TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS schedule_runs_schedule_idx ON schedule_runs(schedule_id);
+
+-- One row per llm_ingest run, structured detail alongside that run's
+-- own schedule_runs row (which just carries the generic status/log
+-- every schedule kind gets).
+CREATE TABLE IF NOT EXISTS llm_ingestions (
+    id                    TEXT PRIMARY KEY,
+    schedule_id           TEXT NOT NULL,
+    run_id                TEXT NOT NULL,
+    started_at            TEXT NOT NULL,
+    finished_at           TEXT,
+    events_seen           INTEGER NOT NULL DEFAULT 0,
+    findings_created      INTEGER NOT NULL DEFAULT 0,
+    suggestions_created   INTEGER NOT NULL DEFAULT 0,
+    peers_synced          TEXT NOT NULL DEFAULT '[]',
+    summary_text          TEXT NOT NULL DEFAULT '',
+    status                TEXT NOT NULL DEFAULT 'running'
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
     content='help_articles', content_rowid='rowid'

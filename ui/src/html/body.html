@@ -42,6 +42,7 @@
       <div class="nav-dropdown">
         <button id="nav-builds" onclick="showSection('builds', this)">Ansible</button>
         <button id="nav-tofu" onclick="showSection('tofu', this)">OpenTofu</button>
+        <button id="nav-scheduler" onclick="showSection('scheduler', this)">Scheduler</button>
       </div>
     </div>
     <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
@@ -751,6 +752,127 @@
       </div>
       <div class="form-actions">
         <button class="btn btn-primary" onclick="pairManual()">Pair</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ Scheduler ═══════════════════════════ -->
+  <div id="section-scheduler" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Schedules</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadScheduler()">↻</button>
+      </div>
+      <div class="table-wrap">
+        <table id="sched-table">
+          <thead><tr><th>Name</th><th>Kind</th><th>Next Run</th><th>Last Run</th><th>Enabled</th><th></th></tr></thead>
+          <tbody id="sched-tbody"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>New Schedule</h2>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Name *</label>
+          <input id="sched-name" type="text" placeholder="Nightly vpc-only build">
+        </div>
+        <div class="field">
+          <label>Kind *</label>
+          <select id="sched-kind" onchange="_schedOnKindChange()">
+            <option value="build">Generic Build</option>
+            <option value="llm_ingest">7B LLM Sentinel Ingest</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="sched-build-fields">
+        <div class="form-grid">
+          <div class="field">
+            <label>Engine</label>
+            <select id="sched-engine" onchange="_schedLoadTemplates()">
+              <option value="tofu">OpenTofu</option>
+              <option value="ansible">Ansible</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Template</label>
+            <select id="sched-template" onchange="_schedOnTemplateChange()"></select>
+          </div>
+        </div>
+        <div id="sched-var-form"></div>
+      </div>
+
+      <div id="sched-llm-fields" style="display:none">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+          Each wakeup checks Sentinel for new events since the last run; if there's nothing new, the ~4-minute cluster build is skipped entirely. Otherwise it builds the coordinator + one RPC worker per peer below, has the 7B model draft an understanding of what's new, writes it into this host's own Sentinel, relays the same findings to every peer below that's currently reachable and running Sentinel, then tears the cluster back down.
+        </p>
+        <div class="field">
+          <label>Worker Peers (JSON) *</label>
+          <textarea id="sched-worker-peers" rows="4" placeholder='[{"peer_id":"...","peer_vpc_id":"...","peer_subnet_id":"...","peer_security_group_id":"..."}]'></textarea>
+          <span class="bm-field-hint">One entry per RPC worker. Peer ids/vpc/subnet/security-group ids come from the Peers page and that peer's own catalogue (Resource Placement page).</span>
+        </div>
+      </div>
+
+      <h3 class="about-heading" style="margin-top:20px">Recurrence</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>Mode</label>
+          <select id="sched-mode" onchange="_schedOnModeChange()">
+            <option value="once">Once</option>
+            <option value="daily" selected>Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="interval_minutes">Every N minutes</option>
+            <option value="interval_hours">Every N hours</option>
+          </select>
+        </div>
+        <div class="field" id="sched-field-date" style="display:none">
+          <label>Date</label>
+          <input id="sched-date" type="date">
+        </div>
+        <div class="field" id="sched-field-weekday" style="display:none">
+          <label>Day of Week</label>
+          <select id="sched-weekday">
+            <option value="0">Sunday</option><option value="1">Monday</option>
+            <option value="2">Tuesday</option><option value="3">Wednesday</option>
+            <option value="4">Thursday</option><option value="5">Friday</option>
+            <option value="6">Saturday</option>
+          </select>
+        </div>
+        <div class="field" id="sched-field-hour">
+          <label>Hour</label>
+          <input id="sched-hour" type="number" min="0" max="23" value="3">
+        </div>
+        <div class="field" id="sched-field-minute">
+          <label>Minute</label>
+          <input id="sched-minute" type="number" min="0" max="59" value="0">
+        </div>
+        <div class="field" id="sched-field-n" style="display:none">
+          <label id="sched-n-label">N</label>
+          <input id="sched-n" type="number" min="1" value="15">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="schedCreate()">Create Schedule</button>
+      </div>
+    </div>
+
+    <div class="card" id="sched-runs-card" style="display:none">
+      <div class="card-header">
+        <h2 id="sched-runs-title">Run History</h2>
+        <button class="refresh-btn" title="Close" onclick="document.getElementById('sched-runs-card').style.display='none'">✕</button>
+      </div>
+      <div class="table-wrap">
+        <table id="sched-runs-table">
+          <thead><tr><th>Started</th><th>Status</th><th>Summary</th></tr></thead>
+          <tbody id="sched-runs-tbody"></tbody>
+        </table>
       </div>
     </div>
   </div>
