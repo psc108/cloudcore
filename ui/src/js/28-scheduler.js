@@ -47,6 +47,67 @@ function _schedOnKindChange() {
   const kind = document.getElementById('sched-kind').value;
   document.getElementById('sched-build-fields').style.display = kind === 'build' ? '' : 'none';
   document.getElementById('sched-llm-fields').style.display = kind === 'llm_ingest' ? '' : 'none';
+  if (kind === 'llm_ingest') _schedLoadPeerPicker();
+}
+
+// Auto-populates the worker-peer candidate pool from the same
+// traffic-light verdict the Resource Placement page's Capacity card
+// and the Build Manager's peer_id auto-fill already use — per direct
+// request: "when setting the schedule for llm wakeup we should expect
+// the peers list to auto populate based on the traffic lights." Every
+// approved peer is listed and selectable (never hidden — "leave alone"
+// is a default, not a lockout), only green ones start checked.
+async function _schedLoadPeerPicker() {
+  const tbody = document.getElementById('sched-peer-picker-tbody');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="3">Loading…</td></tr>';
+  try {
+    const [peersData, rec] = await Promise.all([
+      api('GET', '/v1/peers?status=approved'),
+      api('GET', '/v1/peers/recommend-placement'),
+    ]);
+    const verdictByPeer = {};
+    (rec.hosts || []).forEach(h => { if (h.peer_id) verdictByPeer[h.peer_id] = h.verdict; });
+    const peers = (peersData.items || []).filter(p => p.status === 'approved');
+    if (!peers.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">No approved peers — pair with one on the Peers page first.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = peers.map(p => {
+      const verdict = verdictByPeer[p.id];
+      const checked = verdict === 'active' ? 'checked' : '';
+      const badgeHtml = verdict && _PLACEMENT_VERDICTS[verdict]
+        ? `<span class="badge badge-${verdict}">${_PLACEMENT_VERDICTS[verdict].dot} ${_PLACEMENT_VERDICTS[verdict].label}</span>`
+        : '<span class="badge">⚪ Unknown — can\'t assess right now</span>';
+      return `<tr>
+        <td><input type="checkbox" class="sched-peer-cb" value="${p.id}" ${checked}></td>
+        <td>${_esc(p.hostname)}</td>
+        <td>${badgeHtml}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="3">Error: ${e.message}</td></tr>`;
+  }
+}
+
+// Resolves one peer's own vpc/subnet/security-group (first match, same
+// "auto-select the first/only entry" convention the Build Manager's own
+// peer cascade already uses — see _bmCascadeFromPeer/_bmCascadeFromVpc
+// in 16-build-manager.js) — done once at pool-creation time, since
+// which *network scaffolding* a peer has doesn't change with load the
+// way whether it's actually USED each cycle does (that part is decided
+// fresh every wakeup, server-side, by api/scheduler.py).
+async function _schedResolvePeerPlacement(peerId) {
+  const [vpcData, sgData] = await Promise.all([
+    api('GET', `/v1/peers/${peerId}/vpcs`),
+    api('GET', `/v1/peers/${peerId}/security-groups`),
+  ]);
+  const vpc = (vpcData.items || [])[0];
+  if (!vpc) return null;
+  const subnetData = await api('GET', `/v1/peers/${peerId}/subnets?vpc_id=${encodeURIComponent(vpc.id)}`);
+  const subnet = (subnetData.items || [])[0];
+  const sg = (sgData.items || []).find(s => s.vpc_id === vpc.id);
+  if (!subnet || !sg) return null;
+  return { peer_id: peerId, peer_vpc_id: vpc.id, peer_subnet_id: subnet.id, peer_security_group_id: sg.id };
 }
 
 function _schedOnModeChange() {
@@ -150,19 +211,23 @@ async function schedCreate() {
     }
     payload.var_overrides = var_overrides;
   } else {
-    const raw = document.getElementById('sched-worker-peers').value.trim();
-    let worker_peers;
+    const checked = Array.from(document.querySelectorAll('.sched-peer-cb:checked')).map(cb => cb.value);
+    if (!checked.length) {
+      toast('Select at least one peer for the worker pool (green ones are pre-checked).', 'error');
+      return;
+    }
+    let pool;
     try {
-      worker_peers = raw ? JSON.parse(raw) : [];
+      pool = (await Promise.all(checked.map(_schedResolvePeerPlacement))).filter(Boolean);
     } catch (e) {
-      toast('Worker Peers must be valid JSON: ' + e.message, 'error');
+      toast('Failed to resolve peer network details: ' + e.message, 'error');
       return;
     }
-    if (!Array.isArray(worker_peers) || !worker_peers.length) {
-      toast('At least one worker peer is required for 7B LLM Ingest.', 'error');
+    if (!pool.length) {
+      toast('Could not resolve a vpc/subnet/security-group on any selected peer — check that peer\'s own catalogue on the Resource Placement page.', 'error');
       return;
     }
-    payload.var_overrides = { worker_peers };
+    payload.var_overrides = { worker_peer_pool: pool };
   }
 
   try {

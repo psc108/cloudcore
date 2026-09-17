@@ -22,6 +22,7 @@ import build_engine
 import croncalc
 import db
 import peer_client
+import peers_routes
 import peers_store
 import tofu_engine
 from models import now_iso
@@ -323,8 +324,39 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
 
     _log(f"{len(new_events)} new Sentinel event(s) since checkpoint {checkpoint}.")
 
-    # 2. Build the ephemeral cluster.
+    # 2. Pick workers from the schedule's own candidate pool by CURRENT
+    # traffic light, not whatever was true when the schedule was
+    # created — the whole point of "auto-populate based on the traffic
+    # lights" is that this is re-evaluated every wakeup. Green
+    # (verdict 'active') preferred; amber ('pending', "risky but could
+    # try") used only if no green candidate is available right now; red
+    # ('error', "leave alone") never auto-selected.
     var_overrides = dict(schedule["var_overrides"])
+    pool = var_overrides.pop("worker_peer_pool", []) or []
+    if not pool:
+        _log("No worker peer pool configured on this schedule.")
+        _save_ingestion(finished_at=now_iso(), status="failed", events_seen=len(new_events))
+        return "failed", "No worker peer pool configured", log
+
+    green, amber = [], []
+    for p in pool:
+        verdict = peers_routes.peer_verdict(p["peer_id"])
+        if verdict == "active":
+            green.append(p)
+        elif verdict == "pending":
+            amber.append(p)
+        else:
+            _log(f"Peer {p['peer_id']}: verdict={verdict or 'unreachable'} — excluded this cycle.")
+    selected = green or amber
+    if not selected:
+        _log("No pool peer is currently green or amber (all red or unreachable) — skipping this cycle.")
+        _save_ingestion(finished_at=now_iso(), status="success", events_seen=len(new_events))
+        return "success", "No healthy worker peer available this cycle", log
+    _log(f"Selected {len(selected)} worker(s) this cycle "
+         f"({'green' if selected is green else 'amber (no green available)'}).")
+    var_overrides["worker_peers"] = selected
+
+    # 3. Build the ephemeral cluster.
     http_port = int(var_overrides.get("http_port", 8610))
     build = tofu_engine.submit_build("distributed-llm", var_overrides, created_by="scheduler")
     build_id = build["id"]
@@ -351,14 +383,14 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
     max_event_id = checkpoint
 
     try:
-        # 3. Wait for the coordinator to actually be ready.
+        # 4. Wait for the coordinator to actually be ready.
         coordinator_url = f"http://127.0.0.1:{http_port}"
         if not _wait_for_health(coordinator_url, timeout_s=360):
             _log("Coordinator never became healthy within 6 minutes.")
             raise RuntimeError("coordinator health check timed out")
         _log("Coordinator healthy — sending ingestion prompt.")
 
-        # 4. Prompt the model.
+        # 5. Prompt the model.
         parsed = _run_ingestion_prompt(coordinator_url, new_events)
         summary_text = parsed.get("summary", "")
         model_findings = parsed.get("findings", []) or []
@@ -366,7 +398,7 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
         _log(f"Model returned {len(model_findings)} finding(s), "
              f"{len(model_suggestions)} suggestion(s).")
 
-        # 5. Write back into this host's own Sentinel.
+        # 6. Write back into this host's own Sentinel.
         source_doc = f"llm-ingest:{_HOSTNAME}"
         codes = []
         if model_findings:
@@ -396,14 +428,14 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
                 suggestions_created = resp.get("imported", 0)
                 _log(f"Imported {suggestions_created} suggestion(s) into local Sentinel.")
 
-        # 6. Advance the checkpoint.
+        # 7. Advance the checkpoint.
         max_event_id = max(e["id"] for e in new_events)
 
-        # 7. Distribute to online peers.
+        # 8. Distribute to online peers.
         peers_synced = _distribute_to_peers(model_findings, model_suggestions, codes, source_doc, _log)
 
     finally:
-        # 8. Always tear the cluster down, regardless of steps 4-7.
+        # 9. Always tear the cluster down, regardless of steps 5-8.
         _log("Destroying ephemeral cluster...")
         try:
             tofu_engine.run_tofu_destroy(build_id)

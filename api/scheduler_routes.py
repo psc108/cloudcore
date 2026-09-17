@@ -63,6 +63,12 @@ def create_schedule():
 
     if kind == "llm_ingest":
         engine, template = "tofu", "distributed-llm"
+        pool = (body.get("var_overrides") or {}).get("worker_peer_pool")
+        if not pool or not isinstance(pool, list):
+            return jsonify({"status": 400, "title": "Bad Request",
+                             "detail": "var_overrides.worker_peer_pool (a non-empty list) is required for kind='llm_ingest' — "
+                                       "which of these peers actually run each cycle is decided automatically by "
+                                       "their current traffic light, not fixed at creation time"}), 400
     else:
         engine = body.get("engine")
         template = body.get("template")

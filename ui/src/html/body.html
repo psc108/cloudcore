@@ -810,12 +810,17 @@
 
       <div id="sched-llm-fields" style="display:none">
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
-          Each wakeup checks Sentinel for new events since the last run; if there's nothing new, the ~4-minute cluster build is skipped entirely. Otherwise it builds the coordinator + one RPC worker per peer below, has the 7B model draft an understanding of what's new, writes it into this host's own Sentinel, relays the same findings to every peer below that's currently reachable and running Sentinel, then tears the cluster back down.
+          Each wakeup checks Sentinel for new events since the last run; if there's nothing new, the ~4-minute cluster build is skipped entirely. Otherwise it re-checks every peer below against its <em>current</em> traffic light, builds the coordinator + one RPC worker on each green (or, if none are green, amber) peer, has the 7B model draft an understanding of what's new, writes it into this host's own Sentinel, relays the same findings to every peer that's currently reachable and running Sentinel, then tears the cluster back down.
         </p>
         <div class="field">
-          <label>Worker Peers (JSON) *</label>
-          <textarea id="sched-worker-peers" rows="4" placeholder='[{"peer_id":"...","peer_vpc_id":"...","peer_subnet_id":"...","peer_security_group_id":"..."}]'></textarea>
-          <span class="bm-field-hint">One entry per RPC worker. Peer ids/vpc/subnet/security-group ids come from the Peers page and that peer's own catalogue (Resource Placement page).</span>
+          <label>Worker Peer Pool *</label>
+          <div class="table-wrap">
+            <table id="sched-peer-picker">
+              <thead><tr><th></th><th>Peer</th><th>Placement (right now)</th></tr></thead>
+              <tbody id="sched-peer-picker-tbody"><tr class="empty-row"><td colspan="3">Loading…</td></tr></tbody>
+            </table>
+          </div>
+          <span class="bm-field-hint">Green peers are pre-checked automatically. This is only the <em>candidate pool</em> — which of these actually run as a worker is re-decided by this same traffic light at every wakeup, not fixed now: a peer that goes red later is skipped that cycle rather than forcing a bad placement. vpc/subnet/security-group are auto-resolved from each peer's own catalogue (first match) at creation time.</span>
         </div>
       </div>
 
