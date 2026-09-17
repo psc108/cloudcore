@@ -24,8 +24,8 @@ output "lb_dns" {
 }
 
 output "lb_endpoints" {
-  description = "Usable load balancer endpoints (http://127.0.0.1:<port>) keyed by resource key."
-  value       = module.lb.lb_endpoints_by_key
+  description = "Usable load balancer endpoints (http://127.0.0.1:<port>) keyed by resource key. cloudcore_lb_listener.web.port, not module.lb's own auto-assigned listen_port -- see var.lb_port's own comment for why."
+  value       = { "alb${local.sfx}" = "http://127.0.0.1:${cloudcore_lb_listener.web.port}" }
 }
 
 output "ssh_commands" {

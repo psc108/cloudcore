@@ -95,3 +95,30 @@ module "lb" {
     }
   }
 }
+
+# Registers both web instances as real haproxy backends — previously
+# missing entirely (module.lb created the load balancer with nothing
+# routing to it). cloudcore_lb_listener.port is required and distinct
+# from the LB resource's own computed listen_port: creating any listener
+# replaces that default frontend outright, so 80 here is what actually
+# matters, matching the web tier's own SG rule.
+resource "cloudcore_lb_target_group" "web" {
+  lb_id    = module.lb.lb_ids_by_key["alb${local.sfx}"]
+  name     = "web${local.sfx}"
+  port     = 80
+  protocol = "http"
+
+  targets = [
+    for k, id in module.web.instance_ids_by_key : {
+      instance_id = id
+      port        = 80
+    }
+  ]
+}
+
+resource "cloudcore_lb_listener" "web" {
+  lb_id           = module.lb.lb_ids_by_key["alb${local.sfx}"]
+  port            = var.lb_port
+  protocol        = "http"
+  target_group_id = cloudcore_lb_target_group.web.id
+}

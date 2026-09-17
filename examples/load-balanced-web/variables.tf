@@ -40,6 +40,23 @@ variable "instance_count" {
   default     = 2
 }
 
+variable "lb_port" {
+  description = <<-EOT
+    Host port the load balancer listens on (loopback-only, same access
+    model as everything else in CloudCore — reachable from 127.0.0.1 on
+    the CloudCore host itself). This is the cloudcore_lb_listener's own
+    bind port, NOT the cloudcore_load_balancer resource's auto-assigned
+    listen_port — creating any listener replaces that default frontend
+    outright, so this is what actually matters. Chosen outside every
+    other port range this platform auto-allocates (SSH 12200-12299,
+    HTTP hostfwd 12800-12899, NFS SSH 12300-12399, LB auto-allocation
+    8200-8299) and outside ghidra-workstation's own fixed 8600 — change
+    it if it collides with something else already running on your host.
+  EOT
+  type        = number
+  default     = 8601
+}
+
 # Leave blank to keep every web instance local (the default -- the
 # resulting placement_overrides below is empty, a no-op). To put the
 # second web instance on a paired remote host instead -- real

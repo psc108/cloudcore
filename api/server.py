@@ -1249,6 +1249,20 @@ def create_target_group(lb_id):
     if any(t["name"] == name for t in lb.target_groups):
         return problem(409, "Conflict", f"Target group '{name}' already exists on this LB")
     from models import new_id
+    # `or 30`/`or 2`, not `.get(key, 30)`: the Terraform provider's
+    # health_check is a nested object whose own per-field Computed
+    # defaults only apply when the *object itself* isn't null — leaving
+    # health_check out of a cloudcore_lb_target_group block entirely
+    # (the common case) means the provider sends its Go zero-value
+    # struct instead, i.e. explicit interval/threshold 0s, not an
+    # absent key .get()'s default could catch. 0 is never a valid
+    # health-check interval or threshold, so treating a falsy incoming
+    # value as "not really set" is safe here (found live: haproxy
+    # rejected the resulting config outright with "invalid value 0 for
+    # argument 'inter'" — an F-092-adjacent target group came up with
+    # zero real backends, then with an interval that broke every
+    # backend on the whole LB, while wiring the missing backend
+    # registration step into examples/load-balanced-web).
     hc = body.get("health_check", {})
     tg = {
         "id": new_id(),
@@ -1258,10 +1272,10 @@ def create_target_group(lb_id):
         "protocol": body.get("protocol", "http").lower(),
         "targets": body.get("targets") or [],
         "health_check": {
-            "path": hc.get("path", "/"),
-            "interval": int(hc.get("interval", 30)),
-            "healthy_threshold": int(hc.get("healthy_threshold", 2)),
-            "unhealthy_threshold": int(hc.get("unhealthy_threshold", 2)),
+            "path": hc.get("path") or "/",
+            "interval": int(hc.get("interval") or 30),
+            "healthy_threshold": int(hc.get("healthy_threshold") or 2),
+            "unhealthy_threshold": int(hc.get("unhealthy_threshold") or 2),
         },
         "status": "active",
     }
@@ -1301,12 +1315,20 @@ def update_target_group(lb_id, tg_id):
     tg["protocol"] = body.get("protocol", tg["protocol"])
     tg["targets"] = body.get("targets", tg["targets"])
     if "health_check" in body:
+        # Same "or", not ".get(key, existing)" reasoning as create_target_group:
+        # a falsy incoming value (the provider's zero-value struct sent for
+        # an unconfigured health_check) means fall back, not "explicitly
+        # wants 0" — 0 is never valid for any of these fields.
+        # Chained `or`s all the way to the literal default, not a single
+        # fallback to the stored value: that value can itself already be
+        # a stale 0 from before this fix (this exact PUT is what's used
+        # to force a stuck-at-0 target group back to a sane value).
         hc = body["health_check"]
         tg["health_check"] = {
-            "path": hc.get("path", tg["health_check"].get("path", "/")),
-            "interval": int(hc.get("interval", tg["health_check"].get("interval", 30))),
-            "healthy_threshold": int(hc.get("healthy_threshold", tg["health_check"].get("healthy_threshold", 2))),
-            "unhealthy_threshold": int(hc.get("unhealthy_threshold", tg["health_check"].get("unhealthy_threshold", 2))),
+            "path": hc.get("path") or tg["health_check"].get("path") or "/",
+            "interval": int(hc.get("interval") or tg["health_check"].get("interval") or 30),
+            "healthy_threshold": int(hc.get("healthy_threshold") or tg["health_check"].get("healthy_threshold") or 2),
+            "unhealthy_threshold": int(hc.get("unhealthy_threshold") or tg["health_check"].get("unhealthy_threshold") or 2),
         }
     try:
         lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))

@@ -75,6 +75,29 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
 
     inst_map = {i.id: i for i in (vpc_instances or [])}
 
+    # Every caller builds vpc_instances via store.list_instances_by_vpc(lb.vpc_id)
+    # — but a target group's own targets are explicit instance_ids, not a vpc
+    # membership query, and a peer-placed instance's local wrapper row stores
+    # the *peer's own* vpc_id (needed so it doesn't collide with this host's
+    # catalogue), not this LB's local one. That row would never match the
+    # vpc_id filter, so a cross-host target group member was silently dropped
+    # from inst_map and never appeared as a real haproxy server line — found
+    # live proving the cross-host load-balanced-web demo, once F-092's fix
+    # made it possible to reach that far. Resolve any target instance_id the
+    # vpc-scoped list missed with a direct by-id lookup instead.
+    missing_ids = {
+        t.get("instance_id")
+        for tg in lb.target_groups
+        for t in (tg.get("targets") or [])
+        if t.get("instance_id") and t.get("instance_id") not in inst_map
+    }
+    if missing_ids:
+        import store as resource_store
+        for iid in missing_ids:
+            inst = resource_store.get_instance(iid)
+            if inst:
+                inst_map[iid] = inst
+
     # --- Resolve target groups → backend sections ---
     tg_sections: dict[str, tuple[str, str]] = {}  # tg_id -> (backend_name, cfg_block)
     for tg in lb.target_groups:
