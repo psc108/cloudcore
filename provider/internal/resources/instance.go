@@ -285,12 +285,15 @@ var instanceUserObjectType = types.ObjectType{AttrTypes: map[string]attr.Type{
 
 // instanceUsersFromAPI converts the API's []instanceUserAPIModel into the
 // `users` list's state representation — the reverse of instanceUsersToAPI
-// below. Needed by both Read and ImportState; ImportState previously never
-// called anything like this at all (state.Users was left at its Go zero
-// value), which the framework can't turn into a valid empty list on its own
-// since a bare empty slice carries no element-type information — every
-// import of a real instance with no extra `users` configured (the common
-// case) failed outright before this existed.
+// below. Used ONLY by ImportState, deliberately NOT by instanceMapToState
+// (see its own comment): Import starts from a genuinely blank state with
+// no prior plan/config to inherit `users` from, so it's the one case where
+// reconstructing from the API is actually correct. ImportState previously
+// never set state.Users at all (left at its Go zero value), which the
+// framework can't turn into a valid empty list on its own since a bare
+// empty slice carries no element-type information — every import of a
+// real instance with no extra `users` configured (the common case) failed
+// outright before this existed.
 func instanceUsersFromAPI(ctx context.Context, users []instanceUserAPIModel) (types.List, error) {
 	values := make([]attr.Value, len(users))
 	for i, u := range users {
@@ -355,11 +358,19 @@ func instanceMapToState(ctx context.Context, result instanceAPIModel, state *Ins
 		state.PeerID = types.StringNull()
 	}
 	state.HostHostname = types.StringValue(result.HostHostname)
-	usersList, err := instanceUsersFromAPI(ctx, result.Users)
-	if err != nil {
-		return fmt.Errorf("converting users: %w", err)
-	}
-	state.Users = usersList
+	// `users` is deliberately NOT set here. It's Optional but not Computed,
+	// so Terraform's own protocol requires Create/Update's final state to
+	// equal whatever was planned from config, byte for byte — the API
+	// response can't distinguish "not configured" (null) from "configured
+	// as an empty list" ([]), both come back as "users": [] from GET, so
+	// reconstructing it here for Create/Update/Read would occasionally
+	// collapse a real [] into null and trip "Provider produced
+	// inconsistent result after apply" (found live: every module.workers/
+	// module.coordinator instance sets users via a module default of [],
+	// not by leaving it unconfigured). state already carries the correct
+	// value from plan (Create/Update) or prior state (Read) — leave it
+	// alone. ImportState is the one caller with no prior value to inherit
+	// from; it sets state.Users itself via instanceUsersFromAPI below.
 	return nil
 }
 
@@ -543,5 +554,11 @@ func (r *InstanceResource) ImportState(ctx context.Context, req resource.ImportS
 		resp.Diagnostics.AddError("Map instance state failed", err.Error())
 		return
 	}
+	usersList, err := instanceUsersFromAPI(ctx, result.Users)
+	if err != nil {
+		resp.Diagnostics.AddError("Map instance state failed", fmt.Sprintf("converting users: %s", err))
+		return
+	}
+	state.Users = usersList
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
