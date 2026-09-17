@@ -33,6 +33,26 @@
     # "Show host USB devices" task below (or `-e usb_device_id=...` on the
     # command line) to find the real value first.
     usb_device_id: "CHANGE_ME:0000"
+    # Leave blank to keep the instance local (the default -- everything
+    # below is a no-op). To put it on a paired remote host instead, set
+    # peer_id (see the Dashboard's Peers section, or the peer_info
+    # Ansible module, for available hosts) AND peer_vpc_id/
+    # peer_subnet_id/peer_security_group_id to THAT peer's own
+    # vpc_id/subnet_id/security_group_id. None of the three are optional
+    # once peer_id is set: a remote peer has its own separate
+    # VPC/subnet/security-group catalogue, not this build's local one —
+    # this playbook's own sg (created above) only ever exists on THIS
+    # host (see haFullStack-LLD.md §13, and the security_group_ids
+    # placement_overrides field modules/instance-group gained after
+    # F-092 for the same requirement in the Terraform world). Note
+    # usb_device_id itself is unaffected by peer placement in name, but
+    # its VALUE must be a device id that physically exists on whichever
+    # host actually ends up creating the instance -- the USB adapter
+    # this sniffer needs is plugged into a specific machine, peer or not.
+    peer_id: ""
+    peer_vpc_id: ""
+    peer_subnet_id: ""
+    peer_security_group_id: ""
 
   tasks:
     - name: List host USB devices
@@ -101,10 +121,11 @@
         name: "{{ instance_name }}"
         image_id: ubuntu-22.04
         flavor: "{{ instance_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
-        security_group_ids: ["{{ sg.security_group.id }}"]
+        vpc_id: "{{ peer_vpc_id if peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ peer_subnet_id if peer_id != '' else 'subnet-local-01' }}"
+        security_group_ids: ["{{ peer_security_group_id if peer_id != '' else sg.security_group.id }}"]
         usb_device_ids: ["{{ usb_device_id }}"]
+        peer_id: "{{ peer_id }}"
         tags:
           <<: *common_tags
           Role: sniffer

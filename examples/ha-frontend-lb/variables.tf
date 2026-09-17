@@ -113,4 +113,288 @@ variable "nfs_disk_gb" {
   default     = 10
 }
 
+# ── Per-node peer placement ──────────────────────────────────────────────────
+# Every clustered/multi-node tier in this stack gets PER-NODE placement, not
+# whole-tier: this is what makes real multi-machine clustering demos possible
+# (individual members landing on different physical hosts), the original
+# motivation for this whole feature. Only each tier's anchor node (the first/
+# bootstrap/seed node — "a" for the modules/compute tiers, "01" for the
+# instance-group tiers) stays local-only with no picker; every other node
+# gets its own <tier>_<node>_peer_id/_peer_vpc_id/_peer_subnet_id/
+# _peer_security_group_id set. Leave a node's *_peer_id blank to keep it
+# local (the default -- unchanged behavior). To place it on a paired remote
+# host instead, set *_peer_id (see the Dashboard's Peers section, or the
+# cloudcore_peers data source, for available hosts) AND *_peer_vpc_id/
+# *_peer_subnet_id to THAT peer's own vpc_id/subnet_id. Those two aren't
+# optional once peer_id is set: a remote peer has its own separate VPC/
+# subnet catalogue, not this build's local one (see haFullStack-LLD.md
+# §13). *_peer_security_group_id is likewise required whenever *_peer_id is
+# set -- a peer's own security group catalogue is separate from this
+# build's local one, and the API now rejects a security_group_ids entry it
+# can't resolve locally at instance-create time (previously an unresolved
+# id was silently accepted and produced a DROP-only iptables chain, leaving
+# the instance completely unreachable with no error anywhere — see
+# haFullStack-Findings-Log.md).
+
+# ca -- single node, deliberately not HA (haFullStack-LLD.md §5.1's flagged
+# Lab simplification) -- bare peer vars, same as any other single-instance
+# template, prefixed with the tier name since this file has many tiers.
+variable "ca_peer_id" {
+  description = "ID of a paired remote peer to place the ca instance on instead of the local host. Requires ca_peer_vpc_id/ca_peer_subnet_id/ca_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "ca_peer_vpc_id" {
+  description = "The peer's own VPC ID for the ca instance — only meaningful when ca_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "ca_peer_subnet_id" {
+  description = "The peer's own subnet ID for the ca instance — only meaningful when ca_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "ca_peer_security_group_id" {
+  description = "The peer's own security group ID for the ca instance — required when ca_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# frontend -- variable-count instance-group (var.frontend_count, default 2).
+# Only the second instance ("02") gets a peer var-set, matching
+# load-balanced-web's own reference pattern exactly.
+variable "frontend_02_peer_id" {
+  description = "ID of a paired remote peer to place the second frontend instance on instead of the local host. Requires frontend_02_peer_vpc_id/frontend_02_peer_subnet_id/frontend_02_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "frontend_02_peer_vpc_id" {
+  description = "The peer's own VPC ID for the second frontend instance — only meaningful when frontend_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "frontend_02_peer_subnet_id" {
+  description = "The peer's own subnet ID for the second frontend instance — only meaningful when frontend_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "frontend_02_peer_security_group_id" {
+  description = "The peer's own security group ID for the second frontend instance — required when frontend_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# mysql -- Group Replication cluster: bootstrap node "a" (anchor, stays
+# local-only) + replica nodes "b"/"c", each independently placeable.
+variable "mysql_b_peer_id" {
+  description = "ID of a paired remote peer to place MySQL replica node b on instead of the local host. Requires mysql_b_peer_vpc_id/mysql_b_peer_subnet_id/mysql_b_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_b_peer_vpc_id" {
+  description = "The peer's own VPC ID for MySQL replica node b — only meaningful when mysql_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_b_peer_subnet_id" {
+  description = "The peer's own subnet ID for MySQL replica node b — only meaningful when mysql_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_b_peer_security_group_id" {
+  description = "The peer's own security group ID for MySQL replica node b — required when mysql_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_c_peer_id" {
+  description = "ID of a paired remote peer to place MySQL replica node c on instead of the local host. Requires mysql_c_peer_vpc_id/mysql_c_peer_subnet_id/mysql_c_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_c_peer_vpc_id" {
+  description = "The peer's own VPC ID for MySQL replica node c — only meaningful when mysql_c_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_c_peer_subnet_id" {
+  description = "The peer's own subnet ID for MySQL replica node c — only meaningful when mysql_c_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "mysql_c_peer_security_group_id" {
+  description = "The peer's own security group ID for MySQL replica node c — required when mysql_c_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# proxysql -- MASTER/BACKUP Keepalived pair: node "a" (MASTER, anchor,
+# stays local-only) + node "b" (BACKUP, independently placeable).
+variable "proxysql_b_peer_id" {
+  description = "ID of a paired remote peer to place ProxySQL/NGINX node b (BACKUP) on instead of the local host. Requires proxysql_b_peer_vpc_id/proxysql_b_peer_subnet_id/proxysql_b_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "proxysql_b_peer_vpc_id" {
+  description = "The peer's own VPC ID for ProxySQL/NGINX node b — only meaningful when proxysql_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "proxysql_b_peer_subnet_id" {
+  description = "The peer's own subnet ID for ProxySQL/NGINX node b — only meaningful when proxysql_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "proxysql_b_peer_security_group_id" {
+  description = "The peer's own security group ID for ProxySQL/NGINX node b — required when proxysql_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# memcached -- fixed 2-node instance-group. Only the second instance ("02")
+# gets a peer var-set, matching load-balanced-web's own reference pattern.
+variable "memcached_02_peer_id" {
+  description = "ID of a paired remote peer to place the second memcached instance on instead of the local host. Requires memcached_02_peer_vpc_id/memcached_02_peer_subnet_id/memcached_02_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "memcached_02_peer_vpc_id" {
+  description = "The peer's own VPC ID for the second memcached instance — only meaningful when memcached_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "memcached_02_peer_subnet_id" {
+  description = "The peer's own subnet ID for the second memcached instance — only meaningful when memcached_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "memcached_02_peer_security_group_id" {
+  description = "The peer's own security group ID for the second memcached instance — required when memcached_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# keystone -- fixed 2-node instance-group (genuinely identical config, no
+# per-node role — see main.tf's own comment). Only the second instance
+# ("02") gets a peer var-set, matching load-balanced-web's own reference
+# pattern.
+variable "keystone_02_peer_id" {
+  description = "ID of a paired remote peer to place the second keystone instance on instead of the local host. Requires keystone_02_peer_vpc_id/keystone_02_peer_subnet_id/keystone_02_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "keystone_02_peer_vpc_id" {
+  description = "The peer's own VPC ID for the second keystone instance — only meaningful when keystone_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "keystone_02_peer_subnet_id" {
+  description = "The peer's own subnet ID for the second keystone instance — only meaningful when keystone_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "keystone_02_peer_security_group_id" {
+  description = "The peer's own security group ID for the second keystone instance — required when keystone_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# backend -- fixed 2-node instance-group (genuinely identical config, no
+# per-node role — see main.tf's own comment). Only the second instance
+# ("02") gets a peer var-set, matching load-balanced-web's own reference
+# pattern.
+variable "backend_02_peer_id" {
+  description = "ID of a paired remote peer to place the second backend instance on instead of the local host. Requires backend_02_peer_vpc_id/backend_02_peer_subnet_id/backend_02_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "backend_02_peer_vpc_id" {
+  description = "The peer's own VPC ID for the second backend instance — only meaningful when backend_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "backend_02_peer_subnet_id" {
+  description = "The peer's own subnet ID for the second backend instance — only meaningful when backend_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "backend_02_peer_security_group_id" {
+  description = "The peer's own security group ID for the second backend instance — required when backend_02_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# rabbitmq -- clustered: seed node "a" (anchor, stays local-only) + joiner
+# nodes "b"/"c", each independently placeable.
+variable "rabbitmq_b_peer_id" {
+  description = "ID of a paired remote peer to place RabbitMQ joiner node b on instead of the local host. Requires rabbitmq_b_peer_vpc_id/rabbitmq_b_peer_subnet_id/rabbitmq_b_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_b_peer_vpc_id" {
+  description = "The peer's own VPC ID for RabbitMQ joiner node b — only meaningful when rabbitmq_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_b_peer_subnet_id" {
+  description = "The peer's own subnet ID for RabbitMQ joiner node b — only meaningful when rabbitmq_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_b_peer_security_group_id" {
+  description = "The peer's own security group ID for RabbitMQ joiner node b — required when rabbitmq_b_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_c_peer_id" {
+  description = "ID of a paired remote peer to place RabbitMQ joiner node c on instead of the local host. Requires rabbitmq_c_peer_vpc_id/rabbitmq_c_peer_subnet_id/rabbitmq_c_peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_c_peer_vpc_id" {
+  description = "The peer's own VPC ID for RabbitMQ joiner node c — only meaningful when rabbitmq_c_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_c_peer_subnet_id" {
+  description = "The peer's own subnet ID for RabbitMQ joiner node c — only meaningful when rabbitmq_c_peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "rabbitmq_c_peer_security_group_id" {
+  description = "The peer's own security group ID for RabbitMQ joiner node c — required when rabbitmq_c_peer_id is set."
+  type        = string
+  default     = ""
+}
 

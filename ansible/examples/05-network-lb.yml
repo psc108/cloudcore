@@ -13,9 +13,28 @@
     vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
     lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-nlb"
     backend_port: 5432   # example: PostgreSQL
+    # Leave blank to keep both db instances local (the default --
+    # everything below is a no-op). To put db-02 on a paired remote host
+    # instead, set db_02_peer_id (see the Dashboard's Peers section, or
+    # the peer_info Ansible module, for available hosts) AND
+    # db_02_peer_vpc_id/db_02_peer_subnet_id to THAT peer's own
+    # vpc_id/subnet_id. Those two aren't optional once peer_id is set: a
+    # remote peer has its own separate VPC/subnet catalogue, not this
+    # build's local one (see haFullStack-LLD.md §13, and
+    # modules/instance-group's own placement_overrides for the same
+    # requirement in the Terraform world).
+    db_02_peer_id: ""
+    db_02_peer_vpc_id: ""
+    db_02_peer_subnet_id: ""
     instances:
       - name: "{{ project }}-{{ env }}-{{ build_suffix }}-db-01"
+        subnet_id: subnet-local-01
+        peer_id: ""
+        vpc_id_override: ""
       - name: "{{ project }}-{{ env }}-{{ build_suffix }}-db-02"
+        subnet_id: "{{ db_02_peer_subnet_id | default('subnet-local-01', true) }}"
+        peer_id: "{{ db_02_peer_id }}"
+        vpc_id_override: "{{ db_02_peer_vpc_id }}"
 
   tasks:
     - name: Create VPC
@@ -39,7 +58,9 @@
         name: "{{ item.name }}"
         image_id: ubuntu-22.04
         flavor: standard.medium
-        vpc_id: "{{ vpc.vpc.id }}"
+        vpc_id: "{{ item.vpc_id_override | default(vpc.vpc.id, true) }}"
+        subnet_id: "{{ item.subnet_id }}"
+        peer_id: "{{ item.peer_id }}"
         user_data: |
           #cloud-config
           # apt_preserve_sources_list + bootcmd point this guest at the
@@ -185,7 +206,6 @@
             - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
             - usermod -aG adm promtail
             - systemctl enable --now promtail
-        subnet_id: subnet-local-01
         tags:
           Environment: "{{ env }}"
           Project: "{{ project }}"

@@ -35,6 +35,34 @@
     frontend_flavor: standard.small
     backend_flavor:  standard.medium
     data_flavor:     standard.medium
+    # Leave any of these blank to keep that tier local (the default --
+    # everything below is a no-op). To put a given tier on a paired
+    # remote host instead, set its own <tier>_peer_id (see the
+    # Dashboard's Peers section, or the peer_info Ansible module, for
+    # available hosts) AND <tier>_peer_vpc_id/<tier>_peer_subnet_id to
+    # THAT peer's own vpc_id/subnet_id. The vpc/subnet vars aren't
+    # optional once a tier's peer_id is set: a remote peer has its own
+    # separate VPC/subnet catalogue, not this build's local one (see
+    # haFullStack-LLD.md §13, and modules/instance-group's own
+    # placement_overrides for the same requirement in the Terraform
+    # world). Each tier is independent -- any subset can be peer-placed,
+    # each to a different peer if desired; the admin NFS server always
+    # stays local (cross-host NFS export/mount isn't supported).
+    frontend_peer_id: ""
+    frontend_peer_vpc_id: ""
+    frontend_peer_subnet_id: ""
+    backend_peer_id: ""
+    backend_peer_vpc_id: ""
+    backend_peer_subnet_id: ""
+    mysql_peer_id: ""
+    mysql_peer_vpc_id: ""
+    mysql_peer_subnet_id: ""
+    keystone_peer_id: ""
+    keystone_peer_vpc_id: ""
+    keystone_peer_subnet_id: ""
+    rabbitmq_peer_id: ""
+    rabbitmq_peer_vpc_id: ""
+    rabbitmq_peer_subnet_id: ""
 
   tasks:
     # ── VPC ──────────────────────────────────────────────────────────────────
@@ -114,8 +142,9 @@
         name:      "{{ frontend_name }}"
         image_id:  ubuntu-22.04
         flavor:    "{{ frontend_flavor }}"
-        vpc_id:    "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id:    "{{ frontend_peer_vpc_id if frontend_peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ frontend_peer_subnet_id if frontend_peer_id != '' else 'subnet-local-01' }}"
+        peer_id:   "{{ frontend_peer_id }}"
         user_data: |
           #cloud-config
           apt_preserve_sources_list: true
@@ -273,8 +302,9 @@
         name:      "{{ backend_name }}"
         image_id:  ubuntu-22.04
         flavor:    "{{ backend_flavor }}"
-        vpc_id:    "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id:    "{{ backend_peer_vpc_id if backend_peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ backend_peer_subnet_id if backend_peer_id != '' else 'subnet-local-01' }}"
+        peer_id:   "{{ backend_peer_id }}"
         user_data: |
           #cloud-config
           apt_preserve_sources_list: true
@@ -432,8 +462,9 @@
         name:      "{{ mysql_name }}"
         image_id:  ubuntu-22.04
         flavor:    "{{ data_flavor }}"
-        vpc_id:    "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id:    "{{ mysql_peer_vpc_id if mysql_peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ mysql_peer_subnet_id if mysql_peer_id != '' else 'subnet-local-01' }}"
+        peer_id:   "{{ mysql_peer_id }}"
         user_data: |
           #cloud-config
           apt_preserve_sources_list: true
@@ -592,8 +623,9 @@
         name:      "{{ keystone_name }}"
         image_id:  ubuntu-22.04
         flavor:    "{{ backend_flavor }}"
-        vpc_id:    "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id:    "{{ keystone_peer_vpc_id if keystone_peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ keystone_peer_subnet_id if keystone_peer_id != '' else 'subnet-local-01' }}"
+        peer_id:   "{{ keystone_peer_id }}"
         user_data: |
           #cloud-config
           apt_preserve_sources_list: true
@@ -751,8 +783,9 @@
         name:      "{{ rabbitmq_name }}"
         image_id:  ubuntu-22.04
         flavor:    "{{ data_flavor }}"
-        vpc_id:    "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id:    "{{ rabbitmq_peer_vpc_id if rabbitmq_peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ rabbitmq_peer_subnet_id if rabbitmq_peer_id != '' else 'subnet-local-01' }}"
+        peer_id:   "{{ rabbitmq_peer_id }}"
         user_data: |
           #cloud-config
           apt_preserve_sources_list: true

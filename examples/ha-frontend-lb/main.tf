@@ -217,6 +217,18 @@ module "frontend" {
   security_group_ids = [module.security_groups.security_group_ids_by_key["frontend${local.sfx}"]]
   user_data          = local.frontend_user_data
   users              = local.ecs_user
+
+  # Empty when frontend_02_peer_id is unset -- every instance stays
+  # local, unchanged default behavior. See variables.tf's own comment
+  # for why vpc_id/subnet_id travel together with peer_id here.
+  placement_overrides = var.frontend_02_peer_id != "" ? {
+    "02" = {
+      peer_id            = var.frontend_02_peer_id
+      vpc_id             = var.frontend_02_peer_vpc_id
+      subnet_id          = var.frontend_02_peer_subnet_id
+      security_group_ids = [var.frontend_02_peer_security_group_id]
+    }
+  } : {}
 }
 
 # Split into two module calls (bootstrap node, then joiners) rather than
@@ -277,6 +289,18 @@ module "memcached" {
   security_group_ids = [module.security_groups.security_group_ids_by_key["memcached${local.sfx}"]]
   user_data          = local.memcached_user_data
   users              = local.ecs_user
+
+  # Empty when memcached_02_peer_id is unset -- every instance stays
+  # local, unchanged default behavior. See variables.tf's own comment
+  # for why vpc_id/subnet_id travel together with peer_id here.
+  placement_overrides = var.memcached_02_peer_id != "" ? {
+    "02" = {
+      peer_id            = var.memcached_02_peer_id
+      vpc_id             = var.memcached_02_peer_vpc_id
+      subnet_id          = var.memcached_02_peer_subnet_id
+      security_group_ids = [var.memcached_02_peer_security_group_id]
+    }
+  } : {}
 }
 
 # instance-group, not compute: unlike MySQL's bootstrap/joiner split or
@@ -303,6 +327,18 @@ module "keystone" {
   security_group_ids = [module.security_groups.security_group_ids_by_key["keystone${local.sfx}"]]
   user_data          = local.keystone_user_data
   users              = local.ecs_user
+
+  # Empty when keystone_02_peer_id is unset -- every instance stays
+  # local, unchanged default behavior. See variables.tf's own comment
+  # for why vpc_id/subnet_id travel together with peer_id here.
+  placement_overrides = var.keystone_02_peer_id != "" ? {
+    "02" = {
+      peer_id            = var.keystone_02_peer_id
+      vpc_id             = var.keystone_02_peer_vpc_id
+      subnet_id          = var.keystone_02_peer_subnet_id
+      security_group_ids = [var.keystone_02_peer_security_group_id]
+    }
+  } : {}
 }
 
 # Split into two module calls (seed, then joiners) — same reasoning as
@@ -330,6 +366,18 @@ module "backend" {
   security_group_ids = [module.security_groups.security_group_ids_by_key["backend${local.sfx}"]]
   user_data          = local.backend_user_data
   users              = local.ecs_user
+
+  # Empty when backend_02_peer_id is unset -- every instance stays
+  # local, unchanged default behavior. See variables.tf's own comment
+  # for why vpc_id/subnet_id travel together with peer_id here.
+  placement_overrides = var.backend_02_peer_id != "" ? {
+    "02" = {
+      peer_id            = var.backend_02_peer_id
+      vpc_id             = var.backend_02_peer_vpc_id
+      subnet_id          = var.backend_02_peer_subnet_id
+      security_group_ids = [var.backend_02_peer_security_group_id]
+    }
+  } : {}
 }
 
 # Shared read/write storage for the frontend + backend tiers, prep for

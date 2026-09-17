@@ -13,10 +13,37 @@
     vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
     lb_name: "{{ project }}-{{ env }}-{{ build_suffix }}-alb"
     dns_zone: "{{ project }}-{{ build_suffix }}.internal"
+    # Leave blank to keep all three web instances local (the default --
+    # everything below is a no-op). To put web-02 and/or web-03 on a
+    # paired remote host instead, set web_02_peer_id/web_03_peer_id (see
+    # the Dashboard's Peers section, or the peer_info Ansible module,
+    # for available hosts) AND the matching _peer_vpc_id/_peer_subnet_id
+    # to THAT peer's own vpc_id/subnet_id. The vpc/subnet vars aren't
+    # optional once a given instance's peer_id is set: a remote peer has
+    # its own separate VPC/subnet catalogue, not this build's local one
+    # (see haFullStack-LLD.md §13, and modules/instance-group's own
+    # placement_overrides for the same requirement in the Terraform
+    # world). web-02 and web-03 are independent -- either, both, or
+    # neither can be peer-placed, and each can go to a different peer.
+    web_02_peer_id: ""
+    web_02_peer_vpc_id: ""
+    web_02_peer_subnet_id: ""
+    web_03_peer_id: ""
+    web_03_peer_vpc_id: ""
+    web_03_peer_subnet_id: ""
     web_instances:
       - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-01"
+        subnet_id: subnet-local-01
+        peer_id: ""
+        vpc_id_override: ""
       - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-02"
+        subnet_id: "{{ web_02_peer_subnet_id | default('subnet-local-01', true) }}"
+        peer_id: "{{ web_02_peer_id }}"
+        vpc_id_override: "{{ web_02_peer_vpc_id }}"
       - name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-03"
+        subnet_id: "{{ web_03_peer_subnet_id | default('subnet-local-01', true) }}"
+        peer_id: "{{ web_03_peer_id }}"
+        vpc_id_override: "{{ web_03_peer_vpc_id }}"
 
   tasks:
     # ── VPC ──────────────────────────────────────────────────────────────────
@@ -42,8 +69,9 @@
         name: "{{ item.name }}"
         image_id: ubuntu-22.04
         flavor: standard.small
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id: "{{ item.vpc_id_override | default(vpc.vpc.id, true) }}"
+        subnet_id: "{{ item.subnet_id }}"
+        peer_id: "{{ item.peer_id }}"
         user_data: |
           #cloud-config
           # apt_preserve_sources_list + bootcmd point this guest at

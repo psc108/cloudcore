@@ -11,6 +11,19 @@
     project: "{{ default_project }}"
     vpc_name: "{{ project }}-{{ env }}-{{ build_suffix }}-main"
     instance_name: "{{ project }}-{{ env }}-{{ build_suffix }}-web-01"
+    # Leave blank to keep the instance local (the default -- everything
+    # below is a no-op). To put it on a paired remote host instead, set
+    # peer_id (see the Dashboard's Peers section, or the peer_info
+    # Ansible module, for available hosts) AND peer_vpc_id/
+    # peer_subnet_id to THAT peer's own vpc_id/subnet_id. Those two
+    # aren't optional once peer_id is set: a remote peer has its own
+    # separate VPC/subnet catalogue, not this build's local one (see
+    # haFullStack-LLD.md §13, and modules/instance-group's own
+    # placement_overrides for the same requirement in the Terraform
+    # world).
+    peer_id: ""
+    peer_vpc_id: ""
+    peer_subnet_id: ""
 
   tasks:
     - name: Create VPC
@@ -34,8 +47,9 @@
         name: "{{ instance_name }}"
         image_id: ubuntu-22.04
         flavor: standard.small
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
+        vpc_id: "{{ peer_vpc_id if peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ peer_subnet_id if peer_id != '' else 'subnet-local-01' }}"
+        peer_id: "{{ peer_id }}"
         user_data: |
           #cloud-config
           # apt_preserve_sources_list + bootcmd point this guest at the

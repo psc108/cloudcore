@@ -91,3 +91,41 @@ variable "rtl8812au_driver_sha256" {
   type        = string
   default     = "114f0334f08612652e0d9f5dbf38359d894db26c75f210667cdec1800f805cec"
 }
+
+# Leave blank to keep the sniffer instance local (the default -- unchanged
+# behavior). To place it on a paired remote host instead, set peer_id
+# (see the Dashboard's Peers section, or the cloudcore_peers data
+# source, for available hosts) AND peer_vpc_id/peer_subnet_id to THAT
+# peer's own vpc_id/subnet_id. Those two aren't optional once peer_id
+# is set: a remote peer has its own separate VPC/subnet catalogue, not
+# this build's local one (see haFullStack-LLD.md §13).
+variable "peer_id" {
+  description = "ID of a paired remote peer to place the sniffer instance on instead of the local host. Requires peer_vpc_id/peer_subnet_id/peer_security_group_id to also be set."
+  type        = string
+  default     = ""
+}
+
+variable "peer_vpc_id" {
+  description = "The peer's own VPC ID for the sniffer instance — only meaningful when peer_id is set."
+  type        = string
+  default     = ""
+}
+
+variable "peer_subnet_id" {
+  description = "The peer's own subnet ID for the sniffer instance — only meaningful when peer_id is set."
+  type        = string
+  default     = ""
+}
+
+# Same reasoning as peer_vpc_id/subnet_id: a peer's own security group
+# catalogue is separate from this build's local one, and the API now
+# rejects a security_group_ids entry it can't resolve locally at
+# instance-create time (previously an unresolved id was silently
+# accepted and produced a DROP-only iptables chain, leaving the
+# instance completely unreachable with no error anywhere — see
+# haFullStack-Findings-Log.md). Required whenever peer_id is set.
+variable "peer_security_group_id" {
+  description = "The peer's own security group ID for the sniffer instance — required when peer_id is set."
+  type        = string
+  default     = ""
+}

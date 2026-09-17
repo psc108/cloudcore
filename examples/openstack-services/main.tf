@@ -102,12 +102,18 @@ module "frontend" {
   image_id        = "ubuntu-22.04"
   flavor          = var.frontend_flavor
   count_instances = 1
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["public${local.sfx}"]
-  security_group_ids = [
+
+  # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
+  # peer's own catalogue when frontend_peer_id is set -- see
+  # variables.tf's own comment for why. Empty peer_id (the default)
+  # keeps this instance local, unchanged default behavior.
+  vpc_id    = var.frontend_peer_id != "" ? var.frontend_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id = var.frontend_peer_id != "" ? var.frontend_peer_subnet_id : module.subnets.subnet_ids_by_key["public${local.sfx}"]
+  security_group_ids = var.frontend_peer_id != "" ? [var.frontend_peer_security_group_id] : [
     module.security_groups.security_group_ids_by_key["frontend${local.sfx}"],
   ]
   user_data = local.frontend_user_data
+  peer_id   = var.frontend_peer_id != "" ? var.frontend_peer_id : null
   tags      = { Role = "frontend" }
 }
 
@@ -122,12 +128,18 @@ module "backend" {
   image_id        = "ubuntu-22.04"
   flavor          = var.backend_flavor
   count_instances = 1
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["private${local.sfx}"]
-  security_group_ids = [
+
+  # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
+  # peer's own catalogue when backend_peer_id is set -- see
+  # variables.tf's own comment for why. Empty peer_id (the default)
+  # keeps this instance local, unchanged default behavior.
+  vpc_id    = var.backend_peer_id != "" ? var.backend_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id = var.backend_peer_id != "" ? var.backend_peer_subnet_id : module.subnets.subnet_ids_by_key["private${local.sfx}"]
+  security_group_ids = var.backend_peer_id != "" ? [var.backend_peer_security_group_id] : [
     module.security_groups.security_group_ids_by_key["backend${local.sfx}"],
   ]
   user_data = local.backend_user_data
+  peer_id   = var.backend_peer_id != "" ? var.backend_peer_id : null
   tags      = { Role = "backend" }
 }
 
@@ -142,12 +154,18 @@ module "mysql" {
   image_id        = "ubuntu-22.04"
   flavor          = var.data_flavor
   count_instances = 1
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["private${local.sfx}"]
-  security_group_ids = [
+
+  # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
+  # peer's own catalogue when mysql_peer_id is set -- see variables.tf's
+  # own comment for why. Empty peer_id (the default) keeps this
+  # instance local, unchanged default behavior.
+  vpc_id    = var.mysql_peer_id != "" ? var.mysql_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id = var.mysql_peer_id != "" ? var.mysql_peer_subnet_id : module.subnets.subnet_ids_by_key["private${local.sfx}"]
+  security_group_ids = var.mysql_peer_id != "" ? [var.mysql_peer_security_group_id] : [
     module.security_groups.security_group_ids_by_key["data${local.sfx}"],
   ]
   user_data = local.mysql_user_data
+  peer_id   = var.mysql_peer_id != "" ? var.mysql_peer_id : null
   tags      = { Role = "mysql" }
 }
 
@@ -162,12 +180,18 @@ module "keystone" {
   image_id        = "ubuntu-22.04"
   flavor          = var.backend_flavor
   count_instances = 1
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["private${local.sfx}"]
-  security_group_ids = [
+
+  # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
+  # peer's own catalogue when keystone_peer_id is set -- see
+  # variables.tf's own comment for why. Empty peer_id (the default)
+  # keeps this instance local, unchanged default behavior.
+  vpc_id    = var.keystone_peer_id != "" ? var.keystone_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id = var.keystone_peer_id != "" ? var.keystone_peer_subnet_id : module.subnets.subnet_ids_by_key["private${local.sfx}"]
+  security_group_ids = var.keystone_peer_id != "" ? [var.keystone_peer_security_group_id] : [
     module.security_groups.security_group_ids_by_key["identity${local.sfx}"],
   ]
   user_data = local.keystone_user_data
+  peer_id   = var.keystone_peer_id != "" ? var.keystone_peer_id : null
   tags      = { Role = "keystone" }
 }
 
@@ -182,12 +206,18 @@ module "rabbitmq" {
   image_id        = "ubuntu-22.04"
   flavor          = var.data_flavor
   count_instances = 1
-  vpc_id          = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id       = module.subnets.subnet_ids_by_key["private${local.sfx}"]
-  security_group_ids = [
+
+  # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
+  # peer's own catalogue when rabbitmq_peer_id is set -- see
+  # variables.tf's own comment for why. Empty peer_id (the default)
+  # keeps this instance local, unchanged default behavior.
+  vpc_id    = var.rabbitmq_peer_id != "" ? var.rabbitmq_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id = var.rabbitmq_peer_id != "" ? var.rabbitmq_peer_subnet_id : module.subnets.subnet_ids_by_key["private${local.sfx}"]
+  security_group_ids = var.rabbitmq_peer_id != "" ? [var.rabbitmq_peer_security_group_id] : [
     module.security_groups.security_group_ids_by_key["data${local.sfx}"],
   ]
   user_data = local.rabbitmq_user_data
+  peer_id   = var.rabbitmq_peer_id != "" ? var.rabbitmq_peer_id : null
   tags      = { Role = "rabbitmq" }
 }
 

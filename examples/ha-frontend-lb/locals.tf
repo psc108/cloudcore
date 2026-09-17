@@ -105,13 +105,18 @@ locals {
   step_ca_deb_sha256  = "f8e43f0f2ba1e37121b75623993ea0bece5cc3a02b73eefc16e414d41c9fec71"
   step_cli_deb_sha256 = "5845c181251ffe43ca2331bc171e0b92324a71be9cf4ef76cd6fbbba4f2a3cc6"
 
+  # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
+  # peer's own catalogue when ca_peer_id is set -- see variables.tf's
+  # own comment for why. Empty ca_peer_id (the default) keeps this
+  # instance local, unchanged default behavior.
   ca_instance = {
     "ca-a${local.sfx}" = {
       image_id           = "ubuntu-22.04"
       flavor             = var.ca_flavor
-      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
-      security_group_ids = [module.security_groups.security_group_ids_by_key["ca${local.sfx}"]]
+      vpc_id             = var.ca_peer_id != "" ? var.ca_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id          = var.ca_peer_id != "" ? var.ca_peer_subnet_id : module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = var.ca_peer_id != "" ? [var.ca_peer_security_group_id] : [module.security_groups.security_group_ids_by_key["ca${local.sfx}"]]
+      peer_id            = var.ca_peer_id != "" ? var.ca_peer_id : null
       users              = local.ecs_user
       user_data = templatefile("${path.module}/files/ca-cloud-init.yaml.tftpl", {
         step_ca_deb_sha256   = local.step_ca_deb_sha256
@@ -241,13 +246,26 @@ locals {
     c = { server_id = 3 }
   }
 
+  # Per-node peer placement, node "a" (mysql_bootstrap_instances above)
+  # excluded -- it's this tier's anchor and stays local-only, same as
+  # load-balanced-web's own "01" anchor. peer_id/vpc_id/subnet_id/
+  # security_group_ids swap together to that node's own peer's catalogue
+  # when its own <role>_peer_id is set -- see variables.tf's own comment
+  # for why. Empty (the default) keeps every node local, unchanged
+  # default behavior.
+  mysql_replica_peer = {
+    b = { peer_id = var.mysql_b_peer_id, vpc_id = var.mysql_b_peer_vpc_id, subnet_id = var.mysql_b_peer_subnet_id, security_group_ids = [var.mysql_b_peer_security_group_id] }
+    c = { peer_id = var.mysql_c_peer_id, vpc_id = var.mysql_c_peer_vpc_id, subnet_id = var.mysql_c_peer_subnet_id, security_group_ids = [var.mysql_c_peer_security_group_id] }
+  }
+
   mysql_replica_instances = {
     for role, cfg in local.mysql_replica_roles : "mysql-${role}${local.sfx}" => {
       image_id           = "ubuntu-22.04"
       flavor             = var.mysql_flavor
-      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
-      security_group_ids = [module.security_groups.security_group_ids_by_key["mysql${local.sfx}"]]
+      vpc_id             = local.mysql_replica_peer[role].peer_id != "" ? local.mysql_replica_peer[role].vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id          = local.mysql_replica_peer[role].peer_id != "" ? local.mysql_replica_peer[role].subnet_id : module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = local.mysql_replica_peer[role].peer_id != "" ? local.mysql_replica_peer[role].security_group_ids : [module.security_groups.security_group_ids_by_key["mysql${local.sfx}"]]
+      peer_id            = local.mysql_replica_peer[role].peer_id != "" ? local.mysql_replica_peer[role].peer_id : null
       users              = local.ecs_user
       user_data = templatefile("${path.module}/files/mysql-cloud-init.yaml.tftpl", {
         server_id               = cfg.server_id
@@ -286,14 +304,24 @@ locals {
   # Keepalived is co-located here (haFullStack-LLD.md §1/§2), the same
   # reason the now-retired standalone "nginx" module used modules/compute
   # instead of instance-group.
+  # Per-node peer placement, node "a" (MASTER) excluded -- it's this
+  # tier's anchor and stays local-only, same as load-balanced-web's own
+  # "01" anchor. Only "b" (BACKUP) is independently placeable. peer_id/
+  # vpc_id/subnet_id/security_group_ids swap together to that peer's
+  # own catalogue when proxysql_b_peer_id is set -- see variables.tf's
+  # own comment for why. Empty (the default) keeps both nodes local,
+  # unchanged default behavior.
   proxysql_instances = {
     for role, cfg in local.proxysql_roles : "proxysql-${role}${local.sfx}" => {
-      image_id           = "ubuntu-22.04"
-      flavor             = var.proxysql_flavor
-      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
-      security_group_ids = [module.security_groups.security_group_ids_by_key["proxysql${local.sfx}"]]
-      users              = local.ecs_user
+      image_id  = "ubuntu-22.04"
+      flavor    = var.proxysql_flavor
+      vpc_id    = role == "b" && var.proxysql_b_peer_id != "" ? var.proxysql_b_peer_vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id = role == "b" && var.proxysql_b_peer_id != "" ? var.proxysql_b_peer_subnet_id : module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = role == "b" && var.proxysql_b_peer_id != "" ? [var.proxysql_b_peer_security_group_id] : [
+        module.security_groups.security_group_ids_by_key["proxysql${local.sfx}"]
+      ]
+      peer_id = role == "b" && var.proxysql_b_peer_id != "" ? var.proxysql_b_peer_id : null
+      users   = local.ecs_user
       user_data = templatefile("${path.module}/files/proxysql-cloud-init.yaml.tftpl", {
         proxysql_deb_url        = local.proxysql_deb_url
         proxysql_deb_sha256     = local.proxysql_deb_sha256
@@ -400,13 +428,26 @@ locals {
     c = {}
   }
 
+  # Per-node peer placement, node "a" (rabbitmq_seed_instance above)
+  # excluded -- it's this tier's anchor and stays local-only, same as
+  # load-balanced-web's own "01" anchor. peer_id/vpc_id/subnet_id/
+  # security_group_ids swap together to that node's own peer's
+  # catalogue when its own <role>_peer_id is set -- see variables.tf's
+  # own comment for why. Empty (the default) keeps every node local,
+  # unchanged default behavior.
+  rabbitmq_joiner_peer = {
+    b = { peer_id = var.rabbitmq_b_peer_id, vpc_id = var.rabbitmq_b_peer_vpc_id, subnet_id = var.rabbitmq_b_peer_subnet_id, security_group_ids = [var.rabbitmq_b_peer_security_group_id] }
+    c = { peer_id = var.rabbitmq_c_peer_id, vpc_id = var.rabbitmq_c_peer_vpc_id, subnet_id = var.rabbitmq_c_peer_subnet_id, security_group_ids = [var.rabbitmq_c_peer_security_group_id] }
+  }
+
   rabbitmq_joiner_instances = {
     for role, cfg in local.rabbitmq_joiner_roles : "rabbitmq-${role}${local.sfx}" => {
       image_id           = "ubuntu-22.04"
       flavor             = var.rabbitmq_flavor
-      vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-      subnet_id          = module.subnets.subnet_ids_by_key["main${local.sfx}"]
-      security_group_ids = [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
+      vpc_id             = local.rabbitmq_joiner_peer[role].peer_id != "" ? local.rabbitmq_joiner_peer[role].vpc_id : module.vpc.vpc_ids_by_key[local.vpc_key]
+      subnet_id          = local.rabbitmq_joiner_peer[role].peer_id != "" ? local.rabbitmq_joiner_peer[role].subnet_id : module.subnets.subnet_ids_by_key["main${local.sfx}"]
+      security_group_ids = local.rabbitmq_joiner_peer[role].peer_id != "" ? local.rabbitmq_joiner_peer[role].security_group_ids : [module.security_groups.security_group_ids_by_key["rabbitmq${local.sfx}"]]
+      peer_id            = local.rabbitmq_joiner_peer[role].peer_id != "" ? local.rabbitmq_joiner_peer[role].peer_id : null
       users              = local.ecs_user
       user_data = templatefile("${path.module}/files/rabbitmq-cloud-init.yaml.tftpl", {
         is_seed                    = false

@@ -80,6 +80,74 @@
       - username: ecs
         sudo: true
 
+    # Per-node peer placement -- leave any of these blank to keep that
+    # node local (the default; every var below defaults to "" and the
+    # whole mechanism is a no-op until set). To put a given node on a
+    # paired remote host instead, set its own <node>_peer_id (see the
+    # Dashboard's Peers section, or the peer_info Ansible module, for
+    # available hosts) AND <node>_peer_vpc_id/<node>_peer_subnet_id/
+    # <node>_peer_security_group_id to THAT peer's own
+    # vpc_id/subnet_id/security_group_id. None of the three are optional
+    # once a node's peer_id is set: a remote peer has its own separate
+    # VPC/subnet/security-group catalogue, not this build's local one
+    # (see haFullStack-LLD.md §13, and the security_group_ids
+    # placement_overrides field modules/instance-group gained after
+    # F-092 for the same requirement in the Terraform world). Per-node,
+    # not whole-tier, by design -- the entire point of real multi-machine
+    # clustering is splitting individual members across hosts (e.g. one
+    # MySQL replica on a peer while bootstrap+the other replica stay
+    # local), not moving a whole tier as one unit. One node per tier
+    # (the "a"/"01" instance) is always the local anchor and has no peer
+    # vars of its own, matching every other example's convention.
+    # CAUTION -- two tiers have real cross-host constraints beyond the
+    # usual vpc/subnet/sg ones: ProxySQL's keepalived VIP failover
+    # (192.168.100.5) needs VRRP multicast between both nodes, which
+    # does not cross a WireGuard peer tunnel onto a different physical
+    # bridge subnet -- splitting proxysql_a/proxysql_b across hosts will
+    # break VIP failover even though the instances themselves come up
+    # fine. MySQL Group Replication has no such constraint (plain TCP).
+    ca_peer_id: ""
+    ca_peer_vpc_id: ""
+    ca_peer_subnet_id: ""
+    ca_peer_security_group_id: ""
+    mysql_b_peer_id: ""
+    mysql_b_peer_vpc_id: ""
+    mysql_b_peer_subnet_id: ""
+    mysql_b_peer_security_group_id: ""
+    mysql_c_peer_id: ""
+    mysql_c_peer_vpc_id: ""
+    mysql_c_peer_subnet_id: ""
+    mysql_c_peer_security_group_id: ""
+    memcached_02_peer_id: ""
+    memcached_02_peer_vpc_id: ""
+    memcached_02_peer_subnet_id: ""
+    memcached_02_peer_security_group_id: ""
+    keystone_02_peer_id: ""
+    keystone_02_peer_vpc_id: ""
+    keystone_02_peer_subnet_id: ""
+    keystone_02_peer_security_group_id: ""
+    backend_02_peer_id: ""
+    backend_02_peer_vpc_id: ""
+    backend_02_peer_subnet_id: ""
+    backend_02_peer_security_group_id: ""
+    rabbitmq_b_peer_id: ""
+    rabbitmq_b_peer_vpc_id: ""
+    rabbitmq_b_peer_subnet_id: ""
+    rabbitmq_b_peer_security_group_id: ""
+    rabbitmq_c_peer_id: ""
+    rabbitmq_c_peer_vpc_id: ""
+    rabbitmq_c_peer_subnet_id: ""
+    rabbitmq_c_peer_security_group_id: ""
+    frontend_02_peer_id: ""
+    frontend_02_peer_vpc_id: ""
+    frontend_02_peer_subnet_id: ""
+    frontend_02_peer_security_group_id: ""
+    # See the CAUTION above -- this one breaks VRRP/VIP failover if used.
+    proxysql_b_peer_id: ""
+    proxysql_b_peer_vpc_id: ""
+    proxysql_b_peer_subnet_id: ""
+    proxysql_b_peer_security_group_id: ""
+
     security_groups:
       - name: frontend
         description: "Frontend web tier — HTTP from the LB nodes' subnet only, plus SSH for debugging"
@@ -245,9 +313,10 @@
         name: "{{ pfx }}-ca-a"
         image_id: ubuntu-22.04
         flavor: "{{ ca_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.ca }}"]
+        vpc_id: "{{ ca_peer_vpc_id if ca_peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ ca_peer_subnet_id if ca_peer_id != '' else subnet_id }}"
+        security_group_ids: ["{{ ca_peer_security_group_id if ca_peer_id != '' else sg_ids.ca }}"]
+        peer_id: "{{ ca_peer_id }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/ca-cloud-init.yml.j2', template_vars={
           'step_ca_deb_sha256': step_ca_deb_sha256, 'step_cli_deb_sha256': step_cli_deb_sha256,
@@ -308,9 +377,10 @@
         name: "{{ pfx }}-mysql-{{ item.role }}"
         image_id: ubuntu-22.04
         flavor: "{{ mysql_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.mysql }}"]
+        vpc_id: "{{ item.vpc_id_override if item.peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ item.subnet_id_override if item.peer_id != '' else subnet_id }}"
+        security_group_ids: ["{{ item.sg_override if item.peer_id != '' else sg_ids.mysql }}"]
+        peer_id: "{{ item.peer_id }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/mysql-cloud-init.yml.j2', template_vars={
           'server_id': item.server_id, 'is_bootstrap': false,
@@ -324,8 +394,8 @@
           'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: mysql-replica }
       loop:
-        - { role: b, server_id: 2 }
-        - { role: c, server_id: 3 }
+        - { role: b, server_id: 2, peer_id: "{{ mysql_b_peer_id }}", vpc_id_override: "{{ mysql_b_peer_vpc_id }}", subnet_id_override: "{{ mysql_b_peer_subnet_id }}", sg_override: "{{ mysql_b_peer_security_group_id }}" }
+        - { role: c, server_id: 3, peer_id: "{{ mysql_c_peer_id }}", vpc_id_override: "{{ mysql_c_peer_vpc_id }}", subnet_id_override: "{{ mysql_c_peer_subnet_id }}", sg_override: "{{ mysql_c_peer_security_group_id }}" }
       loop_control:
         label: "{{ item.role }}"
       register: mysql_replicas_results
@@ -355,9 +425,10 @@
         name: "{{ pfx }}-memcached-{{ item }}"
         image_id: ubuntu-22.04
         flavor: "{{ memcached_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.memcached }}"]
+        vpc_id: "{{ memcached_02_peer_vpc_id if (item == '02' and memcached_02_peer_id != '') else vpc.vpc.id }}"
+        subnet_id: "{{ memcached_02_peer_subnet_id if (item == '02' and memcached_02_peer_id != '') else subnet_id }}"
+        security_group_ids: ["{{ memcached_02_peer_security_group_id if (item == '02' and memcached_02_peer_id != '') else sg_ids.memcached }}"]
+        peer_id: "{{ memcached_02_peer_id if item == '02' else '' }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/memcached-cloud-init.yml.j2', template_vars={'promtail_config': promtail_config}) }}"
         tags: { <<: *common_tags, Role: memcached }
@@ -415,9 +486,10 @@
         name: "{{ pfx }}-keystone-{{ item }}"
         image_id: ubuntu-22.04
         flavor: "{{ keystone_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.keystone }}"]
+        vpc_id: "{{ keystone_02_peer_vpc_id if (item == '02' and keystone_02_peer_id != '') else vpc.vpc.id }}"
+        subnet_id: "{{ keystone_02_peer_subnet_id if (item == '02' and keystone_02_peer_id != '') else subnet_id }}"
+        security_group_ids: ["{{ keystone_02_peer_security_group_id if (item == '02' and keystone_02_peer_id != '') else sg_ids.keystone }}"]
+        peer_id: "{{ keystone_02_peer_id if item == '02' else '' }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/keystone-cloud-init.yml.j2', template_vars={
           'vip_address': vip_address, 'root_password': admin_password,
@@ -455,9 +527,10 @@
         name: "{{ pfx }}-backend-{{ item }}"
         image_id: ubuntu-22.04
         flavor: "{{ backend_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.backend }}"]
+        vpc_id: "{{ backend_02_peer_vpc_id if (item == '02' and backend_02_peer_id != '') else vpc.vpc.id }}"
+        subnet_id: "{{ backend_02_peer_subnet_id if (item == '02' and backend_02_peer_id != '') else subnet_id }}"
+        security_group_ids: ["{{ backend_02_peer_security_group_id if (item == '02' and backend_02_peer_id != '') else sg_ids.backend }}"]
+        peer_id: "{{ backend_02_peer_id if item == '02' else '' }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/backend-cloud-init.yml.j2', template_vars={
           'ca_ip': ca_ip, 'ca_provisioner_password': ca_provisioner_password,
@@ -518,12 +591,13 @@
       cloudcore.cloudcore.instance:
         api_url: "{{ cloudcore_api_url }}"
         api_token: "{{ cloudcore_api_token }}"
-        name: "{{ pfx }}-rabbitmq-{{ item }}"
+        name: "{{ pfx }}-rabbitmq-{{ item.role }}"
         image_id: ubuntu-22.04
         flavor: "{{ rabbitmq_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.rabbitmq }}"]
+        vpc_id: "{{ item.vpc_id_override if item.peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ item.subnet_id_override if item.peer_id != '' else subnet_id }}"
+        security_group_ids: ["{{ item.sg_override if item.peer_id != '' else sg_ids.rabbitmq }}"]
+        peer_id: "{{ item.peer_id }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/rabbitmq-cloud-init.yml.j2', template_vars={
           'is_seed': false, 'seed_ip': rabbitmq_a_poll.json.private_ip, 'erlang_cookie': erlang_cookie,
@@ -532,7 +606,11 @@
           'rabbitmq_services_password': admin_password, 'admin_password': admin_password,
           'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: rabbitmq-joiner }
-      loop: [b, c]
+      loop:
+        - { role: b, peer_id: "{{ rabbitmq_b_peer_id }}", vpc_id_override: "{{ rabbitmq_b_peer_vpc_id }}", subnet_id_override: "{{ rabbitmq_b_peer_subnet_id }}", sg_override: "{{ rabbitmq_b_peer_security_group_id }}" }
+        - { role: c, peer_id: "{{ rabbitmq_c_peer_id }}", vpc_id_override: "{{ rabbitmq_c_peer_vpc_id }}", subnet_id_override: "{{ rabbitmq_c_peer_subnet_id }}", sg_override: "{{ rabbitmq_c_peer_security_group_id }}" }
+      loop_control:
+        label: "{{ item.role }}"
       register: rabbitmq_joiners_results
 
     - name: Wait for RabbitMQ joiners to reach running

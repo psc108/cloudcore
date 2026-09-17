@@ -85,4 +85,16 @@ module "app" {
   subnet_id          = module.subnets.subnet_ids_by_key["app${local.sfx}"]
   security_group_ids = module.security_groups.security_group_ids_list
   user_data          = local.app_user_data
+
+  # Empty when app_02_peer_id is unset -- every instance stays local,
+  # unchanged default behavior. See variables.tf's own comment for why
+  # vpc_id/subnet_id travel together with peer_id here.
+  placement_overrides = var.app_02_peer_id != "" ? {
+    "02" = {
+      peer_id            = var.app_02_peer_id
+      vpc_id             = var.app_02_peer_vpc_id
+      subnet_id          = var.app_02_peer_subnet_id
+      security_group_ids = [var.app_02_peer_security_group_id]
+    }
+  } : {}
 }
