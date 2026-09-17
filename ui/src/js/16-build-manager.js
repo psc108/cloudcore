@@ -103,11 +103,18 @@ async function _bmRenderVarForm(filename, tpl, schema) {
   }
 
   let approvedPeers = [];
+  let recommendation = null;
   if (editable.some(([key]) => _BM_PEER_ID_RE.test(key))) {
     try {
       const peerData = await api('GET', '/v1/peers?status=approved');
       approvedPeers = peerData.items;
     } catch (e) { /* fall through — the field just renders with no options */ }
+    // Best-effort: a failed recommendation fetch just means every
+    // peer_id field falls back to its old default of "local, blank" —
+    // never blocks rendering the rest of the form over it.
+    try {
+      recommendation = await api('GET', '/v1/peers/recommend-placement');
+    } catch (e) { /* fall through */ }
   }
 
   const peerFamilies = _bmPeerFamilies(editable);
@@ -120,16 +127,19 @@ async function _bmRenderVarForm(filename, tpl, schema) {
 
   container.innerHTML = editable.map(([key, meta]) => {
     if (_BM_PEER_ID_RE.test(key)) {
+      const rec = recommendation && recommendation.recommended;
+      const recId = rec ? (rec.peer_id || '') : null;
       const options = approvedPeers.length
-        ? approvedPeers.map(p => `<option value="${p.id}">${_esc(p.hostname)} (${badge(p.wg_tunnel_status)})</option>`).join('')
+        ? approvedPeers.map(p => `<option value="${p.id}"${p.id === recId ? ' selected' : ''}>${_esc(p.hostname)} (${badge(p.wg_tunnel_status)})</option>`).join('')
         : '';
       return `
         <div class="field">
           <label>${key.replace(/_/g, ' ')}</label>
           <select id="bm-var-${key}" data-key="${key}">
-            <option value="">— local (this host) —</option>
+            <option value=""${recId === '' ? ' selected' : ''}>— local (this host) —</option>
             ${options}
           </select>
+          ${rec && approvedPeers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
           ${!approvedPeers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
         </div>`;
     }
@@ -153,15 +163,22 @@ async function _bmRenderVarForm(filename, tpl, schema) {
   `;
   }).join('');
 
-  _bmWirePeerCascades(peerFamilies);
+  await _bmWirePeerCascades(peerFamilies);
 }
 
-function _bmWirePeerCascades(families) {
-  Object.entries(families).forEach(([peerKey, f]) => {
-    if (!f.vpcKey && !f.subnetKey && !f.sgKey) return;
+async function _bmWirePeerCascades(families) {
+  for (const [peerKey, f] of Object.entries(families)) {
+    if (!f.vpcKey && !f.subnetKey && !f.sgKey) continue;
     const peerSel = document.getElementById(`bm-var-${peerKey}`);
-    if (peerSel) peerSel.addEventListener('change', () => _bmCascadeFromPeer(peerKey, f));
-  });
+    if (!peerSel) continue;
+    peerSel.addEventListener('change', () => _bmCascadeFromPeer(peerKey, f));
+    // A recommendation may have pre-selected a real peer above (not the
+    // "local" blank default) — cascade its vpc/subnet/sg immediately,
+    // same as a user's own manual selection would, rather than leaving
+    // those fields stuck on "select a peer first" despite a peer
+    // already being chosen.
+    if (peerSel.value) await _bmCascadeFromPeer(peerKey, f);
+  }
 }
 
 // Fetches the selected peer's own vpcs (+ security groups, unfiltered —

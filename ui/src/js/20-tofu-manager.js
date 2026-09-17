@@ -112,11 +112,15 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
   }
 
   let approvedPeers = [];
+  let recommendation = null;
   if (editable.some(([key]) => _TF_PEER_ID_RE.test(key))) {
     try {
       const peerData = await api('GET', '/v1/peers?status=approved');
       approvedPeers = peerData.items || [];
     } catch (e) { /* field just renders with no options */ }
+    try {
+      recommendation = await api('GET', '/v1/peers/recommend-placement');
+    } catch (e) { /* fall through — fields fall back to the old local default */ }
   }
 
   const peerFamilies = _tfPeerFamilies(editable);
@@ -129,7 +133,7 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
 
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
-    if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers);
+    if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers, recommendation);
     if (cascadeTargetKeys.has(key)) return _tfRenderPeerCascadeField(key, meta);
     return `
       <div class="field">
@@ -144,7 +148,7 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
     `;
   }).join('');
 
-  _tfWirePeerCascades(peerFamilies);
+  await _tfWirePeerCascades(peerFamilies);
 }
 
 function _tfRenderPeerCascadeField(key, meta) {
@@ -158,12 +162,17 @@ function _tfRenderPeerCascadeField(key, meta) {
   `;
 }
 
-function _tfWirePeerCascades(families) {
-  Object.entries(families).forEach(([peerKey, f]) => {
-    if (!f.vpcKey && !f.subnetKey && !f.sgKey) return;
+async function _tfWirePeerCascades(families) {
+  for (const [peerKey, f] of Object.entries(families)) {
+    if (!f.vpcKey && !f.subnetKey && !f.sgKey) continue;
     const peerSel = document.getElementById(`tf-var-${peerKey}`);
-    if (peerSel) peerSel.addEventListener('change', () => _tfCascadeFromPeer(peerKey, f));
-  });
+    if (!peerSel) continue;
+    peerSel.addEventListener('change', () => _tfCascadeFromPeer(peerKey, f));
+    // A recommendation may have pre-selected a real peer above (not the
+    // "local" blank default) — cascade its vpc/subnet/sg immediately,
+    // same as a user's own manual selection would.
+    if (peerSel.value) await _tfCascadeFromPeer(peerKey, f);
+  }
 }
 
 // Fetches the selected peer's own vpcs (+ security groups, unfiltered —
@@ -245,18 +254,21 @@ async function _tfCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId) {
   }
 }
 
-function _tfRenderPeerField(key, meta, peers) {
+function _tfRenderPeerField(key, meta, peers, recommendation) {
   const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
+  const rec = recommendation && recommendation.recommended;
+  const recId = rec ? (rec.peer_id || '') : null;
   const options = peers.length
-    ? peers.map(p => `<option value="${_esc(p.id)}">${_esc(p.hostname)} (${_esc(p.wg_tunnel_status)})</option>`).join('')
+    ? peers.map(p => `<option value="${_esc(p.id)}"${p.id === recId ? ' selected' : ''}>${_esc(p.hostname)} (${_esc(p.wg_tunnel_status)})</option>`).join('')
     : '';
   return `
     <div class="field">
       <label>${label}</label>
       <select id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}">
-        <option value="">— local (this host) —</option>
+        <option value=""${recId === '' ? ' selected' : ''}>— local (this host) —</option>
         ${options}
       </select>
+      ${rec && peers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
       ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
     </div>
   `;
