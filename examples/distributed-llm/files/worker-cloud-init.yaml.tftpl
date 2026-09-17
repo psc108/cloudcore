@@ -24,6 +24,14 @@ package_update: true
 packages:
   - curl
   - promtail
+  # libgomp1 (GNU OpenMP runtime): the prebuilt llama.cpp release binary
+  # links against it, but it isn't in the base Ubuntu 22.04 cloud image
+  # by default — found live ("error while loading shared libraries:
+  # libgomp.so.1: cannot open shared object file"), already resolvable
+  # via the cached apt-repo mirror (it's a transitive dependency of
+  # something else already present there), just never explicitly
+  # requested before now.
+  - libgomp1
 
 write_files:
   - path: /etc/promtail/config.yml

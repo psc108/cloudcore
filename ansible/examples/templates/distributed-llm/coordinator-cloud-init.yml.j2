@@ -15,6 +15,9 @@ package_update: true
 packages:
   - curl
   - promtail
+  # See worker-cloud-init.yml.j2's own comment on libgomp1 — the
+  # coordinator's llama-server binary needs it for the identical reason.
+  - libgomp1
 
 write_files:
   - path: /etc/promtail/config.yml
@@ -31,7 +34,7 @@ write_files:
       [Service]
       WorkingDirectory=/opt/llama.cpp
       Environment=LD_LIBRARY_PATH=/opt/llama.cpp
-      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/{{ model_filename }} --host 0.0.0.0 --port {{ http_port }} -c {{ context_size }} -ngl 99 --rpc {{ rpc_servers }} -t {{ threads }}
+      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/{{ model_filename }} --host 0.0.0.0 --port {{ http_port }} -c {{ context_size }} -ngl {{ rpc_offload_layers }} --rpc {{ rpc_servers }} -t {{ threads }}
       Restart=on-failure
       RestartSec=5
       User=root

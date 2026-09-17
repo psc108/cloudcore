@@ -83,6 +83,26 @@ variable "threads" {
   default     = 4
 }
 
+# llama.cpp's own -ngl flag means "how many of the model's layers to
+# offload to non-CPU backends" (GPU normally, but --rpc's own workers
+# count the same way) -- NOT "how many layers per worker" and NOT a
+# percentage. With exactly one RPC worker configured, every offloaded
+# layer goes to that ONE worker; a high value like the GPU-offload
+# convention's usual 99 ("offload everything possible") tries to push
+# nearly the ENTIRE model onto that single worker instead of splitting
+# it with the coordinator's own local CPU -- found live: it tried to
+# allocate a ~4.3GB buffer on a worker with only 4096MB RAM and failed
+# outright. Mistral-7B-Instruct-v0.3 has 32 transformer layers; 16 here
+# gives a roughly even coordinator/worker split. Changing model_filename
+# to a model with a different layer count (or adding more worker_peers
+# entries) means re-tuning this by hand -- there's no automatic
+# even-split behavior to rely on.
+variable "rpc_offload_layers" {
+  description = "Number of model layers to offload to the RPC worker(s) via -ngl. Tune this alongside model_filename/worker_peers — see the comment above for why 99 (the usual GPU-offload convention) is wrong here."
+  type        = number
+  default     = 16
+}
+
 # --- Pinned artifacts (api/build-package-repo.sh) — exact values kept in
 # sync by hand with that script's own ARTIFACT_URLS, same convention
 # every other example's own pinned-artifact variables already use (see

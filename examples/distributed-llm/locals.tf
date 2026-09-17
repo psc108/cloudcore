@@ -50,8 +50,9 @@ locals {
     model_sha256       = var.model_sha256
     http_port          = var.http_port
     context_size       = var.context_size
-    threads            = var.threads
-    rpc_servers        = local.rpc_servers
-    promtail_config    = local.promtail_config
+    threads             = var.threads
+    rpc_offload_layers  = var.rpc_offload_layers
+    rpc_servers         = local.rpc_servers
+    promtail_config     = local.promtail_config
   })
 }

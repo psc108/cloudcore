@@ -141,6 +141,14 @@ resource "cloudcore_lb_target_group" "coordinator" {
   port     = var.http_port
   protocol = "http"
 
+  # llama-server's own root path ("/") returns 415, not a 2xx a plain
+  # `GET /` health check would accept — found live (the LB never marked
+  # the coordinator healthy despite it genuinely serving requests fine).
+  # /health is llama-server's real liveness endpoint.
+  health_check = {
+    path = "/health"
+  }
+
   targets = [
     {
       instance_id = module.coordinator.instance_ids_by_key["01"]

@@ -45,6 +45,23 @@
     coordinator_flavor: standard.large
     worker_flavor: standard.large
 
+    # llama.cpp's own -ngl flag means "how many of the model's layers to
+    # offload to non-CPU backends" (GPU normally, but --rpc's own workers
+    # count the same way) -- NOT "how many layers per worker" and NOT a
+    # percentage. With exactly one RPC worker configured, every offloaded
+    # layer goes to that ONE worker; a high value like the GPU-offload
+    # convention's usual 99 ("offload everything possible") tries to push
+    # nearly the ENTIRE model onto that single worker instead of splitting
+    # it with the coordinator's own local CPU -- found live on the
+    # Terraform side of this same template: it tried to allocate a ~4.3GB
+    # buffer on a worker with only 4096MB RAM and failed outright.
+    # Mistral-7B-Instruct-v0.3 has 32 transformer layers; 16 here gives a
+    # roughly even coordinator/worker split. Changing model_filename to a
+    # model with a different layer count (or adding more worker_peers
+    # entries) means re-tuning this by hand -- there's no automatic
+    # even-split behavior to rely on.
+    rpc_offload_layers: 16
+
     # Pinned artifacts (api/build-package-repo.sh) — exact values kept
     # in sync by hand with that script's own ARTIFACT_URLS.
     llama_archive_name: llama-b11025-bin-ubuntu-x64.tar.gz
@@ -174,6 +191,7 @@
           'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
           'model_filename': model_filename, 'model_sha256': model_sha256,
           'http_port': http_port, 'context_size': context_size, 'threads': threads,
+          'rpc_offload_layers': rpc_offload_layers,
           'rpc_servers': rpc_servers, 'promtail_config': promtail_config }) }}"
 
     - name: Create coordinator instance
@@ -236,6 +254,24 @@
           address: "{{ coordinator_poll.json.private_ip }}"
           port: "{{ http_port }}"
         status_code: 201
+
+    - name: Set LB health check to llama-server's real liveness endpoint
+      # llama-server's own root path ("/") returns 415, not a 2xx a
+      # default/plain health check would accept — found live on the
+      # Terraform side of this same template (the LB never marked the
+      # coordinator healthy despite it genuinely serving requests fine).
+      # /health is llama-server's real liveness endpoint.
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/health-check"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          protocol: HTTP
+          path: /health
+        status_code: 200
 
     - name: Show inference endpoint
       ansible.builtin.debug:
