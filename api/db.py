@@ -397,7 +397,12 @@ CREATE INDEX IF NOT EXISTS schedule_runs_schedule_idx ON schedule_runs(schedule_
 
 -- One row per llm_ingest run, structured detail alongside that run's
 -- own schedule_runs row (which just carries the generic status/log
--- every schedule kind gets).
+-- every schedule kind gets). The *_seconds/token/stats columns back
+-- the LLM Performance page (api/scheduler.py's own timing/usage
+-- capture around the ephemeral build->health->inference cycle) —
+-- deliberately generic column names (not "7b_" prefixed etc.) so a
+-- future schedule pointed at a different template/model populates the
+-- same columns without a schema change.
 CREATE TABLE IF NOT EXISTS llm_ingestions (
     id                    TEXT PRIMARY KEY,
     schedule_id           TEXT NOT NULL,
@@ -409,7 +414,16 @@ CREATE TABLE IF NOT EXISTS llm_ingestions (
     suggestions_created   INTEGER NOT NULL DEFAULT 0,
     peers_synced          TEXT NOT NULL DEFAULT '[]',
     summary_text          TEXT NOT NULL DEFAULT '',
-    status                TEXT NOT NULL DEFAULT 'running'
+    status                TEXT NOT NULL DEFAULT 'running',
+    cluster_build_seconds REAL,
+    model_load_seconds    REAL,
+    inference_seconds     REAL,
+    prompt_tokens         INTEGER,
+    completion_tokens     INTEGER,
+    total_tokens          INTEGER,
+    tokens_per_second     REAL,
+    coordinator_stats     TEXT NOT NULL DEFAULT '{}',
+    worker_stats          TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
@@ -506,6 +520,22 @@ def _migrate_columns() -> None:
         _conn.execute("ALTER TABLE load_balancers ADD COLUMN target_groups TEXT NOT NULL DEFAULT '[]'")
     if "deletion_protection" not in lb_cols:
         _conn.execute("ALTER TABLE load_balancers ADD COLUMN deletion_protection INTEGER NOT NULL DEFAULT 0")
+
+    # llm_ingestions predates the LLM Performance page's own timing/
+    # token/resource-usage capture (this table itself was added earlier
+    # in the same overall feature) — an already-initialized install has
+    # the table but not these columns.
+    ing_cols = {row[1] for row in _conn.execute("PRAGMA table_info(llm_ingestions)").fetchall()}
+    if ing_cols and "cluster_build_seconds" not in ing_cols:
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN cluster_build_seconds REAL")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN model_load_seconds REAL")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN inference_seconds REAL")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN prompt_tokens INTEGER")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN completion_tokens INTEGER")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN total_tokens INTEGER")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN tokens_per_second REAL")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN coordinator_stats TEXT NOT NULL DEFAULT '{}'")
+        _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN worker_stats TEXT NOT NULL DEFAULT '[]'")
     _conn.commit()
 
 

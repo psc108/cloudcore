@@ -25,6 +25,14 @@ def _auth():
     return None
 
 
+@scheduler_bp.get("/v1/llm-performance")
+def llm_performance():
+    err = _auth()
+    if err: return err
+    limit = min(int(request.args.get("limit", 50)), 200)
+    return jsonify({"items": scheduler.list_llm_ingestions(limit)})
+
+
 @scheduler_bp.get("/v1/schedules/templates")
 def list_all_templates():
     err = _auth()

@@ -456,6 +456,19 @@ def get_peer_stats(peer_id: str):
     return jsonify(resp.body), resp.status
 
 
+def peer_stats(peer_id: str) -> dict | None:
+    """This peer's raw current CPU/memory/disk/instance stats (see
+    host_stats.py), or None if unreachable. Sibling to peer_verdict()
+    below — that one collapses this same data to a single traffic-
+    light tier for placement decisions; the LLM Performance page (see
+    api/scheduler.py) wants the full numbers to show alongside a run's
+    timing, not just the tier."""
+    resp, error = _peer_proxy_get(peer_id, "/v1/system/stats")
+    if error or resp.status != 200:
+        return None
+    return resp.body
+
+
 def peer_verdict(peer_id: str) -> str | None:
     """This peer's current traffic-light verdict ('active'/'pending'/
     'error', see host_stats.py), or None if it can't be reached right
@@ -465,10 +478,8 @@ def peer_verdict(peer_id: str) -> str | None:
     not just once, when the schedule was first created — matching the
     same "automatic, current-load-based" placement this project's own
     traffic-light system already promises everywhere else it's used."""
-    resp, error = _peer_proxy_get(peer_id, "/v1/system/stats")
-    if error or resp.status != 200:
-        return None
-    return host_stats.verdict(resp.body)
+    stats = peer_stats(peer_id)
+    return host_stats.verdict(stats) if stats is not None else None
 
 
 @peers_bp.get("/v1/peers/recommend-placement")

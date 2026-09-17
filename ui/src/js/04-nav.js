@@ -5,7 +5,7 @@ const _sectionGroup = {
   sgs: 'infrastructure',  subnets: 'infrastructure',
   dns: 'networking', peers: 'networking', placement: 'networking',
   nfs: 'storage',
-  builds: 'builds', tofu: 'builds', scheduler: 'builds',
+  builds: 'builds', tofu: 'builds', scheduler: 'builds', llmperf: 'builds',
 };
 
 // Click-toggle dropdowns; close when clicking outside
@@ -46,6 +46,7 @@ function showSection(name, btn) {
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
   if (name === 'scheduler')     { loadScheduler(); startSchedulerPoll(); }
+  if (name === 'llmperf')        loadLlmPerformance();
   if (name === 'editor')         loadEditor();
   if (name === 'settings')       loadSettings();
   if (name === 'about')          loadAbout();

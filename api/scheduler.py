@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 import build_engine
 import croncalc
 import db
+import host_stats
 import peer_client
 import peers_routes
 import peers_store
@@ -127,6 +128,14 @@ def delete_schedule(schedule_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def _ing_row_to_dict(row) -> dict:
+    d = dict(row)
+    d["peers_synced"] = json.loads(d.get("peers_synced") or "[]")
+    d["coordinator_stats"] = json.loads(d.get("coordinator_stats") or "{}")
+    d["worker_stats"] = json.loads(d.get("worker_stats") or "[]")
+    return d
+
+
 def list_runs(schedule_id: str, limit: int = 50) -> list[dict]:
     rows = db.get_db().execute(
         "SELECT * FROM schedule_runs WHERE schedule_id=? ORDER BY started_at DESC LIMIT ?",
@@ -138,11 +147,26 @@ def list_runs(schedule_id: str, limit: int = 50) -> list[dict]:
         ing = db.get_db().execute(
             "SELECT * FROM llm_ingestions WHERE run_id=?", (d["id"],)).fetchone()
         if ing:
-            ing_d = dict(ing)
-            ing_d["peers_synced"] = json.loads(ing_d.get("peers_synced") or "[]")
-            d["llm_ingestion"] = ing_d
+            d["llm_ingestion"] = _ing_row_to_dict(ing)
         out.append(d)
     return out
+
+
+def list_llm_ingestions(limit: int = 50) -> list[dict]:
+    """Every llm_ingest run across every schedule, newest first — backs
+    the LLM Performance page (per direct request: "we now need a
+    performance page to show how the 7b (or any other llm we
+    introduce) is performing"). Joined with the owning schedule's own
+    name/template so the page can label each row without a second
+    round trip, and deliberately not scoped to one schedule — a lab
+    with several llm_ingest schedules (different models/templates
+    later) should see them side by side on one page."""
+    rows = db.get_db().execute(
+        """SELECT i.*, s.name AS schedule_name, s.template AS schedule_template
+           FROM llm_ingestions i JOIN schedules s ON s.id = i.schedule_id
+           ORDER BY i.started_at DESC LIMIT ?""",
+        (limit,)).fetchall()
+    return [_ing_row_to_dict(r) for r in rows]
 
 
 def _resolve_recurrence(recurrence: dict) -> tuple[str, str | None, str]:
@@ -290,19 +314,37 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
         c.execute(
             """INSERT INTO llm_ingestions
                (id, schedule_id, run_id, started_at, finished_at, events_seen,
-                findings_created, suggestions_created, peers_synced, summary_text, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                findings_created, suggestions_created, peers_synced, summary_text, status,
+                cluster_build_seconds, model_load_seconds, inference_seconds,
+                prompt_tokens, completion_tokens, total_tokens, tokens_per_second,
+                coordinator_stats, worker_stats)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  finished_at=excluded.finished_at, events_seen=excluded.events_seen,
                  findings_created=excluded.findings_created,
                  suggestions_created=excluded.suggestions_created,
                  peers_synced=excluded.peers_synced, summary_text=excluded.summary_text,
-                 status=excluded.status""",
+                 status=excluded.status,
+                 cluster_build_seconds=excluded.cluster_build_seconds,
+                 model_load_seconds=excluded.model_load_seconds,
+                 inference_seconds=excluded.inference_seconds,
+                 prompt_tokens=excluded.prompt_tokens,
+                 completion_tokens=excluded.completion_tokens,
+                 total_tokens=excluded.total_tokens,
+                 tokens_per_second=excluded.tokens_per_second,
+                 coordinator_stats=excluded.coordinator_stats,
+                 worker_stats=excluded.worker_stats""",
             (ing_id, schedule_id, run_id, ing_started, fields.get("finished_at"),
              fields.get("events_seen", 0), fields.get("findings_created", 0),
              fields.get("suggestions_created", 0),
              json.dumps(fields.get("peers_synced", [])),
-             fields.get("summary_text", ""), fields.get("status", "running")))
+             fields.get("summary_text", ""), fields.get("status", "running"),
+             fields.get("cluster_build_seconds"), fields.get("model_load_seconds"),
+             fields.get("inference_seconds"), fields.get("prompt_tokens"),
+             fields.get("completion_tokens"), fields.get("total_tokens"),
+             fields.get("tokens_per_second"),
+             json.dumps(fields.get("coordinator_stats", {})),
+             json.dumps(fields.get("worker_stats", []))))
         c.commit()
 
     _save_ingestion(status="running")
@@ -358,6 +400,7 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
 
     # 3. Build the ephemeral cluster.
     http_port = int(var_overrides.get("http_port", 8610))
+    build_start = time.monotonic()
     build = tofu_engine.submit_build("distributed-llm", var_overrides, created_by="scheduler")
     build_id = build["id"]
     _log(f"tofu apply started: build {build_id}")
@@ -374,24 +417,60 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
             pass
         _save_ingestion(finished_at=now_iso(), status="failed", events_seen=len(new_events))
         return "failed", "Cluster build failed", log
-    _log("Cluster built successfully.")
+    cluster_build_seconds = time.monotonic() - build_start
+    _log(f"Cluster built successfully in {cluster_build_seconds:.1f}s.")
 
     findings_created = 0
     suggestions_created = 0
     summary_text = ""
     peers_synced: list[dict] = []
     max_event_id = checkpoint
+    model_load_seconds = None
+    inference_seconds = None
+    tokens_per_second = None
+    usage = {}
+    coordinator_stats = {}
+    worker_stats: list[dict] = []
 
     try:
-        # 4. Wait for the coordinator to actually be ready.
+        # 4. Wait for the coordinator to actually be ready — this is
+        # the model-load wait, timed separately from the cluster build
+        # above since "how long OpenTofu took" and "how long the model
+        # took to load once the VMs existed" are two different things
+        # worth telling apart on the Performance page.
         coordinator_url = f"http://127.0.0.1:{http_port}"
+        load_start = time.monotonic()
         if not _wait_for_health(coordinator_url, timeout_s=360):
             _log("Coordinator never became healthy within 6 minutes.")
             raise RuntimeError("coordinator health check timed out")
-        _log("Coordinator healthy — sending ingestion prompt.")
+        model_load_seconds = time.monotonic() - load_start
+        _log(f"Coordinator healthy after {model_load_seconds:.1f}s — sending ingestion prompt.")
+
+        # Resource-usage snapshot, right as inference is about to
+        # start (peak-ish load for both roles) — coordinator is always
+        # this host itself (the template never peer-places it), workers
+        # are whichever peers got selected in step 2 above.
+        try:
+            coordinator_stats = host_stats.collect()
+        except Exception:
+            pass
+        for p in selected:
+            s = peers_routes.peer_stats(p["peer_id"])
+            if s is not None:
+                worker_stats.append({"peer_id": p["peer_id"], "stats": s})
 
         # 5. Prompt the model.
-        parsed = _run_ingestion_prompt(coordinator_url, new_events)
+        inference_start = time.monotonic()
+        parsed, usage = _run_ingestion_prompt(coordinator_url, new_events)
+        inference_seconds = time.monotonic() - inference_start
+        completion_tokens = usage.get("completion_tokens")
+        if completion_tokens and inference_seconds > 0:
+            tokens_per_second = completion_tokens / inference_seconds
+        else:
+            tokens_per_second = None
+        _log(f"Inference took {inference_seconds:.1f}s"
+             + (f", {completion_tokens} completion tokens "
+                f"({tokens_per_second:.1f} tok/s)" if tokens_per_second else "") + ".")
         summary_text = parsed.get("summary", "")
         model_findings = parsed.get("findings", []) or []
         model_suggestions = parsed.get("suggestions", []) or []
@@ -434,6 +513,20 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
         # 8. Distribute to online peers.
         peers_synced = _distribute_to_peers(model_findings, model_suggestions, codes, source_doc, _log)
 
+    except Exception as e:
+        # Anything in steps 4-8 (most notably the coordinator health
+        # check timing out) used to propagate straight past the
+        # llm_ingestions save below and out of this function entirely
+        # — the finally clause still tore the cluster down, but the
+        # row stayed stuck at status='running' forever, which is
+        # exactly the kind of thing that looks broken on a performance
+        # history page. Save a real 'failed' row instead.
+        _log(f"llm_ingest failed: {e}")
+        _save_ingestion(finished_at=now_iso(), status="failed", events_seen=len(new_events),
+                         cluster_build_seconds=cluster_build_seconds, model_load_seconds=model_load_seconds,
+                         inference_seconds=inference_seconds, coordinator_stats=coordinator_stats,
+                         worker_stats=worker_stats)
+        return "failed", f"llm_ingest failed: {e}", log
     finally:
         # 9. Always tear the cluster down, regardless of steps 5-8.
         _log("Destroying ephemeral cluster...")
@@ -450,7 +543,12 @@ def _run_llm_ingest_schedule(schedule: dict, run_id: str) -> tuple[str, str, lis
 
     _save_ingestion(finished_at=now_iso(), status="success", events_seen=len(new_events),
                      findings_created=findings_created, suggestions_created=suggestions_created,
-                     peers_synced=peers_synced, summary_text=summary_text)
+                     peers_synced=peers_synced, summary_text=summary_text,
+                     cluster_build_seconds=cluster_build_seconds, model_load_seconds=model_load_seconds,
+                     inference_seconds=inference_seconds, prompt_tokens=usage.get("prompt_tokens"),
+                     completion_tokens=usage.get("completion_tokens"), total_tokens=usage.get("total_tokens"),
+                     tokens_per_second=tokens_per_second,
+                     coordinator_stats=coordinator_stats, worker_stats=worker_stats)
     return "success", summary_text or f"Ingested {len(new_events)} event(s)", log
 
 
@@ -507,7 +605,12 @@ def _extract_json_object(text: str) -> dict:
     raise ValueError("unterminated JSON object in model response")
 
 
-def _run_ingestion_prompt(coordinator_url: str, events: list[dict]) -> dict:
+def _run_ingestion_prompt(coordinator_url: str, events: list[dict]) -> tuple[dict, dict]:
+    """Returns (parsed_response, usage) — usage is llama-server's own
+    OpenAI-compatible 'usage' object (prompt_tokens/completion_tokens/
+    total_tokens) when present, or {} if this build of llama-server
+    doesn't return one (not guaranteed across versions — read
+    defensively, never assumed)."""
     prompt_lines = [
         "You are reviewing new log-intelligence events from Sentinel, "
         "a lab monitoring tool for a small virtualization platform.",
@@ -549,10 +652,11 @@ def _run_ingestion_prompt(coordinator_url: str, events: list[dict]) -> dict:
     with urllib.request.urlopen(req, timeout=180) as r:
         resp = json.loads(r.read())
     content = resp["choices"][0]["message"]["content"]
+    usage = resp.get("usage") or {}
     try:
-        return _extract_json_object(content)
+        return _extract_json_object(content), usage
     except (ValueError, json.JSONDecodeError):
-        return {"summary": content, "findings": [], "suggestions": []}
+        return {"summary": content, "findings": [], "suggestions": []}, usage
 
 
 def _distribute_to_peers(findings: list[dict], suggestions: list[dict], codes: list[str],
