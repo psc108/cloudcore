@@ -3721,6 +3721,13 @@ async function tfSelectTemplate(dirName) {
 // type that only one template uses.
 const _TF_USB_DEVICE_VAR = 'usb_device_id';
 
+// Same suffix match as the Ansible build manager's own peer picker
+// (16-build-manager.js's _BM_PEER_ID_RE) — kept as two separate
+// constants since these are two independent renderers, not shared
+// code, but deliberately the same matching rule so a template author
+// gets identical behavior regardless of which build system they used.
+const _TF_PEER_ID_RE = /(^|_)peer_id$/i;
+
 async function _tfRenderVarForm(dirName, tpl, schema) {
   document.getElementById('tf-form-title').textContent = tpl ? tpl.title : dirName;
   document.getElementById('tf-submit-dirname').value = dirName;
@@ -3743,8 +3750,17 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
     }
   }
 
+  let approvedPeers = [];
+  if (editable.some(([key]) => _TF_PEER_ID_RE.test(key))) {
+    try {
+      const peerData = await api('GET', '/v1/peers?status=approved');
+      approvedPeers = peerData.items || [];
+    } catch (e) { /* field just renders with no options */ }
+  }
+
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
+    if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers);
     return `
       <div class="field">
         <label>${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}</label>
@@ -3757,6 +3773,23 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
       </div>
     `;
   }).join('');
+}
+
+function _tfRenderPeerField(key, meta, peers) {
+  const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
+  const options = peers.length
+    ? peers.map(p => `<option value="${_esc(p.id)}">${_esc(p.hostname)} (${_esc(p.wg_tunnel_status)})</option>`).join('')
+    : '';
+  return `
+    <div class="field">
+      <label>${label}</label>
+      <select id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}">
+        <option value="">— local (this host) —</option>
+        ${options}
+      </select>
+      ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
+    </div>
+  `;
 }
 
 function _tfRenderUsbField(key, meta, devices) {
