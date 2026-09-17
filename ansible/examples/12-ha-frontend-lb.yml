@@ -623,7 +623,7 @@
       delay: 5
       loop: "{{ rabbitmq_joiners_results.results }}"
       loop_control:
-        label: "{{ item.item }}"
+        label: "{{ item.item.role }}"
 
     - name: Record all RabbitMQ IPs
       ansible.builtin.set_fact:
@@ -638,9 +638,10 @@
         name: "{{ pfx }}-frontend-{{ item }}"
         image_id: ubuntu-22.04
         flavor: "{{ frontend_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.frontend }}"]
+        vpc_id: "{{ frontend_02_peer_vpc_id if (item == '02' and frontend_02_peer_id != '') else vpc.vpc.id }}"
+        subnet_id: "{{ frontend_02_peer_subnet_id if (item == '02' and frontend_02_peer_id != '') else subnet_id }}"
+        security_group_ids: ["{{ frontend_02_peer_security_group_id if (item == '02' and frontend_02_peer_id != '') else sg_ids.frontend }}"]
+        peer_id: "{{ frontend_02_peer_id if item == '02' else '' }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/frontend-cloud-init.yml.j2', template_vars={
           'vip_address': vip_address, 'app_password': admin_password, 'admin_password': admin_password,
@@ -701,9 +702,10 @@
         name: "{{ pfx }}-proxysql-{{ item.role }}"
         image_id: ubuntu-22.04
         flavor: "{{ proxysql_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: "{{ subnet_id }}"
-        security_group_ids: ["{{ sg_ids.proxysql }}"]
+        vpc_id: "{{ item.vpc_id_override if item.peer_id != '' else vpc.vpc.id }}"
+        subnet_id: "{{ item.subnet_id_override if item.peer_id != '' else subnet_id }}"
+        security_group_ids: ["{{ item.sg_override if item.peer_id != '' else sg_ids.proxysql }}"]
+        peer_id: "{{ item.peer_id }}"
         users: "{{ ecs_user }}"
         user_data: "{{ lookup('template', 'templates/ha-frontend-lb/proxysql-cloud-init.yml.j2', template_vars={
           'proxysql_deb_sha256': proxysql_deb_sha256, 'mysql_ips': mysql_all_ips,
@@ -717,8 +719,8 @@
           'promtail_config': promtail_config }) }}"
         tags: { <<: *common_tags, Role: proxysql }
       loop:
-        - { role: a, state: MASTER, priority: 150 }
-        - { role: b, state: BACKUP, priority: 100 }
+        - { role: a, state: MASTER, priority: 150, peer_id: "", vpc_id_override: "", subnet_id_override: "", sg_override: "" }
+        - { role: b, state: BACKUP, priority: 100, peer_id: "{{ proxysql_b_peer_id }}", vpc_id_override: "{{ proxysql_b_peer_vpc_id }}", subnet_id_override: "{{ proxysql_b_peer_subnet_id }}", sg_override: "{{ proxysql_b_peer_security_group_id }}" }
       loop_control:
         label: "{{ item.role }}"
       register: proxysql_results
