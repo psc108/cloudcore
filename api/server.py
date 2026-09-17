@@ -479,6 +479,26 @@ def create_instance():
     if peer_id:
         return _create_remote_instance(peer_id, body)
 
+    # Enforced on whichever host actually runs this function: for a
+    # peer-placed instance that's the remote peer's own server.py, after
+    # _create_remote_instance forwards the request with peer_id stripped
+    # (see below) — so this catches a security group id that only exists
+    # on the *originating* host before the instance is ever created.
+    # Previously an unresolved id was accepted here and silently
+    # contributed zero rules at launch (sg_routes._merged_rules skips any
+    # id sg_store can't find) — apply_bridge() still installs a
+    # DROP-terminated chain regardless, so the instance came up completely
+    # unreachable with no error anywhere (found running the cross-host
+    # load-balanced-web demo: a locally-created SG id was passed through
+    # to a peer-placed instance, which built and booted "successfully"
+    # but never answered a ping or an HTTP request).
+    for sg_id in (body.get("security_group_ids") or []):
+        if not sg_store.get(sg_id):
+            return problem(400, "Bad Request",
+                f"security group '{sg_id}' not found — for a peer-placed instance, "
+                "security_group_ids must reference a security group that exists on "
+                "the target peer, not the originating host")
+
     # `or []`, not `.get(key, [])`: Terraform sends an explicit JSON null
     # for an unset Optional list attribute, which a plain default doesn't
     # catch since the key is present — same bug class already fixed in

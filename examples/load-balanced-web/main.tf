@@ -71,9 +71,10 @@ module "web" {
   # vpc_id/subnet_id travel together with peer_id here.
   placement_overrides = var.web_02_peer_id != "" ? {
     "02" = {
-      peer_id   = var.web_02_peer_id
-      vpc_id    = var.web_02_peer_vpc_id
-      subnet_id = var.web_02_peer_subnet_id
+      peer_id            = var.web_02_peer_id
+      vpc_id             = var.web_02_peer_vpc_id
+      subnet_id          = var.web_02_peer_subnet_id
+      security_group_ids = [var.web_02_peer_security_group_id]
     }
   } : {}
 }

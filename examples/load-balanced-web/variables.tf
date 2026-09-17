@@ -69,3 +69,16 @@ variable "web_02_peer_subnet_id" {
   type        = string
   default     = ""
 }
+
+# Same reasoning as web_02_peer_vpc_id/subnet_id: a peer's own security
+# group catalogue is separate from this build's local one, and the API
+# now rejects a security_group_ids entry it can't resolve locally at
+# instance-create time (previously an unresolved id was silently
+# accepted and produced a DROP-only iptables chain, leaving the
+# instance completely unreachable with no error anywhere — see
+# haFullStack-Findings-Log.md). Required whenever web_02_peer_id is set.
+variable "web_02_peer_security_group_id" {
+  description = "The peer's own security group ID for the second web instance — required when web_02_peer_id is set."
+  type        = string
+  default     = ""
+}

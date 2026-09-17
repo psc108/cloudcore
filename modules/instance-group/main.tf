@@ -2,10 +2,11 @@
 #
 # Models a horizontally-scaled set of identical instances — the CloudCore
 # equivalent of an Auto Scaling Group. All instances share the same image,
-# flavor, security groups, and user data. The one thing that CAN differ
-# per instance is *where* it lands — peer_id, and (since a remote peer
-# has its own separate VPC/subnet catalogue) vpc_id/subnet_id along with
-# it, via placement_overrides — everything else is uniform by design.
+# flavor, and user data. The one thing that CAN differ per instance is
+# *where* it lands — peer_id, and (since a remote peer has its own
+# separate VPC/subnet/security-group catalogue) vpc_id/subnet_id/
+# security_group_ids along with it, via placement_overrides — everything
+# else is uniform by design.
 #
 # Instances are named: <project>-<environment>-<name>-01, -02, etc.
 # Scaling up adds instances; scaling down removes the highest-numbered ones.
@@ -33,6 +34,10 @@ locals {
     for k in keys(local.instance_keys) :
     k => try(var.placement_overrides[k].subnet_id, null) != null ? var.placement_overrides[k].subnet_id : var.subnet_id
   }
+  effective_security_group_ids = {
+    for k in keys(local.instance_keys) :
+    k => try(var.placement_overrides[k].security_group_ids, null) != null ? var.placement_overrides[k].security_group_ids : var.security_group_ids
+  }
 }
 
 resource "cloudcore_instance" "this" {
@@ -50,7 +55,7 @@ resource "cloudcore_instance" "this" {
   # apply — "provider produced inconsistent result after apply". Passing
   # null explicitly when empty keeps the plan and the post-apply state
   # in agreement.
-  security_group_ids = length(var.security_group_ids) > 0 ? var.security_group_ids : null
+  security_group_ids = length(local.effective_security_group_ids[each.key]) > 0 ? local.effective_security_group_ids[each.key] : null
   usb_device_ids     = length(var.usb_device_ids) > 0 ? var.usb_device_ids : null
   user_data          = var.user_data
   users              = var.users

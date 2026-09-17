@@ -97,22 +97,28 @@ variable "placement_overrides" {
   description = <<-EOT
     Per-instance placement overrides, keyed by the same two-digit index
     outputs.tf's own _by_key outputs use ("01", "02", ...) — e.g.
-    { "02" = { peer_id = "<peer-id>", vpc_id = "<peer's-vpc-id>", subnet_id = "<peer's-subnet-id>" } }
+    { "02" = { peer_id = "<peer-id>", vpc_id = "<peer's-vpc-id>", subnet_id = "<peer's-subnet-id>", security_group_ids = ["<peer's-sg-id>"] } }
     puts just the second instance on that peer, while the rest follow
-    var.peer_id/var.vpc_id/var.subnet_id (or stay local if peer_id is
-    also unset). vpc_id/subnet_id need overriding together with peer_id,
-    not just peer_id alone: a paired peer has its own separate VPC/
-    subnet catalogue, not the group's local one — the id the rest of
-    the group uses won't exist there. Any field left out of a given
-    entry falls back to the group's own default. This is what makes
-    real mixed-host clustering possible within one group: e.g. a
-    3-node tier with 2 nodes local and 1 on a paired remote host, to
-    actually demonstrate clustering across machines, not just within one.
+    var.peer_id/var.vpc_id/var.subnet_id/var.security_group_ids (or stay
+    local if peer_id is also unset). vpc_id/subnet_id/security_group_ids
+    all need overriding together with peer_id, not just peer_id alone: a
+    paired peer has its own separate VPC/subnet/security-group catalogue,
+    not the group's local one — the id the rest of
+    those ids won't exist there. Omitting security_group_ids on a
+    peer-placed entry is a hard error at apply time (the API now rejects
+    an id it can't resolve locally, rather than silently applying zero
+    rules and leaving the instance unreachable — see
+    haFullStack-Findings-Log.md). Any field left out of a given entry
+    falls back to the group's own default. This is what makes real
+    mixed-host clustering possible within one group: e.g. a 3-node tier
+    with 2 nodes local and 1 on a paired remote host, to actually
+    demonstrate clustering across machines, not just within one.
   EOT
   type = map(object({
-    peer_id   = optional(string)
-    vpc_id    = optional(string)
-    subnet_id = optional(string)
+    peer_id            = optional(string)
+    vpc_id             = optional(string)
+    subnet_id          = optional(string)
+    security_group_ids = optional(list(string))
   }))
   default = {}
 }
