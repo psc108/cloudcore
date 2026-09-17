@@ -25,6 +25,14 @@ const _PLACEMENT_TYPES = [
   { type: 'Security Group', path: '/v1/security-groups' },
 ];
 
+// Three-tier read of a percentage against its own warn/hot thresholds —
+// the single source of truth both the per-metric badges and the overall
+// traffic-light verdict below are built from, so they can never disagree
+// with each other about what "70%" means for a given metric.
+function _placementTier(pct, warnAt, hotAt) {
+  return pct >= hotAt ? 'error' : pct >= warnAt ? 'pending' : 'active';
+}
+
 // Reuses the existing status-badge CSS variants for a load percentage,
 // rather than adding new classes just for this: badge-active (green)
 // under the "comfortable" threshold, badge-pending (yellow/warn) under
@@ -32,8 +40,30 @@ const _PLACEMENT_TYPES = [
 // three-tier meaning every other badge on this dashboard already
 // conveys, just keyed off a number instead of an enum value here.
 function _placementLoadBadge(pct, warnAt, hotAt) {
-  const cls = pct >= hotAt ? 'error' : pct >= warnAt ? 'pending' : 'active';
+  const cls = _placementTier(pct, warnAt, hotAt);
   return `<span class="badge badge-${cls}">${pct.toFixed(1)}%</span>`;
+}
+
+// Traffic-light placement verdict, per direct request: "green - use for
+// resources, amber, risky but could try, red - leave alone." Worst of
+// the three metrics wins — a host that's fine on CPU/disk but nearly out
+// of memory is still not a safe placement target, so this is
+// deliberately not an average.
+const _PLACEMENT_VERDICTS = {
+  active:  { label: 'Use for resources',   dot: '🟢' },
+  pending: { label: 'Risky — could try',   dot: '🟡' },
+  error:   { label: 'Leave alone',         dot: '🔴' },
+};
+
+function _placementVerdict(stats) {
+  const tiers = [
+    _placementTier(stats.cpu.load_pct_1m, 70, 100),
+    _placementTier(stats.memory.used_pct, 70, 90),
+    _placementTier(stats.disk.used_pct, 70, 90),
+  ];
+  const worst = tiers.includes('error') ? 'error' : tiers.includes('pending') ? 'pending' : 'active';
+  const v = _PLACEMENT_VERDICTS[worst];
+  return `<span class="badge badge-${worst}">${v.dot} ${v.label}</span>`;
 }
 
 function _placementStatsRow(hostname, stats) {
@@ -42,6 +72,7 @@ function _placementStatsRow(hostname, stats) {
       <tr>
         <td><strong>${_esc(hostname)}</strong></td>
         <td colspan="4" class="text-muted">Unreachable — stats unavailable</td>
+        <td><span class="badge badge-stopped">⚪ Unknown — can't assess</span></td>
       </tr>`;
   }
   return `
@@ -51,6 +82,7 @@ function _placementStatsRow(hostname, stats) {
       <td>${_placementLoadBadge(stats.memory.used_pct, 70, 90)} <span class="text-muted">(${stats.memory.available_mb} MB free)</span></td>
       <td>${_placementLoadBadge(stats.disk.used_pct, 70, 90)} <span class="text-muted">(${stats.disk.free_gb} GB free)</span></td>
       <td>${stats.instances.running} running / ${stats.instances.count} total</td>
+      <td>${_placementVerdict(stats)}</td>
     </tr>`;
 }
 
@@ -112,7 +144,7 @@ function loadResourcePlacement() {
   const capacityTbody = document.getElementById('capacity-tbody');
   const peersTbody = document.getElementById('placement-peers-tbody');
   const tbody = document.getElementById('placement-tbody');
-  capacityTbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
+  capacityTbody.innerHTML = '<tr class="empty-row"><td colspan="6">Loading…</td></tr>';
   peersTbody.innerHTML = '<tr class="empty-row"><td colspan="5">Loading…</td></tr>';
   tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Loading…</td></tr>';
 
@@ -148,10 +180,8 @@ function loadResourcePlacement() {
       _renderPlacementTable(tbody, resources, peerById);
     });
   }).catch(e => {
-    const peerMsg = `<tr class="empty-row"><td colspan="5">Error: ${_esc(e.message)}</td></tr>`;
-    const resMsg = `<tr class="empty-row"><td colspan="6">Error: ${_esc(e.message)}</td></tr>`;
-    capacityTbody.innerHTML = peerMsg;
-    peersTbody.innerHTML = peerMsg;
-    tbody.innerHTML = resMsg;
+    capacityTbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${_esc(e.message)}</td></tr>`;
+    peersTbody.innerHTML = `<tr class="empty-row"><td colspan="5">Error: ${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${_esc(e.message)}</td></tr>`;
   });
 }

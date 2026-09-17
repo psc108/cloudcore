@@ -766,12 +766,13 @@
         Current load on this host and every paired peer, side by side — which one's actually overloaded, and which
         can tolerate placing another resource on it. CPU load is the 1-minute load average normalized by core
         count (a load of 1.0 on 4 cores shows as 25%, so it stays comparable across hosts with different core
-        counts); Memory and Disk are the standard "how full is it" percentages.
+        counts); Memory and Disk are the standard "how full is it" percentages. Placement is the worst of the
+        three, in one glance — 🟢 use for resources, 🟡 risky but could try, 🔴 leave alone.
       </p>
       <div class="table-wrap">
         <table id="capacity-table">
-          <thead><tr><th>Host</th><th>CPU</th><th>Memory</th><th>Disk</th><th>Instances</th></tr></thead>
-          <tbody id="capacity-tbody"><tr class="empty-row"><td colspan="5">Loading…</td></tr></tbody>
+          <thead><tr><th>Host</th><th>CPU</th><th>Memory</th><th>Disk</th><th>Instances</th><th>Placement</th></tr></thead>
+          <tbody id="capacity-tbody"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
