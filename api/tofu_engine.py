@@ -6,14 +6,18 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import db
 import failure_queue
+import idle_watcher
 import settings_store
 
 _running: dict[str, dict] = {}
@@ -226,7 +230,8 @@ def _connection_vars() -> dict:
 # Build lifecycle
 # ---------------------------------------------------------------------------
 
-def submit_build(dir_name: str, var_overrides: dict, created_by: str = "ui") -> dict:
+def submit_build(dir_name: str, var_overrides: dict, created_by: str = "ui",
+                  idle_timeout_minutes: int | None = None) -> dict:
     build_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     build = {
@@ -243,7 +248,8 @@ def submit_build(dir_name: str, var_overrides: dict, created_by: str = "ui") -> 
         "provisioned": [],
     }
     _running[build_id] = build
-    threading.Thread(target=_run_build, args=(build_id, var_overrides), daemon=True).start()
+    threading.Thread(target=_run_build, args=(build_id, var_overrides, idle_timeout_minutes),
+                      daemon=True).start()
     return build
 
 
@@ -311,7 +317,7 @@ def _diff_snapshots(before: dict, after: dict) -> list[dict]:
     return provisioned
 
 
-def _run_build(build_id: str, var_overrides: dict) -> None:
+def _run_build(build_id: str, var_overrides: dict, idle_timeout_minutes: int | None = None) -> None:
     build = _running[build_id]
     build["status"] = "running"
     build["started_at"] = datetime.now(timezone.utc).isoformat()
@@ -339,7 +345,42 @@ def _run_build(build_id: str, var_overrides: dict) -> None:
                 pass
         if build["status"] == "failed":
             _cleanup_failed_build(build, var_overrides)
+        elif build["status"] == "success" and idle_timeout_minutes:
+            _start_idle_watcher(build, var_overrides, idle_timeout_minutes)
         _save_build(build)
+
+
+def _start_idle_watcher(build: dict, var_overrides: dict, idle_timeout_minutes: int) -> None:
+    """Per direct request: "it takes ~4-8 minutes to get the llm
+    ready... [would it help to] keep it running constantly?" — not
+    forever (ties up both machines indefinitely) and not torn down
+    after every single chat (re-pays the whole cold start every time),
+    but destroyed automatically once nothing has actually used it for
+    the configured window. See api/idle_watcher.py's own docstring for
+    how "idle" is actually measured."""
+    try:
+        lb_entry = next((r for r in (build.get("provisioned") or []) if r["type"] == "lb"), None)
+        if not lb_entry:
+            _log(build, "Idle-timeout requested but this build has no load balancer — skipping.")
+            return
+        http_port = int(var_overrides.get("http_port") or
+                         extract_template_vars(build["template"]).get("http_port", {}).get("default") or 0)
+        if not http_port:
+            _log(build, "Idle-timeout requested but couldn't determine http_port — skipping.")
+            return
+        lb = json.loads(urllib.request.urlopen(
+            urllib.request.Request(f"http://127.0.0.1:8080/v1/load-balancers/{lb_entry['id']}",
+                                    headers={"Authorization": f"Bearer {var_overrides.get('cloudcore_api_token', 'dev-token')}"}),
+            timeout=10).read())
+        tg = next((t for t in (lb.get("target_groups") or []) if t.get("port") == http_port), None)
+        if not tg:
+            _log(build, "Idle-timeout requested but couldn't find a matching target group — skipping.")
+            return
+        backend_name = f"tg-{tg['id'][:8]}-back"
+        idle_watcher.start(build["id"], sys.modules[__name__], lb_entry["id"], backend_name, idle_timeout_minutes)
+        _log(build, f"Idle-timeout auto-shutdown armed: {idle_timeout_minutes} minute(s) with no real client traffic.")
+    except Exception as e:
+        _log(build, f"WARNING: failed to arm idle-timeout watcher: {e}")
 
 
 def _cleanup_failed_build(build: dict, var_overrides: dict) -> None:

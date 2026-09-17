@@ -4239,6 +4239,23 @@ const _TF_PEER_ID_RE = /(^|_)peer_id$/i;
 // above rather than imported.
 const _TF_WORKER_PEERS_VAR = 'worker_peers';
 
+// Any template exposing http_port (today: distributed-llm, llm-chat —
+// both real load-balanced HTTP services expensive to cold-start) also
+// gets an idle-timeout auto-shutdown control, per direct request:
+// "it takes ~4-8 minutes to get the llm ready... make it a 60 minute
+// default but allow the user to choose in 30 minute increments." Not
+// a template variable — a build-submission option sent alongside vars,
+// so it's rendered and collected separately from the editable.map()
+// loop below.
+const _TF_HTTP_PORT_VAR = 'http_port';
+const _TF_IDLE_OPTIONS_MIN = [30, 60, 90, 120, 180, 240];
+
+function _tfIdleLabel(m) {
+  if (m < 60) return `${m} minutes`;
+  const h = m / 60;
+  return Number.isInteger(h) ? `${h} hour${h > 1 ? 's' : ''}` : `${h} hours`;
+}
+
 // A peer-placed resource's own peer_vpc_id/peer_subnet_id/
 // peer_security_group_id also get real pickers, cascading from their
 // sibling peer_id field — "checking the current vpc id's on the
@@ -4329,6 +4346,19 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
       </div>
     `;
   }).join('');
+
+  if (editable.some(([key]) => key === _TF_HTTP_PORT_VAR)) {
+    container.innerHTML += `
+      <div class="field">
+        <label>Idle Timeout</label>
+        <select id="tf-idle-timeout">
+          <option value="">Off — destroy manually</option>
+          ${_TF_IDLE_OPTIONS_MIN.map(m =>
+            `<option value="${m}"${m === 60 ? ' selected' : ''}>${_tfIdleLabel(m)}</option>`).join('')}
+        </select>
+        <span class="bm-field-hint">Automatically destroys this build once nothing has actually talked to it for this long — the coordinator itself stays running, ready instantly, for as long as it's actually being used.</span>
+      </div>`;
+  }
 
   await _tfWirePeerCascades(peerFamilies);
   if (hasWorkerPeers) await _tfWireWorkerPeersField(_TF_WORKER_PEERS_VAR);
@@ -4650,13 +4680,17 @@ async function tfSubmitBuild() {
     }
   }
 
+  const idleSel = document.getElementById('tf-idle-timeout');
+  const idleTimeoutMinutes = idleSel && idleSel.value ? Number(idleSel.value) : undefined;
+
   const btn = document.getElementById('tf-submit-btn');
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
   let data;
   try {
-    data = await api('POST', '/v1/tofu/builds', { template: dirName, vars });
+    data = await api('POST', '/v1/tofu/builds',
+      { template: dirName, vars, idle_timeout_minutes: idleTimeoutMinutes });
   } catch (e) {
     btn.disabled = false;
     btn.textContent = 'Run Apply';

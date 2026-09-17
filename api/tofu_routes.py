@@ -6,6 +6,7 @@ import json
 import os
 from flask import Blueprint, jsonify, request, Response
 
+import idle_watcher
 import tofu_engine
 
 tofu_bp = Blueprint("tofu", __name__)
@@ -61,7 +62,20 @@ def submit_build():
             "detail": f"Missing required variable(s): {', '.join(missing)}",
         }), 400
 
-    build = tofu_engine.submit_build(template, var_overrides, body.get("created_by", "ui"))
+    idle_timeout_minutes = body.get("idle_timeout_minutes")
+    if idle_timeout_minutes is not None:
+        try:
+            idle_timeout_minutes = int(idle_timeout_minutes)
+        except (TypeError, ValueError):
+            return jsonify({"status": 400, "title": "Bad Request",
+                             "detail": "idle_timeout_minutes must be an integer"}), 400
+        if idle_timeout_minutes < idle_watcher.MIN_MINUTES or idle_timeout_minutes % idle_watcher.STEP_MINUTES != 0:
+            return jsonify({"status": 400, "title": "Bad Request",
+                             "detail": f"idle_timeout_minutes must be a multiple of {idle_watcher.STEP_MINUTES}, "
+                                       f"at least {idle_watcher.MIN_MINUTES}"}), 400
+
+    build = tofu_engine.submit_build(template, var_overrides, body.get("created_by", "ui"),
+                                      idle_timeout_minutes)
     return jsonify(_summary(build)), 202
 
 
