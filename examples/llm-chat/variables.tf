@@ -351,3 +351,20 @@ variable "coordinator_peer_security_group_id" {
   type        = string
   default     = ""
 }
+
+# Deliberately NOT cloudcore_api_token — that name is reserved for the
+# OpenTofu *provider's* own auth (tofu_engine.py's _build_env()
+# explicitly excludes cloudcore_api_token/cloudcore_api_url from ever
+# becoming a real Terraform variable, so a variable with that name
+# here would silently never receive the value a caller actually
+# submits). This is a genuinely separate credential: what the
+# coordinator's own verify-proxy.service uses to authenticate its
+# POST back to the CloudCore API's examples-capture endpoint
+# (api/examples_listener.py, Phase 3). Defaults to the same
+# "dev-token" every other unauthenticated-by-default piece of this lab
+# stack uses; override to match a real deployment's CLOUDCORE_API_TOKEN.
+variable "examples_ingestion_token" {
+  description = "Bearer token verify-proxy.service uses to POST captured grounded-verification examples back to the CloudCore API (api/llm_examples_routes.py's ingest_example). Must match the API host's own CLOUDCORE_API_TOKEN."
+  type        = string
+  default     = "dev-token"
+}

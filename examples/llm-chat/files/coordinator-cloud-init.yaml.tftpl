@@ -95,6 +95,9 @@ write_files:
       Environment=VERIFY_TIMEOUT_SECONDS=${verify_timeout_seconds}
       Environment=VERIFY_MAX_MEMORY_MB=${verify_max_memory_mb}
       Environment=VERIFY_MAX_FIX_ROUNDS=${verify_max_fix_rounds}
+      Environment=EXAMPLES_API_BASE=${examples_api_base}
+      Environment=EXAMPLES_API_TOKEN=${examples_ingestion_token}
+      Environment=EXAMPLES_MODEL_FILENAME=${model_filename}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
       Restart=on-failure
       RestartSec=5

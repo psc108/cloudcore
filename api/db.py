@@ -445,6 +445,38 @@ CREATE TABLE IF NOT EXISTS failed_build_logs (
     created_at    TEXT NOT NULL
 );
 
+-- Every llm-chat grounded-verification transaction (Phase 1/2's own
+-- real execution result, pass or fail, plus a fix round if one ran) —
+-- captured unconditionally, nothing filtered at capture time, so this
+-- table doubles as the exportable training corpus. `status` controls
+-- only what the separate student review page shows (an instructor
+-- curates by publishing good teaching examples), never what's
+-- captured. No student/session identity is ever recorded — a shared
+-- cohort resource, matching the chat itself having no login. `source`
+-- defaults to this coordinator's own capture path but is
+-- deliberately generic so a future capture client (e.g. a student
+-- running a model locally) could feed the same table without a schema
+-- change — not built now, just not designed away.
+CREATE TABLE IF NOT EXISTS llm_verification_examples (
+    id               TEXT PRIMARY KEY,
+    source           TEXT NOT NULL DEFAULT 'llm-chat-coordinator',
+    build_id         TEXT NOT NULL DEFAULT '',
+    model_filename   TEXT NOT NULL,
+    prompt           TEXT NOT NULL,
+    generated_code   TEXT NOT NULL,
+    exec_stdout      TEXT NOT NULL DEFAULT '',
+    exec_stderr      TEXT NOT NULL DEFAULT '',
+    exec_exit_code   INTEGER,
+    passed           INTEGER NOT NULL DEFAULT 0,
+    fix_explanation  TEXT NOT NULL DEFAULT '',
+    fixed_code       TEXT NOT NULL DEFAULT '',
+    fix_exec_stdout  TEXT NOT NULL DEFAULT '',
+    fix_exec_stderr  TEXT NOT NULL DEFAULT '',
+    fix_passed       INTEGER,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    created_at       TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
     content='help_articles', content_rowid='rowid'

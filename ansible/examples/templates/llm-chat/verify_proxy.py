@@ -32,6 +32,7 @@ this codebase (examples/ha-frontend-lb's serve-ca-certs.py).
 """
 from __future__ import annotations
 
+import html
 import http.client
 import http.server
 import json
@@ -44,6 +45,8 @@ import signal
 import socket
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 
 UPSTREAM_HOST = "127.0.0.1"
 UPSTREAM_PORT = 8721
@@ -54,6 +57,17 @@ VERIFY_TIMEOUT_S = int(os.environ.get("VERIFY_TIMEOUT_SECONDS", "15"))
 VERIFY_MAX_MEMORY_MB = int(os.environ.get("VERIFY_MAX_MEMORY_MB", "256"))
 VERIFY_MAX_FIX_ROUNDS = int(os.environ.get("VERIFY_MAX_FIX_ROUNDS", "3"))
 SANDBOX_USER = "sandboxrunner"
+
+# Phase 3 -- central learning corpus capture (api/examples_listener.py,
+# api/llm_examples_routes.py). Best-effort only: a capture failure must
+# never affect the chat response itself, so every call site wraps this
+# in try/except and only ever logs. Empty EXAMPLES_API_BASE (unset)
+# disables capture entirely rather than failing outward -- lets this
+# same proxy source run against an older API host with no Phase 3
+# routes at all.
+EXAMPLES_API_BASE = os.environ.get("EXAMPLES_API_BASE", "").rstrip("/")
+EXAMPLES_API_TOKEN = os.environ.get("EXAMPLES_API_TOKEN", "")
+EXAMPLES_MODEL_FILENAME = os.environ.get("EXAMPLES_MODEL_FILENAME", "")
 
 # How often (seconds) to send an SSE keep-alive comment to the browser
 # while waiting on an internal fix-round completion -- HAProxy's own
@@ -226,17 +240,31 @@ def _call_llama_direct(messages: list, heartbeat=None, timeout: int = 3600,
 
 
 def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
-                          max_tokens: int | None = None) -> str:
+                          max_tokens: int | None = None) -> tuple[str, dict]:
     """Runs the initial sandboxed execution and, if it fails, up to
     VERIFY_MAX_FIX_ROUNDS grounded fix attempts (Phase 2) -- each one
     grounded in the REAL traceback from the attempt before it, not
-    another unverified guess. Returns the complete markdown to append
-    to the model's own response. `max_tokens`, when known, is passed
+    another unverified guess. `max_tokens`, when known, is passed
     through to each fix round's own completion so it isn't left
-    effectively unbounded."""
+    effectively unbounded.
+
+    Returns (markdown, capture) -- markdown is the complete text to
+    append to the model's own response, unchanged from before this
+    return type grew a second element; capture is the same real data
+    shaped for Phase 3's learning-corpus record (llm_examples_store's
+    own field names): the initial code/result always, plus the LAST
+    fix round actually attempted (if any) -- the DB schema holds one
+    fix slot, representing where the chain ended up, not every
+    intermediate round."""
     result = run_sandboxed(code)
-    if (not result["timed_out"] and result["exit_code"] == 0) or VERIFY_MAX_FIX_ROUNDS <= 0:
-        return format_verification_block(result, final=True)
+    capture = {
+        "generated_code": code,
+        "exec_stdout": result["stdout"], "exec_stderr": result["stderr"],
+        "exec_exit_code": result["exit_code"],
+        "passed": (not result["timed_out"] and result["exit_code"] == 0),
+    }
+    if capture["passed"] or VERIFY_MAX_FIX_ROUNDS <= 0:
+        return format_verification_block(result, final=True), capture
 
     blocks = [format_verification_block(result, final=False)]
     messages = list(original_messages)
@@ -263,6 +291,7 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
 
         messages.append({"role": "assistant", "content": fix_text})
         blocks.append(f"\n\n---\n### Fix attempt {round_num} of {VERIFY_MAX_FIX_ROUNDS}\n\n{fix_text}")
+        capture["fix_explanation"] = fix_text
 
         new_code = extract_python_code(fix_text)
         if not new_code:
@@ -277,10 +306,50 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
         passed = not result["timed_out"] and result["exit_code"] == 0
         blocks.append(format_verification_block(result, final=(passed or is_last_round)))
         code = new_code
+        capture.update({
+            "fixed_code": new_code,
+            "fix_exec_stdout": result["stdout"], "fix_exec_stderr": result["stderr"],
+            "fix_passed": passed,
+        })
         if passed:
             break
 
-    return "".join(blocks)
+    return "".join(blocks), capture
+
+
+def _extract_prompt(original_messages: list) -> str:
+    """The most recent user-role message -- what the student actually
+    asked in this turn, not the whole running conversation."""
+    for msg in reversed(original_messages or []):
+        if msg.get("role") == "user":
+            return msg.get("content") or ""
+    return ""
+
+
+def capture_example(original_messages: list, capture: dict) -> None:
+    """POSTs one grounded-verification transaction back to the CloudCore
+    API's examples-capture endpoint (api/llm_examples_routes.py). Fully
+    best-effort -- any failure (capture disabled, host unreachable,
+    non-2xx) is swallowed after one stderr line for journald, since a
+    capture problem must never affect the chat response itself."""
+    if not EXAMPLES_API_BASE or not EXAMPLES_MODEL_FILENAME:
+        return
+    payload = {
+        "source": "llm-chat-coordinator",
+        "model_filename": EXAMPLES_MODEL_FILENAME,
+        "prompt": _extract_prompt(original_messages),
+        **capture,
+    }
+    try:
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            EXAMPLES_API_BASE + "/v1/llm-chat/examples", data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {EXAMPLES_API_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"verify-proxy: example capture failed (non-fatal): {e}", flush=True)
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -293,7 +362,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # --- dispatch -----------------------------------------------------
 
     def do_GET(self):
-        self._proxy_passthrough()
+        if self.path.split("?", 1)[0].rstrip("/") == "/examples":
+            self._serve_examples_page()
+        else:
+            self._proxy_passthrough()
 
     def do_HEAD(self):
         self._proxy_passthrough()
@@ -405,8 +477,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         code = extract_python_code(content)
         if code:
-            extra = verify_and_maybe_fix(request_messages, code, max_tokens=request_max_tokens)
+            extra, capture = verify_and_maybe_fix(request_messages, code, max_tokens=request_max_tokens)
             data["choices"][0]["message"]["content"] = content + extra
+            capture_example(request_messages, capture)
         out = json.dumps(data).encode()
         self.send_response(resp.status)
         self.send_header("Content-Type", "application/json")
@@ -465,9 +538,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         full_text = "".join(accumulated)
         code = extract_python_code(full_text)
         if code:
-            extra = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
-                                          max_tokens=request_max_tokens)
+            extra, capture = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
+                                                    max_tokens=request_max_tokens)
             self._write_sse_delta(extra, last_chunk_meta)
+            capture_example(request_messages, capture)
 
         try:
             self.wfile.write(b"data: [DONE]\n\n")
@@ -497,6 +571,97 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # thread's own loop stops cleanly instead of retrying forever.
         self.wfile.write(b": verifying...\n\n")
         self.wfile.flush()
+
+    # --- Phase 3: student review page ----------------------------------
+
+    def _serve_examples_page(self):
+        """Small, self-rendered HTML page (stdlib only, no new frontend
+        framework -- matches this whole proxy's own convention) showing
+        every published grounded-verification example's full journey:
+        prompt -> wrong code -> real failure -> grounded explanation ->
+        fix -> real re-verification result. Served on the SAME URL/port
+        students already use for chat -- no new credentials, no new
+        address to distribute, matches Phase 3's own design intent
+        ('for the benefit of all students', not gated per-person)."""
+        items = []
+        error = None
+        if EXAMPLES_API_BASE:
+            try:
+                req = urllib.request.Request(
+                    EXAMPLES_API_BASE + "/v1/llm-chat/examples/published?limit=100")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    items = json.loads(resp.read()).get("items", [])
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                error = str(e)
+        else:
+            error = "example capture is not configured for this deployment"
+
+        body = self._render_examples_html(items, error)
+        out = body.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    @staticmethod
+    def _render_examples_html(items: list, error: str | None) -> str:
+        esc = html.escape
+
+        def _block(label: str, text: str) -> str:
+            if not (text or "").strip():
+                return ""
+            return f"<h4>{esc(label)}</h4><pre>{esc(text)}</pre>"
+
+        cards = []
+        for it in items:
+            passed_badge = '<span class="pass">PASSED</span>' if it.get("passed") else '<span class="fail">FAILED</span>'
+            parts = [
+                f'<div class="card">',
+                f'<div class="meta">{esc(it.get("model_filename",""))} &middot; {esc(it.get("created_at",""))} &middot; {passed_badge}</div>',
+                _block("Prompt", it.get("prompt", "")),
+                _block("Generated code", it.get("generated_code", "")),
+                _block("Actually executed -- stdout", it.get("exec_stdout", "")),
+                _block("Actually executed -- stderr", it.get("exec_stderr", "")),
+            ]
+            if it.get("fix_explanation"):
+                fix_badge = '<span class="pass">FIX PASSED</span>' if it.get("fix_passed") else '<span class="fail">FIX FAILED</span>'
+                parts += [
+                    f'<div class="meta">{fix_badge}</div>',
+                    _block("Grounded explanation + fix", it.get("fix_explanation", "")),
+                    _block("Fixed code", it.get("fixed_code", "")),
+                    _block("Re-execution -- stdout", it.get("fix_exec_stdout", "")),
+                    _block("Re-execution -- stderr", it.get("fix_exec_stderr", "")),
+                ]
+            parts.append("</div>")
+            cards.append("".join(parts))
+
+        body_html = (
+            f'<p class="error">Examples aren\'t available right now: {esc(error)}</p>' if error
+            else ('<p class="empty">No examples have been published yet.</p>' if not items
+                  else "\n".join(cards))
+        )
+
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8">
+<title>llm-chat -- Learning Examples</title>
+<style>
+body {{ font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }}
+h1 {{ font-size: 1.4rem; }}
+.card {{ border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.25rem 0; }}
+.meta {{ color: #666; font-size: 0.85rem; margin-bottom: 0.5rem; }}
+h4 {{ margin: 0.75rem 0 0.25rem; font-size: 0.9rem; }}
+pre {{ background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }}
+.pass {{ color: #0a7a2f; font-weight: 600; }}
+.fail {{ color: #b02a2a; font-weight: 600; }}
+.error, .empty {{ color: #666; }}
+</style></head>
+<body>
+<h1>Learning Examples</h1>
+<p class="meta">Real prompts, real code, real execution results -- curated from this deployment's own chat sessions. Nothing here is summarized or reworded.</p>
+{body_html}
+</body></html>
+"""
 
 
 def main():

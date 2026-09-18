@@ -38,7 +38,7 @@ is a different, non-interactive consumer and stays untouched.
 | 1 | Sandboxed execution + honest display (Python-only, single turn) | Done — verified live (real `numpy` `ModuleNotFoundError` shown honestly, single `[DONE]`) |
 | 2 | Grounded fix loop | Done — verified live (real 3-round fix loop against a genuine `numpy` failure, correct round-limiting, single "ask again" invite only on the final block) |
 | PRIORITY | Coordinator placement-awareness | Code complete, verified as far as topology allows — 2026-09-18 |
-| 3 | Central learning corpus + student review page | Not started |
+| 3 | Central learning corpus + student review page | Done — verified live end-to-end, 2026-09-18 |
 | 4 | Interactive sandbox (placeholder — needs its own document) | Not started |
 
 ---
@@ -602,6 +602,63 @@ appears on `GET /examples` on the coordinator's own URL with the full
 journey intact; confirm `GET /v1/llm-chat/examples/export` returns
 valid JSONL covering *all* captured rows regardless of status, not
 just published ones.
+
+### A real gap this plan's own first draft missed, found before writing code
+
+The line above ("gated by the same `cloudcore_api_token` every
+template's guest already has via `tofu_engine.py`'s
+`_connection_vars()` — no new plumbing needed") was wrong. Checked
+directly: `cloudcore_api_token`/`cloudcore_api_url` authenticate the
+*OpenTofu provider* process running on the host — `_build_env()`
+explicitly excludes both from ever becoming real Terraform variables
+(`tofu_engine.py:446-460`), so they never reach a guest VM at all. The
+main API itself binds `127.0.0.1:8080` only (`server.py:2035`) — no
+guest, local or peer-placed, could reach it before this pass.
+
+Fixed by reusing this project's own established pattern
+(`peer_listener.py`: a second Flask bind on `0.0.0.0`, gated by an
+explicit per-endpoint allowlist checked via the accepting socket's own
+port) rather than exposing the whole management API. Per direct
+decision, this got its **own** dedicated, always-on listener
+(`api/examples_listener.py`, port 8083) instead of riding
+`peer_listener`'s own bind — capture shouldn't silently stop working
+if peering ever gets disabled. A genuinely new Terraform variable
+(`examples_ingestion_token`) carries the shared auth token into the
+coordinator's own cloud-init — `cloudcore_api_token` itself couldn't
+be reused for this (see above).
+
+**Address for a peer-placed coordinator, confirmed live rather than
+assumed**: `192.168.100.1` (this host's own bridge gateway, same fixed
+convention Loki/the package repo already use) turns out to work for
+**both** a local and a peer-placed coordinator with zero
+placement-specific templating — confirmed with a real cross-tunnel
+test run directly on Llywyn-Y-Groes (`timeout 5 bash -c 'echo >
+/dev/tcp/192.168.100.1/8082' && echo OK` → `OK`), not just reasoned
+from `wireguard.py`'s symmetric `AllowedIPs` config. (Tested against
+the host itself, not a guest VM on that host specifically — SSH into
+that peer's own guest was refused, since a peer-placed instance is
+provisioned with *that* peer's own keypair, not stourport's; guests
+share their host's own routing by construction, so this is treated as
+sufficient rather than a residual gap.)
+
+### Verified live end-to-end, 2026-09-18
+
+Real prompt through a freshly-redeployed `llm-chat` (coordinator
+local, worker on Llywyn-Y-Groes, both carrying the new capture wiring)
+→ real generated code → real sandboxed execution (`exit_code: 0`,
+`stdout: "6\n"`) → real POST from the coordinator, across the real
+network, through `examples_listener`'s port-gate, into
+`llm_verification_examples` → published via the admin API → appeared
+correctly on the coordinator's own `GET /examples` page, fetched live
+through the LB, with the full prompt/code/stdout journey intact →
+`GET /v1/llm-chat/examples/export` returned valid JSONL. The
+port-gate itself was also directly confirmed: the same ingestion
+endpoint succeeds via port 8083, while an unrelated endpoint
+(`/v1/instances`) 403s there regardless of a valid token. Dashboard
+page (`ui/src/js/30-llm-examples.js`) is wired and present in the
+rebuilt bundle and confirmed against the real API, but not
+visually browser-tested (no browser available in this environment) —
+flagged rather than silently assumed working.
 
 ---
 

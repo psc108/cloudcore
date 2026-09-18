@@ -72,6 +72,17 @@ locals {
   # inlined; plain-text Python needs no build/pinned-artifact step.
   verify_proxy_source = file("${path.module}/files/verify_proxy.py")
 
+  # Fixed host-level address, same convention as promtail_config's own
+  # Loki target and the host-level package repo (192.168.100.1:8090) —
+  # api/examples_listener.py's own dedicated, always-on bind. Confirmed
+  # live this session that this exact address is reachable not just
+  # from local guests but across the WireGuard tunnel from a
+  # peer-placed coordinator's own host network too (192.168.100.0/24 is
+  # in every paired peer's own AllowedIPs — see wireguard.py's
+  # render_config), so one fixed address covers both placements with
+  # no peer-specific templating needed.
+  examples_api_base = "http://192.168.100.1:8083"
+
   coordinator_user_data = templatefile("${path.module}/files/coordinator-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256
@@ -89,5 +100,7 @@ locals {
     verify_timeout_seconds  = var.verify_timeout_seconds
     verify_max_memory_mb    = var.verify_max_memory_mb
     verify_max_fix_rounds   = var.verify_max_fix_rounds
+    examples_api_base        = local.examples_api_base
+    examples_ingestion_token = var.examples_ingestion_token
   })
 }

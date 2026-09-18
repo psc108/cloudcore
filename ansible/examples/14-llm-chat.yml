@@ -224,6 +224,25 @@
     coordinator_peer_subnet_id: ""
     coordinator_peer_security_group_id: ""
 
+    # --- Phase 3: central learning corpus capture ---------------------
+    # Fixed host-level address, same convention as promtail's own Loki
+    # target — api/examples_listener.py's own dedicated, always-on bind,
+    # confirmed reachable both from local guests and, across the
+    # WireGuard tunnel, from a peer-placed coordinator's own host
+    # network (192.168.100.0/24 is in every paired peer's own
+    # AllowedIPs — see wireguard.py's render_config). One fixed address
+    # covers both placements, no peer-specific templating needed.
+    #
+    # Deliberately a separate token from cloudcore_api_token/
+    # cloudcore_api_url (those two are excluded from ever reaching
+    # Terraform variables by tofu_engine.py's own _build_env(); the
+    # equivalent Ansible path has no such exclusion, but naming this
+    # one distinctly keeps both engines' own examples.tf/.yml
+    # documentation and behaviour identical). Must match the API host's
+    # own CLOUDCORE_API_TOKEN.
+    examples_api_base: "http://192.168.100.1:8083"
+    examples_ingestion_token: "dev-token"
+
   tasks:
     - name: Fail fast if worker_peers is empty
       ansible.builtin.fail:
@@ -341,7 +360,9 @@
           'enable_verification': enable_verification,
           'verify_timeout_seconds': verify_timeout_seconds,
           'verify_max_memory_mb': verify_max_memory_mb,
-          'verify_max_fix_rounds': verify_max_fix_rounds }) }}"
+          'verify_max_fix_rounds': verify_max_fix_rounds,
+          'examples_api_base': examples_api_base,
+          'examples_ingestion_token': examples_ingestion_token }) }}"
 
     - name: Create coordinator instance
       # vpc_id/subnet_id/security_group_ids/peer_id fall back to this

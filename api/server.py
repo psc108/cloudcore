@@ -22,6 +22,7 @@ import identity
 import discovery
 import settings_store
 import peer_listener
+import examples_listener
 import peer_client
 import peers_store
 from models import (
@@ -40,6 +41,7 @@ from settings_routes import settings_bp
 from peers_routes import peers_bp, PEER_REACHABLE_ENDPOINTS
 from stats_routes import stats_bp
 from scheduler_routes import scheduler_bp
+from llm_examples_routes import examples_bp, EXAMPLES_REACHABLE_ENDPOINTS
 import scheduler
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
@@ -56,6 +58,7 @@ app.register_blueprint(settings_bp)
 app.register_blueprint(peers_bp)
 app.register_blueprint(stats_bp)
 app.register_blueprint(scheduler_bp)
+app.register_blueprint(examples_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -113,6 +116,13 @@ def _peer_bind_gate():
     # client can influence.
     if request.environ.get("SERVER_PORT") == str(discovery.peer_listener_port()):
         if request.endpoint not in (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS):
+            abort(403)
+    # Same mechanism, second always-on bind (examples_listener.py, not
+    # gated by discovery.enabled) — restricted to exactly the two
+    # llm-chat example-capture endpoints regardless of any token
+    # presented, same defense-in-depth reasoning as the peer bind above.
+    if request.environ.get("SERVER_PORT") == str(examples_listener.PORT):
+        if request.endpoint not in EXAMPLES_REACHABLE_ENDPOINTS:
             abort(403)
 
 
@@ -2024,6 +2034,10 @@ if __name__ == "__main__":
         # explicit settings PUT, not implicitly.
         discovery.advertise()
         peer_listener.start(discovery.peer_listener_port())
+    # Unconditional, unlike peer_listener above — deliberately not tied
+    # to discovery.enabled (see examples_listener.py's own docstring).
+    examples_listener.init(app)
+    examples_listener.start()
     dns_store.load()
     reconcile()
     dns_server.start()

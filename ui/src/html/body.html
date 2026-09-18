@@ -44,6 +44,7 @@
         <button id="nav-tofu" onclick="showSection('tofu', this)">OpenTofu</button>
         <button id="nav-scheduler" onclick="showSection('scheduler', this)">Scheduler</button>
         <button id="nav-llmperf" onclick="showSection('llmperf', this)">LLM Performance</button>
+        <button id="nav-llmexamples" onclick="showSection('llmexamples', this)">LLM Examples</button>
       </div>
     </div>
     <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
@@ -920,6 +921,37 @@
         <button class="refresh-btn" title="Close" onclick="document.getElementById('llmperf-detail-card').style.display='none'">✕</button>
       </div>
       <div id="llmperf-detail-body"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ LLM Examples ═══════════════════════════ -->
+  <div id="section-llmexamples" class="section">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Grounded Verification Examples</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadLlmExamples()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Every real prompt → code → execution (→ fix → re-execution) transaction captured by an llm-chat coordinator's own verify-proxy.service. Capture is unconditional — this list is the full corpus, exportable as JSONL below regardless of status. Publishing here only controls what appears on that deployment's own unauthenticated student review page (<span class="mono">GET /examples</span>) — it never affects what's captured.
+      </p>
+      <button class="btn btn-sm" onclick="_llmExExport()" style="margin-bottom:12px">Export JSONL (full corpus)</button>
+      <div class="table-wrap">
+        <table id="llmex-table">
+          <thead><tr>
+            <th>Created</th><th>Model</th><th>Initial</th><th>Fix</th><th>Status</th><th>Prompt</th><th></th>
+          </tr></thead>
+          <tbody id="llmex-tbody"><tr class="empty-row"><td colspan="7">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="llmex-detail-card" style="display:none">
+      <div class="card-header">
+        <h2>Example Detail</h2>
+        <button class="refresh-btn" title="Close" onclick="document.getElementById('llmex-detail-card').style.display='none'">✕</button>
+      </div>
+      <div id="llmex-detail-body"></div>
     </div>
   </div>
 
