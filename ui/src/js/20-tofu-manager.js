@@ -164,7 +164,7 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
     if (key === _TF_WORKER_PEERS_VAR) return _tfRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts);
-    if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers, recommendation);
+    if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers, recommendation, hasWorkerPeers);
     if (cascadeTargetKeys.has(key)) return _tfRenderPeerCascadeField(key, meta);
     return `
       <div class="field">
@@ -387,9 +387,18 @@ async function _tfCascadeFromVpc(vpcSel, subnetSel, sgSel, peerId) {
   }
 }
 
-function _tfRenderPeerField(key, meta, peers, recommendation) {
+function _tfRenderPeerField(key, meta, peers, recommendation, hasWorkerPeers) {
   const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
-  const rec = recommendation && recommendation.recommended;
+  // Never auto-recommend a standalone _peer_id field when this same
+  // form also has a worker_peers list (llm-chat's own
+  // coordinator_peer_id today) — recommend-placement has no idea
+  // worker_peers exists and would happily suggest the very peer a
+  // worker checkbox is about to auto-check, which the server then
+  // rejects (same peer hosting both roles defeats the reason this
+  // template splits across hosts via RPC). Matches this field's own
+  // Terraform variable comment: "Deliberately not auto-selected... a
+  // human choosing via the dashboard is this pass's actual mechanism."
+  const rec = (!hasWorkerPeers && recommendation) ? recommendation.recommended : null;
   const recId = rec ? (rec.peer_id || '') : null;
   const options = peers.length
     ? peers.map(p => `<option value="${_esc(p.id)}"${p.id === recId ? ' selected' : ''}>${_esc(p.hostname)} (${_esc(p.wg_tunnel_status)})</option>`).join('')
@@ -402,6 +411,7 @@ function _tfRenderPeerField(key, meta, peers, recommendation) {
         ${options}
       </select>
       ${rec && peers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
+      ${hasWorkerPeers && peers.length ? `<span class="bm-field-hint">Not auto-selected — must be a different peer than any worker below, so this always starts local. Pick one deliberately if you want it peer-placed.</span>` : ''}
       ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
     </div>
   `;

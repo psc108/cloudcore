@@ -145,7 +145,17 @@ async function _bmRenderVarForm(filename, tpl, schema) {
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _BM_WORKER_PEERS_VAR) return _bmRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts);
     if (_BM_PEER_ID_RE.test(key)) {
-      const rec = recommendation && recommendation.recommended;
+      // Never auto-recommend a standalone _peer_id field when this same
+      // form also has a worker_peers list (llm-chat's own
+      // coordinator_peer_id today, and any future template shaped the
+      // same way) — recommend-placement has no idea worker_peers exists
+      // and would happily suggest the very peer a worker checkbox is
+      // about to auto-check, which the server then rejects (same peer
+      // hosting both roles defeats the reason this template splits
+      // across hosts via RPC). Matches this field's own Terraform
+      // variable comment: "Deliberately not auto-selected... a human
+      // choosing via the dashboard is this pass's actual mechanism."
+      const rec = (!hasWorkerPeers && recommendation) ? recommendation.recommended : null;
       const recId = rec ? (rec.peer_id || '') : null;
       const options = approvedPeers.length
         ? approvedPeers.map(p => `<option value="${p.id}"${p.id === recId ? ' selected' : ''}>${_esc(p.hostname)} (${badge(p.wg_tunnel_status)})</option>`).join('')
@@ -158,6 +168,7 @@ async function _bmRenderVarForm(filename, tpl, schema) {
             ${options}
           </select>
           ${rec && approvedPeers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
+          ${hasWorkerPeers && approvedPeers.length ? `<span class="bm-field-hint">Not auto-selected — must be a different peer than any worker below, so this always starts local. Pick one deliberately if you want it peer-placed.</span>` : ''}
           ${!approvedPeers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
         </div>`;
     }
