@@ -58,6 +58,7 @@ import signal
 import socket
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -841,17 +842,38 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             upstream_payload["max_tokens"] = max_tokens
         upstream_body = json.dumps(upstream_payload).encode()
 
-        try:
-            conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=600)
-            conn.request("POST", "/v1/chat/completions", body=upstream_body,
-                          headers={"Content-Type": "application/json",
-                                   "Content-Length": str(len(upstream_body))})
-            resp = conn.getresponse()
-        except (ConnectionRefusedError, socket.timeout, OSError) as e:
+        # A single failed TCP connect attempt to a purely local port
+        # (127.0.0.1:8721) shouldn't necessarily fail the whole turn --
+        # found live that a real 502 reached the browser with nothing
+        # useful logged server-side to diagnose it afterward (the
+        # original single-attempt version only ever wrote its error to
+        # the client, never to stderr/journald). A couple of quick
+        # retries smooths over a genuinely transient blip without
+        # masking a real, persistent failure -- still 502s if all
+        # attempts fail, but now with the real exception in the journal.
+        conn = None
+        last_err = None
+        for attempt in range(3):
+            try:
+                conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=600)
+                conn.request("POST", "/v1/chat/completions", body=upstream_body,
+                              headers={"Content-Type": "application/json",
+                                       "Content-Length": str(len(upstream_body))})
+                resp = conn.getresponse()
+                break
+            except (ConnectionRefusedError, socket.timeout, OSError) as e:
+                last_err = e
+                print(f"verify-proxy: /sandbox/ask upstream connect attempt "
+                      f"{attempt + 1}/3 failed: {e!r}", flush=True)
+                if conn is not None:
+                    conn.close()
+                if attempt < 2:
+                    time.sleep(0.5)
+        else:
             self.send_response(502)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(f"verify-proxy: upstream unreachable: {e}".encode())
+            self.wfile.write(f"verify-proxy: upstream unreachable after 3 attempts: {last_err}".encode())
             return
 
         self._relay_and_verify_stream(resp, messages, max_tokens, capture_source="llm-chat-sandbox")
