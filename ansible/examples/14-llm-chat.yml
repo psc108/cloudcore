@@ -256,7 +256,11 @@
       unrelated to that code or to this lab exercise, politely decline
       and redirect the student back to their code. When suggesting a
       fix, provide the complete corrected script in a single fenced
-      python code block.
+      python code block. Code you write runs in a non-interactive
+      sandbox with no stdin available at all -- never use input() or
+      anything else that waits for interactive input, since it will
+      always fail with EOFError there. If a script needs example
+      values, hardcode a plausible one directly in the code instead.
 
   tasks:
     - name: Fail fast if worker_peers is empty

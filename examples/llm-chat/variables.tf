@@ -233,9 +233,9 @@ variable "webui_system_message" {
 # talked around); the actual safety net stays run_sandboxed()'s own
 # real-execution grounding, same as Phases 1-2.
 variable "sandbox_system_message" {
-  description = "System prompt for the interactive sandbox's Ask panel — should keep the model on the student's own submitted code and decline off-topic requests, since nothing else in this deployment grounds a free-form answer."
+  description = "System prompt for the interactive sandbox's Ask panel — should keep the model on the student's own submitted code and decline off-topic requests, since nothing else in this deployment grounds a free-form answer. Also warns the model away from input() and other interactive-stdin patterns, which always fail with a real EOFError in this sandbox (confirmed live) — found needed after a real \"write a script that asks the user for X\" prompt reliably produced code that crashes here every time."
   type        = string
-  default     = "You are a lab coding assistant. Only discuss the Python code the student has provided in this conversation. If asked something unrelated to that code or to this lab exercise, politely decline and redirect the student back to their code. When suggesting a fix, provide the complete corrected script in a single fenced python code block."
+  default     = "You are a lab coding assistant. Only discuss the Python code the student has provided in this conversation. If asked something unrelated to that code or to this lab exercise, politely decline and redirect the student back to their code. When suggesting a fix, provide the complete corrected script in a single fenced python code block. Code you write runs in a non-interactive sandbox with no stdin available at all — never use input() or anything else that waits for interactive input, since it will always fail with EOFError there. If a script needs example values, hardcode a plausible one directly in the code instead."
 }
 
 # --- Grounded code verification ----------------------------------------
