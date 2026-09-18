@@ -39,7 +39,7 @@ is a different, non-interactive consumer and stays untouched.
 | 2 | Grounded fix loop | Done — verified live (real 3-round fix loop against a genuine `numpy` failure, correct round-limiting, single "ask again" invite only on the final block) |
 | PRIORITY | Coordinator placement-awareness | Code complete, verified as far as topology allows — 2026-09-18 |
 | 3 | Central learning corpus + student review page | Done — verified live end-to-end, 2026-09-18 |
-| 4 | Interactive sandbox (placeholder — needs its own document) | Not started |
+| 4 | Interactive sandbox | Designed — see `llm-chat-interactive-sandbox-Phased-Implementation.md`, not yet built |
 
 ---
 
@@ -662,7 +662,27 @@ flagged rather than silently assumed working.
 
 ---
 
-## Phase 4 — Interactive sandbox (placeholder — needs its own document)
+## Phase 4 — Interactive sandbox
+
+**Done — moved to its own document**: `llm-chat-interactive-sandbox-
+Phased-Implementation.md` (repo root), written and approved
+2026-09-18 per this section's own instruction below (plan-mode
+session, real codebase research, explicit architecture decisions,
+user sign-off before code). It rolled up all three "Explicitly out of
+scope" items below, and the design itself moved further than
+originally imagined here: rather than a code editor added *alongside*
+llama-server's own chat webui, direct follow-up during that planning
+session reframed it — the sandbox now **replaces** the general chat
+webui entirely (made genuinely unreachable, not just unadvertised),
+since every interaction in the new interface stays anchored to actual
+student code, closing the one real gap Phase 1/2's grounding mechanism
+never covered: a free-form question with no code in it at all, which
+nothing in this document's own Phases 1-3 could ever verify. See that
+document for the full design and staged build (Stage 1: core Run/Ask
+loop; Stage 2: CodeMirror upgrade) — not yet built.
+
+<details>
+<summary>Original placeholder text (superseded by the document above, kept for history)</summary>
 
 Per direct follow-up: a real hands-on workspace where a student can
 edit code themselves, re-run it on demand, and iterate directly with
@@ -672,7 +692,7 @@ finally building a real UI surface of our own (a code editor + run
 history panel), which breaks the "use llama-server's own webui as-is,
 never build a new frontend" principle this whole plan has held to —
 that's a deliberate scope boundary, not an oversight, and it's why
-this stays a placeholder here rather than a real design.
+this stayed a placeholder here rather than a real design.
 
 **This section exists as a marker, not a plan**: once Phases 1-3 are
 built and verified, before writing any code for this phase, stop and
@@ -685,6 +705,8 @@ should also **roll up every item in "Explicitly out of scope" below**
 capture client) — not because they necessarily belong *in* the
 sandbox feature, but so nothing raised and deliberately deferred
 across Phases 1-3 gets silently lost when attention moves to Phase 4.
+
+</details>
 
 ## Explicitly out of scope for now (future work, not silently assumed
 — to be rolled into Phase 4's own document, not dropped)
