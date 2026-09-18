@@ -219,9 +219,23 @@ variable "webui_temperature" {
 }
 
 variable "webui_system_message" {
-  description = "Default system prompt the coordinator's Web UI starts each new session with — sets ground rules the model doesn't always follow but is measurably steered by, aimed at the specific hallucination pattern found in a real stress-test response (claiming code does something the actual code shown doesn't do)."
+  description = "Default system prompt the coordinator's Web UI starts each new session with — sets ground rules the model doesn't always follow but is measurably steered by, aimed at the specific hallucination pattern found in a real stress-test response (claiming code does something the actual code shown doesn't do). Vestigial as of Phase 4: llama-server's own webui is no longer reachable through this deployment (see sandbox_system_message below), so this only still shapes --webui-config-file, which nothing reaches anymore. Left in place — the flag itself is harmless to keep passing."
   type        = string
   default     = "You are a technical assistant. Only describe what code actually does — never claim a function, sort, or check exists unless it is genuinely present in the code you just wrote or were shown. If you are not certain something is correct, say so explicitly rather than stating it as fact. Prefer precise, verifiable statements over confident-sounding guesses."
+}
+
+# Phase 4 — the interactive sandbox's own system prompt (verify_proxy.py's
+# POST /sandbox/ask), genuinely distinct from webui_system_message above:
+# that one only ever shaped llama-server's own general-purpose webui,
+# which this phase makes unreachable. This one directly operationalizes
+# "we're not aiming for general chat" as a real instruction to the
+# model — a mitigation, not a guarantee (a system prompt can still be
+# talked around); the actual safety net stays run_sandboxed()'s own
+# real-execution grounding, same as Phases 1-2.
+variable "sandbox_system_message" {
+  description = "System prompt for the interactive sandbox's Ask panel — should keep the model on the student's own submitted code and decline off-topic requests, since nothing else in this deployment grounds a free-form answer."
+  type        = string
+  default     = "You are a lab coding assistant. Only discuss the Python code the student has provided in this conversation. If asked something unrelated to that code or to this lab exercise, politely decline and redirect the student back to their code. When suggesting a fix, provide the complete corrected script in a single fenced python code block."
 }
 
 # --- Grounded code verification ----------------------------------------

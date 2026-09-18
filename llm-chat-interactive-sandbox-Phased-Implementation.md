@@ -50,7 +50,7 @@ untouched, as in every prior phase.
 
 | # | Stage | Status |
 |---|---|---|
-| 1 | Core Run/Ask loop, plain textarea, chat webui removed | Not started |
+| 1 | Core Run/Ask loop, plain textarea, chat webui removed | Done — verified live 2026-09-18 |
 | 2 | CodeMirror upgrade | Not started |
 
 ---
@@ -282,6 +282,45 @@ discipline):
 5. Confirm the existing student review page (`GET /examples`) and the
    Dashboard's LLM Examples page both show sandbox-originated rows
    correctly, with no code changes needed on either.
+
+### Verified live, 2026-09-18
+
+Real redeploy (`llm-chat`, coordinator local + worker on
+Llywyn-Y-Groes, carrying the new capture wiring). All five steps
+above confirmed against the real running deployment, not just unit
+tests:
+
+1. `GET /` → 200, the sandbox page (confirmed by content, not just
+   status). `GET /v1/chat/completions` (and everything else not
+   explicitly routed) → 404 — genuinely closed, not just unlinked.
+   `GET /health` still passes through for the LB.
+2. `POST /sandbox/run` with a real 1-5 summing loop → real stdout
+   `"15\n"`, `exit_code: 0` — the actual sandboxed interpreter, not a
+   simulated result.
+3. `POST /sandbox/ask` asked the real 14B model why
+   `divide(10, 0)` crashes — took 97s at this hardware's real
+   generation speed (consistent with prior findings), returned a
+   correct explanation plus a fix, and the SSE stream carried a real
+   appended `ACTUALLY EXECUTED` block showing the *actual* re-run
+   result (`"Error: Division by zero is not allowed.\n"`, `exit_code: 0`)
+   — not the model's own unverified claim about what the fix does.
+4. Confirmed via the admin API: the transaction landed in
+   `llm_verification_examples` with `source = "llm-chat-sandbox"`,
+   correctly distinguishing it from chat-originated rows.
+5. Published that row and confirmed it rendered correctly, unmodified,
+   on both `GET /examples` (fetched live through the LB) and the
+   Dashboard's existing LLM Examples page — zero code changes needed
+   on either, exactly as designed.
+
+One extension made beyond the original design during implementation:
+`POST /v1/chat/completions` itself (not just `GET /`) is now also
+unreachable from outside — a raw, un-gated chat endpoint would have
+left exactly the loophole this whole phase exists to close (a caller
+could still get an ungrounded, off-topic answer by POSTing directly to
+it, bypassing `sandbox_system_message` entirely). `_relay_and_verify_stream`
+is reused internally by `/sandbox/ask`; the dead
+`_handle_chat_completions`/`_relay_raw`/`_relay_and_verify_json` code
+paths were removed rather than left unreachable.
 
 ---
 

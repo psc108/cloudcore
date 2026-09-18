@@ -102,5 +102,6 @@ locals {
     verify_max_fix_rounds   = var.verify_max_fix_rounds
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
+    sandbox_system_message   = var.sandbox_system_message
   })
 }

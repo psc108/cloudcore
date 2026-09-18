@@ -56,6 +56,13 @@ write_files:
     content: |
       ${indent(6, verify_proxy_source)}
 
+  # Phase 4 — the sandbox's own system prompt (verify_proxy.py's
+  # SANDBOX_SYSTEM_MESSAGE_FILE), plain text rather than an
+  # Environment= line — see that constant's own comment for why.
+  - path: /opt/llama.cpp/sandbox-system-message.txt
+    content: |
+      ${indent(6, sandbox_system_message)}
+
   - path: /etc/systemd/system/llama-server.service
     content: |
       [Unit]

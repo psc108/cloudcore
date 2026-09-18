@@ -2,17 +2,25 @@
 """Reverse proxy + grounded code verification for llm-chat's coordinator.
 
 Sits in front of llama-server (which binds 127.0.0.1 only once this is
-in place) on the port the load balancer actually points at. Every
-request is passed through unchanged EXCEPT POST /v1/chat/completions:
-the response is relayed to the browser in real time exactly as
-llama-server streams it (so the existing webui renders normally, with
-no added latency until generation finishes), while this process also
-accumulates the full assistant text. Once the model's own stream ends,
-if the text contains a fenced Python code block, the code is run in a
-sandbox and the real result is appended as more streamed content in
-the SAME turn -- never a separate UI element, never summarized or
-reworded, clearly labeled as actually executed rather than model
-output.
+in place) on the port the load balancer actually points at. As of
+Phase 4, this proxy IS the deployment's only interface -- llama-server's
+own general-purpose webui is no longer reachable at all (GET / serves
+the sandbox page instead; passthrough is now an explicit allowlist of
+just /health for the LB's own health check, see do_GET/_not_found).
+Every model interaction now goes through POST /sandbox/ask, which
+builds its own messages list (a tightly scoped system prompt + the
+browser's own held conversation + this turn's code/question) rather
+than relaying an arbitrary caller-supplied one -- deliberately: a
+free-form chat box invites exactly the ungrounded, off-topic question
+this whole mechanism has no way to verify.
+
+The model's response is relayed to the browser in real time exactly as
+llama-server streams it, while this process also accumulates the full
+assistant text. Once the model's own stream ends, if the text contains
+a fenced Python code block, the code is run in a sandbox and the real
+result is appended as more streamed content in the SAME turn -- never
+a separate UI element, never summarized or reworded, clearly labeled
+as actually executed rather than model output.
 
 Phase 2: if that first execution fails, up to VERIFY_MAX_FIX_ROUNDS
 grounded fix attempts follow automatically, in the same turn -- each
@@ -23,7 +31,12 @@ block in the whole chain ever tells the student to ask again
 themselves; an intermediate failure is followed by another automatic
 attempt, so inviting the student to ask there would be misleading.
 
-See llm-chat-verification-Phased-Implementation.md (Phases 1-2) for
+Phase 4 also adds POST /sandbox/run -- the student's own code, executed
+as-is via the same sandbox, with no model involved and nothing
+captured (there's no model claim to ground).
+
+See llm-chat-interactive-sandbox-Phased-Implementation.md (Phase 4)
+and llm-chat-verification-Phased-Implementation.md (Phases 1-3) for
 the full design rationale.
 
 Pure stdlib -- no new dependency on the guest image, matching the only
@@ -68,6 +81,37 @@ SANDBOX_USER = "sandboxrunner"
 EXAMPLES_API_BASE = os.environ.get("EXAMPLES_API_BASE", "").rstrip("/")
 EXAMPLES_API_TOKEN = os.environ.get("EXAMPLES_API_TOKEN", "")
 EXAMPLES_MODEL_FILENAME = os.environ.get("EXAMPLES_MODEL_FILENAME", "")
+
+# Phase 4 -- the interactive sandbox's own system prompt. Deliberately
+# separate from (and replaces the purpose of) webui_system_message,
+# which only ever shaped llama-server's OWN webui -- moot now that
+# GET / serves the sandbox instead (see do_GET). A mitigation, not a
+# guarantee (a system prompt can still be talked around); the real
+# safety net stays run_sandboxed()'s own grounding, same as Phases 1-2.
+#
+# Read from a plain text file, not an env var -- unlike every other
+# VERIFY_*/EXAMPLES_* setting, this one is free-form prose (spaces,
+# punctuation, a student's own template overrides), which a systemd
+# Environment= line can't carry safely without real quoting risk. Same
+# write-a-file convention coordinator-cloud-init.yaml.tftpl's own
+# webui-config.json and verify_proxy.py entries already use. Falls
+# back to a sensible built-in default so this file also runs correctly
+# outside cloud-init (e.g. this module's own local tests).
+_SANDBOX_SYSTEM_MESSAGE_DEFAULT = (
+    "You are a lab coding assistant. Only discuss the Python code the "
+    "student has provided in this conversation. If asked something "
+    "unrelated to that code or to this lab exercise, politely decline "
+    "and redirect the student back to their code. When suggesting a "
+    "fix, provide the complete corrected script in a single fenced "
+    "python code block."
+)
+_SANDBOX_SYSTEM_MESSAGE_PATH = os.environ.get(
+    "SANDBOX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/sandbox-system-message.txt")
+try:
+    SANDBOX_SYSTEM_MESSAGE = open(_SANDBOX_SYSTEM_MESSAGE_PATH).read().strip() \
+        or _SANDBOX_SYSTEM_MESSAGE_DEFAULT
+except OSError:
+    SANDBOX_SYSTEM_MESSAGE = _SANDBOX_SYSTEM_MESSAGE_DEFAULT
 
 # How often (seconds) to send an SSE keep-alive comment to the browser
 # while waiting on an internal fix-round completion -- HAProxy's own
@@ -326,16 +370,20 @@ def _extract_prompt(original_messages: list) -> str:
     return ""
 
 
-def capture_example(original_messages: list, capture: dict) -> None:
+def capture_example(original_messages: list, capture: dict,
+                     source: str = "llm-chat-coordinator") -> None:
     """POSTs one grounded-verification transaction back to the CloudCore
     API's examples-capture endpoint (api/llm_examples_routes.py). Fully
     best-effort -- any failure (capture disabled, host unreachable,
     non-2xx) is swallowed after one stderr line for journald, since a
-    capture problem must never affect the chat response itself."""
+    capture problem must never affect the chat response itself.
+    `source` distinguishes the sandbox's own on-demand Ask transactions
+    ("llm-chat-sandbox") from the default chat-originated ones -- see
+    do_POST's /sandbox/ask branch."""
     if not EXAMPLES_API_BASE or not EXAMPLES_MODEL_FILENAME:
         return
     payload = {
-        "source": "llm-chat-coordinator",
+        "source": source,
         "model_filename": EXAMPLES_MODEL_FILENAME,
         "prompt": _extract_prompt(original_messages),
         **capture,
@@ -352,6 +400,215 @@ def capture_example(original_messages: list, capture: dict) -> None:
         print(f"verify-proxy: example capture failed (non-fatal): {e}", flush=True)
 
 
+# Phase 4 -- the interactive sandbox itself. Stdlib-rendered, no new
+# frontend framework, matching /examples' own convention. Plain
+# <textarea> for Stage 1 (see the Interactive Sandbox phased-
+# implementation doc's own Stage 1/2 split) -- CodeMirror needs its
+# own JS/CSS shipped into this guest's cloud-init, deferred to Stage 2.
+# All state (code buffer, ask conversation) lives client-side in
+# localStorage -- no server-side student identity, matching Phase 3's
+# own privacy stance. Every fetch to /sandbox/run or /sandbox/ask
+# disables its own button while in flight -- the simplest real abuse
+# mitigation for Stage 1 (see the doc's own "Abuse/rate consideration").
+SANDBOX_PAGE_HTML = """<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-chat -- Sandbox</title>
+<style>
+:root { color-scheme: light dark; }
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; color: #1a1a1a; }
+h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+.sub { color: #666; font-size: 0.85rem; margin: 0 0 1.25rem; }
+.panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+.panel h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+textarea#code { width: 100%; min-height: 280px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; padding: 0.75rem; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; resize: vertical; }
+.row { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
+button { font: inherit; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid #999; background: #f2f2f2; cursor: pointer; }
+button:hover:not(:disabled) { background: #e8e8e8; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: #2a5db0; border-color: #2a5db0; color: #fff; }
+button.primary:hover:not(:disabled) { background: #234f96; }
+.status { font-size: 0.85rem; color: #666; }
+pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0.5rem 0 0; }
+.result h4 { margin: 0.75rem 0 0.25rem; font-size: 0.85rem; }
+.result.pass .exitline { color: #0a7a2f; font-weight: 600; }
+.result.fail .exitline { color: #b02a2a; font-weight: 600; }
+#transcript { display: flex; flex-direction: column; gap: 0.75rem; max-height: 420px; overflow-y: auto; padding: 0.25rem 0; }
+.msg { border-radius: 6px; padding: 0.5rem 0.75rem; }
+.msg.student { background: #eef3fb; }
+.msg.model { background: #f6f6f6; }
+.msg .who { font-size: 0.75rem; color: #888; margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.msg .content { white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; }
+#question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; }
+footer { margin-top: 1.5rem; font-size: 0.8rem; color: #888; }
+footer a { color: inherit; }
+</style></head>
+<body>
+<h1>Sandbox</h1>
+<p class="sub">Write real Python, run it for real, and ask the model about it -- every response you get back is grounded in an actual execution, not just the model's own word for it.</p>
+
+<div class="panel">
+  <h2>Your code</h2>
+  <textarea id="code" spellcheck="false" placeholder="# Write or paste your Python here"></textarea>
+  <div class="row">
+    <button id="runBtn" class="primary" onclick="runCode()">Run</button>
+    <button onclick="clearAll()">Clear session</button>
+    <span id="runStatus" class="status"></span>
+  </div>
+  <div id="runResult"></div>
+</div>
+
+<div class="panel">
+  <h2>Ask about this code</h2>
+  <div id="transcript"></div>
+  <div class="row">
+    <input id="question" type="text" placeholder="e.g. why does this fail on an empty list?" onkeydown="if(event.key==='Enter')askModel()">
+    <button id="askBtn" class="primary" onclick="askModel()">Ask</button>
+  </div>
+</div>
+
+<footer>Published examples from sessions like this one: <a href="/examples">/examples</a></footer>
+
+<script>
+const CODE_KEY = 'sandboxCode', HISTORY_KEY = 'sandboxHistory';
+const codeEl = document.getElementById('code');
+const transcriptEl = document.getElementById('transcript');
+
+function loadState() {
+  codeEl.value = localStorage.getItem(CODE_KEY) || '';
+  renderTranscript();
+}
+function saveCode() { localStorage.setItem(CODE_KEY, codeEl.value); }
+codeEl.addEventListener('input', saveCode);
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function saveHistory(h) { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); }
+
+function renderTranscript() {
+  const h = getHistory();
+  transcriptEl.innerHTML = h.map(m => `
+    <div class="msg ${m.role === 'user' ? 'student' : 'model'}">
+      <div class="who">${m.role === 'user' ? 'You' : 'Model'}</div>
+      <div class="content"></div>
+    </div>`).join('');
+  // textContent, not innerHTML, for the actual message body -- never
+  // trust/render model or student text as markup.
+  [...transcriptEl.children].forEach((el, i) => { el.querySelector('.content').textContent = h[i].content; });
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function clearAll() {
+  if (!confirm('Clear your code and conversation? This only affects this browser.')) return;
+  localStorage.removeItem(CODE_KEY);
+  localStorage.removeItem(HISTORY_KEY);
+  codeEl.value = '';
+  renderTranscript();
+  document.getElementById('runResult').innerHTML = '';
+}
+
+async function runCode() {
+  const btn = document.getElementById('runBtn');
+  const status = document.getElementById('runStatus');
+  const out = document.getElementById('runResult');
+  if (!codeEl.value.trim()) return;
+  btn.disabled = true;
+  status.textContent = 'Running...';
+  out.innerHTML = '';
+  try {
+    const resp = await fetch('/sandbox/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: codeEl.value}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { status.textContent = 'Error: ' + (data.error || resp.status); return; }
+    const passed = !data.timed_out && data.exit_code === 0;
+    status.textContent = '';
+    const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+    out.innerHTML = `<div class="result ${passed ? 'pass' : 'fail'}">
+      ${data.stdout.trim() ? `<h4>stdout</h4><pre>${esc(data.stdout)}</pre>` : ''}
+      ${data.stderr.trim() ? `<h4>stderr</h4><pre>${esc(data.stderr)}</pre>` : ''}
+      <p class="exitline">exit code: ${data.exit_code}${data.timed_out ? ' (timed out)' : ''}</p>
+    </div>`;
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function askModel() {
+  const btn = document.getElementById('askBtn');
+  const qEl = document.getElementById('question');
+  const question = qEl.value.trim();
+  if (!question) return;
+
+  const history = getHistory();
+  history.push({role: 'user', content: question});
+  saveHistory(history);
+  renderTranscript();
+  qEl.value = '';
+  btn.disabled = true;
+
+  // Placeholder model bubble, filled in as tokens stream -- textContent
+  // only, same no-markup-from-untrusted-text rule as renderTranscript().
+  const bubble = document.createElement('div');
+  bubble.className = 'msg model';
+  bubble.innerHTML = '<div class="who">Model</div><div class="content"></div>';
+  transcriptEl.appendChild(bubble);
+  const bubbleContent = bubble.querySelector('.content');
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+
+  let assistantText = '';
+  try {
+    const resp = await fetch('/sandbox/ask', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: codeEl.value, question, history: history.slice(0, -1)}),
+    });
+    if (!resp.ok || !resp.body) {
+      bubbleContent.textContent = 'Request failed (' + resp.status + ')';
+    } else {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream: true});
+        const events = buf.split('\\n\\n');
+        buf = events.pop();
+        for (const evt of events) {
+          const line = evt.split('\\n').find(l => l.startsWith('data: '));
+          if (!line) continue;
+          const payload = line.slice(6);
+          if (payload === '[DONE]') continue;
+          try {
+            const obj = JSON.parse(payload);
+            const delta = (obj.choices[0].delta || {}).content || '';
+            if (delta) { assistantText += delta; bubbleContent.textContent = assistantText; transcriptEl.scrollTop = transcriptEl.scrollHeight; }
+          } catch (e) { /* skip malformed/comment lines (SSE heartbeats etc.) */ }
+        }
+      }
+    }
+  } catch (e) {
+    bubbleContent.textContent = 'Request failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+
+  const h = getHistory();
+  h.push({role: 'assistant', content: assistantText || bubbleContent.textContent});
+  saveHistory(h);
+}
+
+loadState();
+</script>
+</body></html>
+"""
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "verify-proxy/1"
@@ -361,31 +618,58 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     # --- dispatch -----------------------------------------------------
 
+    def _clean_path(self) -> str:
+        return self.path.split("?", 1)[0].rstrip("/") or "/"
+
     def do_GET(self):
-        if self.path.split("?", 1)[0].rstrip("/") == "/examples":
+        path = self._clean_path()
+        if path == "/":
+            self._serve_sandbox_page()
+        elif path == "/examples":
             self._serve_examples_page()
-        else:
+        elif path == "/health":
             self._proxy_passthrough()
+        else:
+            self._not_found()
 
     def do_HEAD(self):
-        self._proxy_passthrough()
+        if self._clean_path() == "/health":
+            self._proxy_passthrough()
+        else:
+            self._not_found()
 
     def do_PUT(self):
-        self._proxy_passthrough()
+        self._not_found()
 
     def do_DELETE(self):
-        self._proxy_passthrough()
+        self._not_found()
 
     def do_PATCH(self):
-        self._proxy_passthrough()
+        self._not_found()
 
     def do_POST(self):
-        if self.path.split("?", 1)[0].rstrip("/") == "/v1/chat/completions":
-            self._handle_chat_completions()
+        path = self._clean_path()
+        if path == "/sandbox/run":
+            self._handle_sandbox_run()
+        elif path == "/sandbox/ask":
+            self._handle_sandbox_ask()
         else:
-            self._proxy_passthrough()
+            self._not_found()
 
-    # --- plain reverse proxy (everything except chat completions) -----
+    def _not_found(self):
+        # Phase 4: the sandbox is the only interface this deployment
+        # exposes now -- llama-server's own webui and its raw
+        # /v1/chat/completions are deliberately no longer reachable
+        # from outside (only /sandbox/ask calls that internally). Same
+        # least-exposure discipline api/examples_listener.py's own
+        # endpoint allowlist already uses.
+        self.send_response(404)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(b"not found")
+
+    # --- plain reverse proxy (/health only -- see do_GET/do_HEAD) -----
 
     def _upstream_request(self, body: bytes | None):
         conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=600)
@@ -419,19 +703,80 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(resp_body)
         conn.close()
 
-    # --- chat completions: relay + verify ------------------------------
+    # --- Phase 4: the sandbox's own two actions -------------------------
 
-    def _handle_chat_completions(self):
+    def _read_json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(length) if length else b""
         try:
-            req_json = json.loads(body) if body else {}
+            return json.loads(body) if body else {}
         except json.JSONDecodeError:
-            req_json = {}
-        wants_stream = bool(req_json.get("stream"))
+            return {}
+
+    def _handle_sandbox_run(self):
+        """Plain Run -- executes the student's own current buffer as-is,
+        synchronously, through the exact same run_sandboxed() Phases 1-2
+        already proved live. Bounded to a few seconds by
+        VERIFY_TIMEOUT_SECONDS, so a plain JSON response is enough; no
+        SSE/streaming needed for this action. Not captured -- this is
+        the student's own code, not a model claim, so there's nothing
+        to ground against."""
+        req_json = self._read_json_body()
+        code = req_json.get("code") or ""
+        if not code.strip():
+            out = json.dumps({"error": "code is required"}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
+
+        result = run_sandboxed(code)
+        out = json.dumps(result).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def _handle_sandbox_ask(self):
+        """Ask the model about the current code -- builds a fresh
+        messages list from SANDBOX_SYSTEM_MESSAGE + the browser's own
+        held conversation history + this turn's code/question, streams
+        the real generation back via the same SSE mechanics the old
+        chat endpoint used, then grounds and captures it exactly the
+        same way (source="llm-chat-sandbox", distinguishing these rows
+        from chat-originated ones in the shared Phase 3 corpus)."""
+        req_json = self._read_json_body()
+        code = (req_json.get("code") or "").strip()
+        question = (req_json.get("question") or "").strip()
+        history = req_json.get("history") or []
+        max_tokens = req_json.get("max_tokens")
+
+        if not question:
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"question is required")
+            return
+
+        user_turn = (f"Here is my current code:\n```python\n{code}\n```\n\n{question}"
+                     if code else question)
+        messages = ([{"role": "system", "content": SANDBOX_SYSTEM_MESSAGE}]
+                    + list(history) + [{"role": "user", "content": user_turn}])
+
+        upstream_payload = {"messages": messages, "stream": True}
+        if max_tokens:
+            upstream_payload["max_tokens"] = max_tokens
+        upstream_body = json.dumps(upstream_payload).encode()
 
         try:
-            conn, resp = self._upstream_request(body)
+            conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=600)
+            conn.request("POST", "/v1/chat/completions", body=upstream_body,
+                          headers={"Content-Type": "application/json",
+                                   "Content-Length": str(len(upstream_body))})
+            resp = conn.getresponse()
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
             self.send_response(502)
             self.send_header("Content-Type", "text/plain")
@@ -439,55 +784,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(f"verify-proxy: upstream unreachable: {e}".encode())
             return
 
-        if not ENABLE_VERIFICATION:
-            self._relay_raw(resp, wants_stream)
-            conn.close()
-            return
-
-        request_messages = req_json.get("messages") or []
-        request_max_tokens = req_json.get("max_tokens")
-        if wants_stream:
-            self._relay_and_verify_stream(resp, request_messages, request_max_tokens)
-        else:
-            self._relay_and_verify_json(resp, request_messages, request_max_tokens)
+        self._relay_and_verify_stream(resp, messages, max_tokens, capture_source="llm-chat-sandbox")
         conn.close()
 
-    def _relay_raw(self, resp, wants_stream: bool):
-        body = resp.read()
-        self.send_response(resp.status)
-        for k, v in resp.getheaders():
-            if k.lower() in ("transfer-encoding", "connection", "content-length"):
-                continue
-            self.send_header(k, v)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _relay_and_verify_json(self, resp, request_messages: list, request_max_tokens=None):
-        body = resp.read()
-        try:
-            data = json.loads(body)
-            content = data["choices"][0]["message"]["content"]
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-            self.send_response(resp.status)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        code = extract_python_code(content)
-        if code:
-            extra, capture = verify_and_maybe_fix(request_messages, code, max_tokens=request_max_tokens)
-            data["choices"][0]["message"]["content"] = content + extra
-            capture_example(request_messages, capture)
-        out = json.dumps(data).encode()
-        self.send_response(resp.status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
-
-    def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None):
+    def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
+                                  capture_source: str = "llm-chat-coordinator"):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -536,12 +837,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 continue
 
         full_text = "".join(accumulated)
-        code = extract_python_code(full_text)
+        code = extract_python_code(full_text) if ENABLE_VERIFICATION else None
         if code:
             extra, capture = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
                                                     max_tokens=request_max_tokens)
             self._write_sse_delta(extra, last_chunk_meta)
-            capture_example(request_messages, capture)
+            capture_example(request_messages, capture, source=capture_source)
 
         try:
             self.wfile.write(b"data: [DONE]\n\n")
@@ -571,6 +872,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # thread's own loop stops cleanly instead of retrying forever.
         self.wfile.write(b": verifying...\n\n")
         self.wfile.flush()
+
+    # --- Phase 4: the sandbox itself ------------------------------------
+
+    def _serve_sandbox_page(self):
+        out = SANDBOX_PAGE_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
 
     # --- Phase 3: student review page ----------------------------------
 

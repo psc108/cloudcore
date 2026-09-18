@@ -243,6 +243,21 @@
     examples_api_base: "http://192.168.100.1:8083"
     examples_ingestion_token: "dev-token"
 
+    # --- Phase 4: interactive sandbox ----------------------------------
+    # Genuinely distinct from webui_system_message above — that one only
+    # ever shaped llama-server's own general-purpose webui, which this
+    # phase makes unreachable (GET / now serves the sandbox instead). A
+    # mitigation, not a guarantee (a system prompt can still be talked
+    # around) — the real safety net stays run_sandboxed()'s own
+    # real-execution grounding, same as Phases 1-2.
+    sandbox_system_message: >-
+      You are a lab coding assistant. Only discuss the Python code the
+      student has provided in this conversation. If asked something
+      unrelated to that code or to this lab exercise, politely decline
+      and redirect the student back to their code. When suggesting a
+      fix, provide the complete corrected script in a single fenced
+      python code block.
+
   tasks:
     - name: Fail fast if worker_peers is empty
       ansible.builtin.fail:
@@ -362,7 +377,8 @@
           'verify_max_memory_mb': verify_max_memory_mb,
           'verify_max_fix_rounds': verify_max_fix_rounds,
           'examples_api_base': examples_api_base,
-          'examples_ingestion_token': examples_ingestion_token }) }}"
+          'examples_ingestion_token': examples_ingestion_token,
+          'sandbox_system_message': sandbox_system_message }) }}"
 
     - name: Create coordinator instance
       # vpc_id/subnet_id/security_group_ids/peer_id fall back to this
