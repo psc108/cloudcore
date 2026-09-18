@@ -442,22 +442,28 @@ SANDBOX_PAGE_HTML = """<!doctype html>
 <script src="/vendor/codemirror-mode-python.min.js"></script>
 <script src="/vendor/codemirror-addon-matchbrackets.min.js"></script>
 <style>
-:root { color-scheme: light dark; }
-body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; color: #1a1a1a; }
+/* Deliberately no `color-scheme: light dark` -- found live that
+   declaring it without actually authoring a dark palette let the
+   browser paint a dark background under this page's own fixed dark
+   text colors whenever the OS/browser was in dark mode, making most
+   of the page barely legible without selecting it. Forcing a plain,
+   guaranteed-white background sidesteps that entirely; darkened the
+   muted grays below a bit further too, for real margin either way. */
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; color: #1a1a1a; background: #fff; }
 h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
-.sub { color: #666; font-size: 0.85rem; margin: 0 0 1.25rem; }
+.sub { color: #444; font-size: 0.85rem; margin: 0 0 1.25rem; }
 .panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
 .panel h2 { font-size: 1rem; margin: 0 0 0.75rem; }
 #codeHost { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
 #codeHost .CodeMirror { height: 320px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; }
 .row { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
-button { font: inherit; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid #999; background: #f2f2f2; cursor: pointer; }
+button { font: inherit; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid #999; background: #f2f2f2; cursor: pointer; color: #1a1a1a; }
 button:hover:not(:disabled) { background: #e8e8e8; }
 button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: #2a5db0; border-color: #2a5db0; color: #fff; }
 button.primary:hover:not(:disabled) { background: #234f96; }
-.status { font-size: 0.85rem; color: #666; }
-pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0.5rem 0 0; }
+.status { font-size: 0.85rem; color: #444; }
+pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0.5rem 0 0; color: #1a1a1a; }
 .result h4 { margin: 0.75rem 0 0.25rem; font-size: 0.85rem; }
 .result.pass .exitline { color: #0a7a2f; font-weight: 600; }
 .result.fail .exitline { color: #b02a2a; font-weight: 600; }
@@ -465,11 +471,13 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .msg { border-radius: 6px; padding: 0.5rem 0.75rem; }
 .msg.student { background: #eef3fb; }
 .msg.model { background: #f6f6f6; }
-.msg .who { font-size: 0.75rem; color: #888; margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.03em; }
-.msg .content { white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; }
-#question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; }
-footer { margin-top: 1.5rem; font-size: 0.8rem; color: #888; }
-footer a { color: inherit; }
+.msg .who { font-size: 0.75rem; color: #555; margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.msg .content { white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; color: #1a1a1a; }
+.msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
+@keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+#question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; }
+footer { margin-top: 1.5rem; font-size: 0.8rem; color: #555; }
+footer a { color: #2a5db0; }
 </style></head>
 <body>
 <h1>Sandbox</h1>
@@ -487,11 +495,13 @@ footer a { color: inherit; }
 </div>
 
 <div class="panel">
-  <h2>Ask about this code</h2>
+  <h2>Ask the model</h2>
+  <p class="sub" style="margin-bottom:0.75rem">Leave the code box empty to ask for something new to be written, or ask about the code above to get it explained or fixed. Either way, the answer is always re-run for real before you see it.</p>
   <div id="transcript"></div>
   <div class="row">
-    <input id="question" type="text" placeholder="e.g. why does this fail on an empty list?" onkeydown="if(event.key==='Enter')askModel()">
+    <input id="question" type="text" placeholder="e.g. write a function that checks if a number is prime — or: why does this fail on an empty list?" onkeydown="if(event.key==='Enter')askModel()">
     <button id="askBtn" class="primary" onclick="askModel()">Ask</button>
+    <span id="askStatus" class="status"></span>
   </div>
 </div>
 
@@ -576,6 +586,7 @@ async function runCode() {
 async function askModel() {
   const btn = document.getElementById('askBtn');
   const qEl = document.getElementById('question');
+  const status = document.getElementById('askStatus');
   const question = qEl.value.trim();
   if (!question) return;
 
@@ -585,12 +596,17 @@ async function askModel() {
   renderTranscript();
   qEl.value = '';
   btn.disabled = true;
+  status.textContent = 'Thinking…';
 
   // Placeholder model bubble, filled in as tokens stream -- textContent
   // only, same no-markup-from-untrusted-text rule as renderTranscript().
+  // Starts showing "Thinking..." (pulsing, via the .thinking class) so
+  // a long real wait before the first token arrives doesn't look like
+  // the page has just frozen -- found live this needed to be explicit,
+  // an empty bubble alone wasn't enough of a signal.
   const bubble = document.createElement('div');
   bubble.className = 'msg model';
-  bubble.innerHTML = '<div class="who">Model</div><div class="content"></div>';
+  bubble.innerHTML = '<div class="who">Model</div><div class="content thinking">Thinking…</div>';
   transcriptEl.appendChild(bubble);
   const bubbleContent = bubble.querySelector('.content');
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
@@ -602,6 +618,7 @@ async function askModel() {
       body: JSON.stringify({code: cm.getValue(), question, history: history.slice(0, -1)}),
     });
     if (!resp.ok || !resp.body) {
+      bubbleContent.classList.remove('thinking');
       bubbleContent.textContent = 'Request failed (' + resp.status + ')';
     } else {
       const reader = resp.body.getReader();
@@ -614,6 +631,15 @@ async function askModel() {
         const events = buf.split('\\n\\n');
         buf = events.pop();
         for (const evt of events) {
+          if (evt.startsWith(':')) {
+            // A heartbeat comment (": verifying...") -- sent while a
+            // real sandboxed re-execution or grounded fix round is
+            // running server-side, after the model's own text has
+            // already fully arrived. No new content to show, but this
+            // is the other place a real wait needs a visible signal.
+            status.textContent = 'Verifying…';
+            continue;
+          }
           const line = evt.split('\\n').find(l => l.startsWith('data: '));
           if (!line) continue;
           const payload = line.slice(6);
@@ -621,15 +647,23 @@ async function askModel() {
           try {
             const obj = JSON.parse(payload);
             const delta = (obj.choices[0].delta || {}).content || '';
-            if (delta) { assistantText += delta; bubbleContent.textContent = assistantText; transcriptEl.scrollTop = transcriptEl.scrollHeight; }
-          } catch (e) { /* skip malformed/comment lines (SSE heartbeats etc.) */ }
+            if (delta) {
+              assistantText += delta;
+              bubbleContent.classList.remove('thinking');
+              bubbleContent.textContent = assistantText;
+              transcriptEl.scrollTop = transcriptEl.scrollHeight;
+              status.textContent = 'Thinking…';
+            }
+          } catch (e) { /* skip malformed lines */ }
         }
       }
     }
   } catch (e) {
+    bubbleContent.classList.remove('thinking');
     bubbleContent.textContent = 'Request failed: ' + e.message;
   } finally {
     btn.disabled = false;
+    status.textContent = '';
   }
 
   const h = getHistory();
