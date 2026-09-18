@@ -298,3 +298,56 @@ variable "worker_peers" {
     error_message = "At least one worker_peers entry is required — this template's whole purpose is cross-host distributed inference."
   }
 }
+
+# --- Coordinator placement -----------------------------------------------
+# The coordinator is local by default (all four below empty) — exactly
+# today's only behaviour. Per direct follow-up ("should we not place
+# the co-ordinator on the peer with the best available resource?"):
+# this host's own core count is a real, fixed ceiling regardless of
+# which flavor is chosen (see coordinator_flavor's own comment for a
+# real KVM-oversubscription case this caused), so sometimes the right
+# answer is putting the coordinator itself on a peer instead. Same
+# shape as worker_peers' own four fields, applied to a single instance
+# instead of a list — `api/capacity_gate.py` checks a peer-placed
+# coordinator's real available RAM the same way it already does for
+# workers, and both Build Managers' own submit routes reject a request
+# where coordinator_peer_id matches a worker's own peer_id (same
+# machine hosting both roles defeats the entire reason this template
+# splits across hosts via RPC).
+#
+# Deliberately NOT auto-selected server-side the way
+# api/layer_split.py auto-fills rpc_offload_layers — a worker's own
+# security group is an existing one on that peer, scoped narrowly to
+# the RPC port; it was never designed for a coordinator's own needs
+# (SSH + the chat HTTP UI). Blindly reusing "the peer's first SG" the
+# low-risk way the dashboard auto-picks a first VPC/subnet would be a
+# real, silent security decision. Leaving this to a human choosing
+# from the Dashboard's own live cascading dropdown (which already
+# shows the real SG options to review before submitting — the exact
+# same `_peer_id`-suffix convention worker_peers already gets picked
+# up by, `ui/src/js/16-build-manager.js`'s own `_BM_PEER_ID_RE`, no
+# new frontend code needed) keeps that a deliberate choice, not an
+# automated one.
+variable "coordinator_peer_id" {
+  description = "Approved peer to place the coordinator instance on instead of this host. Empty (default) keeps today's behaviour — coordinator always local. Must not match any worker_peers[].peer_id — rejected server-side before the build is even submitted if it does."
+  type        = string
+  default     = ""
+}
+
+variable "coordinator_peer_vpc_id" {
+  description = "The chosen coordinator_peer_id's own VPC to place the coordinator in — a peer has its own separate catalogue, not this build's local one. Ignored when coordinator_peer_id is empty."
+  type        = string
+  default     = ""
+}
+
+variable "coordinator_peer_subnet_id" {
+  description = "The chosen coordinator_peer_id's own subnet. Ignored when coordinator_peer_id is empty."
+  type        = string
+  default     = ""
+}
+
+variable "coordinator_peer_security_group_id" {
+  description = "The chosen coordinator_peer_id's own existing security group — must actually allow SSH (22) and http_port from admin_cidr; this is not verified automatically (see the SECURITY note above for why). Ignored when coordinator_peer_id is empty."
+  type        = string
+  default     = ""
+}

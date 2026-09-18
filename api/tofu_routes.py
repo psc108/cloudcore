@@ -64,7 +64,13 @@ def submit_build():
             "detail": f"Missing required variable(s): {', '.join(missing)}",
         }), 400
 
-    capacity_error = capacity_gate.check_worker_peers(var_overrides, schema)
+    overlap_error = capacity_gate.check_no_coordinator_worker_overlap(var_overrides)
+    if overlap_error:
+        return jsonify({"status": 400, "title": "Invalid peer placement",
+                         "detail": overlap_error}), 400
+
+    capacity_error = capacity_gate.check_worker_peers(var_overrides, schema) \
+        or capacity_gate.check_coordinator_peer(var_overrides, schema)
     if capacity_error:
         return jsonify({"status": 400, "title": "Insufficient peer capacity",
                          "detail": capacity_error}), 400

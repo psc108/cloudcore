@@ -28,6 +28,19 @@ locals {
     }
   }
 
+  # Empty map (no override — stays local, today's default behaviour)
+  # unless coordinator_peer_id is actually set. Same shape
+  # worker_placement_overrides already uses, applied to the
+  # coordinator's own single "01" key instead of one per worker.
+  coordinator_placement_overrides = var.coordinator_peer_id != "" ? {
+    "01" = {
+      peer_id            = var.coordinator_peer_id
+      vpc_id             = var.coordinator_peer_vpc_id
+      subnet_id          = var.coordinator_peer_subnet_id
+      security_group_ids = [var.coordinator_peer_security_group_id]
+    }
+  } : {}
+
   worker_user_data = templatefile("${path.module}/files/worker-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256

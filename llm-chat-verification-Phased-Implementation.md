@@ -37,7 +37,7 @@ is a different, non-interactive consumer and stays untouched.
 |---|---|---|
 | 1 | Sandboxed execution + honest display (Python-only, single turn) | Done — verified live (real `numpy` `ModuleNotFoundError` shown honestly, single `[DONE]`) |
 | 2 | Grounded fix loop | Done — verified live (real 3-round fix loop against a genuine `numpy` failure, correct round-limiting, single "ask again" invite only on the final block) |
-| PRIORITY | Coordinator placement-awareness | Not started — do before Phase 3 |
+| PRIORITY | Coordinator placement-awareness | Code complete, verified as far as topology allows — 2026-09-18 |
 | 3 | Central learning corpus + student review page | Not started |
 | 4 | Interactive sandbox (placeholder — needs its own document) | Not started |
 
@@ -281,7 +281,7 @@ routes to the real backend) but worth a cleanup pass separately.
 
 ---
 
-## PRIORITY — coordinator placement-awareness (do this next, before Phase 3)
+## PRIORITY — coordinator placement-awareness
 
 Found live deploying the first real verify-proxy.service build:
 `module.coordinator` in `main.tf` has no placement override at all —
@@ -293,39 +293,192 @@ during Phase 2 testing and hit KVM's own "-accel kvm: warning: Number
 of SMP cpus requested (6) exceeds the recommended cpus supported by
 KVM (4)", taking 5-6x longer than normal to come up. Immediately
 unblocked by giving `coordinator_flavor` its own smaller default
-(`standard.large`, 4 vCPU — matches this host exactly) separate from
-`worker_flavor` — but per direct follow-up, that flavor split is a
-stopgap, not the real fix: "should we not place it on the co-ordinator
-on the peer with the best available resource?" Agreed, and explicitly
-prioritized to land before Phase 3 work starts, so it isn't hit again
-in the next stage.
+(`standard.large`, 4 vCPU) separate from `worker_flavor` — but per
+direct follow-up, that flavor split is a stopgap, not the real fix:
+"should we not place it on the co-ordinator on the peer with the best
+available resource?" Agreed, prioritized before Phase 3.
 
-**What this actually needs** (not yet designed in detail — do that
-properly, the same research-first way Phases 1-3 were planned, before
-writing code):
-- Reuse `api/peers_routes.recommend_placement()` — the same traffic-
-  light logic that already auto-suggests placement for workers/VPCs/
-  instances elsewhere — rather than inventing new placement logic for
-  the coordinator specifically.
-- New `coordinator_peer_id` (+ matching `_peer_vpc_id`/`_peer_subnet_id`/
-  `_peer_security_group_id`) variables, and wiring `module.coordinator`
-  through `placement_overrides` the same way `module.workers` already
-  is — currently that module block has no placement mechanism to reuse
-  at all.
-- A real exclusion rule: if the "best" peer is also the peer already
-  chosen for a worker, the coordinator must not land there too — that
-  would put coordinator and worker on the same machine and defeat the
-  entire reason this template splits across hosts via RPC.
-- Verify, not assume: does an LB created on this host actually route
-  to a peer-placed instance's private IP over the same WireGuard
-  tunnel worker RPC traffic already crosses? This has never been
-  tested for this template and the whole approach depends on the
-  answer.
-- `api/layer_split.py`'s `maybe_apply()` currently always calls
-  `host_stats.collect()` for the coordinator's own stats, assuming
-  "coordinator = this host" — once the coordinator can be peer-placed,
-  it needs to call `peers_routes.peer_stats(coordinator_peer_id)`
-  instead whenever one is actually chosen.
+### Research confirmed, both real open questions from the earlier note
+
+1. **LB routing to a peer-placed instance — confirmed working, not
+   assumed.** Real TCP connect from this host directly to a peer-
+   placed instance's own port (`/dev/tcp/192.168.101.x/50052`)
+   succeeded — the WireGuard tunnel bridges the whole guest network,
+   the same way worker RPC traffic already proves, so an LB created
+   locally can reach a peer-placed coordinator's real IP:port exactly
+   like it reaches today's local one. No LB/`module.lb` changes
+   needed — it already resolves an instance's real IP server-side
+   regardless of which host it's actually on (same mechanism already
+   proven for `module.workers.private_ips_list`).
+2. **`modules/instance-group`'s `placement_overrides` already supports
+   a single-instance group — confirmed, no rework needed.**
+   `variables.tf:117-123`: `map(object({peer_id, vpc_id, subnet_id,
+   security_group_ids}))`, keyed by the same two-digit index workers
+   already use ("01", "02", ...). `main.tf`'s own per-key
+   `effective_peer_id`/`effective_vpc_id`/etc. lookups (lines 25-39)
+   have no count-based branching at all — `count_instances = 1` with
+   a single `"01"` key works identically to the worker case.
+
+### A real security consideration that shapes scope
+
+Unlike vpc_id/subnet_id (pure network topology, no real risk), a
+peer's security group genuinely governs what's reachable. A worker's
+own security group is deliberately "an EXISTING one on the peer,"
+scoped narrowly to the RPC port (see `worker_peers`' own SECURITY
+comment in `variables.tf`) — it was never designed for a coordinator's
+own needs (SSH + the chat HTTP UI, `admin_cidr`-scoped, today wide
+open at `0.0.0.0/0` by default). Auto-selecting "the peer's own first
+SG" the same low-risk way the dashboard already auto-picks "the first
+VPC/subnet" would be a real, silent security decision, not just a
+placement one. That pushes this feature toward **human-confirmed
+placement**, not `layer_split.py`-style blind server-side automation —
+matching how every other peer-placed field in this project already
+works (a human picks from a live, real dropdown before submitting),
+rather than being the exception.
+
+### Design
+
+**New Terraform variables** (`examples/llm-chat/variables.tf`):
+`coordinator_peer_id`, `coordinator_peer_vpc_id`,
+`coordinator_peer_subnet_id`, `coordinator_peer_security_group_id` —
+all `string`, default `""` (empty = stay local, today's exact default
+behaviour, fully backward compatible).
+
+**`locals.tf`**: new `coordinator_placement_overrides`, built only
+when `var.coordinator_peer_id != ""` — `{"01" = {peer_id = ...,
+vpc_id = ..., subnet_id = ..., security_group_ids = [...]}}`, same
+shape `worker_placement_overrides` already uses.
+
+**`main.tf`**: `module.coordinator` gains
+`placement_overrides = local.coordinator_placement_overrides`
+(currently has none at all).
+
+**Free dashboard support, zero new frontend code**: confirmed live in
+`ui/src/js/16-build-manager.js` — `_BM_PEER_ID_RE = /(^|_)peer_id$/i`
+already matches any variable ending in `peer_id`, and
+`_bmPeerFamilies()` already derives `_peer_vpc_id`/`_peer_subnet_id`/
+`_peer_security_group_id` siblings by name and wires up the same live
+cascading dropdowns worker fields already get — `coordinator_peer_id`
+will be picked up automatically the moment these variables exist, no
+JS changes needed (same convention `20-tofu-manager.js` mirrors).
+
+**Ansible parity** (`ansible/examples/14-llm-chat.yml`): same four new
+vars; the existing "Create coordinator instance" task's hardcoded
+`vpc_id`/`subnet_id: subnet-local-01`/`security_group_ids` become
+conditional on `coordinator_peer_id` being set, plus a `peer_id:`
+arg — same per-item override shape the worker loop already proves
+works, applied to a single task instead of a loop.
+
+**`api/capacity_gate.py`**: extend to also check a peer-placed
+coordinator's real available RAM against `coordinator_flavor` when
+`coordinator_peer_id` is set — the same check already exists for
+workers; a peer-placed coordinator had no equivalent safety net at
+all before this feature made it possible.
+
+**`api/layer_split.py`**: `maybe_apply()` currently always calls
+`host_stats.collect()` for the coordinator's own stats, assuming
+"coordinator = this host" — now calls
+`peers_routes.peer_stats(coordinator_peer_id)` instead whenever one is
+actually chosen.
+
+**New validation, both submit routes**: reject with a clear 400 if
+`coordinator_peer_id` equals any `worker_peers[].peer_id` — landing
+both roles on the same machine silently defeats the entire reason this
+template splits across hosts via RPC. Cheap to add, matches
+`capacity_gate.py`'s own existing "reject with a clear message before
+the build is even submitted" convention.
+
+**Explicitly not in this pass**: automatic server-side placement
+selection for the coordinator (the `layer_split.py` pattern) — the SG
+consideration above makes that a real, separate, security-relevant
+decision worth its own explicit sign-off later, not something to fold
+in silently while making placement merely *possible* for the first
+time. A human choosing via the dashboard (which already shows the
+real SG options to review before submitting) is this pass's actual
+mechanism, consistent with how every other peer-placed field already
+works in this project.
+
+**Verification**: build `llm-chat` once with `coordinator_peer_id`
+set to the real paired peer and `worker_peers` empty/local (the
+inverse of today's only configuration) — confirm the coordinator
+instance really lands on the peer (`host_hostname` in
+`GET /v1/instances/<id>`), the LB's own health check against its real
+peer IP succeeds, and a real chat completion works end to end through
+that path. Separately, confirm the new same-peer validation actually
+rejects a request where `coordinator_peer_id` matches a
+`worker_peers[].peer_id`.
+
+### Verified 2026-09-18
+
+**API-side code** (`api/capacity_gate.py`'s new `check_coordinator_peer()`
+and `check_no_coordinator_worker_overlap()`, `api/layer_split.py`'s
+`maybe_apply()` now calling `peers_routes.peer_stats(coordinator_peer_id)`
+instead of `host_stats.collect()` when one is set, and both submit
+routes wiring them in) — unit-verified directly against real data
+(the real approved peer's own live stats via `peers_routes.peer_stats()`,
+a real GGUF file, `db.init()` against the real `cloudcore.db`), then
+re-verified through the real running HTTP API after a required server
+restart (see incident note below): the same-peer overlap request
+correctly returns `400 Invalid peer placement`, an unreachable
+`coordinator_peer_id` correctly returns `400 Insufficient peer capacity`
+naming the real RAM shortfall, and `rpc_offload_layers` computes a
+real, different value depending on whether the coordinator's stats
+come from this host or the peer.
+
+**Incident during testing, disclosed and resolved**: an early live
+test was sent to the *already-running* dev API process rather than
+one that had picked up these code changes — its in-memory code was
+stale, so the same-peer-overlap request fell through to the
+pre-existing "destroy existing state before applying" build path
+instead of being rejected up front, using the test's own placeholder
+`vpc_id`/`security_group_id` values. This destroyed the real, working
+`llm-chat` deployment that existed at the time (coordinator
+`37801a0a-...`, worker `d4b7c78f-...`), and the attempted recreation
+correctly failed against the peer's own security-group validation
+("security group 'z' not found"), which CloudCore's own failed-build
+auto-destroy then cleanly tore down — leaving an empty, non-broken
+state rather than a half-provisioned one. Root cause: testing against
+a live process without restarting it to load the edited code, not a
+flaw in the new logic itself (confirmed once retested properly). The
+dev server was restarted on stourport (where the CloudCore control
+plane runs — Llywyn-Y-Groes is a placement target only, never where
+`server.py` itself runs) and the same request then correctly rejected
+with `400` before touching any real infrastructure. `llm-chat` was
+then rebuilt fresh in its known-good configuration (coordinator local,
+one worker on Llywyn-Y-Groes) to restore working state — confirmed via
+a real `tofu apply` (`Apply complete! Resources: 8 added`) and real
+instance IDs (`c11d781c-...` coordinator, `fcb9e44a-...` worker on
+`Llywyn-Y-Groes`).
+
+**Full live end-to-end test of "coordinator actually placed on the
+peer" — genuinely blocked, not skipped.** This plan's own verification
+step above assumed `worker_peers: []` was a viable standalone
+config to isolate coordinator placement. It isn't: the coordinator's
+`llama-server` command line always passes both `-ngl
+${rpc_offload_layers}` and `--rpc ${rpc_servers}`
+(`coordinator-cloud-init.yaml.tftpl:69`), and with zero workers
+`rpc_servers` renders as an empty string — an RPC-offload flag with no
+RPC backends. This template was never designed to run coordinator-only.
+Combined with the same-peer exclusion this same pass just added
+(intentionally — landing coordinator and worker on the same machine
+defeats the reason for RPC splitting), a *working* "coordinator on a
+peer, with a real functioning worker" configuration needs the
+coordinator on one peer and the worker on a **different** one — and
+this fleet currently has exactly one approved peer (Llywyn-Y-Groes).
+Structurally impossible to fully exercise until a second peer joins.
+
+**What this leaves genuinely proven vs. not**: the Terraform mechanism
+itself (`placement_overrides` on a single-instance group) is not new
+code risk — it's the exact same `modules/instance-group` code path
+already proven live, repeatedly, for `module.workers`, including in
+this very redeploy. A real `tofu plan` dry-run earlier in this pass
+independently confirmed `coordinator_peer_id` correctly forces
+`module.coordinator`'s instance to resolve `peer_id`/`vpc_id`/
+`subnet_id`/`security_group_ids` from the peer's real values. What
+remains genuinely unverified is only the *combination* — coordinator
+on a peer at the same time as a live, chat-serving worker — which
+needs a second peer host to even attempt safely. Recorded here rather
+than silently assumed; revisit when a second peer is available.
 
 ---
 

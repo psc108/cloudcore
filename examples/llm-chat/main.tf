@@ -111,9 +111,14 @@ module "coordinator" {
   image_id           = "ubuntu-22.04"
   flavor             = var.coordinator_flavor
   count_instances    = 1
-  vpc_id             = module.vpc.vpc_ids_by_key[local.vpc_key]
-  subnet_id          = module.subnets.subnet_ids_by_key["chat${local.sfx}"]
-  security_group_ids = module.security_groups.security_group_ids_list
+  # Fallback values only — used as-is when coordinator_peer_id is empty
+  # (today's default: coordinator stays local). When it's set,
+  # coordinator_placement_overrides' own "01" entry takes over instead,
+  # same mechanism module.workers already relies on below.
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["chat${local.sfx}"]
+  security_group_ids  = module.security_groups.security_group_ids_list
+  placement_overrides = local.coordinator_placement_overrides
   user_data          = local.coordinator_user_data
 }
 

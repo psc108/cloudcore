@@ -197,6 +197,33 @@
     # upstream project's own docs explicitly call for.
     worker_peers: []
 
+    # --- Coordinator placement ---------------------------------------
+    # Empty by default (all four) — coordinator stays local, exactly
+    # today's only behaviour. Per direct follow-up ("should we not
+    # place the co-ordinator on the peer with the best available
+    # resource?"): this host's own core count is a real, fixed ceiling
+    # regardless of flavor (see coordinator_flavor's own comment for a
+    # real KVM-oversubscription case this caused), so sometimes the
+    # right answer is putting the coordinator itself on a peer
+    # instead. Same shape as worker_peers' own four fields, applied to
+    # a single instance. api/capacity_gate.py checks a peer-placed
+    # coordinator's real available RAM the same way it already does
+    # for workers, and both Build Managers' own submit routes reject a
+    # request where coordinator_peer_id matches a worker's own
+    # peer_id — same machine hosting both roles defeats the entire
+    # reason this playbook splits across hosts via RPC.
+    #
+    # Deliberately not auto-selected — a worker's own security group is
+    # an existing one on that peer, scoped narrowly to the RPC port; it
+    # was never designed for a coordinator's own needs (SSH + the chat
+    # HTTP UI). Pick a real, existing SG on the target peer that
+    # actually allows SSH (22) and http_port from admin_cidr — this is
+    # not verified automatically.
+    coordinator_peer_id: ""
+    coordinator_peer_vpc_id: ""
+    coordinator_peer_subnet_id: ""
+    coordinator_peer_security_group_id: ""
+
   tasks:
     - name: Fail fast if worker_peers is empty
       ansible.builtin.fail:
@@ -317,15 +344,22 @@
           'verify_max_fix_rounds': verify_max_fix_rounds }) }}"
 
     - name: Create coordinator instance
+      # vpc_id/subnet_id/security_group_ids/peer_id fall back to this
+      # build's own local resources when coordinator_peer_id is empty
+      # (today's default behaviour) — otherwise switch to the chosen
+      # peer's own existing catalogue entries, same per-item override
+      # shape the worker loop above already proves works, applied to a
+      # single task instead of a loop.
       cloudcore.cloudcore.instance:
         api_url: "{{ cloudcore_api_url }}"
         api_token: "{{ cloudcore_api_token }}"
         name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-coord"
         image_id: ubuntu-22.04
         flavor: "{{ coordinator_flavor }}"
-        vpc_id: "{{ vpc.vpc.id }}"
-        subnet_id: subnet-local-01
-        security_group_ids: ["{{ sg.security_group.id }}"]
+        vpc_id: "{{ coordinator_peer_vpc_id if coordinator_peer_id else vpc.vpc.id }}"
+        subnet_id: "{{ coordinator_peer_subnet_id if coordinator_peer_id else 'subnet-local-01' }}"
+        security_group_ids: ["{{ coordinator_peer_security_group_id if coordinator_peer_id else sg.security_group.id }}"]
+        peer_id: "{{ coordinator_peer_id }}"
         user_data: "{{ coordinator_user_data }}"
         tags:
           Environment: "{{ env }}"

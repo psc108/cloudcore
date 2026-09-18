@@ -164,10 +164,19 @@ def maybe_apply(var_overrides: dict, schema: dict) -> None:
             return
         worker_stats_list.append(stats)
 
-    try:
-        coordinator_stats = host_stats.collect()
-    except Exception:
-        return
+    coordinator_peer_id = var_overrides.get("coordinator_peer_id")
+    if coordinator_peer_id:
+        # Coordinator is peer-placed (examples/llm-chat's own
+        # coordinator_peer_id) — "this host" is no longer the right
+        # source for its stats, the named peer is.
+        coordinator_stats = peers_routes.peer_stats(coordinator_peer_id)
+        if coordinator_stats is None:
+            return
+    else:
+        try:
+            coordinator_stats = host_stats.collect()
+        except Exception:
+            return
 
     coordinator_flavor = var_overrides.get("coordinator_flavor") \
         or (schema.get("coordinator_flavor", {}) or {}).get("default")
