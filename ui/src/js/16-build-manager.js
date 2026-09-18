@@ -68,6 +68,20 @@ const _BM_PEER_ID_RE = /(^|_)peer_id$/i;
 // the existing _BM_PEER_ID_RE family logic.
 const _BM_WORKER_PEERS_VAR = 'worker_peers';
 
+// Found live: this field's own static default (24, llm-chat's only
+// consumer today) was being pre-filled into the input and submitted on
+// every single build regardless of whether a real person ever touched
+// it — silently defeating api/layer_split.py's own dynamic,
+// safety-clamped computation, which only ever fills this in when the
+// caller left it genuinely blank. Caused a real OOM crash loop: 24
+// layers on a 4096MB standard.large coordinator is ~4.3GB of weights
+// alone. Rendered specially (empty value, explanatory placeholder) so
+// a normal "just build it" flow actually gets the safe, real-time
+// computed split instead of silently reverting to the unsafe static
+// fallback that variable's own description already warns is "only a
+// static fallback for a direct tofu apply."
+const _BM_DYNAMIC_LAYERS_VAR = 'rpc_offload_layers';
+
 // A peer-placed resource's own peer_vpc_id/peer_subnet_id/
 // peer_security_group_id also get real pickers, cascading from their
 // sibling peer_id field — "checking the current vpc id's on the
@@ -180,6 +194,16 @@ async function _bmRenderVarForm(filename, tpl, schema) {
             <option value="">— select a peer first —</option>
           </select>
         </div>`;
+    }
+    if (key === _BM_DYNAMIC_LAYERS_VAR) {
+      return `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')}</label>
+      <input type="text" id="bm-var-${key}" data-key="${key}"
+             placeholder="Auto-computed from real-time peer/host capacity — leave blank">
+      <span class="bm-field-hint">Leave blank (recommended) so this is computed fresh at build time from each participant's actual current CPU/RAM, safety-clamped to what really fits. Only set this yourself to override that — e.g. ${_esc(String(meta.default ?? ''))} for a direct playbook run with no API/dynamic computation available.</span>
+    </div>
+  `;
     }
     return `
     <div class="field">
