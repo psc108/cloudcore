@@ -83,6 +83,17 @@ locals {
   # no peer-specific templating needed.
   examples_api_base = "http://192.168.100.1:8083"
 
+  # Stage 2 — the same CodeMirror 5.65.16 build already vendored for the
+  # Dashboard's own Editor page (ui/vendor/, a sibling of this example
+  # directory — ../../ui/vendor from here), read fresh and re-embedded
+  # into THIS guest's own cloud-init: the dashboard's /vendor/ route
+  # only ever serves the admin host, never a student-facing coordinator.
+  codemirror_core_js         = file("${path.module}/../../ui/vendor/codemirror.min.js")
+  codemirror_core_css        = file("${path.module}/../../ui/vendor/codemirror.min.css")
+  codemirror_theme_css       = file("${path.module}/../../ui/vendor/codemirror-theme-dracula.min.css")
+  codemirror_matchbrackets_js = file("${path.module}/../../ui/vendor/codemirror-addon-matchbrackets.min.js")
+  codemirror_python_mode_js  = file("${path.module}/../../ui/vendor/codemirror-mode-python.min.js")
+
   coordinator_user_data = templatefile("${path.module}/files/coordinator-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256
@@ -103,5 +114,10 @@ locals {
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
     sandbox_system_message   = var.sandbox_system_message
+    codemirror_core_js         = local.codemirror_core_js
+    codemirror_core_css        = local.codemirror_core_css
+    codemirror_theme_css       = local.codemirror_theme_css
+    codemirror_matchbrackets_js = local.codemirror_matchbrackets_js
+    codemirror_python_mode_js  = local.codemirror_python_mode_js
   })
 }

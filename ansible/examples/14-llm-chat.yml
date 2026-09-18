@@ -362,6 +362,19 @@
       ansible.builtin.set_fact:
         verify_proxy_source: "{{ lookup('file', 'templates/llm-chat/verify_proxy.py') }}"
 
+    - name: Load CodeMirror assets (Stage 2 — interactive sandbox editor)
+      # Same vendored build the Dashboard's own Editor page already
+      # ships (ui/vendor/, two levels up from this playbook's own
+      # directory) — read fresh and re-embedded into this guest's own
+      # cloud-init, since the dashboard's own /vendor/ route only ever
+      # reaches the admin host, never a student-facing coordinator.
+      ansible.builtin.set_fact:
+        codemirror_core_js: "{{ lookup('file', '../../ui/vendor/codemirror.min.js') }}"
+        codemirror_core_css: "{{ lookup('file', '../../ui/vendor/codemirror.min.css') }}"
+        codemirror_theme_css: "{{ lookup('file', '../../ui/vendor/codemirror-theme-dracula.min.css') }}"
+        codemirror_matchbrackets_js: "{{ lookup('file', '../../ui/vendor/codemirror-addon-matchbrackets.min.js') }}"
+        codemirror_python_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-python.min.js') }}"
+
     - name: Render coordinator user_data
       ansible.builtin.set_fact:
         coordinator_user_data: "{{ lookup('template', 'templates/llm-chat/coordinator-cloud-init.yml.j2', template_vars={
@@ -378,7 +391,12 @@
           'verify_max_fix_rounds': verify_max_fix_rounds,
           'examples_api_base': examples_api_base,
           'examples_ingestion_token': examples_ingestion_token,
-          'sandbox_system_message': sandbox_system_message }) }}"
+          'sandbox_system_message': sandbox_system_message,
+          'codemirror_core_js': codemirror_core_js,
+          'codemirror_core_css': codemirror_core_css,
+          'codemirror_theme_css': codemirror_theme_css,
+          'codemirror_matchbrackets_js': codemirror_matchbrackets_js,
+          'codemirror_python_mode_js': codemirror_python_mode_js }) }}"
 
     - name: Create coordinator instance
       # vpc_id/subnet_id/security_group_ids/peer_id fall back to this

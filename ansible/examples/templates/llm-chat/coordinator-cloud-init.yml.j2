@@ -63,6 +63,38 @@ write_files:
     content: |
       {{ sandbox_system_message | indent(6) }}
 
+  # Stage 2 — CodeMirror 5.65.16, the same version already vendored for
+  # the Dashboard's own Editor page (ui/vendor/), shipped here too since
+  # this guest is a different serving context entirely. Served by
+  # verify_proxy.py's own GET /vendor/<name>, an explicit filename
+  # allowlist — matches this project's offline-capable, no-CDN
+  # convention throughout.
+  #
+  # base64 (encoding: b64), not plain content: | -- found live that
+  # codemirror.min.js's own minified source contains a literal U+0080
+  # character (a valid JS string literal), which is legal UTF-8 but
+  # forbidden by strict YAML 1.1 inside a plain scalar. Base64
+  # sidesteps this whole class of problem for any vendored asset.
+  - path: /opt/llama.cpp/vendor/codemirror.min.js
+    encoding: b64
+    content: "{{ codemirror_core_js | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror.min.css
+    encoding: b64
+    content: "{{ codemirror_core_css | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror-theme-dracula.min.css
+    encoding: b64
+    content: "{{ codemirror_theme_css | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror-addon-matchbrackets.min.js
+    encoding: b64
+    content: "{{ codemirror_matchbrackets_js | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror-mode-python.min.js
+    encoding: b64
+    content: "{{ codemirror_python_mode_js | b64encode }}"
+
   - path: /etc/systemd/system/llama-server.service
     content: |
       [Unit]

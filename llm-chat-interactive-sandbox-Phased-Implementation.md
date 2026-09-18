@@ -51,7 +51,7 @@ untouched, as in every prior phase.
 | # | Stage | Status |
 |---|---|---|
 | 1 | Core Run/Ask loop, plain textarea, chat webui removed | Done — verified live 2026-09-18 |
-| 2 | CodeMirror upgrade | Not started |
+| 2 | CodeMirror upgrade | Done — verified live 2026-09-18 |
 
 ---
 
@@ -342,6 +342,47 @@ dashboard.
 **Verification**: real syntax highlighting and line numbers render in
 a real browser against a real deployment; Run/Ask still work
 unchanged underneath — this stage only touches presentation.
+
+### A real bug found and fixed during implementation
+
+The first real redeploy failed outright — `Error: Instance entered
+error state` from the CloudCore provider, no further detail. Isolated
+methodically rather than guessed at: a synthetic ~234KB `user_data`
+blob created a real instance successfully (ruling out raw size), so
+the actual coordinator cloud-init was rendered locally byte-for-byte
+and fed to `yaml.safe_load` directly, which failed with `unacceptable
+character #x0080`. Traced to `ui/vendor/codemirror.min.js` itself — a
+literal `U+0080` character in its own minified source (part of a
+word-character range check), completely valid JavaScript and valid
+UTF-8, but forbidden by strict YAML 1.1 inside a plain scalar. This
+was never a problem before Stage 2: the Dashboard only ever serves
+this exact file as a raw static asset (`GET /vendor/<path>`), never
+through a YAML document — Stage 2 is the first place in this codebase
+this file has ever been embedded inside one.
+
+**Fixed** by switching all five `write_files` entries for the
+CodeMirror assets from plain `content: |` to `encoding: b64` +
+`base64encode(...)` (Terraform) / `| b64encode` (Ansible) — a
+standard, well-supported cloud-init feature. This sidesteps the whole
+class of problem for any vendored asset, not just this one character
+in this one file, and was confirmed round-trip-exact locally
+(`base64.b64decode(...) == original bytes`) before redeploying.
+
+### Verified live, 2026-09-18
+
+Redeployed successfully after the fix. All five vendor assets fetched
+from the live coordinator via `GET /vendor/<name>` matched the local
+`ui/vendor/` files byte-for-byte (confirmed by SHA-256, not just size)
+— `codemirror.min.js` and `codemirror-mode-python.min.js` both
+checksum-identical to their source files, confirming the base64
+round-trip through real cloud-init delivered them uncorrupted.
+`POST /sandbox/run` re-verified working unchanged underneath. The
+sandbox page's own HTML/JS was confirmed to reference and initialize
+CodeMirror correctly (`mode: 'python'`, the `#codeHost` div, `cm.getValue()`
+wired into Run/Ask) — genuine visual rendering in an actual browser
+was **not** confirmed in this environment (no browser available),
+flagged rather than assumed, same limitation noted for the Phase 3
+Dashboard page.
 
 ---
 

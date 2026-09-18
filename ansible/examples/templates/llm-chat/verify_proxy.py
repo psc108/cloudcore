@@ -113,6 +113,23 @@ try:
 except OSError:
     SANDBOX_SYSTEM_MESSAGE = _SANDBOX_SYSTEM_MESSAGE_DEFAULT
 
+# Stage 2 -- CodeMirror assets embedded into this guest's own cloud-init
+# (coordinator-cloud-init.yaml.tftpl's own write_files, same mechanism
+# verify_proxy_source itself already proves) and served from here, not
+# a CDN -- matches this whole project's offline-capable convention (see
+# api/server.py's own GET /vendor/<path>, the dashboard's equivalent).
+# An explicit filename allowlist, not a general static-file server --
+# same least-exposure discipline this file already applies elsewhere
+# (do_GET's own route allowlist, examples_listener.py's endpoint gate).
+VENDOR_DIR = os.environ.get("SANDBOX_VENDOR_DIR", "/opt/llama.cpp/vendor")
+VENDOR_CONTENT_TYPES = {
+    "codemirror.min.js": "text/javascript",
+    "codemirror.min.css": "text/css",
+    "codemirror-theme-dracula.min.css": "text/css",
+    "codemirror-addon-matchbrackets.min.js": "text/javascript",
+    "codemirror-mode-python.min.js": "text/javascript",
+}
+
 # How often (seconds) to send an SSE keep-alive comment to the browser
 # while waiting on an internal fix-round completion -- HAProxy's own
 # timeout client/server (api/lb.py, 300s) is an inactivity timer, so a
@@ -403,8 +420,13 @@ def capture_example(original_messages: list, capture: dict,
 # Phase 4 -- the interactive sandbox itself. Stdlib-rendered, no new
 # frontend framework, matching /examples' own convention. Plain
 # <textarea> for Stage 1 (see the Interactive Sandbox phased-
-# implementation doc's own Stage 1/2 split) -- CodeMirror needs its
-# own JS/CSS shipped into this guest's cloud-init, deferred to Stage 2.
+# implementation doc's own Stage 1/2 split). Stage 2: CodeMirror 5,
+# same version already vendored for the Dashboard's own Editor page
+# (ui/vendor/), shipped into THIS guest's own cloud-init instead (the
+# dashboard's /vendor/ route serves the admin host, not this
+# student-facing coordinator -- see GET /vendor/<name> below) and
+# served from local files, never a CDN, same offline-capable
+# convention this whole project already holds to.
 # All state (code buffer, ask conversation) lives client-side in
 # localStorage -- no server-side student identity, matching Phase 3's
 # own privacy stance. Every fetch to /sandbox/run or /sandbox/ask
@@ -414,6 +436,11 @@ SANDBOX_PAGE_HTML = """<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>llm-chat -- Sandbox</title>
+<link rel="stylesheet" href="/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/vendor/codemirror-theme-dracula.min.css">
+<script src="/vendor/codemirror.min.js"></script>
+<script src="/vendor/codemirror-mode-python.min.js"></script>
+<script src="/vendor/codemirror-addon-matchbrackets.min.js"></script>
 <style>
 :root { color-scheme: light dark; }
 body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; color: #1a1a1a; }
@@ -421,7 +448,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
 .sub { color: #666; font-size: 0.85rem; margin: 0 0 1.25rem; }
 .panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
 .panel h2 { font-size: 1rem; margin: 0 0 0.75rem; }
-textarea#code { width: 100%; min-height: 280px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; padding: 0.75rem; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; resize: vertical; }
+#codeHost { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+#codeHost .CodeMirror { height: 320px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9rem; }
 .row { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
 button { font: inherit; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid #999; background: #f2f2f2; cursor: pointer; }
 button:hover:not(:disabled) { background: #e8e8e8; }
@@ -449,7 +477,7 @@ footer a { color: inherit; }
 
 <div class="panel">
   <h2>Your code</h2>
-  <textarea id="code" spellcheck="false" placeholder="# Write or paste your Python here"></textarea>
+  <div id="codeHost"></div>
   <div class="row">
     <button id="runBtn" class="primary" onclick="runCode()">Run</button>
     <button onclick="clearAll()">Clear session</button>
@@ -471,15 +499,21 @@ footer a { color: inherit; }
 
 <script>
 const CODE_KEY = 'sandboxCode', HISTORY_KEY = 'sandboxHistory';
-const codeEl = document.getElementById('code');
 const transcriptEl = document.getElementById('transcript');
 
+// CodeMirror(host, {...}), not .fromTextArea() -- same init pattern
+// the Dashboard's own Editor page already uses (ui/src/js/18-editor.js).
+const cm = CodeMirror(document.getElementById('codeHost'), {
+  mode: 'python', theme: 'dracula', lineNumbers: true, matchBrackets: true,
+  indentUnit: 4, tabSize: 4, viewportMargin: Infinity,
+});
+cm.on('change', saveCode);
+
 function loadState() {
-  codeEl.value = localStorage.getItem(CODE_KEY) || '';
+  cm.setValue(localStorage.getItem(CODE_KEY) || '');
   renderTranscript();
 }
-function saveCode() { localStorage.setItem(CODE_KEY, codeEl.value); }
-codeEl.addEventListener('input', saveCode);
+function saveCode() { localStorage.setItem(CODE_KEY, cm.getValue()); }
 
 function getHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
@@ -504,7 +538,7 @@ function clearAll() {
   if (!confirm('Clear your code and conversation? This only affects this browser.')) return;
   localStorage.removeItem(CODE_KEY);
   localStorage.removeItem(HISTORY_KEY);
-  codeEl.value = '';
+  cm.setValue('');
   renderTranscript();
   document.getElementById('runResult').innerHTML = '';
 }
@@ -513,14 +547,14 @@ async function runCode() {
   const btn = document.getElementById('runBtn');
   const status = document.getElementById('runStatus');
   const out = document.getElementById('runResult');
-  if (!codeEl.value.trim()) return;
+  if (!cm.getValue().trim()) return;
   btn.disabled = true;
   status.textContent = 'Running...';
   out.innerHTML = '';
   try {
     const resp = await fetch('/sandbox/run', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code: codeEl.value}),
+      body: JSON.stringify({code: cm.getValue()}),
     });
     const data = await resp.json();
     if (!resp.ok) { status.textContent = 'Error: ' + (data.error || resp.status); return; }
@@ -565,7 +599,7 @@ async function askModel() {
   try {
     const resp = await fetch('/sandbox/ask', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code: codeEl.value, question, history: history.slice(0, -1)}),
+      body: JSON.stringify({code: cm.getValue(), question, history: history.slice(0, -1)}),
     });
     if (!resp.ok || !resp.body) {
       bubbleContent.textContent = 'Request failed (' + resp.status + ')';
@@ -629,6 +663,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._serve_examples_page()
         elif path == "/health":
             self._proxy_passthrough()
+        elif path.startswith("/vendor/"):
+            self._serve_vendor_file(path[len("/vendor/"):])
         else:
             self._not_found()
 
@@ -882,6 +918,29 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
+
+    def _serve_vendor_file(self, name: str):
+        """Stage 2's own CodeMirror assets, embedded into this guest's
+        cloud-init at build time -- see VENDOR_DIR/VENDOR_CONTENT_TYPES'
+        own comment. Pinned, versioned files, so a long-lived cache is
+        fine, same reasoning api/server.py's own GET /vendor/<path>
+        already documents for the dashboard's equivalent."""
+        content_type = VENDOR_CONTENT_TYPES.get(name)
+        if not content_type:
+            self._not_found()
+            return
+        try:
+            with open(os.path.join(VENDOR_DIR, name), "rb") as f:
+                body = f.read()
+        except OSError:
+            self._not_found()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- Phase 3: student review page ----------------------------------
 
