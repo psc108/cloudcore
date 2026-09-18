@@ -52,15 +52,31 @@
     # below).
     context_size: 4096
     threads: 4
-    # Stepped up from standard.large after moving the default model from
-    # 7B to 14B (see model_filename below) — real testing found the 7B
-    # still hallucinated on non-trivial code tasks even with the system
-    # prompt genuinely reaching it, per direct request ("is there
-    # anything less likely to hallucinate... code is all i really care
-    # about"). Every worker peer's own real available RAM is still
-    # checked against whichever flavor is chosen BEFORE the build is
+    # coordinator_flavor and worker_flavor deliberately do NOT share one
+    # value — found live building the first real verify-proxy.service
+    # deployment: the coordinator is *always* local (no placement
+    # override exists for it in this playbook, unlike workers), so its
+    # flavor's vCPU count is really a claim against *this specific
+    # host's* real core count, not a generic budget. A 6-vCPU
+    # standard.xlarge coordinator on a real 4-core host hit KVM's own
+    # "-accel kvm: warning: Number of SMP cpus requested (6) exceeds
+    # the recommended cpus supported by KVM (4)" and took 5-6x longer
+    # than normal to come up — standard.large (4 vCPU) matches a real
+    # 4-core host exactly, not oversubscribed. worker_flavor stays
+    # standard.xlarge since a worker peer's own core count is checked
+    # for real (api/capacity_gate.py) and this project's own paired
+    # peer genuinely has 8 cores. Making the coordinator itself
+    # peer-placement-aware (choosing whichever host has the most real
+    # spare capacity, the same way api/peers_routes.
+    # recommend_placement() already does for other resources) is a
+    # real, tracked follow-up — see
+    # llm-chat-verification-Phased-Implementation.md's own priority
+    # note for why it isn't done yet.
+    #
+    # Every worker peer's own real available RAM is still checked
+    # against whichever worker_flavor is chosen BEFORE the build is
     # even submitted (api/capacity_gate.py) regardless.
-    coordinator_flavor: standard.xlarge
+    coordinator_flavor: standard.large
     worker_flavor: standard.xlarge
 
     # llama.cpp's own -ngl flag means "how many of the model's layers to
@@ -139,6 +155,27 @@
       you are not certain something is correct, say so explicitly
       rather than stating it as fact. Prefer precise, verifiable
       statements over confident-sounding guesses.
+
+    # Grounded code verification — per direct request: prompting alone
+    # couldn't be trusted to prevent hallucination ("the lab students
+    # can't be allowed to walk away with false education or
+    # confidence... even if the answers are wrong then we can show why
+    # and how it might be put right") — so any Python code block in a
+    # response is actually run in a sandbox on the coordinator (see
+    # templates/llm-chat/coordinator-cloud-init.yml.j2's own
+    # verify-proxy.service) and the real result is appended into the
+    # same chat turn, clearly labeled as executed rather than model
+    # output. See llm-chat-verification-Phased-Implementation.md.
+    enable_verification: true
+    verify_timeout_seconds: 15
+    verify_max_memory_mb: 256
+    # Phase 2 — grounded fix loop. Widened from an initial default of 1
+    # to 3 per direct follow-up ("close the gap [on being able to]
+    # iterate until acceptable/correct performance/output is met") — a
+    # single automatic attempt was judged too thin for that to feel
+    # real. Each round is grounded in the REAL traceback from the
+    # attempt before it, never another unverified guess.
+    verify_max_fix_rounds: 3
 
     # One entry per RPC worker instance — the whole point of this
     # playbook. Each worker is pinned to a specific paired peer (see the
@@ -260,6 +297,10 @@
       ansible.builtin.set_fact:
         webui_config_json: "{{ {'temperature': webui_temperature, 'systemMessage': webui_system_message} | to_nice_json }}"
 
+    - name: Load verify_proxy.py source (grounded code verification)
+      ansible.builtin.set_fact:
+        verify_proxy_source: "{{ lookup('file', 'templates/llm-chat/verify_proxy.py') }}"
+
     - name: Render coordinator user_data
       ansible.builtin.set_fact:
         coordinator_user_data: "{{ lookup('template', 'templates/llm-chat/coordinator-cloud-init.yml.j2', template_vars={
@@ -268,7 +309,12 @@
           'http_port': http_port, 'context_size': context_size, 'threads': threads,
           'rpc_offload_layers': rpc_offload_layers,
           'rpc_servers': rpc_servers, 'promtail_config': promtail_config,
-          'webui_config_json': webui_config_json }) }}"
+          'webui_config_json': webui_config_json,
+          'verify_proxy_source': verify_proxy_source,
+          'enable_verification': enable_verification,
+          'verify_timeout_seconds': verify_timeout_seconds,
+          'verify_max_memory_mb': verify_max_memory_mb,
+          'verify_max_fix_rounds': verify_max_fix_rounds }) }}"
 
     - name: Create coordinator instance
       cloudcore.cloudcore.instance:

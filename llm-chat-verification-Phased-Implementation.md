@@ -35,8 +35,9 @@ is a different, non-interactive consumer and stays untouched.
 
 | # | Phase | Status |
 |---|---|---|
-| 1 | Sandboxed execution + honest display (Python-only, single turn) | Not started |
-| 2 | Grounded fix loop | Not started |
+| 1 | Sandboxed execution + honest display (Python-only, single turn) | Done — verified live (real `numpy` `ModuleNotFoundError` shown honestly, single `[DONE]`) |
+| 2 | Grounded fix loop | Done — verified live (real 3-round fix loop against a genuine `numpy` failure, correct round-limiting, single "ask again" invite only on the final block) |
+| PRIORITY | Coordinator placement-awareness | Not started — do before Phase 3 |
 | 3 | Central learning corpus + student review page | Not started |
 | 4 | Interactive sandbox (placeholder — needs its own document) | Not started |
 
@@ -232,6 +233,99 @@ captured traceback (not a generic explanation), that the re-executed
 fix's real result is shown whatever it is — a fix that still fails
 should be shown as still failing, not glossed over — and that the
 "ask again" invite line is present in a failing result.
+
+**Verified live** (2026-09-18): a complete, real 3-round fix loop
+against a genuine `numpy` `ModuleNotFoundError` (the sandbox is
+deliberately stdlib-only). Confirmed: exactly one `[DONE]`, exactly
+`VERIFY_MAX_FIX_ROUNDS` (3) fix attempts, each one's real re-execution
+result shown honestly, and the "ask again" invite appearing exactly
+once — only on the truly final block, never on an intermediate
+failure. The model's own fix attempts each round only suggested
+`pip install numpy` rather than rewriting the code to avoid the
+dependency — a real, honest limitation of what a 14B model can fix on
+its own, not a flaw in the mechanism; the student sees that plainly
+instead of a false "should work now."
+
+**Two real bugs found and fixed during this same live verification,
+both now committed**:
+- `layer_split.py`'s dynamic CPU-only split pushed 47 of 48 layers
+  (~8.2GB of an 8.37GB model) onto a worker's own 8192MB flavor,
+  leaving almost no room for KV cache/compute buffers — its real
+  RPC server crash-looped under genuine memory pressure on every
+  restart (confirmed via the guest's own `journalctl`:
+  `ggml-rpc.cpp:569: Remote RPC server crashed or returned malformed
+  response`). Fixed: the split is now also clamped so neither side's
+  real share of the model's weight bytes exceeds 75% of its own
+  flavor's RAM, falling back to the template's static default
+  (rather than asserting an unsafe value) if no split fits either
+  side safely.
+- `_call_llama_direct()` (the fix loop's own internal completion
+  call) had a 900s timeout and no `max_tokens` cap — too short for a
+  real non-streaming generation on this hardware, confirmed live when
+  a genuinely-still-working fix round was aborted with "failed to
+  generate (timed out)". Fixed: timeout raised to 3600s, and
+  `max_tokens` now threads through from the original request instead
+  of being left effectively unbounded.
+
+**Small future refinement, not urgent**: the fix prompt could
+explicitly state that only the Python standard library is available
+in the sandbox, which would likely help the model reach for a real
+fix (e.g. `statistics.quantiles`) instead of repeatedly suggesting an
+unusable `pip install`.
+
+**Also found live, unrelated to this template's own code**: `api/lb.py`
+generates a second, unused, stale HAProxy backend block
+(`example-dev-chat-back`, wrong port, always `DOWN`) alongside the
+real target-group-driven one — harmless (the frontend correctly
+routes to the real backend) but worth a cleanup pass separately.
+
+---
+
+## PRIORITY — coordinator placement-awareness (do this next, before Phase 3)
+
+Found live deploying the first real verify-proxy.service build:
+`module.coordinator` in `main.tf` has no placement override at all —
+it's always forced onto whichever host submits the build, unlike
+workers (which already go through `placement_overrides` driven by
+`worker_peers`). This host (stourport) has 4 real CPU cores;
+`coordinator_flavor` briefly defaulted to `standard.xlarge` (6 vCPU)
+during Phase 2 testing and hit KVM's own "-accel kvm: warning: Number
+of SMP cpus requested (6) exceeds the recommended cpus supported by
+KVM (4)", taking 5-6x longer than normal to come up. Immediately
+unblocked by giving `coordinator_flavor` its own smaller default
+(`standard.large`, 4 vCPU — matches this host exactly) separate from
+`worker_flavor` — but per direct follow-up, that flavor split is a
+stopgap, not the real fix: "should we not place it on the co-ordinator
+on the peer with the best available resource?" Agreed, and explicitly
+prioritized to land before Phase 3 work starts, so it isn't hit again
+in the next stage.
+
+**What this actually needs** (not yet designed in detail — do that
+properly, the same research-first way Phases 1-3 were planned, before
+writing code):
+- Reuse `api/peers_routes.recommend_placement()` — the same traffic-
+  light logic that already auto-suggests placement for workers/VPCs/
+  instances elsewhere — rather than inventing new placement logic for
+  the coordinator specifically.
+- New `coordinator_peer_id` (+ matching `_peer_vpc_id`/`_peer_subnet_id`/
+  `_peer_security_group_id`) variables, and wiring `module.coordinator`
+  through `placement_overrides` the same way `module.workers` already
+  is — currently that module block has no placement mechanism to reuse
+  at all.
+- A real exclusion rule: if the "best" peer is also the peer already
+  chosen for a worker, the coordinator must not land there too — that
+  would put coordinator and worker on the same machine and defeat the
+  entire reason this template splits across hosts via RPC.
+- Verify, not assume: does an LB created on this host actually route
+  to a peer-placed instance's private IP over the same WireGuard
+  tunnel worker RPC traffic already crosses? This has never been
+  tested for this template and the whole approach depends on the
+  answer.
+- `api/layer_split.py`'s `maybe_apply()` currently always calls
+  `host_stats.collect()` for the coordinator's own stats, assuming
+  "coordinator = this host" — once the coordinator can be peer-placed,
+  it needs to call `peers_routes.peer_stats(coordinator_peer_id)`
+  instead whenever one is actually chosen.
 
 ---
 

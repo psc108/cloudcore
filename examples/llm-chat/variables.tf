@@ -28,7 +28,6 @@ variable "cidr_block" {
   default     = "10.91.0.0/16"
 }
 
-# standard.xlarge (6 vCPU / 8192MB / 60GB) by default for both roles:
 # Qwen2.5-Coder-14B-Instruct's Q4_K_M weights alone are ~8.37GB, which
 # does not fit in a single CloudCore instance flavor. Splitting the
 # model's layers across the coordinator and every worker is not a
@@ -38,25 +37,48 @@ variable "cidr_block" {
 # mechanism, built first, for automated Sentinel-log-intelligence
 # ingestion rather than a human chat session).
 #
-# Stepped up from the 7B default to 14B, and standard.large to
-# standard.xlarge, after real testing found the 7B model still
-# hallucinated on non-trivial code tasks even with the anti-
-# hallucination system prompt genuinely reaching it — per direct
+# Stepped up from the 7B default to 14B after real testing found the
+# 7B model still hallucinated on non-trivial code tasks even with the
+# anti-hallucination system prompt genuinely reaching it — per direct
 # request ("is there anything less likely to hallucinate... code is
-# all I really care about"). Every worker peer's own real available
-# RAM is still checked against the chosen worker_flavor BEFORE the
-# build is even submitted (api/capacity_gate.py, reusing the same
-# peers_routes.peer_stats() the traffic-light system already uses) —
-# rejected with a clear message rather than letting a worker OOM
-# partway through model load, regardless of which flavor is chosen.
+# all I really care about").
+#
+# coordinator_flavor and worker_flavor deliberately do NOT share one
+# default any more — found live building the first real
+# verify-proxy.service deployment: the coordinator is *always* local
+# (module.coordinator in main.tf has no placement override, unlike
+# workers), so its flavor's vCPU count is really a claim against
+# *this specific host's* real core count, not a generic budget. A
+# 6-vCPU standard.xlarge coordinator on a real 4-core host hit KVM's
+# own "-accel kvm: warning: Number of SMP cpus requested (6) exceeds
+# the recommended cpus supported by KVM (4)" and took 5-6x longer than
+# normal to come up — standard.large (4 vCPU) is coordinator_flavor's
+# own default specifically because it matches a real 4-core host
+# exactly, not oversubscribed. worker_flavor stays standard.xlarge
+# since a worker peer's own core count is checked for real (see
+# api/capacity_gate.py) and this project's own paired peer genuinely
+# has 8 cores. Making the coordinator itself peer-placement-aware
+# (choosing whichever host — including a peer — has the most real
+# spare capacity, the same way api/peers_routes.recommend_placement()
+# already does for other resources) is a real, tracked follow-up, not
+# solved by this flavor split alone — see
+# llm-chat-verification-Phased-Implementation.md's own priority note
+# for why it isn't done yet.
+#
+# Every worker peer's own real available RAM is still checked against
+# the chosen worker_flavor BEFORE the build is even submitted
+# (api/capacity_gate.py, reusing the same peers_routes.peer_stats()
+# the traffic-light system already uses) — rejected with a clear
+# message rather than letting a worker OOM partway through model load,
+# regardless of which flavor is chosen.
 variable "coordinator_flavor" {
-  description = "Compute flavor for the coordinator instance."
+  description = "Compute flavor for the coordinator instance. The coordinator is always local (never peer-placed today), so this is a real claim on THIS host's own core count, not a generic budget — see the comment above for a real KVM-oversubscription case this default was sized to avoid."
   type        = string
-  default     = "standard.xlarge"
+  default     = "standard.large"
 }
 
 variable "worker_flavor" {
-  description = "Compute flavor for each RPC worker instance."
+  description = "Compute flavor for each RPC worker instance. Workers are peer-placed, and api/capacity_gate.py checks the target peer's own real capacity before the build is submitted, so this can safely be sized larger than coordinator_flavor when a peer genuinely has the cores/RAM for it."
   type        = string
   default     = "standard.xlarge"
 }
@@ -200,6 +222,47 @@ variable "webui_system_message" {
   description = "Default system prompt the coordinator's Web UI starts each new session with — sets ground rules the model doesn't always follow but is measurably steered by, aimed at the specific hallucination pattern found in a real stress-test response (claiming code does something the actual code shown doesn't do)."
   type        = string
   default     = "You are a technical assistant. Only describe what code actually does — never claim a function, sort, or check exists unless it is genuinely present in the code you just wrote or were shown. If you are not certain something is correct, say so explicitly rather than stating it as fact. Prefer precise, verifiable statements over confident-sounding guesses."
+}
+
+# --- Grounded code verification ----------------------------------------
+# Per direct request: prompting alone couldn't be trusted to prevent
+# hallucination ("the lab students can't be allowed to walk away with
+# false education or confidence... even if the answers are wrong then
+# we can show why and how it might be put right") — so instead of only
+# asking the model to be accurate, any Python code block in a response
+# is actually run in a sandbox on the coordinator (see files/
+# verify_proxy.py) and the real result is appended into the same chat
+# turn, clearly labeled as executed rather than model output. See
+# llm-chat-verification-Phased-Implementation.md for the full design.
+variable "enable_verification" {
+  description = "Whether the coordinator actually executes Python code blocks and appends the real result to each response. Off falls back to today's behaviour (the model's own narrative, unverified)."
+  type        = bool
+  default     = true
+}
+
+variable "verify_timeout_seconds" {
+  description = "Wall-clock ceiling (seconds) for a single sandboxed execution — both a hard subprocess timeout and the sandbox's own RLIMIT_CPU. A runaway loop is killed and shown as killed, not silently retried."
+  type        = number
+  default     = 15
+}
+
+variable "verify_max_memory_mb" {
+  description = "RLIMIT_AS ceiling (MB) applied to a single sandboxed execution via the unprivileged sandboxrunner user — a script that exceeds it is killed by the kernel, and that real failure is shown like any other."
+  type        = number
+  default     = 256
+}
+
+# Phase 2 — grounded fix loop. Widened from an initial default of 1 to
+# 3 per direct follow-up ("close the gap [on being able to] iterate
+# until acceptable/correct performance/output is met") — a single
+# automatic attempt was judged too thin for that to feel real. Each
+# round is grounded in the REAL traceback from the attempt before it
+# (never another unverified guess), and only the truly final block in
+# the whole chain ever tells the student to ask again themselves.
+variable "verify_max_fix_rounds" {
+  description = "How many automatic grounded fix-and-reverify rounds follow a real execution failure, each one a fresh completion given the actual traceback from the attempt before it. Bounds compute cost against a stubbornly-wrong model — this is a ceiling, not a guarantee every round runs (it stops as soon as one actually passes)."
+  type        = number
+  default     = 3
 }
 
 # One entry per RPC worker instance — the whole point of this template.

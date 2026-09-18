@@ -20,6 +20,13 @@ packages:
   # See worker-cloud-init.yml.j2's own comment on libgomp1 — the
   # coordinator's llama-server binary needs it for the identical reason.
   - libgomp1
+  # verify-proxy.py's own interpreter, and util-linux's `unshare` (its
+  # sandbox's net/pid isolation) — both are already part of the base
+  # Ubuntu 22.04 cloud image (cloud-init itself is written in Python;
+  # unshare ships with util-linux, a base-system package), listed
+  # explicitly anyway rather than relying on an unstated assumption.
+  - python3
+  - util-linux
 
 write_files:
   - path: /etc/promtail/config.yml
@@ -37,6 +44,18 @@ write_files:
     content: |
       {{ webui_config_json | indent(6) }}
 
+  # Grounded code verification — see
+  # llm-chat-verification-Phased-Implementation.md (Phase 1). Sits in
+  # front of llama-server (which now binds 127.0.0.1 only, below):
+  # relays chat traffic through unchanged in real time, but actually
+  # runs any Python code block in a finished response in a sandbox and
+  # appends the real result into the same chat turn, clearly labeled
+  # as executed rather than model output — never trusting the model's
+  # own narrative about its code on its own.
+  - path: /opt/llama.cpp/verify_proxy.py
+    content: |
+      {{ verify_proxy_source | indent(6) }}
+
   - path: /etc/systemd/system/llama-server.service
     content: |
       [Unit]
@@ -47,7 +66,36 @@ write_files:
       [Service]
       WorkingDirectory=/opt/llama.cpp
       Environment=LD_LIBRARY_PATH=/opt/llama.cpp
-      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/{{ model_filename }} --host 0.0.0.0 --port {{ http_port }} -c {{ context_size }} -ngl {{ rpc_offload_layers }} --rpc {{ rpc_servers }} -t {{ threads }} --webui-config-file /opt/llama.cpp/webui-config.json
+      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/{{ model_filename }} --host 127.0.0.1 --port 8721 -c {{ context_size }} -ngl {{ rpc_offload_layers }} --rpc {{ rpc_servers }} -t {{ threads }} --webui-config-file /opt/llama.cpp/webui-config.json
+      Restart=on-failure
+      RestartSec=5
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Runs as root deliberately — verify_proxy.py needs CAP_SYS_ADMIN for
+  # its own sandbox's `unshare --net --pid` isolation (confirmed live:
+  # this fails outright as an unprivileged user), and immediately drops
+  # to the unprivileged sandboxrunner user (created below) before ever
+  # executing a single line of model-generated code — root only ever
+  # touches the sandbox setup, never the code itself.
+  - path: /etc/systemd/system/verify-proxy.service
+    content: |
+      [Unit]
+      Description=llm-chat grounded code verification proxy
+      After=network-online.target llama-server.service
+      Wants=network-online.target
+      Requires=llama-server.service
+
+      [Service]
+      WorkingDirectory=/opt/llama.cpp
+      Environment=VERIFY_LISTEN_PORT={{ http_port }}
+      Environment=VERIFY_ENABLED={{ enable_verification | lower }}
+      Environment=VERIFY_TIMEOUT_SECONDS={{ verify_timeout_seconds }}
+      Environment=VERIFY_MAX_MEMORY_MB={{ verify_max_memory_mb }}
+      Environment=VERIFY_MAX_FIX_ROUNDS={{ verify_max_fix_rounds }}
+      ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
       Restart=on-failure
       RestartSec=5
       User=root
@@ -84,8 +132,13 @@ runcmd:
       sleep 5
     done
     echo '{{ model_sha256 }}  /opt/llama.cpp/models/{{ model_filename }}' | sha256sum -c -
+  # No login, no home dir, no password — this account only ever exists
+  # to be the unprivileged identity verify_proxy.py's sandbox drops to
+  # before running a single line of model-generated code.
+  - useradd --system --no-create-home --shell /usr/sbin/nologin sandboxrunner
   - systemctl daemon-reload
   # See worker-cloud-init.yml.j2's own comment on Restart=on-failure —
   # the same startup-order gap applies here in reverse, same
   # self-healing mitigation.
   - systemctl enable --now llama-server
+  - systemctl enable --now verify-proxy

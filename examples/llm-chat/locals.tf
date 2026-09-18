@@ -53,6 +53,12 @@ locals {
     systemMessage = var.webui_system_message
   })
 
+  # Baked into the coordinator's own cloud-init as plain source (see
+  # files/coordinator-cloud-init.yaml.tftpl's own write_files entry) —
+  # matches how llama-server.service's own unit file is already
+  # inlined; plain-text Python needs no build/pinned-artifact step.
+  verify_proxy_source = file("${path.module}/files/verify_proxy.py")
+
   coordinator_user_data = templatefile("${path.module}/files/coordinator-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256
@@ -65,5 +71,10 @@ locals {
     rpc_servers          = local.rpc_servers
     promtail_config      = local.promtail_config
     webui_config_json    = local.webui_config_json
+    verify_proxy_source     = local.verify_proxy_source
+    enable_verification     = var.enable_verification
+    verify_timeout_seconds  = var.verify_timeout_seconds
+    verify_max_memory_mb    = var.verify_max_memory_mb
+    verify_max_fix_rounds   = var.verify_max_fix_rounds
   })
 }
