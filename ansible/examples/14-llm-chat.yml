@@ -485,10 +485,12 @@
           path: /health
         status_code: 200
 
-    - name: Show chat URL
+    - name: Show sandbox URL
       ansible.builtin.debug:
         msg: >
-          Open this in a real browser (not curl -- llama-server's built-in
-          Web UI serves gzip-encoded assets, which curl doesn't request by
-          default): http://127.0.0.1:{{ lb.load_balancer.listen_port }}/
-          -- coordinator {{ coordinator.instance.name }}, {{ worker_peers | length }} worker(s).
+          Open this in a real browser (not curl -- the sandbox page needs a
+          real browser to run its own JS): http://127.0.0.1:{{ lb.load_balancer.listen_port }}/
+          -- an Interactive Sandbox (code editor + grounded Run/Ask loop),
+          not a general chat webui (that's no longer reachable at all --
+          see llm-chat-interactive-sandbox-Phased-Implementation.md).
+          Coordinator {{ coordinator.instance.name }}, {{ worker_peers | length }} worker(s).
