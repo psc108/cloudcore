@@ -52,6 +52,7 @@ untouched, as in every prior phase.
 |---|---|---|
 | 1 | Core Run/Ask loop, plain textarea, chat webui removed | Done — verified live 2026-09-18 |
 | 2 | CodeMirror upgrade | Done — verified live 2026-09-18 |
+| 3 | True interactive execution (`input()` support) | Done — verified live 2026-09-18 |
 
 ---
 
@@ -386,6 +387,109 @@ Dashboard page.
 
 ---
 
+## Stage 3 — True interactive execution (`input()` support)
+
+Stage 1's own `input()`-avoidance fix (steering the model away from it
+via the system prompt) was the right first move, but per direct
+follow-up: *"how can [we] provide a sandbox that can accept
+input/output but keep it within the sandbox? i'd like the llm to be
+able to fully use the sandboxes o/s as far as it's practical or safe
+to do."* Two decisions confirmed before building: **the model drives
+interactive sessions, not the student** (extends the existing Ask
+panel rather than handing out a raw terminal — every real command and
+result still shown, staying transparent rather than becoming a black
+box), and **true mid-execution pause/resume against a real live
+process**, not just pre-supplied stdin values guessed upfront.
+
+**Research this stage is grounded on**: `llama-server`'s own
+OpenAI-style tool-calling looked like the right mechanism to build
+this on — `GET /props` reports `chat_template_caps.supports_tools:
+true` / `supports_tool_calls: true`. A real test request with a
+`tools` array against the live model proved this doesn't actually
+work with this exact model/template combination — it echoed the tool
+schema back as plain text (`<response>{...}</response>`, `finish_reason:
+"stop"`) rather than a genuine `tool_calls` array. Built on the same
+proven, prompt-based fenced-block pattern used throughout this project
+instead (a new ` ```stdin ` block convention, alongside the existing
+`python` one) — not genuine function-calling. Also confirmed live the
+sandbox has zero network access at all, not even loopback (`unshare
+--net` creates a namespace with no interfaces configured) — a real,
+strong, already-existing safety property, left untouched by this
+stage.
+
+**New**: `run_sandboxed_interactive()` — same isolation exactly as
+`run_sandboxed()` (same `unshare` + unprivileged user + the same
+`resource.setrlimit` CPU/memory/proc/fsize limits, which being
+CPU-time-based rather than wall-clock still correctly bound a
+longer-lived session), but stdin stays open and a non-blocking
+`select()` loop detects when the process goes quiet — likely waiting
+for input — instead of a single blocking `.communicate()`. On a
+detected pause, the model is consulted (the same internal
+`_call_llama_direct()` mechanism the fix loop already uses), grounded
+in the real transcript so far, for what to supply; its reply is fed to
+the *same live process*, not a restart. Two hard caps are enforced
+regardless of what the model decides: `INTERACTIVE_MAX_EXCHANGES`
+(3) and `INTERACTIVE_MAX_WALL_S` (1800s) — either one trips, the
+process is killed and an honest "exceeded its budget" message is
+shown, never a silent hang.
+
+**Deliberately entirely server-side — no new client-facing protocol
+at all.** Because the model drives the session rather than the
+student, the whole "detect pause → ask the model → resume" loop runs
+inside `_handle_sandbox_ask`'s own existing SSE response, the same way
+the Phase 2 fix loop already makes multiple internal model round-trips
+within one streamed turn. No WebSocket, no LB mode change, no new
+guest-side dependency — a real infrastructure expansion this stage
+turned out not to need.
+
+**Modified**: `verify_and_maybe_fix()` now runs every execution
+(initial and any fix-round re-run) through the interactive primitive
+rather than the one-shot one. `sandbox_system_message` flipped from
+"never use `input()`" to explaining the new `stdin` block convention —
+the old wording became actively wrong the moment this shipped.
+**Deliberately unchanged**: the plain **Run** button
+(`_handle_sandbox_run`) — per the "model drives it" decision,
+interactive stdin only ever arrives through the model-driven Ask flow.
+
+### Verified live, 2026-09-18
+
+Real redeploy (dynamic split computed 33, correct placement). Asked
+the exact "search a directory for a file the user specifies" prompt
+that originally surfaced this need. Confirmed genuinely live: the
+model wrote a script with two `input()` calls; the sandbox correctly
+paused at the first, the model was consulted grounded in the real
+prompt text printed so far and replied `/home/user`; the transcript
+shows that value fed to the *same live process* (not a restart), which
+paused again at the second `input()`, was consulted again, and
+completed for real — `os.walk()` genuinely ran, found nothing, printed
+`File not found.`, exit code 0, 2 real exchanges. The interleaved
+transcript shown to the student (prompt → input provided → prompt →
+input provided → real result) confirms
+`format_interactive_verification_block()`'s ordering is correct, not
+just the underlying mechanism.
+
+Confirmed unaffected: the plain Run button still uses one-shot
+`run_sandboxed()` — a script with `input()` submitted via Run still
+gets a real, immediate `EOFError`, exactly as before this stage.
+Confirmed the captured transaction renders correctly on both the
+student review page and the Dashboard's LLM Examples page with zero
+code changes needed on either, as designed.
+
+Not re-tested live: the hard exchange/wall-clock caps — `unshare`
+itself needs root, unavailable on this dev host, so the core
+select/quiet-period/exchange-cap algorithm was validated instead
+against a real plain subprocess (single and multiple genuine `input()`
+exchanges each correctly grounded in the growing real transcript,
+`provide_input()` returning `None` stops cleanly, the exchange cap
+kills a runaway script at exactly the configured limit). Forcing a
+genuine 3+-exchange runaway against the live model would cost many
+real minutes per exchange for marginal additional confidence beyond
+that, since the cap logic is byte-identical, just wrapped in the real
+sandbox rather than a plain subprocess — a reasoned choice to skip,
+not an oversight.
+
+---
+
 ## Explicitly out of scope — rolled up from Phases 1-3, not silently dropped again
 
 - **Non-Python code blocks.** The sandbox stays Python-only, for the
@@ -410,3 +514,16 @@ Dashboard page.
 - **Server-side rate limiting.** Stage 1's mitigation (disable the
   button while a request is in flight) is real but thin; per-IP
   throttling is future hardening if actual abuse is observed.
+- **Network access inside the sandbox.** Confirmed live (Stage 3) that
+  `unshare --net` gives zero connectivity at all, not even loopback —
+  a real, strong existing safety property, deliberately left untouched
+  rather than reconsidered as part of broadening interactivity.
+- **Giving the student their own raw interactive terminal.** The other
+  branch of Stage 3's own "who drives it" decision — not chosen; the
+  model remains the one operating the sandbox as a tool, every real
+  command and result still shown to the student, not a black box.
+- **Perfect "is it actually waiting for input" detection** (Stage 3).
+  The quiet-period heuristic is real but imperfect — a script merely
+  computing something slowly looks identical to one genuinely waiting
+  on stdin. Documented as a known limitation, not solved by this
+  stage.

@@ -53,6 +53,7 @@ import os
 import pwd
 import re
 import resource
+import select
 import shutil
 import signal
 import socket
@@ -104,11 +105,13 @@ _SANDBOX_SYSTEM_MESSAGE_DEFAULT = (
     "unrelated to that code or to this lab exercise, politely decline "
     "and redirect the student back to their code. When suggesting a "
     "fix, provide the complete corrected script in a single fenced "
-    "python code block. Code you write runs in a non-interactive "
-    "sandbox with no stdin available at all -- never use input() or "
-    "anything else that waits for interactive input, since it will "
-    "always fail with EOFError there. If a script needs example "
-    "values, hardcode a plausible one directly in the code instead."
+    "python code block. Code you write runs in a real sandbox that "
+    "supports interactive input() calls -- if a script you wrote is "
+    "waiting for input, you will be shown exactly what it has printed "
+    "so far and asked what to provide; reply with ONLY a fenced "
+    "```stdin block containing exactly the one line to send. This can "
+    "happen a few times per script, not unlimited, so keep prompts "
+    "short and avoid scripts that would need a long back-and-forth."
 )
 _SANDBOX_SYSTEM_MESSAGE_PATH = os.environ.get(
     "SANDBOX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/sandbox-system-message.txt")
@@ -149,6 +152,32 @@ MAX_OUTPUT_CHARS = 8000
 CODE_BLOCK_RE = re.compile(r"```(python|py)?[ \t]*\n(.*?)```", re.DOTALL)
 _PY_HINTS = ("def ", "import ", "print(", "class ", "for ", "if __name__")
 
+# Stage 3 -- true interactive execution (run_sandboxed_interactive()).
+# No new stdin channel to the browser at all: the MODEL drives an
+# interactive session as a tool while answering (per direct decision),
+# so this is entirely an internal detail of _handle_sandbox_ask's own
+# orchestration -- a small fenced-block convention, same shape
+# CODE_BLOCK_RE already proves reliable, for the model to supply
+# exactly one line of stdin at a time.
+STDIN_BLOCK_RE = re.compile(r"```stdin[ \t]*\n(.*?)```", re.DOTALL)
+
+# How long the sandboxed process's own stdout/stderr must stay quiet
+# (while it's still alive) before it's treated as "likely waiting for
+# input" -- a heuristic, not a certainty (a script merely computing
+# something slowly looks identical); confirmed live this session that
+# a genuine input() block produces silence immediately and
+# indefinitely, so a few seconds is a real, working threshold without
+# being so short it misfires on ordinary brief pauses.
+INTERACTIVE_QUIET_S = 3
+
+# Hard caps enforced regardless of what the model/provide_input
+# callback decides -- real generation latency observed this session
+# ranges from ~170s (quiet host) to 1200s+ (contended host) *per
+# exchange*, so the exchange count is the real practical control;
+# the wall-clock figure is a generous backstop, not the primary one.
+INTERACTIVE_MAX_EXCHANGES = 3
+INTERACTIVE_MAX_WALL_S = 1800
+
 
 def extract_python_code(text: str) -> str | None:
     """First fenced code block that's explicitly tagged python/py, or
@@ -160,6 +189,19 @@ def extract_python_code(text: str) -> str | None:
         if not lang and any(h in code for h in _PY_HINTS):
             return code
     return None
+
+
+def extract_stdin_value(text: str) -> str | None:
+    """The first line of the first fenced ```stdin block, or None if
+    the model's reply doesn't contain one -- treated by
+    run_sandboxed_interactive()'s own caller as the model choosing to
+    stop the interactive session there, same shape the fix loop
+    already uses for "no runnable code block found"."""
+    m = STDIN_BLOCK_RE.search(text)
+    if not m:
+        return None
+    value = m.group(1).strip("\n")
+    return value.splitlines()[0] if value else ""
 
 
 def _sandbox_uid_gid() -> tuple[int, int]:
@@ -231,6 +273,158 @@ def run_sandboxed(code: str) -> dict:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def run_sandboxed_interactive(code: str, provide_input) -> dict:
+    """Like run_sandboxed(), same isolation exactly (same unshare +
+    unprivileged user + resource.setrlimit CPU/memory/proc/fsize
+    limits -- CPU-time based, not wall-clock, so still correctly
+    bounds a longer-lived session), but the process's stdin stays open
+    and live instead of DEVNULL.
+
+    Whenever the process goes quiet (no new stdout/stderr for
+    INTERACTIVE_QUIET_S seconds) while still running,
+    `provide_input(transcript_so_far)` is called and expected to
+    return either a string to send as the next stdin line (no trailing
+    newline -- one is added), or None to stop the session there (the
+    process is then killed; whatever real output already happened
+    stays in the transcript). Bounded by INTERACTIVE_MAX_EXCHANGES
+    separate hand-offs and INTERACTIVE_MAX_WALL_S of total wall-clock
+    time regardless of what provide_input decides -- enforced here,
+    not left to the caller's own good behavior.
+
+    Returns {"transcript", "stdout", "stderr", "exit_code",
+    "timed_out", "exchanges"}. `transcript` interleaves stdout/stderr
+    in the real order they arrived, with an inline marker at each
+    point input was actually provided -- the honest, readable record
+    of what really happened, not just two separate buffers with the
+    ordering lost. `timed_out` here means the overall session budget
+    (exchanges or wall-clock) was exceeded, not a per-read timeout --
+    the process may have been legitimately still working when stopped.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="verify-")
+    script_path = os.path.join(tmpdir, "script.py")
+    uid, gid = _sandbox_uid_gid()
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    transcript: list[str] = []
+    exchanges = 0
+    session_timed_out = False
+    try:
+        with open(script_path, "w") as f:
+            f.write(code)
+        os.chown(tmpdir, uid, gid)
+        os.chown(script_path, uid, gid)
+
+        mem_bytes = VERIFY_MAX_MEMORY_MB * 1024 * 1024
+        # Same bootstrap as run_sandboxed() -- see its own comment for
+        # why this runs as root only long enough to drop privileges.
+        bootstrap = (
+            "import os,resource;"
+            f"os.setgid({gid});os.setuid({uid});"
+            f"resource.setrlimit(resource.RLIMIT_CPU,({VERIFY_TIMEOUT_S},{VERIFY_TIMEOUT_S}));"
+            f"resource.setrlimit(resource.RLIMIT_AS,({mem_bytes},{mem_bytes}));"
+            "resource.setrlimit(resource.RLIMIT_NPROC,(32,32));"
+            f"resource.setrlimit(resource.RLIMIT_FSIZE,({10*1024*1024},{10*1024*1024}));"
+            f"os.execvp('python3',['python3',{script_path!r}])"
+        )
+        cmd = ["unshare", "--net", "--pid", "--fork", "--mount-proc", "--",
+               "python3", "-c", bootstrap]
+
+        import subprocess
+        proc = subprocess.Popen(
+            cmd, cwd=tmpdir, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+        os.set_blocking(out_fd, False)
+        os.set_blocking(err_fd, False)
+
+        start = time.monotonic()
+        last_output_at = start
+        fds = [proc.stdout, proc.stderr]
+
+        while True:
+            if time.monotonic() - start > INTERACTIVE_MAX_WALL_S:
+                session_timed_out = True
+                break
+
+            readable, _, _ = select.select(fds, [], [], 0.5)
+            got_output = False
+            for f in readable:
+                fd = f.fileno()
+                try:
+                    chunk = os.read(fd, 65536)
+                except (BlockingIOError, OSError):
+                    chunk = b""
+                if chunk:
+                    got_output = True
+                    text = chunk.decode(errors="replace")
+                    (stdout_parts if fd == out_fd else stderr_parts).append(text)
+                    transcript.append(text)
+            if got_output:
+                last_output_at = time.monotonic()
+                continue
+
+            if proc.poll() is not None:
+                break  # process exited on its own
+
+            if time.monotonic() - last_output_at >= INTERACTIVE_QUIET_S:
+                if exchanges >= INTERACTIVE_MAX_EXCHANGES:
+                    session_timed_out = True
+                    break
+                value = provide_input("".join(transcript))
+                if value is None:
+                    break
+                exchanges += 1
+                transcript.append(f"\n>>> INPUT PROVIDED: {value!r}\n")
+                try:
+                    proc.stdin.write((value + "\n").encode())
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    break
+                last_output_at = time.monotonic()
+
+        if proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+        # Drain anything left buffered in the pipes after the process
+        # ended -- a real final chunk can still be sitting there.
+        for fd, buf in ((out_fd, stdout_parts), (err_fd, stderr_parts)):
+            try:
+                rest = os.read(fd, 65536)
+            except (BlockingIOError, OSError):
+                rest = b""
+            if rest:
+                text = rest.decode(errors="replace")
+                buf.append(text)
+                transcript.append(text)
+
+        if session_timed_out:
+            transcript.append(
+                f"\n[Interactive session ended: exceeded its "
+                f"{INTERACTIVE_MAX_EXCHANGES}-exchange / "
+                f"{INTERACTIVE_MAX_WALL_S}s budget]\n"
+            )
+
+        return {
+            "transcript": "".join(transcript)[:MAX_OUTPUT_CHARS],
+            "stdout": "".join(stdout_parts)[:MAX_OUTPUT_CHARS],
+            "stderr": "".join(stderr_parts)[:MAX_OUTPUT_CHARS],
+            "exit_code": proc.returncode,
+            "timed_out": session_timed_out,
+            "exchanges": exchanges,
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def format_verification_block(result: dict, final: bool = True) -> str:
     """`final` controls only the trailing "ask again" invite -- an
     intermediate round in the Phase 2 fix loop is followed automatically
@@ -244,6 +438,25 @@ def format_verification_block(result: dict, final: bool = True) -> str:
     if result["stderr"].strip():
         lines.append("**stderr:**\n```\n" + result["stderr"].rstrip() + "\n```\n")
     lines.append(f"**exit code:** {result['exit_code']}\n")
+    if not passed and final:
+        lines.append(
+            "\n_This code did not run successfully. You can ask for "
+            "another attempt in your next message._\n"
+        )
+    return "".join(lines)
+
+
+def format_interactive_verification_block(result: dict, final: bool = True) -> str:
+    """Stage 3's own counterpart to format_verification_block() --
+    shows the real interleaved transcript (stdout/stderr/input in the
+    order they actually happened) instead of two separate buffers,
+    since order is exactly what makes an interactive session honest
+    and readable rather than confusing."""
+    passed = (not result["timed_out"]) and result["exit_code"] == 0
+    lines = ["\n\n---\n### ACTUALLY EXECUTED, interactively (not model output)\n"]
+    if result["transcript"].strip():
+        lines.append("**session transcript:**\n```\n" + result["transcript"].rstrip() + "\n```\n")
+    lines.append(f"**exit code:** {result['exit_code']}, **inputs provided:** {result['exchanges']}\n")
     if not passed and final:
         lines.append(
             "\n_This code did not run successfully. You can ask for "
@@ -305,6 +518,37 @@ def _call_llama_direct(messages: list, heartbeat=None, timeout: int = 3600,
             beat_thread.join(timeout=2)
 
 
+def _make_input_provider(messages: list, heartbeat, max_tokens):
+    """Returns a provide_input callback for run_sandboxed_interactive():
+    each call asks the model, grounded in the REAL transcript so far
+    (not a summary), what to supply -- via the same small ```stdin
+    fenced-block convention extract_stdin_value() parses, the
+    interactive counterpart to extract_python_code(). Returns None
+    (stop the session) if the model's reply doesn't contain one -- the
+    model choosing not to continue, same shape the fix loop already
+    uses for "no runnable code block found". `messages` is mutated in
+    place (appended to) on every call, so a script that asks for
+    several separate inputs gets each one grounded in the full real
+    conversation so far, not just the original snapshot."""
+    def provide_input(transcript_so_far: str) -> str | None:
+        prompt = (
+            "The script you wrote is now running. Here is everything it "
+            f"has printed so far:\n\n```\n{transcript_so_far.strip()}\n```\n\n"
+            "It appears to be waiting for input on stdin. If it needs a "
+            "value, reply with ONLY a fenced ```stdin block containing "
+            "exactly the line to send. If you believe nothing more should "
+            "be provided, reply without one."
+        )
+        messages.append({"role": "user", "content": prompt})
+        try:
+            reply = _call_llama_direct(messages, heartbeat=heartbeat, max_tokens=max_tokens)
+        except Exception:
+            return None
+        messages.append({"role": "assistant", "content": reply})
+        return extract_stdin_value(reply)
+    return provide_input
+
+
 def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
                           max_tokens: int | None = None) -> tuple[str, dict]:
     """Runs the initial sandboxed execution and, if it fails, up to
@@ -314,6 +558,15 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
     through to each fix round's own completion so it isn't left
     effectively unbounded.
 
+    Stage 3: every execution (the initial one and any fix-round
+    re-execution) runs through run_sandboxed_interactive() rather than
+    the one-shot run_sandboxed() -- if the code calls input(), the
+    model itself is consulted for what to supply, grounded in the real
+    output so far, up to INTERACTIVE_MAX_EXCHANGES times. The plain
+    Run button (_handle_sandbox_run) is deliberately untouched by this
+    -- per direct decision, only the model-driven Ask flow gets
+    interactive stdin, never the student's own direct Run.
+
     Returns (markdown, capture) -- markdown is the complete text to
     append to the model's own response, unchanged from before this
     return type grew a second element; capture is the same real data
@@ -322,7 +575,10 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
     fix round actually attempted (if any) -- the DB schema holds one
     fix slot, representing where the chain ended up, not every
     intermediate round."""
-    result = run_sandboxed(code)
+    messages = list(original_messages)
+    messages.append({"role": "assistant", "content": f"```python\n{code}\n```"})
+
+    result = run_sandboxed_interactive(code, _make_input_provider(messages, heartbeat, max_tokens))
     capture = {
         "generated_code": code,
         "exec_stdout": result["stdout"], "exec_stderr": result["stderr"],
@@ -330,17 +586,15 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
         "passed": (not result["timed_out"] and result["exit_code"] == 0),
     }
     if capture["passed"] or VERIFY_MAX_FIX_ROUNDS <= 0:
-        return format_verification_block(result, final=True), capture
+        return format_interactive_verification_block(result, final=True), capture
 
-    blocks = [format_verification_block(result, final=False)]
-    messages = list(original_messages)
-    messages.append({"role": "assistant", "content": f"```python\n{code}\n```"})
+    blocks = [format_interactive_verification_block(result, final=False)]
 
     for round_num in range(1, VERIFY_MAX_FIX_ROUNDS + 1):
         is_last_round = round_num == VERIFY_MAX_FIX_ROUNDS
         fix_prompt = (
             "This code was executed and failed with the following real "
-            f"output:\n\n```\n{(result['stderr'] or result['stdout']).strip()}\n```\n\n"
+            f"output:\n\n```\n{(result['stderr'] or result['transcript'] or result['stdout']).strip()}\n```\n\n"
             "Explain exactly what is wrong, quoting the failing line, then "
             "provide a corrected version of the complete script."
         )
@@ -368,9 +622,9 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
             )
             break
 
-        result = run_sandboxed(new_code)
+        result = run_sandboxed_interactive(new_code, _make_input_provider(messages, heartbeat, max_tokens))
         passed = not result["timed_out"] and result["exit_code"] == 0
-        blocks.append(format_verification_block(result, final=(passed or is_last_round)))
+        blocks.append(format_interactive_verification_block(result, final=(passed or is_last_round)))
         code = new_code
         capture.update({
             "fixed_code": new_code,
