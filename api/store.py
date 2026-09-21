@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
 from typing import Optional
 
 import db
@@ -8,6 +10,32 @@ from models import (
     VPC, Instance, LoadBalancer, InstanceStatus, VPCStatus, LBStatus,
     Subnet, SubnetStatus, InternetGateway, IGWStatus, RouteTable, RouteTableStatus,
 )
+
+# db.py's own connection lock only serializes individual execute() calls —
+# it does nothing for a request handler's get_lb() ... mutate ... put_lb()
+# sequence, which is several statements apart. Terraform applies
+# independent resources against the same LB concurrently (e.g. two
+# cloudcore_lb_target_group blocks on one lb_id have no depends_on between
+# them), so two such sequences can interleave: both read the same
+# pre-mutation lb row, each appends its own target group/listener to its
+# own in-memory copy, and whichever put_lb() commits second silently
+# clobbers the first one's write with a target_groups/listeners list that
+# never contained it. Found live: a second target group + a routing rule
+# added on the same apply as the LB's original target group made the
+# original vanish from the stored LB entirely, leaving its listener's
+# default target_group_id dangling and haproxy falling back to a bogus
+# port-80 guess. Callers doing that read-mutate-write sequence must hold
+# this per-lb_id lock for its whole span, not just around put_lb() itself.
+_lb_write_locks: dict[str, threading.Lock] = {}
+_lb_write_locks_meta = threading.Lock()
+
+
+@contextmanager
+def lb_lock(lb_id: str):
+    with _lb_write_locks_meta:
+        lock = _lb_write_locks.setdefault(lb_id, threading.Lock())
+    with lock:
+        yield
 
 
 def _vpc_from_row(row) -> VPC:

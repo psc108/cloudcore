@@ -1322,24 +1322,25 @@ def get_lb(lb_id):
 @app.put("/v1/load-balancers/<lb_id>")
 @require_auth
 def update_lb(lb_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    body = request.get_json(force=True) or {}
-    lb.name = body.get("name", lb.name)
-    lb.subnet_ids = body.get("subnet_ids", lb.subnet_ids)
-    lb.internal = body.get("internal", lb.internal)
-    lb.backends = body.get("backends", lb.backends)
-    lb.sticky_sessions = bool(body.get("sticky_sessions", lb.sticky_sessions))
-    lb.cookie_name = body.get("cookie_name", lb.cookie_name)
-    lb.deletion_protection = bool(body.get("deletion_protection", lb.deletion_protection))
-    lb.tags = body.get("tags", lb.tags)
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(lb.to_dict())
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        body = request.get_json(force=True) or {}
+        lb.name = body.get("name", lb.name)
+        lb.subnet_ids = body.get("subnet_ids", lb.subnet_ids)
+        lb.internal = body.get("internal", lb.internal)
+        lb.backends = body.get("backends", lb.backends)
+        lb.sticky_sessions = bool(body.get("sticky_sessions", lb.sticky_sessions))
+        lb.cookie_name = body.get("cookie_name", lb.cookie_name)
+        lb.deletion_protection = bool(body.get("deletion_protection", lb.deletion_protection))
+        lb.tags = body.get("tags", lb.tags)
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(lb.to_dict())
 
 
 @app.delete("/v1/load-balancers/<lb_id>")
@@ -1361,35 +1362,37 @@ def delete_lb(lb_id):
 @app.post("/v1/load-balancers/<lb_id>/backends")
 @require_auth
 def add_backend(lb_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    body = request.get_json(force=True) or {}
-    for field in ("name", "address", "port"):
-        if not body.get(field):
-            return problem(400, "Bad Request", f"{field} is required")
-    lb.backends.append({"name": body["name"], "address": body["address"], "port": int(body["port"])})
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(lb.to_dict()), 201
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        body = request.get_json(force=True) or {}
+        for field in ("name", "address", "port"):
+            if not body.get(field):
+                return problem(400, "Bad Request", f"{field} is required")
+        lb.backends.append({"name": body["name"], "address": body["address"], "port": int(body["port"])})
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(lb.to_dict()), 201
 
 
 @app.delete("/v1/load-balancers/<lb_id>/backends/<backend_name>")
 @require_auth
 def remove_backend(lb_id, backend_name):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    lb.backends = [b for b in lb.backends if b["name"] != backend_name]
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return "", 204
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        lb.backends = [b for b in lb.backends if b["name"] != backend_name]
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return "", 204
 
 
 @app.get("/v1/load-balancers/<lb_id>/listeners")
@@ -1404,46 +1407,47 @@ def list_listeners(lb_id):
 @app.post("/v1/load-balancers/<lb_id>/listeners")
 @require_auth
 def add_listener(lb_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    body = request.get_json(force=True) or {}
-    port = body.get("port")
-    if not port:
-        return problem(400, "Bad Request", "port is required")
-    try:
-        port = int(port)
-    except (ValueError, TypeError):
-        return problem(400, "Bad Request", "port must be an integer")
-    if port < 1 or port > 65535:
-        return problem(400, "Bad Request", "port must be between 1 and 65535")
-    protocol = body.get("protocol", "http")
-    if protocol.lower() not in ("http", "https", "tcp"):
-        return problem(400, "Bad Request", "protocol must be http, https or tcp")
-    if any(l["port"] == port for l in lb.listeners):
-        return problem(409, "Conflict", f"Listener on port {port} already exists")
-    from models import new_id
-    listener = {
-        "id": new_id(),
-        "lb_id": lb_id,
-        "port": port,
-        "protocol": protocol,
-        "target_group_id": body.get("target_group_id", ""),
-        # `or []`, not `.get(..., [])`: Terraform sends this key with an
-        # explicit JSON null when a caller leaves an Optional+Computed
-        # list attribute unset, so a plain default only fires when the
-        # key is absent entirely — it isn't here.
-        "routing_rules": body.get("routing_rules") or [],
-        "default_action": body.get("default_action", "forward"),
-        "status": "active",
-    }
-    lb.listeners.append(listener)
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(listener), 201
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        body = request.get_json(force=True) or {}
+        port = body.get("port")
+        if not port:
+            return problem(400, "Bad Request", "port is required")
+        try:
+            port = int(port)
+        except (ValueError, TypeError):
+            return problem(400, "Bad Request", "port must be an integer")
+        if port < 1 or port > 65535:
+            return problem(400, "Bad Request", "port must be between 1 and 65535")
+        protocol = body.get("protocol", "http")
+        if protocol.lower() not in ("http", "https", "tcp"):
+            return problem(400, "Bad Request", "protocol must be http, https or tcp")
+        if any(l["port"] == port for l in lb.listeners):
+            return problem(409, "Conflict", f"Listener on port {port} already exists")
+        from models import new_id
+        listener = {
+            "id": new_id(),
+            "lb_id": lb_id,
+            "port": port,
+            "protocol": protocol,
+            "target_group_id": body.get("target_group_id", ""),
+            # `or []`, not `.get(..., [])`: Terraform sends this key with an
+            # explicit JSON null when a caller leaves an Optional+Computed
+            # list attribute unset, so a plain default only fires when the
+            # key is absent entirely — it isn't here.
+            "routing_rules": body.get("routing_rules") or [],
+            "default_action": body.get("default_action", "forward"),
+            "status": "active",
+        }
+        lb.listeners.append(listener)
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(listener), 201
 
 
 @app.get("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
@@ -1461,39 +1465,41 @@ def get_listener(lb_id, listener_id):
 @app.put("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
 @require_auth
 def update_listener(lb_id, listener_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    lst = next((l for l in lb.listeners if l["id"] == listener_id), None)
-    if not lst:
-        return problem(404, "Not Found", f"Listener '{listener_id}' not found")
-    body = request.get_json(force=True) or {}
-    lst["target_group_id"] = body.get("target_group_id", lst.get("target_group_id", ""))
-    lst["routing_rules"]   = body.get("routing_rules") or lst.get("routing_rules") or []
-    lst["default_action"]  = body.get("default_action", lst.get("default_action", "forward"))
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(lst)
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        lst = next((l for l in lb.listeners if l["id"] == listener_id), None)
+        if not lst:
+            return problem(404, "Not Found", f"Listener '{listener_id}' not found")
+        body = request.get_json(force=True) or {}
+        lst["target_group_id"] = body.get("target_group_id", lst.get("target_group_id", ""))
+        lst["routing_rules"]   = body.get("routing_rules") or lst.get("routing_rules") or []
+        lst["default_action"]  = body.get("default_action", lst.get("default_action", "forward"))
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(lst)
 
 
 @app.delete("/v1/load-balancers/<lb_id>/listeners/<listener_id>")
 @require_auth
 def remove_listener(lb_id, listener_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    if not any(l["id"] == listener_id for l in lb.listeners):
-        return problem(404, "Not Found", f"Listener '{listener_id}' not found")
-    lb.listeners = [l for l in lb.listeners if l["id"] != listener_id]
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return "", 204
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        if not any(l["id"] == listener_id for l in lb.listeners):
+            return problem(404, "Not Found", f"Listener '{listener_id}' not found")
+        lb.listeners = [l for l in lb.listeners if l["id"] != listener_id]
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return "", 204
 
 
 # ---------------------------------------------------------------------------
@@ -1529,55 +1535,56 @@ def list_target_groups(lb_id):
 @app.post("/v1/load-balancers/<lb_id>/target-groups")
 @require_auth
 def create_target_group(lb_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    body = request.get_json(force=True) or {}
-    name = body.get("name", "").strip()
-    if not name:
-        return problem(400, "Bad Request", "name is required")
-    if not body.get("port"):
-        return problem(400, "Bad Request", "port is required")
-    if any(t["name"] == name for t in lb.target_groups):
-        return problem(409, "Conflict", f"Target group '{name}' already exists on this LB")
-    from models import new_id
-    # `or 30`/`or 2`, not `.get(key, 30)`: the Terraform provider's
-    # health_check is a nested object whose own per-field Computed
-    # defaults only apply when the *object itself* isn't null — leaving
-    # health_check out of a cloudcore_lb_target_group block entirely
-    # (the common case) means the provider sends its Go zero-value
-    # struct instead, i.e. explicit interval/threshold 0s, not an
-    # absent key .get()'s default could catch. 0 is never a valid
-    # health-check interval or threshold, so treating a falsy incoming
-    # value as "not really set" is safe here (found live: haproxy
-    # rejected the resulting config outright with "invalid value 0 for
-    # argument 'inter'" — an F-092-adjacent target group came up with
-    # zero real backends, then with an interval that broke every
-    # backend on the whole LB, while wiring the missing backend
-    # registration step into examples/load-balanced-web).
-    hc = body.get("health_check", {})
-    tg = {
-        "id": new_id(),
-        "lb_id": lb_id,
-        "name": name,
-        "port": int(body["port"]),
-        "protocol": body.get("protocol", "http").lower(),
-        "targets": body.get("targets") or [],
-        "health_check": {
-            "path": hc.get("path") or "/",
-            "interval": int(hc.get("interval") or 30),
-            "healthy_threshold": int(hc.get("healthy_threshold") or 2),
-            "unhealthy_threshold": int(hc.get("unhealthy_threshold") or 2),
-        },
-        "status": "active",
-    }
-    lb.target_groups.append(tg)
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(tg), 201
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        body = request.get_json(force=True) or {}
+        name = body.get("name", "").strip()
+        if not name:
+            return problem(400, "Bad Request", "name is required")
+        if not body.get("port"):
+            return problem(400, "Bad Request", "port is required")
+        if any(t["name"] == name for t in lb.target_groups):
+            return problem(409, "Conflict", f"Target group '{name}' already exists on this LB")
+        from models import new_id
+        # `or 30`/`or 2`, not `.get(key, 30)`: the Terraform provider's
+        # health_check is a nested object whose own per-field Computed
+        # defaults only apply when the *object itself* isn't null — leaving
+        # health_check out of a cloudcore_lb_target_group block entirely
+        # (the common case) means the provider sends its Go zero-value
+        # struct instead, i.e. explicit interval/threshold 0s, not an
+        # absent key .get()'s default could catch. 0 is never a valid
+        # health-check interval or threshold, so treating a falsy incoming
+        # value as "not really set" is safe here (found live: haproxy
+        # rejected the resulting config outright with "invalid value 0 for
+        # argument 'inter'" — an F-092-adjacent target group came up with
+        # zero real backends, then with an interval that broke every
+        # backend on the whole LB, while wiring the missing backend
+        # registration step into examples/load-balanced-web).
+        hc = body.get("health_check", {})
+        tg = {
+            "id": new_id(),
+            "lb_id": lb_id,
+            "name": name,
+            "port": int(body["port"]),
+            "protocol": body.get("protocol", "http").lower(),
+            "targets": body.get("targets") or [],
+            "health_check": {
+                "path": hc.get("path") or "/",
+                "interval": int(hc.get("interval") or 30),
+                "healthy_threshold": int(hc.get("healthy_threshold") or 2),
+                "unhealthy_threshold": int(hc.get("unhealthy_threshold") or 2),
+            },
+            "status": "active",
+        }
+        lb.target_groups.append(tg)
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(tg), 201
 
 
 @app.get("/v1/load-balancers/<lb_id>/target-groups/<tg_id>")
@@ -1595,107 +1602,111 @@ def get_target_group(lb_id, tg_id):
 @app.put("/v1/load-balancers/<lb_id>/target-groups/<tg_id>")
 @require_auth
 def update_target_group(lb_id, tg_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    tg = _find_tg(lb, tg_id)
-    if not tg:
-        return problem(404, "Not Found", f"Target group '{tg_id}' not found")
-    body = request.get_json(force=True) or {}
-    tg["name"]    = body.get("name", tg["name"])
-    tg["port"]    = int(body.get("port", tg["port"]))
-    tg["protocol"] = body.get("protocol", tg["protocol"])
-    tg["targets"] = body.get("targets", tg["targets"])
-    if "health_check" in body:
-        # Same "or", not ".get(key, existing)" reasoning as create_target_group:
-        # a falsy incoming value (the provider's zero-value struct sent for
-        # an unconfigured health_check) means fall back, not "explicitly
-        # wants 0" — 0 is never valid for any of these fields.
-        # Chained `or`s all the way to the literal default, not a single
-        # fallback to the stored value: that value can itself already be
-        # a stale 0 from before this fix (this exact PUT is what's used
-        # to force a stuck-at-0 target group back to a sane value).
-        hc = body["health_check"]
-        tg["health_check"] = {
-            "path": hc.get("path") or tg["health_check"].get("path") or "/",
-            "interval": int(hc.get("interval") or tg["health_check"].get("interval") or 30),
-            "healthy_threshold": int(hc.get("healthy_threshold") or tg["health_check"].get("healthy_threshold") or 2),
-            "unhealthy_threshold": int(hc.get("unhealthy_threshold") or tg["health_check"].get("unhealthy_threshold") or 2),
-        }
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(tg)
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        tg = _find_tg(lb, tg_id)
+        if not tg:
+            return problem(404, "Not Found", f"Target group '{tg_id}' not found")
+        body = request.get_json(force=True) or {}
+        tg["name"]    = body.get("name", tg["name"])
+        tg["port"]    = int(body.get("port", tg["port"]))
+        tg["protocol"] = body.get("protocol", tg["protocol"])
+        tg["targets"] = body.get("targets", tg["targets"])
+        if "health_check" in body:
+            # Same "or", not ".get(key, existing)" reasoning as create_target_group:
+            # a falsy incoming value (the provider's zero-value struct sent for
+            # an unconfigured health_check) means fall back, not "explicitly
+            # wants 0" — 0 is never valid for any of these fields.
+            # Chained `or`s all the way to the literal default, not a single
+            # fallback to the stored value: that value can itself already be
+            # a stale 0 from before this fix (this exact PUT is what's used
+            # to force a stuck-at-0 target group back to a sane value).
+            hc = body["health_check"]
+            tg["health_check"] = {
+                "path": hc.get("path") or tg["health_check"].get("path") or "/",
+                "interval": int(hc.get("interval") or tg["health_check"].get("interval") or 30),
+                "healthy_threshold": int(hc.get("healthy_threshold") or tg["health_check"].get("healthy_threshold") or 2),
+                "unhealthy_threshold": int(hc.get("unhealthy_threshold") or tg["health_check"].get("unhealthy_threshold") or 2),
+            }
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(tg)
 
 
 @app.delete("/v1/load-balancers/<lb_id>/target-groups/<tg_id>")
 @require_auth
 def delete_target_group(lb_id, tg_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    if not _find_tg(lb, tg_id):
-        return problem(404, "Not Found", f"Target group '{tg_id}' not found")
-    in_use = [l for l in lb.listeners
-              if l.get("target_group_id") == tg_id
-              or any(r.get("target_group_id") == tg_id for r in (l.get("routing_rules") or []))]
-    if in_use:
-        return problem(409, "Conflict",
-            f"Target group '{tg_id}' is referenced by {len(in_use)} listener(s) — remove references first")
-    lb.target_groups = [t for t in lb.target_groups if t["id"] != tg_id]
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return "", 204
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        if not _find_tg(lb, tg_id):
+            return problem(404, "Not Found", f"Target group '{tg_id}' not found")
+        in_use = [l for l in lb.listeners
+                  if l.get("target_group_id") == tg_id
+                  or any(r.get("target_group_id") == tg_id for r in (l.get("routing_rules") or []))]
+        if in_use:
+            return problem(409, "Conflict",
+                f"Target group '{tg_id}' is referenced by {len(in_use)} listener(s) — remove references first")
+        lb.target_groups = [t for t in lb.target_groups if t["id"] != tg_id]
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return "", 204
 
 
 @app.put("/v1/load-balancers/<lb_id>/health-check")
 @require_auth
 def set_health_check(lb_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    body = request.get_json(force=True) or {}
-    protocol = body.get("protocol", "HTTP").upper()
-    if protocol not in ("HTTP", "TCP"):
-        return problem(400, "Bad Request", "protocol must be HTTP or TCP")
-    interval = body.get("interval", 30)
-    try:
-        interval = int(interval)
-    except (ValueError, TypeError):
-        return problem(400, "Bad Request", "interval must be an integer")
-    lb.health_check = {
-        "protocol": protocol,
-        "path": body.get("path", "/") if protocol == "HTTP" else "",
-        "interval": interval,
-        "healthy_threshold": int(body.get("healthy_threshold", 2)),
-        "unhealthy_threshold": int(body.get("unhealthy_threshold", 3)),
-    }
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return jsonify(lb.health_check), 200
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        body = request.get_json(force=True) or {}
+        protocol = body.get("protocol", "HTTP").upper()
+        if protocol not in ("HTTP", "TCP"):
+            return problem(400, "Bad Request", "protocol must be HTTP or TCP")
+        interval = body.get("interval", 30)
+        try:
+            interval = int(interval)
+        except (ValueError, TypeError):
+            return problem(400, "Bad Request", "interval must be an integer")
+        lb.health_check = {
+            "protocol": protocol,
+            "path": body.get("path", "/") if protocol == "HTTP" else "",
+            "interval": interval,
+            "healthy_threshold": int(body.get("healthy_threshold", 2)),
+            "unhealthy_threshold": int(body.get("unhealthy_threshold", 3)),
+        }
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return jsonify(lb.health_check), 200
 
 
 @app.delete("/v1/load-balancers/<lb_id>/health-check")
 @require_auth
 def delete_health_check(lb_id):
-    lb = store.get_lb(lb_id)
-    if not lb:
-        return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
-    lb.health_check = {}
-    try:
-        lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
-    except Exception as e:
-        app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
-    store.put_lb(lb)
-    return "", 204
+    with store.lb_lock(lb_id):
+        lb = store.get_lb(lb_id)
+        if not lb:
+            return problem(404, "Not Found", f"Load balancer '{lb_id}' not found")
+        lb.health_check = {}
+        try:
+            lb_backend.reload(lb, vpc_instances=store.list_instances_by_vpc(lb.vpc_id))
+        except Exception as e:
+            app.logger.error("HAProxy reload failed for %s: %s", lb_id, e)
+        store.put_lb(lb)
+        return "", 204
 
 
 @app.get("/v1/load-balancers/<lb_id>/health")

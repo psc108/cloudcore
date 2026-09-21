@@ -46,7 +46,15 @@ import paramiko
 import websockets
 import websockets.legacy.server
 
-WS_HOST = "127.0.0.1"
+# verify_proxy.py's own LB-facing convention, not loopback: HAProxy runs
+# on the CloudCore host itself and reaches this service over the bridge
+# at the coordinator's real private_ip:TERMINAL_PORT (api/lb.py resolves
+# a bridge-mode target group's server address from inst.private_ip, never
+# 127.0.0.1) -- bound to loopback only, every LB health check and real
+# /terminal request got a real "connection refused" from off-box, which
+# is exactly what was found live once the target group's health-check
+# path itself was fixed to stop masking this as a 426-vs-200 issue.
+WS_HOST = "0.0.0.0"
 WS_PORT = int(os.environ.get("TERMINAL_PORT", "8622"))
 
 FC_BIN = "/opt/firecracker/firecracker"
@@ -382,9 +390,27 @@ async def _terminal_handler(websocket):
             _client_active[ip] = max(0, _client_active.get(ip, 1) - 1)
 
 
+async def _health_check(path, request_headers):
+    # HAProxy's target-group health check (api/lb.py's own httpchk, plain
+    # "GET /health" with no Upgrade header) hits this service directly --
+    # left unhandled, every plain HTTP request falls through to the
+    # websockets library's own handshake rejection, a 426 Upgrade
+    # Required, which HAProxy correctly reads as "unhealthy" and marks
+    # the whole backend down. Found live: exactly that, blocking every
+    # request through the LB despite the WS service itself being fine.
+    # Short-circuit only non-upgrade requests to /health; anything else
+    # (including a real WS handshake on /terminal) falls through
+    # unchanged by returning None.
+    if path == "/health" and request_headers.get("Upgrade", "").lower() != "websocket":
+        return (200, [("Content-Type", "text/plain")], b"ok\n")
+    return None
+
+
 async def _main():
     os.makedirs(SESSION_DIR, mode=0o700, exist_ok=True)
-    async with websockets.legacy.server.serve(_terminal_handler, WS_HOST, WS_PORT):
+    async with websockets.legacy.server.serve(
+        _terminal_handler, WS_HOST, WS_PORT, process_request=_health_check
+    ):
         print(f"Sandbox terminal WS server on ws://{WS_HOST}:{WS_PORT}", flush=True)
         await asyncio.Future()
 

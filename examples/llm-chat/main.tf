@@ -218,6 +218,18 @@ resource "cloudcore_lb_target_group" "terminal" {
   port     = var.terminal_port
   protocol = "http"
 
+  # sandbox_terminal.py is a WebSocket-only service -- a plain GET / (the
+  # target group's own default health-check path) never completes the WS
+  # handshake, so the websockets library correctly answers it with a 426
+  # Upgrade Required. HAProxy's httpchk reads that as unhealthy and marks
+  # this whole backend down, 503-ing every real /terminal request even
+  # though the service itself is fine. sandbox_terminal.py's own
+  # process_request hook special-cases exactly this path to answer a
+  # plain 200 instead, but only for /health specifically.
+  health_check = {
+    path = "/health"
+  }
+
   targets = [
     {
       instance_id = module.coordinator.instance_ids_by_key["01"]

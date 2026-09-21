@@ -108,7 +108,22 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
         hc_opts = ""
         if hc and mode == "http" and hc.get("path"):
             hc_opts = (
-                f"    option httpchk GET {hc.get('path', '/')}\n"
+                f"    option httpchk\n"
+                # `option httpchk GET <path>` (no explicit version) sends a
+                # bare HTTP/1.0 request line. Ordinary stdlib HTTP servers
+                # (verify_proxy.py, llama-server) tolerate that fine, but
+                # found live: websockets 16's own request parser
+                # (sandbox_terminal.py's health endpoint) rejects HTTP/1.0
+                # outright with "unsupported HTTP version", a 400 that
+                # HAProxy reads as unhealthy and marks the whole backend
+                # down — even though the exact same request over HTTP/1.1
+                # succeeds. `http-check send` (haproxy 2.x's replacement
+                # for the old one-line `option httpchk GET <path>` form)
+                # lets the version and Host header be stated explicitly,
+                # so this is correct for any HTTP/1.1-only backend, not
+                # just this one.
+                f"    http-check send meth GET uri {hc.get('path', '/')} "
+                f"ver HTTP/1.1 hdr Host localhost\n"
                 f"    default-server inter {hc.get('interval', 30)}s "
                 f"rise {hc.get('healthy_threshold', 2)} "
                 f"fall {hc.get('unhealthy_threshold', 3)}\n"
@@ -192,8 +207,12 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
     hc = lb.health_check or {}
     hc_opts = ""
     if hc and mode == "http":
+        # Same HTTP/1.1-explicit form as the target-group health check
+        # above, for the same reason — see that comment.
         hc_opts = (
-            f"    option httpchk GET {hc.get('path', '/')}\n"
+            f"    option httpchk\n"
+            f"    http-check send meth GET uri {hc.get('path', '/')} "
+            f"ver HTTP/1.1 hdr Host localhost\n"
             f"    default-server inter {hc.get('interval', 30)}s "
             f"rise {hc.get('healthy_threshold', 2)} "
             f"fall {hc.get('unhealthy_threshold', 3)}\n"
