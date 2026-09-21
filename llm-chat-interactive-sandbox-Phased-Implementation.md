@@ -550,7 +550,7 @@ suite re-run clean throughout.
 
 ---
 
-## Stage 5 — Firecracker sandbox shell + network access (Stage A of 2)
+## Stage 5 — Firecracker sandbox shell + network access
 
 The user collapsed three remaining out-of-scope items into one
 combined ask: *"i think all of those but i'd particularly like to see
@@ -630,10 +630,83 @@ Live testing caught what static review didn't:
 
 Both fixes verified live after applying them, not just reasoned about.
 
-**Stage B (not started)**: the WebSocket terminal service
-(`sandbox_terminal.py`, modeled on `api/terminal.py`'s proven WS↔SSH
-bridge), per-session microVM lifecycle automation via `jailer`, LB
-routing, and the browser `xterm.js` panel.
+### Stage B — the WebSocket terminal service + browser UI
+
+`examples/llm-chat/files/sandbox_terminal.py` — a new, separate
+systemd service (`sandbox-terminal.service`), modeled directly on
+`api/terminal.py`'s proven WS↔SSH bridge shape, but owning the full
+per-session Firecracker lifecycle instead of connecting to an existing
+CloudCore instance: on each WS connection, checks a per-IP concurrency
+cap, boots a fresh microVM (a private rootfs copy, a fresh ephemeral
+ed25519 keypair delivered via MMDS — never baked into any image),
+bridges the shell, and tears everything down completely when the
+connection ends. Deliberately **not** run through `jailer` in this
+first pass — a host-side hardening layer on top of the VMM process
+itself, not what makes the actual guest-to-host isolation boundary
+work (that's the KVM guest kernel + Stage A's own iptables policy) —
+named explicitly as a follow-up, not a silent gap. LB wiring reuses the
+same loopback listener via a new path routing rule
+(`/terminal*` → a new target group on `terminal_port`), confirmed
+against the real provider source, not assumed. Browser side: a new
+Terminal panel in the sandbox page using `xterm.js` (already vendored
+for the Dashboard's own admin Terminal feature, reused as-is).
+
+### Verified live, 2026-09-21 (Stage B) — two more real bugs found by doing so
+
+Full end-to-end, multiple independent sessions, against the actual
+coordinator: real per-session microVM boot (~9-13s), real MMDS-
+delivered SSH key, real shell login as `student`, real command
+execution through the actual WebSocket bridge. Real internet egress
+and internal-address blocking both re-confirmed from *inside* a live
+interactive session (not just Stage A's one-shot smoke test) — a
+blocked-address `curl` correctly timed out (`rc=28`) from within a
+real bridged shell. Concurrency cap: the 5th/6th of 6 simultaneous
+connections correctly rejected with a clear capacity message while the
+first 4 booted under real contention. Teardown confirmed complete
+every time — zero leftover processes/TAP devices/session directories
+across many test sessions, including ones that disconnected mid-boot
+(bounded by the existing timeouts, not instant, but self-cleaning — a
+known minor latency gap, not a resource leak). Full existing local
+test suite re-run clean — zero regression to the untouched Run/Ask
+flow.
+
+Live testing again caught what review didn't:
+
+1. **jammy's own `python3-websockets` (9.1-1) is fundamentally broken
+   on jammy's own current Python 3.10.12** — it calls the removed
+   `asyncio.Lock(loop=...)` parameter, crashing every single WS
+   connection with a real `TypeError`. `api/terminal.py` never hit
+   this because it runs on a completely different host/Python (3.12,
+   pip-installed 17.0.1) — confirming the package *exists* in the
+   archive was never the same as confirming it *works* on the actual
+   target runtime. Fixed by vendoring `websockets` 16.1.1 (the newest
+   release still supporting Python 3.10, per PyPI's own metadata) as a
+   pinned `ARTIFACT_URLS` wheel, extracted via `python3 -m zipfile`
+   (no new apt dependency) into a `PYTHONPATH` the systemd unit points
+   at — same pinned-artifact convention as every other third-party
+   binary in this project.
+2. **Firecracker's MMDS returns a leaf string value JSON-quoted**
+   (literal surrounding double quotes) when the request sends
+   `Accept: application/json` — confirmed live via direct MMDS API
+   inspection and a real guest-side debug capture that the delivered
+   SSH key was landing in `authorized_keys` wrapped in quotes,
+   breaking every login. Fixed by omitting that header entirely
+   (MMDS's own IMDS-compatible plain-text format is exactly the raw
+   key line SSH expects). Also confirmed live and fixed: MMDS's
+   link-local address needs an explicit host-scope route inside the
+   guest (`ip route add 169.254.169.254 dev eth0`) — not reachable via
+   the normal default route alone.
+
+**Not yet done**: an actual `tofu apply` exercising the new LB
+`routing_rules` end-to-end through the real load balancer (blocked on
+not having this deployment's own `worker_peers` value outside the
+Dashboard's own Build Manager) — the WS service itself was instead
+verified directly against its loopback port, which is everything the
+LB rule needs to forward to correctly.
+
+**Known follow-ups, not silently deferred**: `jailer`-based host-side
+hardening for the VMM process (named above); pre-warming/pooling for
+faster boots; a slightly tighter mid-boot-disconnect cleanup path.
 
 ---
 
@@ -656,20 +729,26 @@ routing, and the browser `xterm.js` panel.
 - ~~A hard mid-generation interrupt for `/sandbox/ask`~~ — **done,
   Stage 4** (above).
 - ~~Server-side rate limiting~~ — **done, Stage 4** (above).
-- **Network access inside the sandbox.** ~~Confirmed live (Stage 3)
-  that `unshare --net` gives zero connectivity~~ — **in progress,
-  Stage 5**: the *existing* Python sandbox (Run/Ask) stays exactly as
-  network-less as before; a real, isolated internet path now exists
-  for the new Firecracker shell specifically (Stage A infra +
-  isolation live-verified above; Stage B wires it up to an actual
-  student-facing terminal).
-- **Giving the student their own raw interactive terminal.** ~~The
-  other branch of Stage 3's own "who drives it" decision — not
-  chosen~~ — **in progress, Stage 5**: now being built, additively —
-  the model-driven Ask flow is untouched, the terminal is a new,
-  separate capability sitting alongside it, not a replacement.
+- ~~**Network access inside the sandbox.**~~ — **done, Stage 5**: the
+  *existing* Python sandbox (Run/Ask) stays exactly as network-less as
+  before; a real, isolated internet path now exists for the new
+  Firecracker shell specifically, live-verified end-to-end (Stage A
+  infra + isolation, Stage B the actual student-facing terminal).
+- ~~**Giving the student their own raw interactive terminal.**~~ —
+  **done, Stage 5**: built additively — the model-driven Ask flow is
+  untouched, the terminal is a new, separate capability sitting
+  alongside it, not a replacement.
 - **Perfect "is it actually waiting for input" detection** (Stage 3).
   The quiet-period heuristic is real but imperfect — a script merely
   computing something slowly looks identical to one genuinely waiting
   on stdin. Documented as a known limitation, not solved by this
   stage.
+- **`jailer`-based host-side hardening for the Firecracker VMM process**
+  (Stage 5B). Firecracker currently runs directly as root — genuine
+  guest-to-host isolation is unaffected (that's the KVM guest kernel
+  boundary + Stage A's own iptables policy, both live-verified), but
+  `jailer`'s own chroot/uid-drop/cgroups would add a further layer of
+  protection against a hypothetical VMM-process-level compromise.
+  Deliberately deferred rather than debugged blind alongside the rest
+  of Stage 5B's own real, novel bugs — flagged as the next likely
+  hardening step, not silently dropped.
