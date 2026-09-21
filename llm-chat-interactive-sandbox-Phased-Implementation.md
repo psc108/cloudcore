@@ -550,20 +550,105 @@ suite re-run clean throughout.
 
 ---
 
+## Stage 5 — Firecracker sandbox shell + network access (Stage A of 2)
+
+The user collapsed three remaining out-of-scope items into one
+combined ask: *"i think all of those but i'd particularly like to see
+the student get a shell as well"*, then *"i'd like the sandbox to have
+network access yes but i don't want them to be able to jailbreak the
+sandbox and have access to anything else other than the sandbox and
+network"* — and explicitly deferred the isolation architecture:
+*"security isn't my strength... asking you for the best way to
+provide the closest to my requirements."*
+
+**Decision**: Firecracker microVMs, not a container sandbox — a real,
+separate guest kernel under KVM (confirmed live that nested KVM is
+available on the coordinator), not a shared-kernel boundary a
+persistent, network-connected shell has far more opportunity to probe
+than the existing bounded, network-less Python sandbox.
+
+Split into two sub-stages, matching this project's own build-verify-
+next-layer discipline. **This is Stage A only**: infra + the network
+isolation proof, live-verified, no WebSocket service or browser UI
+yet.
+
+**New**: `api/build-firecracker-rootfs.sh` — builds the golden guest
+rootfs (debootstrap, minimal Ubuntu 22.04, `sshd` + a passwordless-
+sudo `student` account, a one-shot boot unit fetching the session's own
+SSH key from Firecracker's MMDS — never baked into the image),
+following `build-package-repo.sh`'s own "throwaway CloudCore instance,
+build there, pull back" architecture. Deliberately not Firecracker's
+own quickstart demo image (a shared squashfs + a shared public demo
+key — wrong for a multi-tenant lab). Firecracker v1.17.0 + jailer and
+a pinned CI kernel, both downloaded and verified for real (the
+release's own `SHA256SUMS` checked against the actual bytes, a real
+`firecracker --version` run against the extracted binary).
+
+**Network isolation** (the actual security mechanism): a new
+coordinator-local bridge `fcbr0`, subnet `10.200.0.0/24`. `iptables`
+`MASQUERADE`s it out to the real internet; the `FORWARD` chain drops
+every RFC1918 destination before the general `ACCEPT` — deliberately
+never enumerating specific CloudCore ports/IPs, since that's brittle.
+`dnsmasq` serves DHCP+DNS for the subnet.
+
+### Verified live, 2026-09-21 — and two real bugs found by doing so
+
+Hand-booted one real microVM against the actual coordinator, SSH'd in
+with a throwaway per-session key (same delivery shape MMDS will use in
+Stage B), confirmed a real `student` account with working passwordless
+sudo. Positive: real HTTPS egress to two external sites, DNS via the
+coordinator's own `dnsmasq`. Negative (the actual bar): the microVM
+cannot reach the coordinator's own `verify-proxy` port, cannot reach
+the coordinator's own SSH on its real bridge address, cannot reach the
+CloudCore control-plane's examples-listener (`:8083`) or package
+mirror (`:8090`) — neither via HTTP nor a raw TCP connect. IPv6:
+confirmed the guest has no global IPv6 route at all, so there's
+nothing for the IPv4-only iptables model to miss as currently built.
+
+Live testing caught what static review didn't:
+
+1. The first INPUT-chain rule only blocked traffic to the
+   coordinator's `fcbr0` gateway address specifically. Live testing
+   found the coordinator's *other* address (its real bridge IP, a
+   different interface) was still fully reachable from the sandbox —
+   SSH included — because the kernel delivers INPUT-chain traffic
+   locally based on *any* locally-owned destination address, not just
+   the one the rule happened to name. Fixed by dropping the
+   destination filter entirely (INPUT-chain traffic is already
+   guaranteed local-destined by definition) plus an
+   `ESTABLISHED,RELATED` exception — which is also what makes the
+   coordinator's own outbound SSH into a microVM (Stage B's whole
+   terminal mechanism) work at all, since the original rule silently
+   dropped its own replies too.
+2. The MMDS-key-fetch script's `curl` call had no
+   `--connect-timeout`/`--max-time`, so a stalled fetch could hang for
+   tens of seconds per attempt across 20 retries — confirmed live this
+   stalls boot far past the intended ~5s budget. Also added an
+   explicit `exit 0`: a false `if` with no `else` was becoming the
+   script's own exit status, making systemd report a hard failure for
+   what's actually a correct, graceful "no key available" outcome.
+
+Both fixes verified live after applying them, not just reasoned about.
+
+**Stage B (not started)**: the WebSocket terminal service
+(`sandbox_terminal.py`, modeled on `api/terminal.py`'s proven WS↔SSH
+bridge), per-session microVM lifecycle automation via `jailer`, LB
+routing, and the browser `xterm.js` panel.
+
+---
+
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
 
 - **Non-Python code blocks.** The sandbox stays Python-only, for the
   same reason `run_sandboxed()` itself is Python-only today. Future
   work: per-language sandbox runners plus a language picker in the UI.
-- **Stronger isolation than same-VM `unshare`/`setrlimit`.** The
-  sandbox becoming the *primary*, higher-traffic interface — rather
-  than occasional inline chat verification — makes the case for
-  stronger isolation (a dedicated throwaway VM/container per run,
-  gVisor/nsjail, a tighter seccomp profile) somewhat stronger than it
-  was in Phase 1. Still deferred here, since the existing mechanism is
-  already live-proven and low-latency — flagged as the most likely
-  next real hardening step once this ships, not silently re-deferred
-  without comment.
+- **Stronger isolation than same-VM `unshare`/`setrlimit`.** ~~Still
+  deferred~~ — **superseded by Stage 5**: Firecracker microVMs are the
+  stronger isolation this item asked for, chosen specifically because
+  the sandbox becoming the *primary* interface (not just occasional
+  inline chat verification) raised the bar past what same-VM
+  `unshare`/`setrlimit` can honestly promise for a persistent,
+  network-connected shell.
 - **A portable local-capture client** (a student running a model on
   their own laptop, feeding the same central corpus). Still not
   built — the `source` field Phase 3 already designed for exactly this
@@ -571,14 +656,18 @@ suite re-run clean throughout.
 - ~~A hard mid-generation interrupt for `/sandbox/ask`~~ — **done,
   Stage 4** (above).
 - ~~Server-side rate limiting~~ — **done, Stage 4** (above).
-- **Network access inside the sandbox.** Confirmed live (Stage 3) that
-  `unshare --net` gives zero connectivity at all, not even loopback —
-  a real, strong existing safety property, deliberately left untouched
-  rather than reconsidered as part of broadening interactivity.
-- **Giving the student their own raw interactive terminal.** The other
-  branch of Stage 3's own "who drives it" decision — not chosen; the
-  model remains the one operating the sandbox as a tool, every real
-  command and result still shown to the student, not a black box.
+- **Network access inside the sandbox.** ~~Confirmed live (Stage 3)
+  that `unshare --net` gives zero connectivity~~ — **in progress,
+  Stage 5**: the *existing* Python sandbox (Run/Ask) stays exactly as
+  network-less as before; a real, isolated internet path now exists
+  for the new Firecracker shell specifically (Stage A infra +
+  isolation live-verified above; Stage B wires it up to an actual
+  student-facing terminal).
+- **Giving the student their own raw interactive terminal.** ~~The
+  other branch of Stage 3's own "who drives it" decision — not
+  chosen~~ — **in progress, Stage 5**: now being built, additively —
+  the model-driven Ask flow is untouched, the terminal is a new,
+  separate capability sitting alongside it, not a replacement.
 - **Perfect "is it actually waiting for input" detection** (Stage 3).
   The quiet-period heuristic is real but imperfect — a script merely
   computing something slowly looks identical to one genuinely waiting
