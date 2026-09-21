@@ -114,6 +114,8 @@ locals {
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
     sandbox_system_message   = var.sandbox_system_message
+    rate_limit_run_per_minute = var.rate_limit_run_per_minute
+    rate_limit_ask_per_10min  = var.rate_limit_ask_per_10min
     codemirror_core_js         = local.codemirror_core_js
     codemirror_core_css        = local.codemirror_core_css
     codemirror_theme_css       = local.codemirror_theme_css

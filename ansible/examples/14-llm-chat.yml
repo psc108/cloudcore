@@ -264,6 +264,15 @@
       happen a few times per script, not unlimited, so keep prompts
       short and avoid scripts that would need a long back-and-forth.
 
+    # Stage 4 — per-client rate limiting, keyed by the real client IP
+    # via X-Forwarded-For (examples/llm-chat's own LB sets option
+    # forwardfor, HTTP mode) — see verify_proxy.py's own _client_ip().
+    # Ask is far more expensive than Run (a real model generation plus
+    # sandboxed execution, possibly several fix rounds), hence the
+    # wider window and separate limit.
+    rate_limit_run_per_minute: 10
+    rate_limit_ask_per_10min: 10
+
   tasks:
     - name: Fail fast if worker_peers is empty
       ansible.builtin.fail:
@@ -398,6 +407,8 @@
           'examples_api_base': examples_api_base,
           'examples_ingestion_token': examples_ingestion_token,
           'sandbox_system_message': sandbox_system_message,
+          'rate_limit_run_per_minute': rate_limit_run_per_minute,
+          'rate_limit_ask_per_10min': rate_limit_ask_per_10min,
           'codemirror_core_js': codemirror_core_js,
           'codemirror_core_css': codemirror_core_css,
           'codemirror_theme_css': codemirror_theme_css,

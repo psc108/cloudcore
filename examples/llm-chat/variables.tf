@@ -238,6 +238,23 @@ variable "sandbox_system_message" {
   default     = "You are a lab coding assistant. Only discuss the Python code the student has provided in this conversation. If asked something unrelated to that code or to this lab exercise, politely decline and redirect the student back to their code. When suggesting a fix, provide the complete corrected script in a single fenced python code block. Code you write runs in a real sandbox that supports interactive input() calls — if a script you wrote is waiting for input, you will be shown exactly what it has printed so far and asked what to provide; reply with ONLY a fenced ```stdin block containing exactly the one line to send. This can happen a few times per script, not unlimited, so keep prompts short and avoid scripts that would need a long back-and-forth."
 }
 
+# Stage 4 — per-client rate limiting for the sandbox's own /sandbox/run
+# and /sandbox/ask endpoints, rolled up from the Phase 4 doc's own
+# "Explicitly out of scope" list. Keyed by the real client IP via
+# X-Forwarded-For, which examples/llm-chat's own LB sets (option
+# forwardfor, HTTP mode) — see verify_proxy.py's own _client_ip().
+variable "rate_limit_run_per_minute" {
+  description = "Maximum POST /sandbox/run requests a single client IP may make per rolling 60-second window before getting a 429. Guards against one student's script loop or a runaway client hammering the sandbox."
+  type        = number
+  default     = 10
+}
+
+variable "rate_limit_ask_per_10min" {
+  description = "Maximum POST /sandbox/ask requests a single client IP may make per rolling 10-minute window before getting a 429. Ask is far more expensive than Run (a real model generation plus sandboxed execution, possibly several fix rounds), so its window and limit are both wider than run's."
+  type        = number
+  default     = 10
+}
+
 # --- Grounded code verification ----------------------------------------
 # Per direct request: prompting alone couldn't be trusted to prevent
 # hallucination ("the lab students can't be allowed to walk away with

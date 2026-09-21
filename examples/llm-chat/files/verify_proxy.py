@@ -178,6 +178,25 @@ INTERACTIVE_QUIET_S = 3
 INTERACTIVE_MAX_EXCHANGES = 3
 INTERACTIVE_MAX_WALL_S = 1800
 
+# Stage 4 -- per-client rate limiting + a hard interrupt, rolled up
+# from the Phase 4 doc's own "Explicitly out of scope" list. Keyed by
+# the REAL client IP, not the TCP peer address: examples/llm-chat's
+# own LB runs in HTTP mode with `option forwardfor` (confirmed in
+# api/lb.py) specifically so this works -- without it every request
+# would appear to come from the LB itself, one shared IP for every
+# student, making per-IP limiting meaningless.
+RATE_LIMIT_RUN_PER_MINUTE = int(os.environ.get("RATE_LIMIT_RUN_PER_MINUTE", "10"))
+RATE_LIMIT_ASK_PER_10MIN = int(os.environ.get("RATE_LIMIT_ASK_PER_10MIN", "10"))
+
+# One shared, thread-safe registry: per-IP request-time history (for
+# the rate limits above), whether that IP currently has an /sandbox/ask
+# in flight (the actual concurrency cap -- one at a time, per IP; a
+# real student only ever has one live question, and this doubles as
+# the key an interrupt request needs no other identifier to find), and
+# the threading.Event a /sandbox/interrupt call sets to stop it.
+_client_lock = threading.Lock()
+_client_state: dict[str, dict] = {}
+
 
 def extract_python_code(text: str) -> str | None:
     """First fenced code block that's explicitly tagged python/py, or
@@ -273,7 +292,7 @@ def run_sandboxed(code: str) -> dict:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def run_sandboxed_interactive(code: str, provide_input) -> dict:
+def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
     """Like run_sandboxed(), same isolation exactly (same unshare +
     unprivileged user + resource.setrlimit CPU/memory/proc/fsize
     limits -- CPU-time based, not wall-clock, so still correctly
@@ -291,15 +310,20 @@ def run_sandboxed_interactive(code: str, provide_input) -> dict:
     time regardless of what provide_input decides -- enforced here,
     not left to the caller's own good behavior.
 
+    `interrupt` (a threading.Event), if given, is checked every poll
+    cycle (~0.5s) regardless of what the process is doing -- a student
+    Stop request kills it promptly even mid-run, not just at the next
+    pause point.
+
     Returns {"transcript", "stdout", "stderr", "exit_code",
-    "timed_out", "exchanges"}. `transcript` interleaves stdout/stderr
-    in the real order they arrived, with an inline marker at each
-    point input was actually provided -- the honest, readable record
-    of what really happened, not just two separate buffers with the
-    ordering lost. `timed_out` here means the overall session budget
-    (exchanges or wall-clock) was exceeded, not a per-read timeout --
-    the process may have been legitimately still working when stopped.
-    """
+    "timed_out", "interrupted", "exchanges"}. `transcript` interleaves
+    stdout/stderr in the real order they arrived, with an inline
+    marker at each point input was actually provided -- the honest,
+    readable record of what really happened, not just two separate
+    buffers with the ordering lost. `timed_out` means the overall
+    session budget (exchanges or wall-clock) was exceeded; `interrupted`
+    means a student explicitly stopped it -- distinct so the student is
+    told honestly which one happened, never conflated."""
     tmpdir = tempfile.mkdtemp(prefix="verify-")
     script_path = os.path.join(tmpdir, "script.py")
     uid, gid = _sandbox_uid_gid()
@@ -308,6 +332,7 @@ def run_sandboxed_interactive(code: str, provide_input) -> dict:
     transcript: list[str] = []
     exchanges = 0
     session_timed_out = False
+    was_interrupted = False
     try:
         with open(script_path, "w") as f:
             f.write(code)
@@ -344,6 +369,9 @@ def run_sandboxed_interactive(code: str, provide_input) -> dict:
         fds = [proc.stdout, proc.stderr]
 
         while True:
+            if interrupt is not None and interrupt.is_set():
+                was_interrupted = True
+                break
             if time.monotonic() - start > INTERACTIVE_MAX_WALL_S:
                 session_timed_out = True
                 break
@@ -406,7 +434,9 @@ def run_sandboxed_interactive(code: str, provide_input) -> dict:
                 buf.append(text)
                 transcript.append(text)
 
-        if session_timed_out:
+        if was_interrupted:
+            transcript.append("\n[Interactive session stopped by the student]\n")
+        elif session_timed_out:
             transcript.append(
                 f"\n[Interactive session ended: exceeded its "
                 f"{INTERACTIVE_MAX_EXCHANGES}-exchange / "
@@ -419,6 +449,7 @@ def run_sandboxed_interactive(code: str, provide_input) -> dict:
             "stderr": "".join(stderr_parts)[:MAX_OUTPUT_CHARS],
             "exit_code": proc.returncode,
             "timed_out": session_timed_out,
+            "interrupted": was_interrupted,
             "exchanges": exchanges,
         }
     finally:
@@ -457,7 +488,9 @@ def format_interactive_verification_block(result: dict, final: bool = True) -> s
     if result["transcript"].strip():
         lines.append("**session transcript:**\n```\n" + result["transcript"].rstrip() + "\n```\n")
     lines.append(f"**exit code:** {result['exit_code']}, **inputs provided:** {result['exchanges']}\n")
-    if not passed and final:
+    if result.get("interrupted"):
+        lines.append("\n_Stopped at your request._\n")
+    elif not passed and final:
         lines.append(
             "\n_This code did not run successfully. You can ask for "
             "another attempt in your next message._\n"
@@ -465,8 +498,18 @@ def format_interactive_verification_block(result: dict, final: bool = True) -> s
     return "".join(lines)
 
 
+class Interrupted(Exception):
+    """Raised by _call_llama_direct() (and treated equivalently by
+    run_sandboxed_interactive()) when a student's own
+    POST /sandbox/interrupt stopped this mid-flight. A plain Exception
+    subclass, not a special control-flow type -- every existing caller
+    already catches Exception generically for "failed to generate" /
+    "no input provided", and this reads sensibly through that same
+    path; no new handling required at most call sites."""
+
+
 def _call_llama_direct(messages: list, heartbeat=None, timeout: int = 3600,
-                        max_tokens: int | None = None) -> str:
+                        max_tokens: int | None = None, interrupt=None) -> str:
     """A fresh, non-streaming completion direct to llama-server's own
     internal port -- deliberately never back through this proxy itself
     (would re-enter this same interception logic pointlessly and risks
@@ -474,6 +517,16 @@ def _call_llama_direct(messages: list, heartbeat=None, timeout: int = 3600,
     requests. `heartbeat`, if given, is called roughly every
     HEARTBEAT_INTERVAL_S while this blocks, to keep the browser's own
     SSE connection alive during a slow internal generation.
+
+    `interrupt`, if given (a threading.Event), is polled every second
+    -- independent of HEARTBEAT_INTERVAL_S, so a Stop button feels
+    responsive rather than waiting a full heartbeat cycle -- and closes
+    the upstream connection the moment it's set, unblocking the
+    otherwise-blocking read and raising Interrupted. llama-server
+    itself has no cancellation endpoint, so the model's own generation
+    keeps computing server-side regardless; this only stops US from
+    waiting on/relaying it further, same as an ordinary dropped
+    connection already does today.
 
     `timeout` defaults to a full hour, not a few minutes: this is a
     non-streaming request, so the socket sits waiting for the ENTIRE
@@ -487,20 +540,36 @@ def _call_llama_direct(messages: list, heartbeat=None, timeout: int = 3600,
     own effectively-unbounded default (n_predict=-1), making a fix
     round's own real duration unpredictable."""
     stop = threading.Event()
+    conn_holder: dict = {}
+    was_interrupted = threading.Event()
 
     def _beat():
-        while not stop.wait(HEARTBEAT_INTERVAL_S):
-            try:
-                heartbeat()
-            except Exception:
+        elapsed = 0.0
+        while True:
+            if stop.wait(1.0):
                 return
+            if interrupt is not None and interrupt.is_set():
+                was_interrupted.set()
+                c = conn_holder.get("conn")
+                if c is not None:
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
+                return
+            elapsed += 1.0
+            if heartbeat is not None and elapsed >= HEARTBEAT_INTERVAL_S:
+                elapsed = 0.0
+                try:
+                    heartbeat()
+                except Exception:
+                    return
 
-    beat_thread = None
-    if heartbeat is not None:
-        beat_thread = threading.Thread(target=_beat, daemon=True)
-        beat_thread.start()
+    beat_thread = threading.Thread(target=_beat, daemon=True)
+    beat_thread.start()
     try:
         conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=timeout)
+        conn_holder["conn"] = conn
         payload = {"messages": messages, "temperature": 0.2, "stream": False}
         if max_tokens:
             payload["max_tokens"] = max_tokens
@@ -512,13 +581,16 @@ def _call_llama_direct(messages: list, heartbeat=None, timeout: int = 3600,
         data = json.loads(resp.read())
         conn.close()
         return data["choices"][0]["message"]["content"]
+    except (http.client.HTTPException, OSError):
+        if was_interrupted.is_set():
+            raise Interrupted("stopped by the student")
+        raise
     finally:
         stop.set()
-        if beat_thread is not None:
-            beat_thread.join(timeout=2)
+        beat_thread.join(timeout=2)
 
 
-def _make_input_provider(messages: list, heartbeat, max_tokens):
+def _make_input_provider(messages: list, heartbeat, max_tokens, interrupt=None):
     """Returns a provide_input callback for run_sandboxed_interactive():
     each call asks the model, grounded in the REAL transcript so far
     (not a summary), what to supply -- via the same small ```stdin
@@ -526,7 +598,9 @@ def _make_input_provider(messages: list, heartbeat, max_tokens):
     interactive counterpart to extract_python_code(). Returns None
     (stop the session) if the model's reply doesn't contain one -- the
     model choosing not to continue, same shape the fix loop already
-    uses for "no runnable code block found". `messages` is mutated in
+    uses for "no runnable code block found" -- and also if `interrupt`
+    fires mid-call (Interrupted from _call_llama_direct(), caught here
+    like any other failure-to-generate). `messages` is mutated in
     place (appended to) on every call, so a script that asks for
     several separate inputs gets each one grounded in the full real
     conversation so far, not just the original snapshot."""
@@ -541,7 +615,8 @@ def _make_input_provider(messages: list, heartbeat, max_tokens):
         )
         messages.append({"role": "user", "content": prompt})
         try:
-            reply = _call_llama_direct(messages, heartbeat=heartbeat, max_tokens=max_tokens)
+            reply = _call_llama_direct(messages, heartbeat=heartbeat, max_tokens=max_tokens,
+                                        interrupt=interrupt)
         except Exception:
             return None
         messages.append({"role": "assistant", "content": reply})
@@ -550,7 +625,7 @@ def _make_input_provider(messages: list, heartbeat, max_tokens):
 
 
 def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
-                          max_tokens: int | None = None) -> tuple[str, dict]:
+                          max_tokens: int | None = None, interrupt=None) -> tuple[str, dict]:
     """Runs the initial sandboxed execution and, if it fails, up to
     VERIFY_MAX_FIX_ROUNDS grounded fix attempts (Phase 2) -- each one
     grounded in the REAL traceback from the attempt before it, not
@@ -574,11 +649,18 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
     own field names): the initial code/result always, plus the LAST
     fix round actually attempted (if any) -- the DB schema holds one
     fix slot, representing where the chain ended up, not every
-    intermediate round."""
+    intermediate round.
+
+    Stage 4: `interrupt` (a threading.Event), if given, is threaded
+    through every sandboxed execution and every internal model call
+    below, and checked again before starting each new fix round --
+    a student's own POST /sandbox/interrupt stops this at its next
+    real check point rather than only between whole turns."""
     messages = list(original_messages)
     messages.append({"role": "assistant", "content": f"```python\n{code}\n```"})
 
-    result = run_sandboxed_interactive(code, _make_input_provider(messages, heartbeat, max_tokens))
+    result = run_sandboxed_interactive(
+        code, _make_input_provider(messages, heartbeat, max_tokens, interrupt), interrupt=interrupt)
     capture = {
         "generated_code": code,
         "exec_stdout": result["stdout"], "exec_stderr": result["stderr"],
@@ -591,6 +673,10 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
     blocks = [format_interactive_verification_block(result, final=False)]
 
     for round_num in range(1, VERIFY_MAX_FIX_ROUNDS + 1):
+        if interrupt is not None and interrupt.is_set():
+            blocks.append("\n\n---\n### Stopped at your request\n")
+            break
+
         is_last_round = round_num == VERIFY_MAX_FIX_ROUNDS
         fix_prompt = (
             "This code was executed and failed with the following real "
@@ -601,7 +687,8 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
         messages.append({"role": "user", "content": fix_prompt})
 
         try:
-            fix_text = _call_llama_direct(messages, heartbeat=heartbeat, max_tokens=max_tokens)
+            fix_text = _call_llama_direct(messages, heartbeat=heartbeat, max_tokens=max_tokens,
+                                           interrupt=interrupt)
         except Exception as e:
             blocks.append(
                 f"\n\n---\n### Fix attempt {round_num} of {VERIFY_MAX_FIX_ROUNDS} "
@@ -622,7 +709,8 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
             )
             break
 
-        result = run_sandboxed_interactive(new_code, _make_input_provider(messages, heartbeat, max_tokens))
+        result = run_sandboxed_interactive(
+            new_code, _make_input_provider(messages, heartbeat, max_tokens, interrupt), interrupt=interrupt)
         passed = not result["timed_out"] and result["exit_code"] == 0
         blocks.append(format_interactive_verification_block(result, final=(passed or is_last_round)))
         code = new_code
@@ -760,6 +848,7 @@ footer a { color: #2a5db0; }
   <div class="row">
     <input id="question" type="text" placeholder="e.g. write a function that checks if a number is prime — or: why does this fail on an empty list?" onkeydown="if(event.key==='Enter')askModel()">
     <button id="askBtn" class="primary" onclick="askModel()">Ask</button>
+    <button id="stopBtn" onclick="stopAsk()" disabled>Stop</button>
     <span id="askStatus" class="status"></span>
   </div>
 </div>
@@ -825,6 +914,14 @@ async function runCode() {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({code: cm.getValue()}),
     });
+    if (resp.status === 429) {
+      // Rate-limit/concurrency responses are plain text, not JSON --
+      // parsing them as JSON below would throw and mask the real,
+      // useful message (e.g. "limit is 10 per minute") behind a
+      // generic "Request failed" from the outer catch.
+      status.textContent = await resp.text();
+      return;
+    }
     const data = await resp.json();
     if (!resp.ok) { status.textContent = 'Error: ' + (data.error || resp.status); return; }
     const passed = !data.timed_out && data.exit_code === 0;
@@ -842,8 +939,20 @@ async function runCode() {
   }
 }
 
+async function stopAsk() {
+  // Best-effort -- see _handle_sandbox_interrupt()'s own docstring:
+  // this stops US from waiting on/relaying the response further, not
+  // the model's own generation on the coordinator, which has no
+  // cancellation endpoint. The streamed response itself (awaited in
+  // askModel() below) is what reports whether it actually landed.
+  const stopBtn = document.getElementById('stopBtn');
+  stopBtn.disabled = true;
+  try { await fetch('/sandbox/interrupt', {method: 'POST'}); } catch (e) { /* best-effort */ }
+}
+
 async function askModel() {
   const btn = document.getElementById('askBtn');
+  const stopBtn = document.getElementById('stopBtn');
   const qEl = document.getElementById('question');
   const status = document.getElementById('askStatus');
   const question = qEl.value.trim();
@@ -855,6 +964,7 @@ async function askModel() {
   renderTranscript();
   qEl.value = '';
   btn.disabled = true;
+  stopBtn.disabled = false;
   status.textContent = 'Thinking…';
 
   // Placeholder model bubble, filled in as tokens stream -- textContent
@@ -877,8 +987,11 @@ async function askModel() {
       body: JSON.stringify({code: cm.getValue(), question, history: history.slice(0, -1)}),
     });
     if (!resp.ok || !resp.body) {
+      // 429 (rate limit or "already have a question in progress") comes
+      // back as plain text with the real, useful reason -- show that
+      // instead of just the bare status code.
       bubbleContent.classList.remove('thinking');
-      bubbleContent.textContent = 'Request failed (' + resp.status + ')';
+      bubbleContent.textContent = resp.status === 429 ? await resp.text() : 'Request failed (' + resp.status + ')';
     } else {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -922,6 +1035,7 @@ async function askModel() {
     bubbleContent.textContent = 'Request failed: ' + e.message;
   } finally {
     btn.disabled = false;
+    stopBtn.disabled = true;
     status.textContent = '';
   }
 
@@ -982,6 +1096,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_sandbox_run()
         elif path == "/sandbox/ask":
             self._handle_sandbox_ask()
+        elif path == "/sandbox/interrupt":
+            self._handle_sandbox_interrupt()
         else:
             self._not_found()
 
@@ -1042,6 +1158,42 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
+    def _client_ip(self) -> str:
+        # See _client_lock's own module-level comment for why
+        # X-Forwarded-For, not self.client_address -- the LB sits in
+        # between and that header is where the real browser IP lives.
+        # Falls back to the raw TCP peer for direct testing (bypassing
+        # the LB entirely, as this session's own verification already
+        # does repeatedly).
+        xff = self.headers.get("X-Forwarded-For", "")
+        if xff:
+            return xff.split(",")[0].strip()
+        return self.client_address[0]
+
+    def _check_and_record_rate(self, ip: str, bucket: str, max_requests: int, window_s: float) -> bool:
+        """Sliding-window per-IP rate check -- returns False (and does
+        NOT record this attempt) if `ip` has already made `max_requests`
+        requests to `bucket` within the last `window_s` seconds."""
+        now = time.monotonic()
+        with _client_lock:
+            state = _client_state.setdefault(ip, {})
+            times = state.setdefault(bucket, [])
+            cutoff = now - window_s
+            while times and times[0] < cutoff:
+                times.pop(0)
+            if len(times) >= max_requests:
+                return False
+            times.append(now)
+            return True
+
+    def _send_rate_limited(self, message: str):
+        out = message.encode()
+        self.send_response(429)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
     def _handle_sandbox_run(self):
         """Plain Run -- executes the student's own current buffer as-is,
         synchronously, through the exact same run_sandboxed() Phases 1-2
@@ -1050,6 +1202,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         SSE/streaming needed for this action. Not captured -- this is
         the student's own code, not a model claim, so there's nothing
         to ground against."""
+        ip = self._client_ip()
+        if not self._check_and_record_rate(ip, "run", RATE_LIMIT_RUN_PER_MINUTE, 60):
+            self._send_rate_limited(
+                f"Too many Run requests -- limit is {RATE_LIMIT_RUN_PER_MINUTE} per minute. "
+                f"Wait a moment and try again.")
+            return
+
         req_json = self._read_json_body()
         code = req_json.get("code") or ""
         if not code.strip():
@@ -1076,7 +1235,39 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         the real generation back via the same SSE mechanics the old
         chat endpoint used, then grounds and captures it exactly the
         same way (source="llm-chat-sandbox", distinguishing these rows
-        from chat-originated ones in the shared Phase 3 corpus)."""
+        from chat-originated ones in the shared Phase 3 corpus).
+
+        Stage 4: rate-limited (RATE_LIMIT_ASK_PER_10MIN) and capped at
+        one in-flight ask per IP -- a real student only ever has one
+        live question, and this concurrency cap is also what makes
+        POST /sandbox/interrupt unambiguous with no extra token needed:
+        the IP alone identifies which session to stop."""
+        ip = self._client_ip()
+        if not self._check_and_record_rate(ip, "ask", RATE_LIMIT_ASK_PER_10MIN, 600):
+            self._send_rate_limited(
+                f"Too many Ask requests -- limit is {RATE_LIMIT_ASK_PER_10MIN} per 10 minutes. "
+                f"Wait a moment and try again.")
+            return
+
+        with _client_lock:
+            state = _client_state.setdefault(ip, {})
+            if state.get("ask_active"):
+                self._send_rate_limited(
+                    "You already have a question in progress -- wait for it to finish, "
+                    "or stop it, before asking another.")
+                return
+            state["ask_active"] = True
+            interrupt_event = threading.Event()
+            state["interrupt"] = interrupt_event
+
+        try:
+            self._do_handle_sandbox_ask(interrupt_event)
+        finally:
+            with _client_lock:
+                state["ask_active"] = False
+                state["interrupt"] = None
+
+    def _do_handle_sandbox_ask(self, interrupt_event):
         req_json = self._read_json_body()
         code = (req_json.get("code") or "").strip()
         question = (req_json.get("question") or "").strip()
@@ -1134,11 +1325,36 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(f"verify-proxy: upstream unreachable after 3 attempts: {last_err}".encode())
             return
 
-        self._relay_and_verify_stream(resp, messages, max_tokens, capture_source="llm-chat-sandbox")
+        self._relay_and_verify_stream(resp, messages, max_tokens, capture_source="llm-chat-sandbox",
+                                       interrupt=interrupt_event)
         conn.close()
 
+    def _handle_sandbox_interrupt(self):
+        """Signals the caller's own in-flight /sandbox/ask (if any) to
+        stop at its next real check point (see _call_llama_direct(),
+        run_sandboxed_interactive(), and _relay_and_verify_stream()'s
+        own interrupt handling). Best-effort, not instant, and not a
+        cancellation on llama-server's own side -- it has no such
+        endpoint, so the model's own generation keeps computing
+        server-side regardless; this only stops US from waiting on or
+        relaying it further, same as an ordinary dropped connection
+        already does today, and tells the student honestly that's what
+        happened rather than pretending it stopped instantly."""
+        ip = self._client_ip()
+        with _client_lock:
+            state = _client_state.get(ip)
+            interrupted = bool(state and state.get("interrupt"))
+            if interrupted:
+                state["interrupt"].set()
+        out = json.dumps({"interrupted": interrupted}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
     def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
-                                  capture_source: str = "llm-chat-coordinator"):
+                                  capture_source: str = "llm-chat-coordinator", interrupt=None):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1148,7 +1364,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         accumulated = []
         last_chunk_meta: dict = {}
         buf = b""
+        interrupted_during_stream = False
         while True:
+            if interrupt is not None and interrupt.is_set():
+                interrupted_during_stream = True
+                break
             chunk = resp.read(1)
             if not chunk:
                 break
@@ -1187,12 +1407,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 continue
 
         full_text = "".join(accumulated)
-        code = extract_python_code(full_text) if ENABLE_VERIFICATION else None
-        if code:
-            extra, capture = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
-                                                    max_tokens=request_max_tokens)
-            self._write_sse_delta(extra, last_chunk_meta)
-            capture_example(request_messages, capture, source=capture_source)
+        if interrupted_during_stream:
+            # Stopped before the model's own response even finished --
+            # nothing coherent to ground/verify yet, so skip straight
+            # to an honest note instead of running verify_and_maybe_fix()
+            # on a deliberately truncated response.
+            self._write_sse_delta("\n\n---\n_Stopped at your request._\n", last_chunk_meta)
+        else:
+            code = extract_python_code(full_text) if ENABLE_VERIFICATION else None
+            if code:
+                extra, capture = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
+                                                        max_tokens=request_max_tokens, interrupt=interrupt)
+                self._write_sse_delta(extra, last_chunk_meta)
+                capture_example(request_messages, capture, source=capture_source)
 
         try:
             self.wfile.write(b"data: [DONE]\n\n")
