@@ -490,7 +490,67 @@ not an oversight.
 
 ---
 
-## Explicitly out of scope — rolled up from Phases 1-3, not silently dropped again
+## Stage 4 — Per-client rate limiting + a hard interrupt
+
+Picks up two items straight off the "Explicitly out of scope" list
+below, per direct request to work through the remaining items now
+("the only item i have no interest in at the moment is non python
+code blocks"), sequenced small-first ("Small ones first") ahead of the
+bigger items that each need their own design discussion.
+
+**Rate limiting**: sliding-window per-IP counters on `POST
+/sandbox/run` (10/minute) and `POST /sandbox/ask` (10/10 minutes —
+wider since Ask is far more expensive: a real generation plus
+sandboxed execution, possibly several fix rounds). Keyed by the real
+client IP via `X-Forwarded-For`, confirmed in `api/lb.py` that this
+example's own LB runs in HTTP mode with `option forwardfor`
+specifically so this works — without it every request would appear to
+come from the LB itself, one shared IP for every student. A second
+concurrency cap rejects a second `/sandbox/ask` from the same IP while
+one is already in flight; this doubles as the interrupt mechanism's
+own key, since a real student only ever has one live question and IP
+alone is therefore enough to identify which in-flight request a Stop
+request targets.
+
+**Hard interrupt**: a `threading.Event` created per in-flight ask,
+checked at every real wait point in the call chain — the SSE relay's
+own read loop, the interactive sandbox's `select()` poll loop, and the
+internal model-call heartbeat thread — so `POST /sandbox/interrupt`
+(wired to a new Stop button, enabled only while an Ask is in flight)
+stops a request promptly regardless of which phase of a potentially
+long request is currently running. Best-effort by design: llama-server
+has no cancellation endpoint of its own, so the model's own generation
+keeps computing server-side regardless — this only stops relaying or
+waiting on it further, same as an ordinary dropped connection already
+does today, and the student is told that honestly ("Stopped at your
+request") rather than shown a misleading failure message.
+
+### Verified live, 2026-09-21
+
+Real redeploy. Basic Run and Ask both confirmed still working
+end-to-end (grounded real execution unaffected by this stage). Run
+rate limiting genuinely 429s after the 10th request in a minute and is
+correctly IP-scoped (a different `X-Forwarded-For` IP is unaffected).
+Two genuinely concurrent Ask requests: the second 429s with the real
+reason ("you already have a question in progress") while the first
+completes normally. A real in-flight Ask — mid-generation, actually
+computing a slow prime-search script — was interrupted via `POST
+/sandbox/interrupt` and stopped cleanly within ~5 seconds, reporting
+"Stopped at your request" rather than a misleading failure. Per-IP
+state is correctly cleared afterward: an immediate follow-up Ask
+succeeds rather than staying wrongly blocked, and interrupting with
+nothing in flight correctly reports `interrupted: false`.
+
+Also verified locally before the live pass: sliding-window limiter
+behaviour including window eviction and per-IP/per-bucket
+independence, `_client_ip()`'s XFF-vs-TCP-peer fallback, and the
+interrupt-checking poll loop against a real subprocess (both a pre-set
+interrupt and one set from another thread mid-run). Full existing test
+suite re-run clean throughout.
+
+---
+
+## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
 
 - **Non-Python code blocks.** The sandbox stays Python-only, for the
   same reason `run_sandboxed()` itself is Python-only today. Future
@@ -508,12 +568,9 @@ not an oversight.
   their own laptop, feeding the same central corpus). Still not
   built — the `source` field Phase 3 already designed for exactly this
   needs no further change here.
-- **A hard mid-generation interrupt** for `/sandbox/ask`. Not built for
-  the chat's own streaming today either; real future work once Stage 1
-  proves the core loop.
-- **Server-side rate limiting.** Stage 1's mitigation (disable the
-  button while a request is in flight) is real but thin; per-IP
-  throttling is future hardening if actual abuse is observed.
+- ~~A hard mid-generation interrupt for `/sandbox/ask`~~ — **done,
+  Stage 4** (above).
+- ~~Server-side rate limiting~~ — **done, Stage 4** (above).
 - **Network access inside the sandbox.** Confirmed live (Stage 3) that
   `unshare --net` gives zero connectivity at all, not even loopback —
   a real, strong existing safety property, deliberately left untouched
