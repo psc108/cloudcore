@@ -399,3 +399,88 @@ variable "examples_ingestion_token" {
   type        = string
   default     = "dev-token"
 }
+
+# --- Stage 5: Firecracker sandbox shell ---------------------------------
+# Per direct request: the model-driven sandbox should also give students a
+# real interactive shell with genuine internet access, isolated so it
+# "can't jailbreak the sandbox and have access to anything else other than
+# the sandbox and network." Built on Firecracker microVMs (a real, separate
+# guest kernel under KVM — confirmed live that the coordinator has nested
+# KVM available), not a container sandbox, since a persistent network-
+# connected shell has far more opportunity to probe a shared-kernel
+# boundary than the existing bounded, network-less Python sandbox ever
+# did. See llm-chat-interactive-sandbox-Phased-Implementation.md's own
+# Stage 5 section for the full design and its live isolation verification.
+#
+# Firecracker + jailer — same pinned-download-plus-checksum convention as
+# llama_release_tag/llama_archive_name/llama_sha256 above, kept in sync by
+# hand with api/build-package-repo.sh's own ARTIFACT_URLS. Verified
+# directly against the real downloaded archive (both the whole-archive
+# hash here and firecracker/jailer's own per-binary hashes, checked again
+# on the guest via the archive's own bundled SHA256SUMS).
+variable "firecracker_release_tag" {
+  description = "Firecracker release tag the firecracker/jailer binaries below were pulled from."
+  type        = string
+  default     = "v1.17.0"
+}
+
+variable "firecracker_archive_name" {
+  description = "Filename of the cached Firecracker release archive (api/build-package-repo.sh's own ARTIFACT_URLS) — contains both firecracker and jailer."
+  type        = string
+  default     = "firecracker-v1.17.0-x86_64.tgz"
+}
+
+variable "firecracker_sha256" {
+  description = "SHA-256 of firecracker_archive_name, verified directly against the real downloaded artifact (matches the archive's own published .sha256.txt release asset)."
+  type        = string
+  default     = "06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558"
+}
+
+# A pinned kernel build from Firecracker's own public CI artifact bucket —
+# the documented, official source for exactly this (see
+# firecracker-microvm/firecracker's own docs/getting-started.md), not
+# built from source here. The kernel's own version need not track the
+# firecracker_release_tag above 1:1 — Firecracker maintains compatibility
+# across CI kernel builds and release versions independently.
+variable "firecracker_kernel_name" {
+  description = "Filename of the cached Firecracker-compatible guest kernel (an uncompressed ELF vmlinux, not bzImage) — api/build-package-repo.sh's own ARTIFACT_URLS."
+  type        = string
+  default     = "firecracker-vmlinux-6.1.155"
+}
+
+variable "firecracker_kernel_sha256" {
+  description = "SHA-256 of firecracker_kernel_name, verified directly against the real downloaded artifact (Firecracker's CI bucket publishes no separate checksums file for this asset)."
+  type        = string
+  default     = "e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2"
+}
+
+# The golden guest rootfs — deliberately NOT Firecracker's own quickstart
+# demo image (a shared squashfs + a shared public demo SSH key, fine for a
+# single-user tutorial, wrong for a multi-tenant lab). Built fresh by
+# api/build-firecracker-rootfs.sh (debootstrap, minimal Ubuntu 22.04,
+# sshd + a "student" account, a one-shot boot unit that fetches THIS
+# session's own SSH public key from Firecracker's MMDS — no key ever
+# baked into the image itself) — run that script by hand to rebuild and
+# update these two values, same cadence as build-package-repo.sh itself.
+variable "firecracker_rootfs_name" {
+  description = "Filename of the golden Firecracker guest rootfs image (api/build-firecracker-rootfs.sh's own output, served via api/build-package-repo.sh's ARTIFACT_URLS path)."
+  type        = string
+  default     = "firecracker-rootfs-jammy.ext4.gz"
+}
+
+variable "firecracker_rootfs_sha256" {
+  description = "SHA-256 of firecracker_rootfs_name — printed by api/build-firecracker-rootfs.sh itself after each build; update this value by hand whenever that script is re-run."
+  type        = string
+  default     = "3808d1aacf008756c9d4313bc1b84f217be28ee68a686a996a1a3ef61daba461"
+}
+
+# Deliberately outside both the platform's own real bridge range
+# (192.168.x.0/24 — see coordinator-cloud-init.yaml.tftpl's own comment on
+# fcbr0 for why that's the thing this whole subnet must never be able to
+# reach) and this example's own fictional declared VPC CIDR (var.cidr_block,
+# 10.91.0.0/16 by default) — no real or apparent overlap with either.
+variable "sandbox_subnet_cidr" {
+  description = "Private /24 the coordinator's own fcbr0 bridge uses for per-session Firecracker microVMs. Each microVM gets one address on this subnet via the coordinator's own dnsmasq; the coordinator's iptables rules NAT it out to the real internet while dropping every RFC1918 destination (see the cloud-init template's own runcmd for the exact ruleset) — this is the actual enforcement point for 'nothing but the sandbox and the network.'"
+  type        = string
+  default     = "10.200.0.0/24"
+}

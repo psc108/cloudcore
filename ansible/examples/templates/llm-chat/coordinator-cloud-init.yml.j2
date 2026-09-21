@@ -27,6 +27,10 @@ packages:
   # explicitly anyway rather than relying on an unstated assumption.
   - python3
   - util-linux
+  # Stage 5 — DHCP+DNS server for the Firecracker sandbox subnet (fcbr0,
+  # below), the same tool api/setup-network.sh already uses for ccbr0 on
+  # the host itself.
+  - dnsmasq
 
 write_files:
   - path: /etc/promtail/config.yml
@@ -180,6 +184,153 @@ runcmd:
   # to be the unprivileged identity verify_proxy.py's sandbox drops to
   # before running a single line of model-generated code.
   - useradd --system --no-create-home --shell /usr/sbin/nologin sandboxrunner
+
+  # --- Stage 5: Firecracker sandbox shell -------------------------------
+  # Same unprivileged-system-account pattern as sandboxrunner above — the
+  # identity jailer chroots each per-session microVM under, never used
+  # for anything else.
+  - useradd --system --no-create-home --shell /usr/sbin/nologin fcrunner
+
+  - mkdir -p /opt/firecracker /srv/jailer
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/{{ firecracker_archive_name }} \
+        http://192.168.100.1:8090/jammy/artifacts/{{ firecracker_archive_name }} && break
+      echo "firecracker download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ firecracker_sha256 }}  /tmp/{{ firecracker_archive_name }}' | sha256sum -c -
+  - tar -xzf /tmp/{{ firecracker_archive_name }} -C /tmp
+  # The archive's own bundled SHA256SUMS is checked again here, per
+  # extracted binary — belt-and-braces on top of the whole-archive hash
+  # already verified above, since that only proves the archive itself
+  # wasn't tampered with in transit, not that these specific two files
+  # inside it are the ones actually executed below.
+  - |
+    cd /tmp/release-*
+    grep -E "\./(firecracker|jailer)-v[0-9.]+-x86_64$" SHA256SUMS | sha256sum -c -
+    install -m 0755 ./firecracker-v*-x86_64 /opt/firecracker/firecracker
+    install -m 0755 ./jailer-v*-x86_64 /opt/firecracker/jailer
+  - rm -rf /tmp/{{ firecracker_archive_name }} /tmp/release-*
+
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/firecracker/vmlinux \
+        http://192.168.100.1:8090/jammy/artifacts/{{ firecracker_kernel_name }} && break
+      echo "firecracker kernel download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ firecracker_kernel_sha256 }}  /opt/firecracker/vmlinux' | sha256sum -c -
+
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/{{ firecracker_rootfs_name }} \
+        http://192.168.100.1:8090/jammy/artifacts/{{ firecracker_rootfs_name }} && break
+      echo "firecracker rootfs download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ firecracker_rootfs_sha256 }}  /tmp/{{ firecracker_rootfs_name }}' | sha256sum -c -
+  - gunzip -c /tmp/{{ firecracker_rootfs_name }} > /opt/firecracker/golden-rootfs.ext4
+  - rm -f /tmp/{{ firecracker_rootfs_name }}
+  - chown fcrunner:fcrunner /opt/firecracker/golden-rootfs.ext4 /opt/firecracker/vmlinux
+
+  # Sandbox network — a coordinator-local bridge distinct from both the
+  # real host bridge (ccbr0, ~192.168.x.0/24, api/setup-network.sh) this
+  # guest itself sits on, and this example's own fictional declared VPC
+  # CIDR (10.91.0.0/16) — no overlap with either, on purpose.
+  # Same idempotent check-then-insert idiom setup-network.sh's own
+  # iptables lines already use throughout.
+  - |
+    FCBR=fcbr0
+    FCNET="{{ sandbox_subnet_cidr }}"
+    FCGW="$(python3 -c "import ipaddress; n=ipaddress.ip_network('$FCNET'); print(list(n.hosts())[0])")"
+    ip link add "$FCBR" type bridge 2>/dev/null || true
+    ip addr add "$FCGW/$(echo "$FCNET" | cut -d/ -f2)" dev "$FCBR" 2>/dev/null || true
+    ip link set "$FCBR" up
+    sysctl -qw net.ipv4.ip_forward=1
+    # This whole subnet is IPv4-only by design — nothing above configures
+    # or expects IPv6 on it, so it's disabled outright rather than left
+    # to whatever the guest kernel's own default happens to be.
+    sysctl -qw "net.ipv6.conf.$FCBR.disable_ipv6=1"
+
+    UPLINK_IF="$(ip -4 route show default | awk '{print $5; exit}')"
+
+    # NAT the sandbox subnet out to the coordinator's own real internet
+    # uplink.
+    iptables -t nat -C POSTROUTING -s "$FCNET" -o "$UPLINK_IF" -j MASQUERADE 2>/dev/null \
+      || iptables -t nat -A POSTROUTING -s "$FCNET" -o "$UPLINK_IF" -j MASQUERADE
+
+    # FORWARD chain — deny-all-private-first, allow-internet-only. This is
+    # the actual enforcement point for "nothing but the sandbox and the
+    # network": every CloudCore-internal destination (the real host
+    # bridge, the RPC worker's own WireGuard-tunneled peer subnet, any
+    # other student's VM sharing that bridge) falls inside one of these
+    # three RFC1918 blocks and is dropped wholesale, without ever having
+    # to enumerate a specific port or IP. No intra-sandbox-subnet
+    # carve-out: $FCNET itself is inside 10.0.0.0/8, so an ACCEPT for it
+    # would have to precede these DROPs to ever be reached, and nothing
+    # in this feature requires one microVM to reach another.
+    for PRIV in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+      iptables -C FORWARD -s "$FCNET" -d "$PRIV" -j DROP 2>/dev/null \
+        || iptables -A FORWARD -s "$FCNET" -d "$PRIV" -j DROP
+    done
+    iptables -C FORWARD -s "$FCNET" -j ACCEPT 2>/dev/null \
+      || iptables -A FORWARD -s "$FCNET" -j ACCEPT
+    # Return path for connections the sandbox itself initiated — NOT a
+    # blanket accept for anything addressed to the sandbox subnet, which
+    # would let an arbitrary internet host open a fresh connection
+    # straight into a running microVM. Only established/related traffic
+    # is allowed back in.
+    iptables -C FORWARD -d "$FCNET" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
+      || iptables -A FORWARD -d "$FCNET" -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    # INPUT chain — the FORWARD rules above only cover traffic being
+    # routed THROUGH the coordinator to some other host. Traffic FROM the
+    # sandbox subnet straight TO one of the coordinator's OWN addresses
+    # is INPUT, not FORWARD -- and confirmed live this means every
+    # locally-owned address, not just $FCGW specifically: a packet whose
+    # destination matches ANY address configured on this host (e.g. its
+    # real bridge IP on a completely different interface) is delivered
+    # locally by the kernel regardless of which interface it arrived on,
+    # so an earlier version of this rule that only matched "-d $FCGW"
+    # left the coordinator's real bridge-facing SSH/services fully
+    # reachable from the sandbox -- confirmed live via a real SSH
+    # connection that should have been blocked. No destination filter
+    # here at all is the correct fix: INPUT-chain traffic is already
+    # guaranteed local-destined by definition, and restricting by WHICH
+    # local address was the actual bug. Allowed: DNS to this
+    # coordinator's own dnsmasq, and established/related return traffic
+    # for connections the COORDINATOR itself initiates INTO a microVM
+    # (the SSH terminal bridge depends on exactly this — confirmed live
+    # that without it, the coordinator's own outbound SSH to a guest
+    # gets its replies dropped by this same rule). Everything else from
+    # the sandbox subnet to any local address is dropped.
+    iptables -C INPUT -s "$FCNET" -p udp --dport 53 -j ACCEPT 2>/dev/null \
+      || iptables -A INPUT -s "$FCNET" -p udp --dport 53 -j ACCEPT
+    iptables -C INPUT -s "$FCNET" -p tcp --dport 53 -j ACCEPT 2>/dev/null \
+      || iptables -A INPUT -s "$FCNET" -p tcp --dport 53 -j ACCEPT
+    iptables -C INPUT -s "$FCNET" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
+      || iptables -A INPUT -s "$FCNET" -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -C INPUT -s "$FCNET" -j DROP 2>/dev/null \
+      || iptables -A INPUT -s "$FCNET" -j DROP
+
+    DHCP_START="$(python3 -c "import ipaddress; n=ipaddress.ip_network('$FCNET'); print(list(n.hosts())[1])")"
+    DHCP_END="$(python3 -c "import ipaddress; n=ipaddress.ip_network('$FCNET'); print(list(n.hosts())[-1])")"
+    {
+      echo "interface=$FCBR"
+      echo "bind-interfaces"
+      echo "dhcp-range=$DHCP_START,$DHCP_END,12h"
+      echo "dhcp-option=option:dns-server,$FCGW"
+      echo "server=8.8.8.8"
+      echo "server=1.1.1.1"
+      echo "no-resolv"
+      echo "except-interface=lo"
+    } > /etc/dnsmasq.d/fcbr0.conf
+    systemctl enable --now dnsmasq
+
   - systemctl daemon-reload
   # See worker-cloud-init.yml.j2's own comment on Restart=on-failure —
   # the same startup-order gap applies here in reverse, same

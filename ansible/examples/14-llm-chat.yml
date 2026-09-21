@@ -273,6 +273,26 @@
     rate_limit_run_per_minute: 10
     rate_limit_ask_per_10min: 10
 
+    # Stage 5 — Firecracker sandbox shell. Same pinned-download-plus-
+    # checksum convention as llama_release_tag/llama_archive_name/
+    # llama_sha256 above; kept in sync by hand with
+    # api/build-package-repo.sh's own ARTIFACT_URLS. See
+    # llm-chat-interactive-sandbox-Phased-Implementation.md's own Stage 5
+    # section for the full design.
+    firecracker_release_tag: v1.17.0
+    firecracker_archive_name: firecracker-v1.17.0-x86_64.tgz
+    firecracker_sha256: 06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
+    firecracker_kernel_name: firecracker-vmlinux-6.1.155
+    firecracker_kernel_sha256: e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2
+    # Rebuilt by api/build-firecracker-rootfs.sh — update these two by
+    # hand whenever that script is re-run.
+    firecracker_rootfs_name: firecracker-rootfs-jammy.ext4.gz
+    firecracker_rootfs_sha256: 3808d1aacf008756c9d4313bc1b84f217be28ee68a686a996a1a3ef61daba461
+    # Deliberately outside both the platform's own real bridge range
+    # (192.168.x.0/24) and this example's own fictional declared VPC CIDR
+    # (10.91.0.0/16 default) — no overlap with either.
+    sandbox_subnet_cidr: 10.200.0.0/24
+
   tasks:
     - name: Fail fast if worker_peers is empty
       ansible.builtin.fail:
@@ -409,6 +429,13 @@
           'sandbox_system_message': sandbox_system_message,
           'rate_limit_run_per_minute': rate_limit_run_per_minute,
           'rate_limit_ask_per_10min': rate_limit_ask_per_10min,
+          'firecracker_archive_name': firecracker_archive_name,
+          'firecracker_sha256': firecracker_sha256,
+          'firecracker_kernel_name': firecracker_kernel_name,
+          'firecracker_kernel_sha256': firecracker_kernel_sha256,
+          'firecracker_rootfs_name': firecracker_rootfs_name,
+          'firecracker_rootfs_sha256': firecracker_rootfs_sha256,
+          'sandbox_subnet_cidr': sandbox_subnet_cidr,
           'codemirror_core_js': codemirror_core_js,
           'codemirror_core_css': codemirror_core_css,
           'codemirror_theme_css': codemirror_theme_css,

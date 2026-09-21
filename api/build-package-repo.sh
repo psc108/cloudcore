@@ -44,7 +44,13 @@ if [ ${#PACKAGES[@]} -eq 0 ]; then
     xfce4 xfce4-terminal tigervnc-standalone-server tigervnc-common novnc websockify unzip gnupg \
     # kiwix-library (curl/ca-certificates already listed above)
     # wifi-sniffer
-    build-essential dkms bc libelf-dev git aircrack-ng hcxtools hcxdumptool tcpdump tshark
+    build-essential dkms bc libelf-dev git aircrack-ng hcxtools hcxdumptool tcpdump tshark \
+    # llm-chat Stage 5 — sandbox_terminal.py's own WS<->SSH bridge needs
+    # websockets + paramiko (both confirmed real Ubuntu 22.04 archive
+    # packages via packages.ubuntu.com/jammy, no third-party repo needed);
+    # dnsmasq is the coordinator's own DHCP+DNS server for the Firecracker
+    # sandbox subnet, same tool setup-network.sh already uses for ccbr0.
+    python3-websockets python3-paramiko dnsmasq
   )
 fi
 
@@ -181,6 +187,22 @@ declare -A ARTIFACT_URLS=(
   # each GGUF's own header rather than needing another hand-maintained
   # layer-count comment every time the model changes.
   [Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf]="https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf"
+  # llm-chat Stage 5 — Firecracker + jailer, one archive covers both (real
+  # static musl binaries, GitHub release, ships its own SHA256SUMS/per-
+  # asset .sha256.txt — verified directly against the real downloaded
+  # archive before this pin was set, not transcribed from the release
+  # notes). firecracker_sha256 in variables.tf is this whole archive's
+  # own hash; the individual firecracker/jailer binary hashes inside it
+  # are checked again by coordinator-cloud-init.yaml.tftpl after
+  # extraction, against SHA256SUMS shipped inside the archive itself.
+  [firecracker-v1.17.0-x86_64.tgz]="https://github.com/firecracker-microvm/firecracker/releases/download/v1.17.0/firecracker-v1.17.0-x86_64.tgz"
+  # llm-chat Stage 5 — a pinned kernel build from Firecracker's own public
+  # CI artifact bucket (documented, official source for exactly this —
+  # see firecracker-microvm/firecracker's own docs/getting-started.md),
+  # not built from source here. Deliberately NOT Firecracker's own demo
+  # rootfs from the same bucket — see build-firecracker-rootfs.sh's own
+  # header for why a custom-built rootfs is used instead.
+  [firecracker-vmlinux-6.1.155]="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/x86_64/vmlinux-6.1.155"
 )
 if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"
@@ -208,12 +230,26 @@ if [ ! -f "$REPO_DIR/artifacts/rtl8812au-$RTL8812AU_REF.tar.gz" ]; then
   rm -rf "$RTL_TMP"
 fi
 
+# llm-chat Stage 5 — the Firecracker golden guest rootfs isn't a plain
+# download like everything above (it's debootstrap-built, needs a real
+# root chroot environment), so it gets its own dedicated builder script
+# rather than an ARTIFACT_URLS entry — same "not a plain download" shape
+# as the RTL8812AU source cache above, just heavier. Skippable with
+# SKIP_FC_ROOTFS=1 (e.g. CODENAME != jammy runs, where it's not used).
+if [ "${SKIP_FC_ROOTFS:-0}" != "1" ] && [ "$CODENAME" = "jammy" ]; then
+  echo "=== Building the Firecracker golden rootfs (llm-chat Stage 5) ==="
+  "$SCRIPT_DIR/build-firecracker-rootfs.sh"
+fi
+
 {
   echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for name in "${!ARTIFACT_URLS[@]}"; do
     echo "$name  sha256=$(sha256sum "$REPO_DIR/artifacts/$name" | cut -d' ' -f1)  source=${ARTIFACT_URLS[$name]}"
   done
   echo "rtl8812au-$RTL8812AU_REF.tar.gz  sha256=$(sha256sum "$REPO_DIR/artifacts/rtl8812au-$RTL8812AU_REF.tar.gz" | cut -d' ' -f1)  source=https://github.com/aircrack-ng/rtl8812au.git@$RTL8812AU_REF"
+  if [ -f "$REPO_DIR/artifacts/firecracker-rootfs-jammy.ext4.gz" ]; then
+    echo "firecracker-rootfs-jammy.ext4.gz  sha256=$(sha256sum "$REPO_DIR/artifacts/firecracker-rootfs-jammy.ext4.gz" | cut -d' ' -f1)  source=build-firecracker-rootfs.sh (debootstrap, built fresh each run)"
+  fi
 } > "$REPO_DIR/artifacts/MANIFEST.txt"
 touch "$REPO_DIR/artifacts/.build-complete"
 

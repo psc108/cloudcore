@@ -116,6 +116,13 @@ locals {
     sandbox_system_message   = var.sandbox_system_message
     rate_limit_run_per_minute = var.rate_limit_run_per_minute
     rate_limit_ask_per_10min  = var.rate_limit_ask_per_10min
+    firecracker_archive_name    = var.firecracker_archive_name
+    firecracker_sha256          = var.firecracker_sha256
+    firecracker_kernel_name     = var.firecracker_kernel_name
+    firecracker_kernel_sha256   = var.firecracker_kernel_sha256
+    firecracker_rootfs_name     = var.firecracker_rootfs_name
+    firecracker_rootfs_sha256   = var.firecracker_rootfs_sha256
+    sandbox_subnet_cidr         = var.sandbox_subnet_cidr
     codemirror_core_js         = local.codemirror_core_js
     codemirror_core_css        = local.codemirror_core_css
     codemirror_theme_css       = local.codemirror_theme_css
