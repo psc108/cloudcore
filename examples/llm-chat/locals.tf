@@ -72,6 +72,12 @@ locals {
   # inlined; plain-text Python needs no build/pinned-artifact step.
   verify_proxy_source = file("${path.module}/files/verify_proxy.py")
 
+  # Stage 5B — same inlining convention, a separate service from
+  # verify-proxy.service (see sandbox_terminal.py's own module
+  # docstring for why: it needs websockets + paramiko, deliberately not
+  # bolted onto verify_proxy.py's zero-dependency stdlib posture).
+  sandbox_terminal_source = file("${path.module}/files/sandbox_terminal.py")
+
   # Fixed host-level address, same convention as promtail_config's own
   # Loki target and the host-level package repo (192.168.100.1:8090) —
   # api/examples_listener.py's own dedicated, always-on bind. Confirmed
@@ -93,6 +99,13 @@ locals {
   codemirror_theme_css       = file("${path.module}/../../ui/vendor/codemirror-theme-dracula.min.css")
   codemirror_matchbrackets_js = file("${path.module}/../../ui/vendor/codemirror-addon-matchbrackets.min.js")
   codemirror_python_mode_js  = file("${path.module}/../../ui/vendor/codemirror-mode-python.min.js")
+
+  # Stage 5B — already vendored for the Dashboard's own admin Terminal
+  # feature (ui/src/js/11-terminal.js) — reused as-is, same re-embedding
+  # reasoning as the CodeMirror assets just above.
+  xterm_core_js      = file("${path.module}/../../ui/vendor/xterm.min.js")
+  xterm_core_css     = file("${path.module}/../../ui/vendor/xterm.min.css")
+  xterm_fit_addon_js = file("${path.module}/../../ui/vendor/xterm-addon-fit.min.js")
 
   coordinator_user_data = templatefile("${path.module}/files/coordinator-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
@@ -123,10 +136,21 @@ locals {
     firecracker_rootfs_name     = var.firecracker_rootfs_name
     firecracker_rootfs_sha256   = var.firecracker_rootfs_sha256
     sandbox_subnet_cidr         = var.sandbox_subnet_cidr
+    sandbox_terminal_source     = local.sandbox_terminal_source
+    terminal_port                    = var.terminal_port
+    terminal_idle_timeout_minutes    = var.terminal_idle_timeout_minutes
+    terminal_max_session_minutes     = var.terminal_max_session_minutes
+    terminal_max_concurrent_sessions = var.terminal_max_concurrent_sessions
+    terminal_boot_timeout_seconds    = var.terminal_boot_timeout_seconds
+    websockets_wheel_name    = var.websockets_wheel_name
+    websockets_wheel_sha256  = var.websockets_wheel_sha256
     codemirror_core_js         = local.codemirror_core_js
     codemirror_core_css        = local.codemirror_core_css
     codemirror_theme_css       = local.codemirror_theme_css
     codemirror_matchbrackets_js = local.codemirror_matchbrackets_js
     codemirror_python_mode_js  = local.codemirror_python_mode_js
+    xterm_core_js      = local.xterm_core_js
+    xterm_core_css     = local.xterm_core_css
+    xterm_fit_addon_js = local.xterm_fit_addon_js
   })
 }

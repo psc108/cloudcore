@@ -31,6 +31,14 @@ packages:
   # below), the same tool api/setup-network.sh already uses for ccbr0 on
   # the host itself.
   - dnsmasq
+  # Stage 5B — sandbox_terminal.py's own WS<->SSH bridge. paramiko is a
+  # real jammy-archive package, confirmed working live. websockets is
+  # deliberately NOT installed here -- jammy's own python3-websockets
+  # (9.1-1) is confirmed broken on jammy's own current Python 3.10.12
+  # (calls the removed asyncio.Lock(loop=...) parameter, crashing every
+  # WS connection) -- a newer version is downloaded+vendored instead,
+  # below.
+  - python3-paramiko
 
 write_files:
   - path: /etc/promtail/config.yml
@@ -59,6 +67,13 @@ write_files:
   - path: /opt/llama.cpp/verify_proxy.py
     content: |
       {{ verify_proxy_source | indent(6) }}
+
+  # Stage 5B — the sandbox terminal's own WebSocket service. Genuinely
+  # separate from verify_proxy.py (own process, own systemd unit) — see
+  # its own module docstring for why.
+  - path: /opt/llama.cpp/sandbox_terminal.py
+    content: |
+      {{ sandbox_terminal_source | indent(6) }}
 
   # Phase 4 — the sandbox's own system prompt (verify_proxy.py's
   # SANDBOX_SYSTEM_MESSAGE_FILE), plain text rather than an
@@ -98,6 +113,21 @@ write_files:
   - path: /opt/llama.cpp/vendor/codemirror-mode-python.min.js
     encoding: b64
     content: "{{ codemirror_python_mode_js | b64encode }}"
+
+  # Stage 5B — xterm.js, same base64 convention as CodeMirror above
+  # (also already vendored for the Dashboard's own admin Terminal
+  # feature — reused as-is here, not a second pin).
+  - path: /opt/llama.cpp/vendor/xterm.min.js
+    encoding: b64
+    content: "{{ xterm_core_js | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/xterm.min.css
+    encoding: b64
+    content: "{{ xterm_core_css | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/xterm-addon-fit.min.js
+    encoding: b64
+    content: "{{ xterm_fit_addon_js | b64encode }}"
 
   - path: /etc/systemd/system/llama-server.service
     content: |
@@ -144,6 +174,40 @@ write_files:
       Environment=RATE_LIMIT_RUN_PER_MINUTE={{ rate_limit_run_per_minute }}
       Environment=RATE_LIMIT_ASK_PER_10MIN={{ rate_limit_ask_per_10min }}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
+      Restart=on-failure
+      RestartSec=5
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Runs as root deliberately, same class of justification as verify-
+  # proxy.service above: creating a TAP device and attaching it to
+  # fcbr0 needs CAP_NET_ADMIN, and firecracker itself needs access to
+  # /dev/kvm. Not run through jailer in this first pass — see
+  # sandbox_terminal.py's own module docstring for why that's a
+  # deliberate, explicitly-flagged simplification rather than a silent
+  # gap (jailer hardens the VMM process on the host side; it does not
+  # change the actual guest-to-host isolation boundary this feature's
+  # security model rests on, which is the KVM guest kernel plus the
+  # iptables egress policy above, both already live-verified in Stage A).
+  - path: /etc/systemd/system/sandbox-terminal.service
+    content: |
+      [Unit]
+      Description=llm-chat Stage 5 sandbox terminal (Firecracker WS bridge)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      WorkingDirectory=/opt/llama.cpp
+      Environment=PYTHONPATH=/opt/llama.cpp/vendor-py
+      Environment=TERMINAL_PORT={{ terminal_port }}
+      Environment=SANDBOX_SUBNET_CIDR={{ sandbox_subnet_cidr }}
+      Environment=TERMINAL_IDLE_TIMEOUT_MINUTES={{ terminal_idle_timeout_minutes }}
+      Environment=TERMINAL_MAX_SESSION_MINUTES={{ terminal_max_session_minutes }}
+      Environment=TERMINAL_MAX_CONCURRENT_SESSIONS={{ terminal_max_concurrent_sessions }}
+      Environment=TERMINAL_BOOT_TIMEOUT_SECONDS={{ terminal_boot_timeout_seconds }}
+      ExecStart=/usr/bin/python3 /opt/llama.cpp/sandbox_terminal.py
       Restart=on-failure
       RestartSec=5
       User=root
@@ -236,6 +300,24 @@ runcmd:
   - gunzip -c /tmp/{{ firecracker_rootfs_name }} > /opt/firecracker/golden-rootfs.ext4
   - rm -f /tmp/{{ firecracker_rootfs_name }}
   - chown fcrunner:fcrunner /opt/firecracker/golden-rootfs.ext4 /opt/firecracker/vmlinux
+
+  # Vendored websockets (see packages: above for why apt's jammy build
+  # can't be used) -- a plain wheel is a zip archive; extracted via
+  # `python3 -m zipfile`, not the unzip binary, to avoid adding yet
+  # another apt-mirror package for one file (confirmed live this works
+  # identically -- a wheel has no install-time build step to skip).
+  - mkdir -p /opt/llama.cpp/vendor-py
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/{{ websockets_wheel_name }} \
+        http://192.168.100.1:8090/jammy/artifacts/{{ websockets_wheel_name }} && break
+      echo "websockets wheel download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ websockets_wheel_sha256 }}  /tmp/{{ websockets_wheel_name }}' | sha256sum -c -
+  - python3 -m zipfile -e /tmp/{{ websockets_wheel_name }} /opt/llama.cpp/vendor-py
+  - rm -f /tmp/{{ websockets_wheel_name }}
 
   # Sandbox network — a coordinator-local bridge distinct from both the
   # real host bridge (ccbr0, ~192.168.x.0/24, api/setup-network.sh) this
@@ -337,3 +419,4 @@ runcmd:
   # self-healing mitigation.
   - systemctl enable --now llama-server
   - systemctl enable --now verify-proxy
+  - systemctl enable --now sandbox-terminal

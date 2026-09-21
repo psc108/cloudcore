@@ -193,4 +193,35 @@ resource "cloudcore_lb_listener" "coordinator" {
   port            = var.http_port
   protocol        = "http"
   target_group_id = cloudcore_lb_target_group.coordinator.id
+
+  # Stage 5B — the sandbox terminal's own WebSocket service reuses this
+  # SAME listener/port via a path routing rule rather than a new LB
+  # listener, matching how verify_proxy.py itself already sits in front
+  # of llama-server on another loopback port. HAProxy (this listener's
+  # own real implementation, api/lb.py) passes a WebSocket upgrade
+  # through transparently once path-matched, same as any other HTTP
+  # request — no separate LB-level WS configuration needed.
+  routing_rules = [
+    {
+      priority = 10
+      conditions = {
+        path_pattern = "/terminal*"
+      }
+      target_group_id = cloudcore_lb_target_group.terminal.id
+    }
+  ]
+}
+
+resource "cloudcore_lb_target_group" "terminal" {
+  lb_id    = module.lb.lb_ids_by_key["chat${local.sfx}"]
+  name     = "${var.project}-${var.environment}-llm-chat-term-tg${local.sfx}"
+  port     = var.terminal_port
+  protocol = "http"
+
+  targets = [
+    {
+      instance_id = module.coordinator.instance_ids_by_key["01"]
+      port        = var.terminal_port
+    }
+  ]
 }

@@ -136,6 +136,12 @@ VENDOR_CONTENT_TYPES = {
     "codemirror-theme-dracula.min.css": "text/css",
     "codemirror-addon-matchbrackets.min.js": "text/javascript",
     "codemirror-mode-python.min.js": "text/javascript",
+    # Stage 5B -- already vendored for the Dashboard's own admin Terminal
+    # feature (ui/vendor/, ui/src/js/11-terminal.js) -- reused as-is
+    # rather than fetching/pinning a second copy.
+    "xterm.min.js": "text/javascript",
+    "xterm.min.css": "text/css",
+    "xterm-addon-fit.min.js": "text/javascript",
 }
 
 # How often (seconds) to send an SSE keep-alive comment to the browser
@@ -785,9 +791,12 @@ SANDBOX_PAGE_HTML = """<!doctype html>
 <title>llm-chat -- Sandbox</title>
 <link rel="stylesheet" href="/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/vendor/codemirror-theme-dracula.min.css">
+<link rel="stylesheet" href="/vendor/xterm.min.css">
 <script src="/vendor/codemirror.min.js"></script>
 <script src="/vendor/codemirror-mode-python.min.js"></script>
 <script src="/vendor/codemirror-addon-matchbrackets.min.js"></script>
+<script src="/vendor/xterm.min.js"></script>
+<script src="/vendor/xterm-addon-fit.min.js"></script>
 <style>
 /* Deliberately no `color-scheme: light dark` -- found live that
    declaring it without actually authoring a dark palette let the
@@ -823,6 +832,9 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
 @keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 #question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; }
+#termHost { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; background: #0d0d0d; padding: 0.4rem; display: none; }
+#termHost.open { display: block; }
+#termHost .xterm { height: 360px; }
 footer { margin-top: 1.5rem; font-size: 0.8rem; color: #555; }
 footer a { color: #2a5db0; }
 </style></head>
@@ -851,6 +863,17 @@ footer a { color: #2a5db0; }
     <button id="stopBtn" onclick="stopAsk()" disabled>Stop</button>
     <span id="askStatus" class="status"></span>
   </div>
+</div>
+
+<div class="panel">
+  <h2>Terminal</h2>
+  <p class="sub" style="margin-bottom:0.75rem">A real, isolated Linux shell with genuine internet access -- separate from the sandbox above, so <code>pip install</code>, <code>curl</code>, and anything else you'd do on a normal machine all work for real. It can't reach anything except the internet: not this lab, not other students, nothing else on the network. Closes automatically after a period of inactivity.</p>
+  <div class="row">
+    <button id="termStartBtn" class="primary" onclick="startTerminal()">Start terminal</button>
+    <button id="termStopBtn" onclick="stopTerminal()" disabled>Disconnect</button>
+    <span id="termStatus" class="status"></span>
+  </div>
+  <div id="termHost"></div>
 </div>
 
 <footer>Published examples from sessions like this one: <a href="/examples">/examples</a></footer>
@@ -1042,6 +1065,103 @@ async function askModel() {
   const h = getHistory();
   h.push({role: 'assistant', content: assistantText || bubbleContent.textContent});
   saveHistory(h);
+}
+
+// ── Terminal panel ──────────────────────────────────────────────────
+// Same xterm.js + WS<->PTY wiring shape as the Dashboard's own admin
+// Terminal feature (ui/src/js/11-terminal.js) -- one fixed panel here
+// rather than that page's multi-window instance picker, since there's
+// only ever one sandbox terminal per student session.
+let termState = null;  // { ws, term, fitAddon }
+
+function startTerminal() {
+  if (termState) return;
+  const startBtn = document.getElementById('termStartBtn');
+  const stopBtn = document.getElementById('termStopBtn');
+  const status = document.getElementById('termStatus');
+  const host = document.getElementById('termHost');
+
+  startBtn.disabled = true;
+  host.classList.add('open');
+  status.textContent = 'Booting a fresh sandboxed shell...';
+
+  const term = new Terminal({
+    theme: { background: '#0d0d0d', foreground: '#e2e6f0', cursor: '#4f8ef7' },
+    fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+    scrollback: 2000,
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(host);
+  fitAddon.fit();
+
+  // Reached through the SAME load balancer the page itself was loaded
+  // through (path-routed to sandbox_terminal.py's own service, a
+  // separate backend port -- see main.tf's own routing_rules) --
+  // deliberately window.location.host, not a hardcoded address, so
+  // this works the same whether the page was reached via the real LB
+  // or a local port-forward used for testing.
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${wsProto}//${location.host}/terminal`);
+  termState = {ws, term, fitAddon};
+
+  ws.onopen = () => {
+    const {cols, rows} = term;
+    ws.send(JSON.stringify({type: 'resize', cols, rows}));
+    stopBtn.disabled = false;
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'output' || msg.type === 'connected') {
+        status.textContent = '';
+        term.write(msg.data);
+      } else if (msg.type === 'error') {
+        term.write('\r\n\x1b[31m' + msg.data + '\x1b[0m\r\n');
+        status.textContent = msg.data;
+      }
+    } catch (e) { /* skip malformed frames */ }
+  };
+
+  ws.onclose = () => {
+    term.write('\r\n\x1b[33m[Session closed]\x1b[0m\r\n');
+    stopBtn.disabled = true;
+    startBtn.disabled = false;
+  };
+
+  ws.onerror = () => {
+    status.textContent = 'Connection error.';
+  };
+
+  term.onData(data => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({type: 'input', data}));
+    }
+  });
+
+  const ro = new ResizeObserver(() => {
+    fitAddon.fit();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({type: 'resize', cols: term.cols, rows: term.rows}));
+    }
+  });
+  ro.observe(host);
+  termState.ro = ro;
+}
+
+function stopTerminal() {
+  if (!termState) return;
+  termState.ws.close();
+  termState.term.dispose();
+  termState.ro.disconnect();
+  document.getElementById('termHost').innerHTML = '';
+  document.getElementById('termHost').classList.remove('open');
+  document.getElementById('termStartBtn').disabled = false;
+  document.getElementById('termStopBtn').disabled = true;
+  termState = null;
 }
 
 loadState();

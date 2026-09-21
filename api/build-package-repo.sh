@@ -46,11 +46,19 @@ if [ ${#PACKAGES[@]} -eq 0 ]; then
     # wifi-sniffer
     build-essential dkms bc libelf-dev git aircrack-ng hcxtools hcxdumptool tcpdump tshark \
     # llm-chat Stage 5 — sandbox_terminal.py's own WS<->SSH bridge needs
-    # websockets + paramiko (both confirmed real Ubuntu 22.04 archive
-    # packages via packages.ubuntu.com/jammy, no third-party repo needed);
+    # paramiko (real Ubuntu 22.04 archive package, confirmed working
+    # live). websockets is deliberately NOT installed from apt here —
+    # jammy's own python3-websockets (9.1-1) is confirmed BROKEN on
+    # jammy's own current Python 3.10.12: it calls asyncio.Lock(loop=...),
+    # a parameter Python 3.10 removed outright, so every single WS
+    # connection crashes with TypeError before this was caught live.
+    # A newer version is vendored instead via ARTIFACT_URLS below,
+    # matching the pinned-artifact convention already used throughout
+    # this file — see firecracker_archive_name's own comment for the
+    # same reasoning applied to a different broken-apt-package problem.
     # dnsmasq is the coordinator's own DHCP+DNS server for the Firecracker
     # sandbox subnet, same tool setup-network.sh already uses for ccbr0.
-    python3-websockets python3-paramiko dnsmasq
+    python3-paramiko dnsmasq
   )
 fi
 
@@ -203,6 +211,16 @@ declare -A ARTIFACT_URLS=(
   # rootfs from the same bucket — see build-firecracker-rootfs.sh's own
   # header for why a custom-built rootfs is used instead.
   [firecracker-vmlinux-6.1.155]="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/x86_64/vmlinux-6.1.155"
+  # llm-chat Stage 5B — vendored websockets (see this file's own PACKAGES
+  # comment above for why apt's jammy build can't be used). 16.1.1 is
+  # the newest release that still supports Python 3.10 (17.x requires
+  # 3.11+, confirmed via PyPI's own metadata) — a real manylinux wheel
+  # for cp310/x86_64, pinned via PyPI's own JSON API (files.pythonhosted.org),
+  # not guessed. Extracted into /opt/llama.cpp/vendor-py/ and referenced
+  # via sandbox-terminal.service's own PYTHONPATH=, matching the "pinned
+  # artifact, not live pip execution on the guest" convention this
+  # project already applies to every other third-party dependency.
+  [websockets-16.1.1-cp310-manylinux.whl]="https://files.pythonhosted.org/packages/f3/18/a17e2f0cde02dc10154c808deed7e1d8528afff93612f70d3f0a5b19b011/websockets-16.1.1-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl"
 )
 if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"

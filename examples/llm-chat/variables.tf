@@ -471,7 +471,7 @@ variable "firecracker_rootfs_name" {
 variable "firecracker_rootfs_sha256" {
   description = "SHA-256 of firecracker_rootfs_name — printed by api/build-firecracker-rootfs.sh itself after each build; update this value by hand whenever that script is re-run."
   type        = string
-  default     = "3808d1aacf008756c9d4313bc1b84f217be28ee68a686a996a1a3ef61daba461"
+  default     = "5ac94d59919e619be6aeb635d5eb48c1d9beb1c767ed8feafb23bef289c787e6"
 }
 
 # Deliberately outside both the platform's own real bridge range
@@ -483,4 +483,67 @@ variable "sandbox_subnet_cidr" {
   description = "Private /24 the coordinator's own fcbr0 bridge uses for per-session Firecracker microVMs. Each microVM gets one address on this subnet via the coordinator's own dnsmasq; the coordinator's iptables rules NAT it out to the real internet while dropping every RFC1918 destination (see the cloud-init template's own runcmd for the exact ruleset) — this is the actual enforcement point for 'nothing but the sandbox and the network.'"
   type        = string
   default     = "10.200.0.0/24"
+}
+
+# --- Stage 5B: the sandbox terminal's own WebSocket service ------------
+# sandbox_terminal.py — a new, separate systemd service from verify-
+# proxy.service (deliberately: it needs websockets + paramiko, which
+# don't belong bolted onto verify_proxy.py's own zero-dependency
+# stdlib-only posture). Reachable through the same LB listener as the
+# rest of the sandbox via a new path routing rule (main.tf), not a new
+# LB port.
+variable "terminal_port" {
+  description = "Loopback port sandbox_terminal.py's own WebSocket server binds to — distinct from http_port (verify-proxy's own port), reached via a new LB path routing rule instead of a new LB listener."
+  type        = number
+  default     = 8622
+}
+
+# Defaults sized against this repo's own existing conventions
+# (RATE_LIMIT_RUN_PER_MINUTE=10, verify_timeout_seconds=15,
+# idle_watcher.py's 60-120min *deployment*-level idle default — this is
+# a *per-session* idle timeout, tracking one active shell, not "is
+# anyone using this deployment at all," hence the much shorter default).
+variable "terminal_idle_timeout_minutes" {
+  description = "A sandbox terminal session with no WebSocket activity for this long is closed automatically."
+  type        = number
+  default     = 15
+}
+
+variable "terminal_max_session_minutes" {
+  description = "Hard wall-clock cap on a single sandbox terminal session, regardless of activity — forces periodic re-provisioning rather than one microVM running indefinitely."
+  type        = number
+  default     = 60
+}
+
+variable "terminal_max_concurrent_sessions" {
+  description = "Maximum sandbox terminal sessions a single client IP may have open at once. Each microVM needs real dedicated host memory, so this bounds RAM/CPU exposure — a request past this limit gets a clear 'capacity full' message, never silent overcommit."
+  type        = number
+  default     = 4
+}
+
+variable "terminal_boot_timeout_seconds" {
+  description = "Ceiling on how long sandbox_terminal.py waits for a freshly-booted microVM to become SSH-reachable before failing the WebSocket connection with a clear error."
+  type        = number
+  default     = 20
+}
+
+# jammy's own python3-websockets (9.1-1) is confirmed BROKEN on jammy's
+# own current Python 3.10.12 — it calls asyncio.Lock(loop=...), a
+# parameter Python 3.10 removed outright, so every single WS connection
+# crashed with a real TypeError before this was caught live. A newer
+# version is vendored instead — 16.1.1 is the newest release that still
+# supports Python 3.10 (17.x requires 3.11+, confirmed via PyPI's own
+# metadata), a real manylinux wheel pinned via PyPI's own JSON API, not
+# guessed — same pinned-artifact convention as every other third-party
+# dependency in this deployment.
+variable "websockets_wheel_name" {
+  description = "Filename of the cached websockets wheel (api/build-package-repo.sh's own ARTIFACT_URLS) — extracted into /opt/llama.cpp/vendor-py/ and referenced via sandbox-terminal.service's own PYTHONPATH=, since jammy's apt-archive websockets package is broken on jammy's own Python version."
+  type        = string
+  default     = "websockets-16.1.1-cp310-manylinux.whl"
+}
+
+variable "websockets_wheel_sha256" {
+  description = "SHA-256 of websockets_wheel_name, confirmed directly against PyPI's own JSON API (pypi.org/pypi/websockets/16.1.1/json) for this exact wheel file."
+  type        = string
+  default     = "1214e673c404684b9bf7154f5cf43b45025b1a6160fac3a9e438e9c1a97e22cb"
 }

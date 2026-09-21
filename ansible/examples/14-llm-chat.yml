@@ -287,11 +287,28 @@
     # Rebuilt by api/build-firecracker-rootfs.sh — update these two by
     # hand whenever that script is re-run.
     firecracker_rootfs_name: firecracker-rootfs-jammy.ext4.gz
-    firecracker_rootfs_sha256: 3808d1aacf008756c9d4313bc1b84f217be28ee68a686a996a1a3ef61daba461
+    firecracker_rootfs_sha256: 5ac94d59919e619be6aeb635d5eb48c1d9beb1c767ed8feafb23bef289c787e6
     # Deliberately outside both the platform's own real bridge range
     # (192.168.x.0/24) and this example's own fictional declared VPC CIDR
     # (10.91.0.0/16 default) — no overlap with either.
     sandbox_subnet_cidr: 10.200.0.0/24
+
+    # Stage 5B — sandbox_terminal.py's own tunables. Defaults sized
+    # against this repo's own existing conventions — see
+    # examples/llm-chat/variables.tf's own matching variable comments
+    # for the fuller reasoning.
+    terminal_port: 8622
+    terminal_idle_timeout_minutes: 15
+    terminal_max_session_minutes: 60
+    terminal_max_concurrent_sessions: 4
+    terminal_boot_timeout_seconds: 20
+
+    # jammy's own python3-websockets (9.1-1) is confirmed broken on
+    # jammy's own current Python 3.10.12 (asyncio.Lock(loop=...), a
+    # parameter Python 3.10 removed outright) -- vendored instead. See
+    # examples/llm-chat/variables.tf's matching variable comment.
+    websockets_wheel_name: websockets-16.1.1-cp310-manylinux.whl
+    websockets_wheel_sha256: 1214e673c404684b9bf7154f5cf43b45025b1a6160fac3a9e438e9c1a97e22cb
 
   tasks:
     - name: Fail fast if worker_peers is empty
@@ -397,6 +414,10 @@
       ansible.builtin.set_fact:
         verify_proxy_source: "{{ lookup('file', 'templates/llm-chat/verify_proxy.py') }}"
 
+    - name: Load sandbox_terminal.py source (Stage 5B sandbox terminal)
+      ansible.builtin.set_fact:
+        sandbox_terminal_source: "{{ lookup('file', 'templates/llm-chat/sandbox_terminal.py') }}"
+
     - name: Load CodeMirror assets (Stage 2 — interactive sandbox editor)
       # Same vendored build the Dashboard's own Editor page already
       # ships (ui/vendor/, two levels up from this playbook's own
@@ -409,6 +430,14 @@
         codemirror_theme_css: "{{ lookup('file', '../../ui/vendor/codemirror-theme-dracula.min.css') }}"
         codemirror_matchbrackets_js: "{{ lookup('file', '../../ui/vendor/codemirror-addon-matchbrackets.min.js') }}"
         codemirror_python_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-python.min.js') }}"
+
+    - name: Load xterm.js assets (Stage 5B — sandbox terminal)
+      # Already vendored for the Dashboard's own admin Terminal feature
+      # — reused as-is, same re-embedding reasoning as CodeMirror above.
+      ansible.builtin.set_fact:
+        xterm_core_js: "{{ lookup('file', '../../ui/vendor/xterm.min.js') }}"
+        xterm_core_css: "{{ lookup('file', '../../ui/vendor/xterm.min.css') }}"
+        xterm_fit_addon_js: "{{ lookup('file', '../../ui/vendor/xterm-addon-fit.min.js') }}"
 
     - name: Render coordinator user_data
       ansible.builtin.set_fact:
@@ -436,11 +465,22 @@
           'firecracker_rootfs_name': firecracker_rootfs_name,
           'firecracker_rootfs_sha256': firecracker_rootfs_sha256,
           'sandbox_subnet_cidr': sandbox_subnet_cidr,
+          'sandbox_terminal_source': sandbox_terminal_source,
+          'terminal_port': terminal_port,
+          'terminal_idle_timeout_minutes': terminal_idle_timeout_minutes,
+          'terminal_max_session_minutes': terminal_max_session_minutes,
+          'terminal_max_concurrent_sessions': terminal_max_concurrent_sessions,
+          'terminal_boot_timeout_seconds': terminal_boot_timeout_seconds,
+          'websockets_wheel_name': websockets_wheel_name,
+          'websockets_wheel_sha256': websockets_wheel_sha256,
           'codemirror_core_js': codemirror_core_js,
           'codemirror_core_css': codemirror_core_css,
           'codemirror_theme_css': codemirror_theme_css,
           'codemirror_matchbrackets_js': codemirror_matchbrackets_js,
-          'codemirror_python_mode_js': codemirror_python_mode_js }) }}"
+          'codemirror_python_mode_js': codemirror_python_mode_js,
+          'xterm_core_js': xterm_core_js,
+          'xterm_core_css': xterm_core_css,
+          'xterm_fit_addon_js': xterm_fit_addon_js }) }}"
 
     - name: Create coordinator instance
       # vpc_id/subnet_id/security_group_ids/peer_id fall back to this

@@ -138,13 +138,27 @@ ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
     cat > /usr/local/bin/fetch-mmds-key.sh <<\"EOS\"
 #!/bin/bash
 set -e
+# MMDS's link-local address needs an explicit host-scope route -- it is
+# NOT reachable via the normal default route, confirmed directly against
+# Firecracker's own docs (mmds-user-guide.md: \"guest applications must
+# insert a new rule into the routing table... ip route add \$MMDS_IPV4_ADDR
+# dev \$MMDS_NET_IF\"). Without this line every curl below fails with a
+# real, immediate \"Network is unreachable\", not a slow timeout.
+ip route add 169.254.169.254 dev eth0 2>/dev/null || true
 for i in \$(seq 1 20); do
   # --connect-timeout/--max-time are load-bearing, not cosmetic: confirmed
   # live that a bare curl call here (no timeout at all) can hang on the
   # OS-level TCP connect timeout -- tens of seconds -- on EACH of these 20
   # attempts if MMDS is unreachable for any reason, turning a boot that
   # should fail over in ~5s into one that stalls for minutes.
-  KEY=\$(curl -s -f --connect-timeout 1 --max-time 2 -H \"Accept: application/json\" \"http://169.254.169.254/latest/meta-data/public-key\" || true)
+  # Deliberately NO Accept: application/json here -- confirmed live that
+  # MMDS returns this leaf string value JSON-quoted (literal double
+  # quotes wrapped around it) when that header is sent, which then
+  # lands verbatim in authorized_keys and breaks every login. Omitting
+  # the header gets MMDS's own IMDS-compatible plain-text format
+  # instead, which for a plain string value like this one is exactly
+  # the raw key line SSH expects, no quotes.
+  KEY=\$(curl -s -f --connect-timeout 1 --max-time 2 \"http://169.254.169.254/latest/meta-data/public-key\" || true)
   [ -n \"\$KEY\" ] && break
   sleep 0.25
 done
