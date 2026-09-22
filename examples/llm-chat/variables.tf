@@ -311,6 +311,44 @@ variable "verify_max_fix_rounds" {
   default     = 3
 }
 
+# Direct report: real Linux Help/Ask answers were regularly cut off
+# mid-word ("often find the llm running out of steam or trailing
+# off"), and manually asking again ("push for it to finish") reliably
+# completed it. Root cause: llama-server's own -c context_size ceiling
+# (not the model choosing to stop) -- the OpenAI-compatible endpoint's
+# final streamed chunk carries finish_reason: "length" whenever that
+# happens, which verify_proxy.py never used to even read. Same
+# ceiling-not-guarantee shape as verify_max_fix_rounds above, just
+# triggered by a truncated response instead of a failed execution --
+# bounds compute cost against a reply that keeps hitting the ceiling
+# every round (a long enough conversation history eventually will,
+# regardless of how large context_size is) rather than looping forever.
+variable "max_continuation_rounds" {
+  description = "How many automatic 'continue exactly where you left off' rounds follow a real llama-server response that was cut off by the context-window ceiling (finish_reason: \"length\"), each one relayed seamlessly into the same answer with no student action needed. A ceiling, not a guarantee every round runs — it stops as soon as one round actually finishes naturally (finish_reason: \"stop\")."
+  type        = number
+  default     = 3
+}
+
+# Found live while verifying the continuation feature above: a real
+# generation can silently DEADLOCK inside llama-server's own thread
+# scheduling when RPC offloading (worker_peers) is in play -- confirmed
+# via /proc/<pid>/task/*/stack on both the coordinator and the worker
+# that every llama-server thread except its plain HTTP listener sits
+# genuinely stuck (futex_wait), not doing real compute or I/O, while
+# the RPC worker itself sits healthily idle waiting for a request that
+# never comes. Once this happens the whole coordinator is wedged for
+# every future request, not just the one that triggered it -- a real
+# bug in llama-server/ggml-rpc itself (documented upstream as an
+# experimental, not fully hardened backend), not something fixable
+# from this deployment's own code. verify_proxy.py can only detect it
+# and self-heal the service for whoever asks next (see its own
+# GENERATION_STALL_TIMEOUT_S comment for the full mechanism).
+variable "generation_stall_timeout_seconds" {
+  description = "How long a response can go with zero real content (not just any byte -- llama-server's own SSE keep-alive pings keep the raw connection alive even while fully deadlocked) before verify_proxy.py treats it as a stalled/deadlocked llama-server and automatically restarts llama-server.service in the background. Well above this platform's own measured worst-case per-token latency so a merely-slow response is never misdiagnosed as stuck."
+  type        = number
+  default     = 120
+}
+
 # One entry per RPC worker instance — the whole point of this template.
 # Each worker is pinned to a specific paired peer (see the Peers
 # section, or the cloudcore_peers data source, for available hosts) and

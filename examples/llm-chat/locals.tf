@@ -135,6 +135,8 @@ locals {
     verify_timeout_seconds  = var.verify_timeout_seconds
     verify_max_memory_mb    = var.verify_max_memory_mb
     verify_max_fix_rounds   = var.verify_max_fix_rounds
+    max_continuation_rounds = var.max_continuation_rounds
+    generation_stall_timeout_seconds = var.generation_stall_timeout_seconds
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
     deployment_name           = local.coordinator_deployment_name

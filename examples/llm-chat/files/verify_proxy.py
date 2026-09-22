@@ -57,6 +57,7 @@ import select
 import shutil
 import signal
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -71,6 +72,135 @@ ENABLE_VERIFICATION = os.environ.get("VERIFY_ENABLED", "true").lower() == "true"
 VERIFY_TIMEOUT_S = int(os.environ.get("VERIFY_TIMEOUT_SECONDS", "15"))
 VERIFY_MAX_MEMORY_MB = int(os.environ.get("VERIFY_MAX_MEMORY_MB", "256"))
 VERIFY_MAX_FIX_ROUNDS = int(os.environ.get("VERIFY_MAX_FIX_ROUNDS", "3"))
+
+# Direct report: real Ask/Linux Help answers were regularly cut off
+# mid-word, and manually asking again reliably completed it. Root
+# cause: llama-server's own -c context_size ceiling (not the model
+# choosing to stop) -- its OpenAI-compatible endpoint's final streamed
+# chunk carries finish_reason: "length" whenever generation is cut off
+# by that ceiling rather than a real end-of-response token, which this
+# file never used to even read. _relay_and_verify_stream() now checks
+# for that and automatically fires up to MAX_CONTINUATION_ROUNDS
+# "continue exactly where you left off" follow-ups, relayed seamlessly
+# into the same SSE stream -- from the browser's own JS this reads as
+# one continuous reply typing out, no student action needed. A
+# ceiling, not a guarantee every round runs: it stops as soon as one
+# round actually finishes naturally (finish_reason: "stop"). Only
+# covers the initial streamed answer today -- verify_and_maybe_fix()'s
+# own grounded-fix-round replies (a separate, buffered, non-streaming
+# call via _call_llama_direct()) are typically much shorter and were
+# not the reported symptom, so left out of scope for now.
+MAX_CONTINUATION_ROUNDS = int(os.environ.get("MAX_CONTINUATION_ROUNDS", "3"))
+
+# How much of the cut-off answer's own tail to quote back at the model
+# when asking it to continue (see _continuation_user_turn below).
+_CONTINUATION_TAIL_CHARS = 300
+
+
+def _continuation_user_turn(prior_text: str) -> str:
+    """Build the user turn for an automatic continuation round. Found
+    live: an earlier, purely instructional version of this prompt
+    ("continue exactly where you left off, do not repeat") was
+    unreliable -- tested against a response deliberately cut off very
+    early (a small max_tokens, to exercise this path quickly), the
+    model repeatedly just restarted its whole answer from the
+    beginning ("Certainly! ...") instead of truly resuming, which would
+    have shown up as real, silently duplicated content in a genuine
+    answer. Quoting the literal tail of what it already wrote back at
+    it, and asking it to continue from that exact text, is a well-
+    established stronger technique than an abstract instruction alone
+    -- it gives the model concrete text to pattern-match against rather
+    than trusting it to remember where a separate, fresh completion
+    request left off."""
+    tail = prior_text[-_CONTINUATION_TAIL_CHARS:]
+    return (
+        "Your previous reply was cut off before it finished. Here is the "
+        "exact end of what you already wrote:\n\n"
+        f"---\n{tail}\n---\n\n"
+        "Continue writing from that exact point onward. Do not repeat any "
+        "of the text above, do not say something like 'Certainly' or "
+        "restart your explanation -- output ONLY the new text that comes "
+        "next, picking up mid-sentence/mid-word if that's where it was cut."
+    )
+
+# Found live, chasing this same continuation feature: a real generation
+# can silently DEADLOCK inside llama-server's own thread scheduling when
+# RPC offloading (--rpc, this deployment's own worker split) is in play
+# -- confirmed via /proc/<pid>/task/*/stack on both ends: the RPC worker
+# sits healthily idle in recvfrom() waiting for a request that never
+# comes, while every llama-server thread except the plain HTTP accept()
+# listener sits in futex_wait, genuinely stuck, not doing compute or
+# I/O. Once this happens the ENTIRE process is wedged for every future
+# request, not just the one that triggered it -- confirmed live: a
+# freshly restarted llama-server, given a brand-new small prompt,
+# deadlocked again immediately. This is a real bug in llama-server/
+# ggml-rpc itself (documented upstream as an experimental, not fully
+# hardened backend) -- nothing in this file can fix the deadlock
+# itself, only detect it and recover the SERVICE for whoever asks next.
+#
+# GENERATION_STALL_TIMEOUT_S: how long with zero real content (not
+# just any byte -- llama-server's own SSE keep-alive pings keep the
+# raw socket alive even while fully deadlocked, which is exactly why a
+# plain connection-level read timeout never caught this) before a
+# response is treated as stalled. Well above this platform's own
+# measured worst-case per-token latency (~1-2s at the observed ~1.3
+# tok/s) so a merely-slow response is never misdiagnosed as stuck.
+GENERATION_STALL_TIMEOUT_S = int(os.environ.get("GENERATION_STALL_TIMEOUT_SECONDS", "120"))
+
+# How often _relay_one_stream's read loop wakes up (via a short socket
+# read timeout) to re-check the stall clock -- NOT the stall threshold
+# itself. Short enough that GENERATION_STALL_TIMEOUT_S is honored
+# reasonably promptly, long enough not to busy-loop.
+_SOCKET_POLL_TIMEOUT_S = 5
+
+# A stalled request means the WHOLE process is wedged, so several
+# concurrent students could all detect the same stall within moments of
+# each other -- this cooldown means only the first one actually fires
+# `systemctl restart`, not one redundant restart per stalled request.
+_LLAMA_RESTART_COOLDOWN_S = 30
+_llama_restart_lock = threading.Lock()
+_llama_last_restart_time = 0.0
+
+
+def _restart_llama_server() -> None:
+    """Best-effort self-heal for the deadlock described above: restart
+    llama-server.service so the NEXT student's request has a healthy
+    process to talk to, since nothing short of a restart clears this
+    (confirmed live -- the deadlock reproduced immediately even on a
+    freshly restarted process talking to a freshly restarted RPC
+    worker, so this is not guaranteed to fully fix it, only to give
+    the next attempt the best real chance). Runs in its own thread,
+    fire-and-forget -- the request that detected the stall has already
+    told its own student what happened and returns immediately rather
+    than waiting out the ~90s model reload too. verify-proxy.service
+    itself runs as root (see its own systemd unit), so this needs no
+    sudo/password prompt.
+
+    Confirmed live: verify-proxy.service's own unit has
+    `Requires=llama-server.service`, so this restart briefly restarts
+    verify-proxy.service TOO (systemd's own dependency propagation,
+    pre-existing, not something this function causes deliberately) --
+    including the very process this function is running in. That's an
+    acceptable, low-cost side effect, not a bug: verify-proxy's own
+    restart takes a couple of seconds (no model to reload), so the only
+    real impact is any OTHER concurrent request landing in that brief
+    window gets its own connection reset -- a clear, honest failure a
+    retry resolves, not a silent hang. Nothing here waits for or
+    depends on this process surviving past this point."""
+    global _llama_last_restart_time
+    with _llama_restart_lock:
+        if time.time() - _llama_last_restart_time < _LLAMA_RESTART_COOLDOWN_S:
+            return
+        _llama_last_restart_time = time.time()
+    try:
+        subprocess.run(["systemctl", "restart", "llama-server.service"],
+                        timeout=15, check=True, capture_output=True)
+        print(f"verify-proxy: restarted llama-server.service after a generation "
+              f"stall (no real content for over {GENERATION_STALL_TIMEOUT_S}s)", flush=True)
+    except Exception as e:
+        print(f"verify-proxy: FAILED to restart llama-server.service after a "
+              f"generation stall: {e!r}", flush=True)
+
 SANDBOX_USER = "sandboxrunner"
 
 # Same fixed pool sandbox_terminal.py's own preview proxy listens on --
@@ -2074,39 +2204,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         messages = ([{"role": "system", "content": system_message}]
                     + list(history) + [{"role": "user", "content": user_turn}])
 
-        upstream_payload = {"messages": messages, "stream": True}
-        if max_tokens:
-            upstream_payload["max_tokens"] = max_tokens
-        upstream_body = json.dumps(upstream_payload).encode()
-
-        # A single failed TCP connect attempt to a purely local port
-        # (127.0.0.1:8721) shouldn't necessarily fail the whole turn --
-        # found live that a real 502 reached the browser with nothing
-        # useful logged server-side to diagnose it afterward (the
-        # original single-attempt version only ever wrote its error to
-        # the client, never to stderr/journald). A couple of quick
-        # retries smooths over a genuinely transient blip without
-        # masking a real, persistent failure -- still 502s if all
-        # attempts fail, but now with the real exception in the journal.
-        conn = None
-        last_err = None
-        for attempt in range(3):
-            try:
-                conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=600)
-                conn.request("POST", "/v1/chat/completions", body=upstream_body,
-                              headers={"Content-Type": "application/json",
-                                       "Content-Length": str(len(upstream_body))})
-                resp = conn.getresponse()
-                break
-            except (ConnectionRefusedError, socket.timeout, OSError) as e:
-                last_err = e
-                print(f"verify-proxy: {endpoint_label} upstream connect attempt "
-                      f"{attempt + 1}/3 failed: {e!r}", flush=True)
-                if conn is not None:
-                    conn.close()
-                if attempt < 2:
-                    time.sleep(0.5)
-        else:
+        conn, resp, last_err = self._open_upstream_completion(messages, max_tokens, endpoint_label)
+        if resp is None:
             self.send_response(502)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
@@ -2116,6 +2215,55 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._relay_and_verify_stream(resp, messages, max_tokens, capture_source=capture_source,
                                        interrupt=interrupt_event, verify=verify)
         conn.close()
+
+    def _open_upstream_completion(self, messages: list, max_tokens=None,
+                                   endpoint_label: str = "ask") -> tuple:
+        """Open a new streaming POST /v1/chat/completions connection to
+        the coordinator's own local llama-server. Shared by the initial
+        ask (_do_handle_ask) and every automatic continuation round
+        (_relay_and_verify_stream, see MAX_CONTINUATION_ROUNDS) -- same
+        brief-retry tolerance the original single-caller version already
+        had for a purely local, otherwise-reliable TCP connect (found
+        live: a single failed attempt reached the browser as a bare 502
+        with nothing useful logged server-side to diagnose afterward).
+        Returns (conn, resp, None) on success, or (None, None, last_err)
+        after 3 failed attempts -- callers decide how to tell the client
+        about that failure in whatever form fits where they are in their
+        own response (a fresh 502 before anything's been sent, or an
+        honest SSE note appended to a stream already in progress)."""
+        payload = {"messages": messages, "stream": True}
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        body = json.dumps(payload).encode()
+
+        # A short timeout, not the original 600s -- this governs every
+        # subsequent resp.read(1) too (see _relay_one_stream), which is
+        # what lets that loop periodically re-check GENERATION_STALL_
+        # TIMEOUT_S's own clock instead of blocking indefinitely.
+        # Confirmed live this doesn't false-positive on a merely-busy
+        # (not deadlocked) llama-server: a new request gets a slot
+        # assigned and starts streaming near-instantly even under real
+        # load -- the observed deadlock only ever blocks actual token
+        # generation, never the initial connect/response-headers phase.
+        conn = None
+        last_err = None
+        for attempt in range(3):
+            try:
+                conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT,
+                                                    timeout=_SOCKET_POLL_TIMEOUT_S)
+                conn.request("POST", "/v1/chat/completions", body=body,
+                              headers={"Content-Type": "application/json",
+                                       "Content-Length": str(len(body))})
+                return conn, conn.getresponse(), None
+            except (ConnectionRefusedError, socket.timeout, OSError) as e:
+                last_err = e
+                print(f"verify-proxy: {endpoint_label} upstream connect attempt "
+                      f"{attempt + 1}/3 failed: {e!r}", flush=True)
+                if conn is not None:
+                    conn.close()
+                if attempt < 2:
+                    time.sleep(0.5)
+        return None, None, last_err
 
     def _handle_sandbox_interrupt(self):
         """Signals the caller's own in-flight /sandbox/ask (if any) to
@@ -2141,25 +2289,60 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
-    def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
-                                  capture_source: str = "llm-chat-coordinator", interrupt=None,
-                                  verify: bool = True):
-        self.send_response(resp.status)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
+    def _relay_one_stream(self, resp, interrupt=None) -> tuple:
+        """Read one streamed /v1/chat/completions response chunk by
+        chunk, forwarding each raw SSE line to the client as it arrives
+        (so the browser sees one continuous typing effect regardless of
+        which underlying request -- the original ask, or an automatic
+        continuation round -- produced it) while accumulating the full
+        text and the final chunk's own finish_reason ("stop" for a
+        genuine model-chosen end, "length" for hitting llama-server's
+        own context_size ceiling -- see MAX_CONTINUATION_ROUNDS).
+        Swallows the upstream's own "data: [DONE]" -- the caller decides
+        when the real, final [DONE] goes out, since it may still need to
+        relay one or more continuation rounds, or a verification block,
+        first.
 
+        Returns (text, finish_reason, stop_reason, meta, timings), where
+        stop_reason is None (finished normally), "interrupted" (the
+        student's own Stop button), "disconnected" (the student
+        navigated away -- a dead pipe, nothing left to write to), or
+        "stalled" (no real content for over GENERATION_STALL_TIMEOUT_S
+        -- see that constant's own comment for the real, live-confirmed
+        llama-server/RPC deadlock this guards against)."""
         accumulated = []
         last_chunk_meta: dict = {}
         last_timings: dict = {}
+        finish_reason = None
         buf = b""
-        interrupted_during_stream = False
+        last_real_content_time = time.time()
         while True:
             if interrupt is not None and interrupt.is_set():
-                interrupted_during_stream = True
-                break
-            chunk = resp.read(1)
+                return "".join(accumulated), finish_reason, "interrupted", last_chunk_meta, last_timings
+            try:
+                chunk = resp.read(1)
+            except (socket.timeout, OSError):
+                # Not necessarily a real failure -- resp's own socket
+                # timeout is deliberately short (_SOCKET_POLL_TIMEOUT_S)
+                # purely so this loop wakes up regularly to check the
+                # stall clock below, not because a few seconds of
+                # silence is itself meaningful (llama-server's own
+                # keep-alive pings, and ordinary inter-token gaps, are
+                # both well under GENERATION_STALL_TIMEOUT_S in normal
+                # operation). Found live: after the FIRST socket.timeout
+                # on a chunked-transfer response, http.client's own
+                # buffered reader latches into a state where every
+                # SUBSEQUENT timed-out read raises a plain OSError
+                # ("cannot read from timed out object"), not another
+                # socket.timeout -- a real stdlib quirk, not a genuine
+                # connection failure, so it's handled identically here
+                # rather than crashing the handler thread. A brief sleep
+                # avoids busy-looping in the (rarer) case this really is
+                # a broken/reset connection repeatedly raising instantly.
+                if time.time() - last_real_content_time > GENERATION_STALL_TIMEOUT_S:
+                    return "".join(accumulated), finish_reason, "stalled", last_chunk_meta, last_timings
+                time.sleep(0.2)
+                continue
             if not chunk:
                 break
             buf += chunk
@@ -2171,46 +2354,116 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             text = line.decode(errors="replace").strip()
             is_done = text.startswith("data: ") and text[len("data: "):] == "[DONE]"
             if is_done:
-                # Swallow the upstream's own [DONE] -- our own single
-                # [DONE] goes out after any verification block below,
-                # never before it (most SSE clients stop reading at the
-                # first one, so anything sent after an earlier [DONE]
-                # would be silently dropped).
                 break
 
             try:
                 self.wfile.write(line)
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                return  # student navigated away mid-stream -- nothing more to do
+                return "".join(accumulated), finish_reason, "disconnected", last_chunk_meta, last_timings
 
             if not text.startswith("data: "):
                 continue
             payload = text[len("data: "):]
             try:
                 obj = json.loads(payload)
-                delta = obj["choices"][0].get("delta", {})
+                choice = obj["choices"][0]
+                delta = choice.get("delta", {})
                 if "content" in delta and delta["content"]:
                     accumulated.append(delta["content"])
+                    last_real_content_time = time.time()
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
                 last_chunk_meta = {k: obj.get(k) for k in ("id", "model", "system_fingerprint")}
                 # llama-server puts this on the final chunk of each
-                # response (finish_reason set) -- see the module-level
+                # response (timings set) -- see the module-level
                 # docstring on _record_llm_stats for where it's read.
                 if obj.get("timings"):
                     last_timings = obj["timings"]
             except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                 continue
 
+        return "".join(accumulated), finish_reason, None, last_chunk_meta, last_timings
+
+    def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
+                                  capture_source: str = "llm-chat-coordinator", interrupt=None,
+                                  verify: bool = True):
+        self.send_response(resp.status)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        text, finish_reason, stop_reason, last_chunk_meta, last_timings = \
+            self._relay_one_stream(resp, interrupt)
+        accumulated_text = [text]
+
+        # Direct report: real answers were regularly cut off mid-word by
+        # llama-server's own context_size ceiling, not a genuine model
+        # decision to stop -- the fix is the same "automatically keep
+        # going, no student action needed" shape this platform already
+        # uses for a failed Run-in-Terminal command, just triggered by
+        # finish_reason == "length" instead of a bad exit code. Each
+        # round is relayed into the exact same SSE stream, seamlessly,
+        # before the real closing [DONE] goes out.
+        continuation_rounds = 0
+        while (stop_reason is None and finish_reason == "length"
+               and continuation_rounds < MAX_CONTINUATION_ROUNDS):
+            continuation_rounds += 1
+            prior_text = "".join(accumulated_text)
+            continue_messages = (list(request_messages)
+                                  + [{"role": "assistant", "content": prior_text},
+                                     {"role": "user", "content": _continuation_user_turn(prior_text)}])
+            conn, cresp, _ = self._open_upstream_completion(continue_messages, request_max_tokens,
+                                                              endpoint_label="continuation")
+            if cresp is None:
+                self._write_sse_delta(
+                    "\n\n_[Automatic continuation failed — the model backend became "
+                    "unreachable. The answer above may be incomplete.]_\n", last_chunk_meta)
+                break
+            text, finish_reason, stop_reason, meta, timings = self._relay_one_stream(cresp, interrupt)
+            conn.close()
+            accumulated_text.append(text)
+            if meta:
+                last_chunk_meta = meta
+            if timings:
+                last_timings = timings
+
+        if stop_reason is None and finish_reason == "length":
+            # Hit MAX_CONTINUATION_ROUNDS without ever seeing a real
+            # "stop" -- said honestly rather than silently presenting a
+            # reply that may still be missing its ending (a long enough
+            # conversation history will eventually refill even a large
+            # context_size regardless of how many rounds are allowed).
+            self._write_sse_delta(
+                "\n\n_[This answer may still be incomplete — it kept hitting the "
+                "model's context limit after several automatic continuations. Ask "
+                "a follow-up if something's missing.]_\n", last_chunk_meta)
+
         if last_timings:
             _record_llm_stats(last_chunk_meta.get("model"), last_timings)
 
-        full_text = "".join(accumulated)
-        if interrupted_during_stream:
+        full_text = "".join(accumulated_text)
+        if stop_reason == "disconnected":
+            return  # student navigated away mid-stream -- nothing more to do
+        elif stop_reason == "interrupted":
             # Stopped before the model's own response even finished --
             # nothing coherent to ground/verify yet, so skip straight
             # to an honest note instead of running verify_and_maybe_fix()
             # on a deliberately truncated response.
             self._write_sse_delta("\n\n---\n_Stopped at your request._\n", last_chunk_meta)
+        elif stop_reason == "stalled":
+            # See GENERATION_STALL_TIMEOUT_S's own comment -- a real,
+            # live-confirmed llama-server/RPC deadlock, not a slow
+            # response. Told honestly rather than left hanging forever;
+            # the restart fires in the background so THIS student's own
+            # request doesn't also sit through the ~90s model reload --
+            # they're told to simply try again shortly instead.
+            self._write_sse_delta(
+                "\n\n---\n_The model backend appears to have stalled. It's being "
+                "automatically restarted -- please try again in about a minute._\n",
+                last_chunk_meta)
+            threading.Thread(target=_restart_llama_server, daemon=True).start()
         elif verify:
             # Stage 8 -- verify=False (the Linux Q&A panel) skips this
             # whole block: no auto-execution of a suggested shell
