@@ -555,58 +555,103 @@
           Role: ingress
       register: lb
 
-    # Known gap, flagged rather than silently left: this Ansible path
-    # still uses the LB's own simple single-backend model (POST
-    # .../backends, one address:port, no listener/target-group objects
-    # at all — see api/lb.py's own "if lb.listeners: ... else:" fallback).
-    # The Terraform path (examples/llm-chat/main.tf) instead builds real
-    # target groups + a listener with routing_rules, which is what makes
-    # path-based routing to sandbox_terminal.py's own /terminal AND the
-    # new preview ports possible at all. DEPLOYMENT_NAME/PREVIEW_PORTS
-    # are still threaded into both services below for parity and so a
-    # student reaching the coordinator directly (bypassing this LB) can
-    # use them — but neither /terminal nor the preview ports are
-    # reachable through THIS Ansible-created LB today. Migrating this
-    # LB setup to the fuller target-group/listener model is a real,
-    # separate piece of work, not attempted here.
-    - name: Register coordinator as the LB backend
-      ansible.builtin.uri:
-        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ cloudcore_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          name: "{{ coordinator.instance.name }}"
-          address: "{{ coordinator_poll.json.private_ip }}"
-          port: "{{ http_port }}"
-        status_code: 201
-
-    - name: Set LB health check to llama-server's real liveness endpoint
-      # llama-server's own root path ("/") requires gzip-encoded
-      # responses (its embedded Web UI assets are pre-compressed) — a
-      # plain health check without Accept-Encoding: gzip gets a 415,
-      # exactly the same finding 13-distributed-llm.yml's own F-097
-      # made for the same binary. /health is llama-server's real
-      # liveness endpoint and needs no special headers.
-      ansible.builtin.uri:
-        url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/health-check"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ cloudcore_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          protocol: HTTP
+    # Real target groups + a listener with routing_rules, matching
+    # examples/llm-chat/main.tf's own model exactly (not the older
+    # simple single-backend model 09-ghidra-workstation.yml/
+    # 11-wifi-sniffer.yml still use) — this is what makes path-based
+    # routing to sandbox_terminal.py's own /terminal AND the preview
+    # ports possible at all. llama-server's own root path ("/") requires
+    # gzip-encoded responses (its embedded Web UI assets are
+    # pre-compressed) — a plain health check without Accept-Encoding:
+    # gzip gets a 415, exactly the same finding 13-distributed-llm.yml's
+    # own F-097 made for the same binary. /health is llama-server's real
+    # liveness endpoint (proxied through by verify_proxy.py) and needs
+    # no special headers.
+    - name: Create coordinator target group
+      cloudcore.cloudcore.lb_target_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-tg"
+        port: "{{ http_port }}"
+        protocol: http
+        health_check:
           path: /health
-        status_code: 200
+        targets:
+          - instance_id: "{{ coordinator.instance.id }}"
+            port: "{{ http_port }}"
+      register: coord_tg
+
+    # sandbox_terminal.py is a WebSocket-only service — a plain GET /
+    # never completes the WS handshake, so the websockets library
+    # correctly answers 426 Upgrade Required; without its own
+    # process_request health hook (see that file) HAProxy would read
+    # that as unhealthy and mark the whole backend down — same finding
+    # examples/llm-chat/main.tf's own terminal target group comment
+    # documents.
+    - name: Create terminal target group
+      cloudcore.cloudcore.lb_target_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-term-tg"
+        port: "{{ terminal_port }}"
+        protocol: http
+        health_check:
+          path: /health
+        targets:
+          - instance_id: "{{ coordinator.instance.id }}"
+            port: "{{ terminal_port }}"
+      register: term_tg
+
+    - name: Create preview target groups
+      cloudcore.cloudcore.lb_target_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-preview-{{ item }}-tg"
+        port: "{{ item }}"
+        protocol: http
+        health_check:
+          path: /health
+        targets:
+          - instance_id: "{{ coordinator.instance.id }}"
+            port: "{{ item }}"
+      loop: "{{ preview_ports }}"
+      register: preview_tgs
+
+    - name: Create main listener (with /terminal routing rule)
+      cloudcore.cloudcore.lb_listener:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        port: "{{ http_port }}"
+        protocol: http
+        target_group_id: "{{ coord_tg.target_group.id }}"
+        routing_rules:
+          - priority: 10
+            conditions:
+              path_pattern: "/terminal*"
+            target_group_id: "{{ term_tg.target_group.id }}"
+
+    - name: Create preview listeners
+      cloudcore.cloudcore.lb_listener:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        lb_id: "{{ lb.load_balancer.id }}"
+        port: "{{ item.item }}"
+        protocol: http
+        target_group_id: "{{ item.target_group.id }}"
+      loop: "{{ preview_tgs.results }}"
 
     - name: Show sandbox URL
       ansible.builtin.debug:
         msg: >
           Open this in a real browser (not curl -- the sandbox page needs a
-          real browser to run its own JS): http://127.0.0.1:{{ lb.load_balancer.listen_port }}/
+          real browser to run its own JS): http://127.0.0.1:{{ http_port }}/
+          -- the Terminal panel there gives a real isolated shell, and ports
+          {{ preview_ports | join(', ') }} are reachable at this same host
+          for previewing any web app a student runs in it.
           -- an Interactive Sandbox (code editor + grounded Run/Ask loop),
           not a general chat webui (that's no longer reachable at all --
           see llm-chat-interactive-sandbox-Phased-Implementation.md).
