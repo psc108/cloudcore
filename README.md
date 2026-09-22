@@ -143,9 +143,19 @@ you pick the *candidate pool* once, not which ones run each time.
 
 Every run's own timing (cluster build time, model load time, inference
 time), token counts, and per-host resource usage during the run are
-on the Dashboard's **Builds → LLM Performance** page — a history of
-real numbers from actual runs, not a live dashboard (the cluster is
-ephemeral, so there's usually nothing running to watch live).
+on the Dashboard's **Builds → LLM Performance** page, under **Ingestion
+Run History** — a history of real numbers from actual runs, since the
+ingestion cluster itself is ephemeral (built fresh each wakeup,
+destroyed after).
+
+The same page's **Live Deployments** section is the opposite: any
+running example's own LLM server — right now, not a history. Any
+example can self-register once at its own startup (`llm-chat`'s
+coordinator already does); the Dashboard live-polls each registered
+deployment for real aggregate stats (requests served, tokens/sec,
+model, uptime) and refreshes automatically every 3 minutes while the
+page is open. A deployment that's mid-rebuild or was torn down without
+unregistering just shows as offline rather than breaking the page.
 
 ### Interactive Sandbox (`examples/llm-chat`)
 
@@ -197,6 +207,31 @@ review page at the same URL's own `/examples` path (e.g.
 `http://127.0.0.1:8620/examples`) — worked examples, curated from
 real sessions, showing the full journey including any real failure and
 fix, not just the successful ones.
+
+#### Terminal and browser preview
+
+Below the Run/Ask panels, a **Terminal** panel gives each student a
+real, persistent Linux shell — genuine internet access (`pip install`,
+`curl`, cloning a repo, anything a normal machine can do), but
+otherwise fully isolated: it cannot reach this lab, any other student,
+or anything else on the network. Unlike the Run sandbox (one-shot,
+stdout-only, no network), this is a real hardware-virtualized
+Firecracker microVM booted fresh per session and torn down completely
+when it ends or goes idle — the same KVM guest-kernel boundary that
+already isolates CloudCore tenants from each other, not a container
+sharing the host kernel.
+
+A fixed pool of four high ports (`41001`–`41004` by default, set once
+at this example's own deploy time via `preview_ports`) is reachable
+from your browser at the same host, reverse-proxied straight into
+whichever microVM your own terminal session is currently using — start
+a web server on any of them (`python3 -m http.server 41001`, Flask's
+`app.run(host='0.0.0.0', port=41001)`, etc.) and open that port in a
+new tab to see it render for real. A student's own program often needs
+more than one port at once (a frontend plus an API, say), so all four
+are always available together, not requested individually. The
+Terminal panel's own description and the shell's "connected" message
+both remind you which ports are live the moment a session starts.
 
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
 precision Q8_0 variant of their own default model on the new
