@@ -32,6 +32,7 @@ function showSection(name, btn) {
   if (name !== 'dashboard') stopDashPoll();
   if (name !== 'peers') stopPeersPoll();
   if (name !== 'scheduler') stopSchedulerPoll();
+  if (name !== 'llmperf') stopLlmPerfPoll();
   if (name === 'dashboard')     { loadDashboard(); startDashPoll(); }
   if (name === 'vpcs')          loadVPCs();
   if (name === 'subnets')       loadSubnets();
@@ -46,7 +47,7 @@ function showSection(name, btn) {
   if (name === 'builds')        loadBuildManager();
   if (name === 'tofu')           loadTofuManager();
   if (name === 'scheduler')     { loadScheduler(); startSchedulerPoll(); }
-  if (name === 'llmperf')        loadLlmPerformance();
+  if (name === 'llmperf')        { loadLlmPerformance(); startLlmPerfPoll(); }
   if (name === 'llmexamples')    loadLlmExamples();
   if (name === 'editor')         loadEditor();
   if (name === 'settings')       loadSettings();

@@ -243,6 +243,15 @@
     examples_api_base: "http://192.168.100.1:8083"
     examples_ingestion_token: "dev-token"
 
+    # CloudCore Dashboard -- LLM Performance page's "live deployments"
+    # registry (verify_proxy.py's own register_llm_deployment(), api/
+    # llm_deployments_routes.py). Must match the coordinator instance's
+    # actual name below ("Create coordinator instance"'s own `name:`) --
+    # computed here, before that task runs, the same reasoning
+    # examples/llm-chat/locals.tf's own coordinator_deployment_name
+    # local documents for the Terraform path.
+    deployment_name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-coord"
+
     # --- Phase 4: interactive sandbox ----------------------------------
     # Genuinely distinct from webui_system_message above — that one only
     # ever shaped llama-server's own general-purpose webui, which this
@@ -455,6 +464,7 @@
           'verify_max_fix_rounds': verify_max_fix_rounds,
           'examples_api_base': examples_api_base,
           'examples_ingestion_token': examples_ingestion_token,
+          'deployment_name': deployment_name,
           'sandbox_system_message': sandbox_system_message,
           'rate_limit_run_per_minute': rate_limit_run_per_minute,
           'rate_limit_ask_per_10min': rate_limit_ask_per_10min,

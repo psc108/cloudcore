@@ -5,6 +5,84 @@
 // api/scheduler.py), so there's rarely a live model to watch; this is a
 // history of past runs' own timing/token/resource-usage numbers instead,
 // captured by the scheduler itself as each cycle actually happened.
+//
+// Per direct follow-up request: "at the moment we only show ingestion
+// performance. i'd like to see llm performance itself as well" — added
+// the Live Deployments section below (api/llm_deployments_routes.py) —
+// any example's own LLM server self-registers once at its own startup,
+// polled live on every load of this page. Distinct data source and
+// distinct concern from the ingestion history above; see db.py's own
+// llm_deployments table comment for why they're separate tables.
+// var, not let — see 28-scheduler.js's own comment on why (ui/build.sh
+// concatenation order + 15-init.js's early showSection() call means a
+// `let` here would hit the same temporal-dead-zone bug found live in
+// F-089).
+var _llmPerfPollTimer = null;
+
+function startLlmPerfPoll() {
+  if (_llmPerfPollTimer) return;
+  // Every 3 minutes, per direct request — long enough that a handful of
+  // stale/unreachable deployments polled server-side on every request
+  // (see llm_deployments_routes.py's own _poll_live) never adds up to
+  // meaningful load, short enough that "live" still means something.
+  _llmPerfPollTimer = setInterval(loadLlmPerformance, 180000);
+}
+function stopLlmPerfPoll() {
+  clearInterval(_llmPerfPollTimer);
+  _llmPerfPollTimer = null;
+}
+
+function _fmtUptime(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function _fmtTps(v) {
+  return (v === null || v === undefined) ? '—' : `${v.toFixed(1)} tok/s`;
+}
+
+async function loadLlmDeployments() {
+  const tbody = document.getElementById('llmdeploy-tbody');
+  try {
+    const data = await api('GET', '/v1/llm-deployments');
+    const items = data.items || [];
+    if (!items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No LLM deployments registered yet — an example self-registers the first time its own server starts (e.g. llm-chat\'s coordinator).</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(d => {
+      const stats = d.stats || {};
+      const statusVal = !d.reachable ? 'down' : 'up';
+      const statusLabel = !d.reachable ? 'offline' : 'up';
+      return `
+      <tr>
+        <td>${_esc(d.name)}</td>
+        <td>${_esc(d.example)}</td>
+        <td><span class="badge badge-${statusVal}">${statusLabel}</span></td>
+        <td>${d.reachable ? _esc((stats.model || '').split('/').pop() || '—') : '—'}</td>
+        <td>${d.reachable ? (stats.requests_served ?? '—') : '—'}</td>
+        <td>${d.reachable ? _fmtTps(stats.avg_tokens_per_second) : '—'}</td>
+        <td>${d.reachable ? _fmtTps(stats.last_tokens_per_second) : '—'}</td>
+        <td>${d.reachable ? _fmtUptime(stats.uptime_seconds) : '—'}</td>
+        <td><button class="btn btn-sm" onclick="_deleteLlmDeployment('${d.id}')">Remove</button></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function _deleteLlmDeployment(id) {
+  if (!confirm('Remove this deployment from the registry? A running deployment will just re-register itself on its own next restart.')) return;
+  try {
+    await api('DELETE', `/v1/llm-deployments/${id}`);
+    loadLlmDeployments();
+  } catch (e) {
+    toast('Remove failed: ' + e.message, 'error');
+  }
+}
 
 function _perfDuration(seconds) {
   if (seconds === null || seconds === undefined) return '—';
@@ -30,6 +108,14 @@ async function _perfLoadPeerHostnames() {
 }
 
 async function loadLlmPerformance() {
+  // Two independent data sources (see this file's own top-of-file
+  // comment) — run them concurrently and let each fail on its own, so
+  // one being slow/erroring never blanks the other's section.
+  loadLlmDeployments();
+  await _loadIngestionHistory();
+}
+
+async function _loadIngestionHistory() {
   const tbody = document.getElementById('llmperf-tbody');
   tbody.innerHTML = '<tr class="empty-row"><td colspan="9">Loading…</td></tr>';
   document.getElementById('llmperf-detail-card').style.display = 'none';

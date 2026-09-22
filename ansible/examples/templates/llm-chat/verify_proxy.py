@@ -84,6 +84,16 @@ EXAMPLES_API_BASE = os.environ.get("EXAMPLES_API_BASE", "").rstrip("/")
 EXAMPLES_API_TOKEN = os.environ.get("EXAMPLES_API_TOKEN", "")
 EXAMPLES_MODEL_FILENAME = os.environ.get("EXAMPLES_MODEL_FILENAME", "")
 
+# CloudCore Dashboard -- LLM Performance page's "live deployments" section
+# (api/llm_deployments_routes.py). Reuses the EXAMPLES_API_* wiring above
+# rather than new Terraform variables -- same host, same always-on
+# listener, same shared ingestion token. Set from Terraform's own
+# knowledge of this instance's eventual CloudCore-assigned name (locals.tf
+# builds it from the same project/environment/name/index convention the
+# instance-group module itself uses), not anything this guest could
+# determine on its own at boot.
+DEPLOYMENT_NAME = os.environ.get("DEPLOYMENT_NAME", "")
+
 # Phase 4 -- the interactive sandbox's own system prompt. Deliberately
 # separate from (and replaces the purpose of) webui_system_message,
 # which only ever shaped llama-server's OWN webui -- moot now that
@@ -770,6 +780,84 @@ def capture_example(original_messages: list, capture: dict,
         print(f"verify-proxy: example capture failed (non-fatal): {e}", flush=True)
 
 
+def register_llm_deployment() -> None:
+    """One-shot, best-effort self-registration with the CloudCore
+    Dashboard's LLM Performance page (api/llm_deployments_routes.py) --
+    same reasoning and wiring as capture_example() above. Skipped
+    entirely if DEPLOYMENT_NAME is unset, same as capture_example skips
+    when EXAMPLES_MODEL_FILENAME is unset -- lets this same proxy source
+    run against an older API host/template with no llm-deployments route
+    at all. Registration is by name, not by CloudCore instance id -- this
+    guest has no way to know the id the API assigned it (assigned only
+    after apply, long after this cloud-init template was rendered); the
+    API resolves name -> current instance -> current private_ip itself
+    at poll time (store.find_instance_by_name), the same trust boundary
+    api/lb.py already relies on rather than a self-reported address."""
+    if not EXAMPLES_API_BASE or not DEPLOYMENT_NAME:
+        return
+    payload = {
+        "name": DEPLOYMENT_NAME,
+        "example": "llm-chat",
+        "port": LISTEN_PORT,
+        "stats_path": "/llm-stats",
+    }
+    try:
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            EXAMPLES_API_BASE + "/v1/llm-deployments/register", data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {EXAMPLES_API_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"verify-proxy: LLM deployment registration failed (non-fatal): {e}", flush=True)
+
+
+# CloudCore Dashboard -- LLM Performance page's live "right now" stats
+# (GET /llm-stats below). Aggregate counters only, in-memory, reset on
+# restart -- this is a live snapshot the Dashboard polls, not a logged
+# time series (api/scheduler.py's llm_ingestions table already owns
+# historical run-by-run numbers for the separate ingest-schedule case).
+_llm_stats_lock = threading.Lock()
+_llm_stats = {
+    "model": None,
+    "requests_served": 0,
+    "completion_tokens_total": 0,
+    "last_tokens_per_second": None,
+    "avg_tokens_per_second": None,
+    "last_request_at": None,
+}
+_LLM_STATS_STARTED_AT = time.time()
+
+
+def _record_llm_stats(model: str, timings: dict) -> None:
+    """Called once per completed /sandbox/ask turn, from
+    _relay_and_verify_stream's own tail -- see its call site below.
+    `timings` is llama-server's own OpenAI-compatible-extension block,
+    present on the final streamed chunk of each response."""
+    tokens = timings.get("predicted_n")
+    tps = timings.get("predicted_per_second")
+    with _llm_stats_lock:
+        _llm_stats["requests_served"] += 1
+        if tokens:
+            _llm_stats["completion_tokens_total"] += tokens
+        if tps:
+            n = _llm_stats["requests_served"]
+            prev_avg = _llm_stats["avg_tokens_per_second"]
+            _llm_stats["last_tokens_per_second"] = tps
+            _llm_stats["avg_tokens_per_second"] = tps if prev_avg is None else (prev_avg * (n - 1) + tps) / n
+        if model:
+            _llm_stats["model"] = model
+        _llm_stats["last_request_at"] = time.time()
+
+
+def _llm_stats_snapshot() -> dict:
+    with _llm_stats_lock:
+        snap = dict(_llm_stats)
+    snap["uptime_seconds"] = round(time.time() - _LLM_STATS_STARTED_AT, 1)
+    return snap
+
+
 # Phase 4 -- the interactive sandbox itself. Stdlib-rendered, no new
 # frontend framework, matching /examples' own convention. Plain
 # <textarea> for Stage 1 (see the Interactive Sandbox phased-
@@ -1190,6 +1278,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._serve_examples_page()
         elif path == "/health":
             self._proxy_passthrough()
+        elif path == "/llm-stats":
+            self._serve_llm_stats()
         elif path.startswith("/vendor/"):
             self._serve_vendor_file(path[len("/vendor/"):])
         else:
@@ -1267,6 +1357,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(resp_body)
         conn.close()
+
+    def _serve_llm_stats(self):
+        """CloudCore Dashboard's LLM Performance page polls this --
+        see register_llm_deployment() and _llm_stats_snapshot() above.
+        Unauthenticated, same as /health -- aggregate counters only, no
+        prompt/response content, nothing a public /health-style endpoint
+        wouldn't already reveal about this deployment being up."""
+        body = json.dumps(_llm_stats_snapshot()).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- Phase 4: the sandbox's own two actions -------------------------
 
@@ -1483,6 +1586,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         accumulated = []
         last_chunk_meta: dict = {}
+        last_timings: dict = {}
         buf = b""
         interrupted_during_stream = False
         while True:
@@ -1523,8 +1627,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 if "content" in delta and delta["content"]:
                     accumulated.append(delta["content"])
                 last_chunk_meta = {k: obj.get(k) for k in ("id", "model", "system_fingerprint")}
+                # llama-server puts this on the final chunk of each
+                # response (finish_reason set) -- see the module-level
+                # docstring on _record_llm_stats for where it's read.
+                if obj.get("timings"):
+                    last_timings = obj["timings"]
             except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                 continue
+
+        if last_timings:
+            _record_llm_stats(last_chunk_meta.get("model"), last_timings)
 
         full_text = "".join(accumulated)
         if interrupted_during_stream:
@@ -1696,6 +1808,9 @@ pre {{ background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: aut
 
 
 def main():
+    # Fire-and-forget -- a slow/unreachable CloudCore API must never
+    # delay this service actually binding and serving real traffic.
+    threading.Thread(target=register_llm_deployment, daemon=True).start()
     server = http.server.ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)
     server.serve_forever()
 

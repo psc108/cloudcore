@@ -42,6 +42,7 @@ from peers_routes import peers_bp, PEER_REACHABLE_ENDPOINTS
 from stats_routes import stats_bp
 from scheduler_routes import scheduler_bp
 from llm_examples_routes import examples_bp, EXAMPLES_REACHABLE_ENDPOINTS
+from llm_deployments_routes import llm_deployments_bp, LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
 import scheduler
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
@@ -59,6 +60,7 @@ app.register_blueprint(peers_bp)
 app.register_blueprint(stats_bp)
 app.register_blueprint(scheduler_bp)
 app.register_blueprint(examples_bp)
+app.register_blueprint(llm_deployments_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -118,11 +120,12 @@ def _peer_bind_gate():
         if request.endpoint not in (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS):
             abort(403)
     # Same mechanism, second always-on bind (examples_listener.py, not
-    # gated by discovery.enabled) — restricted to exactly the two
-    # llm-chat example-capture endpoints regardless of any token
-    # presented, same defense-in-depth reasoning as the peer bind above.
+    # gated by discovery.enabled) — restricted to exactly the llm-chat
+    # example-capture endpoints plus LLM-deployment self-registration,
+    # regardless of any token presented, same defense-in-depth reasoning
+    # as the peer bind above.
     if request.environ.get("SERVER_PORT") == str(examples_listener.PORT):
-        if request.endpoint not in EXAMPLES_REACHABLE_ENDPOINTS:
+        if request.endpoint not in (EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS):
             abort(403)
 
 

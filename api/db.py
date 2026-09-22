@@ -477,6 +477,31 @@ CREATE TABLE IF NOT EXISTS llm_verification_examples (
     created_at       TEXT NOT NULL
 );
 
+-- The LLM Performance page's "live deployments" section — separate
+-- from llm_ingestions above, which is the ephemeral ingest-schedule
+-- history only. A row here just says "an example's own LLM-serving
+-- process self-registered under this name" (api/llm_deployments_routes.py's
+-- POST /v1/llm-deployments/register, called once at verify_proxy.py's
+-- own startup — see that file's register_llm_deployment()). No
+-- instance_id/address is stored: this guest can't know its own
+-- CloudCore-assigned instance id at cloud-init render time, and an
+-- address could change across a rebuild anyway — both are resolved
+-- fresh at poll time via store.find_instance_by_name(name), the same
+-- trust boundary api/lb.py's own target-group resolution already
+-- relies on rather than a self-reported address. `name` is UNIQUE so a
+-- restarted/rebuilt deployment re-registering under the same name
+-- (Terraform's own naming convention is deterministic per apply, not
+-- per-instance-id) just refreshes this row instead of accumulating
+-- stale duplicates every redeploy.
+CREATE TABLE IF NOT EXISTS llm_deployments (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL UNIQUE,
+    example        TEXT NOT NULL,
+    port           INTEGER NOT NULL,
+    stats_path     TEXT NOT NULL,
+    registered_at  TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS help_articles_fts USING fts5(
     title, category, content,
     content='help_articles', content_rowid='rowid'

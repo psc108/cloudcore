@@ -89,6 +89,17 @@ locals {
   # no peer-specific templating needed.
   examples_api_base = "http://192.168.100.1:8083"
 
+  # CloudCore Dashboard -- LLM Performance page's "live deployments"
+  # registry (verify_proxy.py's own register_llm_deployment(), api/
+  # llm_deployments_routes.py). Must match the CloudCore-assigned name
+  # this coordinator instance will actually get, exactly reproducing
+  # modules/instance-group's own "${project}-${environment}-${name}-${key}"
+  # formula for module.coordinator's single ("01") instance below --
+  # the guest itself has no way to know this (its own instance id is
+  # only assigned by the API after apply, long after this string is
+  # rendered into its cloud-init), so it's computed here instead.
+  coordinator_deployment_name = "${var.project}-${var.environment}-llm-chat-coord${local.sfx}-01"
+
   # Stage 2 — the same CodeMirror 5.65.16 build already vendored for the
   # Dashboard's own Editor page (ui/vendor/, a sibling of this example
   # directory — ../../ui/vendor from here), read fresh and re-embedded
@@ -126,6 +137,7 @@ locals {
     verify_max_fix_rounds   = var.verify_max_fix_rounds
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
+    deployment_name           = local.coordinator_deployment_name
     sandbox_system_message   = var.sandbox_system_message
     rate_limit_run_per_minute = var.rate_limit_run_per_minute
     rate_limit_ask_per_10min  = var.rate_limit_ask_per_10min

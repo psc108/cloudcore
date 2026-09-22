@@ -889,6 +889,25 @@
   <!-- ═══════════════════════════ LLM Performance ═══════════════════════════ -->
   <div id="section-llmperf" class="section">
 
+    <div class="card">
+      <div class="card-header">
+        <h2>Live Deployments</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadLlmPerformance()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+        Any running example's own LLM server, self-registered on startup — right now, not a logged history. Refreshes automatically every 3 minutes while this page is open.
+      </p>
+      <div class="table-wrap">
+        <table id="llmdeploy-table">
+          <thead><tr>
+            <th>Name</th><th>Example</th><th>Status</th><th>Model</th>
+            <th>Requests</th><th>Tokens/sec (avg)</th><th>Tokens/sec (last)</th><th>Uptime</th><th></th>
+          </tr></thead>
+          <tbody id="llmdeploy-tbody"><tr class="empty-row"><td colspan="9">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="card" id="llmperf-latest-card" style="display:none">
       <div class="card-header">
         <h2>Latest Run</h2>
@@ -898,11 +917,11 @@
 
     <div class="card">
       <div class="card-header">
-        <h2>Run History</h2>
+        <h2>Ingestion Run History</h2>
         <button class="refresh-btn" title="Refresh" onclick="loadLlmPerformance()">↻</button>
       </div>
       <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
-        One row per llm_ingest wakeup, across every schedule — a "skipped" row (no new Sentinel activity) has no cluster timing since the build never ran. Model/token counts come straight from the coordinator's own OpenAI-compatible response and depend on that llama-server build actually returning a usage block.
+        One row per llm_ingest wakeup, across every schedule — a "skipped" row (no new Sentinel activity) has no cluster timing since the build never ran. Model/token counts come straight from the coordinator's own OpenAI-compatible response and depend on that llama-server build actually returning a usage block. For any example's own LLM server right now, see Live Deployments above.
       </p>
       <div class="table-wrap">
         <table id="llmperf-table">

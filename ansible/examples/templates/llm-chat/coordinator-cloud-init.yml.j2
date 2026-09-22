@@ -171,6 +171,7 @@ write_files:
       Environment=EXAMPLES_API_BASE={{ examples_api_base }}
       Environment=EXAMPLES_API_TOKEN={{ examples_ingestion_token }}
       Environment=EXAMPLES_MODEL_FILENAME={{ model_filename }}
+      Environment=DEPLOYMENT_NAME={{ deployment_name }}
       Environment=RATE_LIMIT_RUN_PER_MINUTE={{ rate_limit_run_per_minute }}
       Environment=RATE_LIMIT_ASK_PER_10MIN={{ rate_limit_ask_per_10min }}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
