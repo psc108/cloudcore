@@ -1120,14 +1120,14 @@ function startTerminal() {
         status.textContent = '';
         term.write(msg.data);
       } else if (msg.type === 'error') {
-        term.write('\r\n\x1b[31m' + msg.data + '\x1b[0m\r\n');
+        term.write('\\r\\n\\x1b[31m' + msg.data + '\\x1b[0m\\r\\n');
         status.textContent = msg.data;
       }
     } catch (e) { /* skip malformed frames */ }
   };
 
   ws.onclose = () => {
-    term.write('\r\n\x1b[33m[Session closed]\x1b[0m\r\n');
+    term.write('\\r\\n\\x1b[33m[Session closed]\\x1b[0m\\r\\n');
     stopBtn.disabled = true;
     startBtn.disabled = false;
   };
