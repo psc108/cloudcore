@@ -17,6 +17,7 @@ instead of after.
 from __future__ import annotations
 
 import compute
+import host_stats
 import peers_routes
 
 # Real weights alone aren't the whole story — llama.cpp/ggml also needs
@@ -28,6 +29,16 @@ import peers_routes
 # own comment in examples/llm-chat/variables.tf for a real example of
 # that failure mode).
 HEADROOM_FACTOR = 1.2
+
+# Per direct correction while sizing standard.2xlarge against a real
+# 8-core test host: a flavor -- or a live capacity decision -- must
+# never claim every physical core a host has. 2 stays off the table
+# for that host's own OS/hypervisor overhead (scheduling, I/O,
+# libvirt/qemu itself) regardless of which host is being evaluated,
+# not just the one this was first noticed against. Flat, not
+# multiplicative like HEADROOM_FACTOR -- it's a fixed cost, not
+# something that scales with the flavor being considered.
+HOST_RESERVED_CORES = 2
 
 
 def check_worker_peers(var_overrides: dict, schema: dict) -> str | None:
@@ -125,4 +136,84 @@ def check_no_coordinator_worker_overlap(var_overrides: dict) -> str | None:
             return (f"coordinator_peer_id can't match a worker_peers entry "
                      f"(peer '{peer_id}') — the coordinator and its workers must be "
                      f"on different machines for RPC splitting to do anything useful.")
+    return None
+
+
+def affords(stats: dict, flavor_name: str) -> bool:
+    """True if `stats` (a host_stats.collect()-shaped dict) can
+    genuinely afford `flavor_name` on all three axes -- RAM, vCPU, and
+    disk. RAM reuses the same HEADROOM_FACTOR the reject-only checks
+    above already apply.
+
+    vCPU is a STATIC check against `cores - HOST_RESERVED_CORES`, not
+    load-adjusted -- found live, against llwyn-y-groes's own real
+    stats, that multiplying by the live load fraction on top of an
+    already-maximal reservation double-penalizes: standard.2xlarge's
+    own 6 vCPU is deliberately sized to exactly saturate `cores - 2` on
+    an idle 8-core host, so ANY nonzero background load (even 1-2%,
+    which is realistically always present) pushed the load-adjusted
+    figure just under 6, meaning the check could nearly never pass in
+    practice regardless of how idle the host actually was. A vCPU
+    allocation is also a fundamentally different kind of resource claim
+    than RAM/disk -- hosts routinely time-share vCPUs across VMs the
+    hypervisor scheduler itself already manages, so "how busy is the
+    CPU RIGHT NOW" isn't actually the right signal for "is there room
+    for one more static allocation" the way it legitimately is for
+    RAM's own available_mb. Live load stays meaningful as the existing
+    tie-break signal (best_fit()'s own ranking among hosts that already
+    afford the same tier), just not as a second, compounding hard gate
+    here. Disk gets no multiplicative headroom at all -- unlike RAM it
+    doesn't get squeezed by other processes' fluctuating demand, so the
+    flat requirement is already honest.
+
+    Public (not underscore-prefixed) since api/peers_routes.py's own
+    recommend_placement() calls this directly too, to annotate every
+    candidate host with the largest flavor IT specifically affords --
+    not just best_fit()'s own single overall winner."""
+    flavor = compute.FLAVORS.get(flavor_name)
+    if flavor is None:
+        return False
+    flavor_vcpus, flavor_mb, flavor_gb = flavor
+
+    available_mb = stats.get("memory", {}).get("available_mb", 0)
+    if available_mb < flavor_mb * HEADROOM_FACTOR:
+        return False
+
+    cores = stats.get("cpu", {}).get("cores", 0)
+    free_cores = cores - HOST_RESERVED_CORES
+    if free_cores < flavor_vcpus:
+        return False
+
+    free_gb = stats.get("disk", {}).get("free_gb", 0)
+    if free_gb < flavor_gb:
+        return False
+
+    return True
+
+
+def best_fit(candidates: list[dict], flavor_names_desc: list[str]) -> dict | None:
+    """Given the same {peer_id, hostname, verdict, stats} candidate
+    shape api/peers_routes.py's own recommend_placement() already
+    builds (this host plus every reachable approved peer), and a list
+    of flavor names ordered LARGEST first, returns the first (flavor,
+    host) pair where some candidate genuinely affords it -- this is
+    what implements "use the best available, or as close to it as
+    possible" without hardcoding one fixed target size. Ties among
+    hosts that can afford the SAME tier are broken exactly the way
+    recommend_placement() already breaks its own ties: lowest verdict
+    severity, then lowest CPU load. Returns None if nothing can afford
+    even the smallest name in the list -- callers should fall back to
+    their own existing default behavior in that case, not treat it as
+    an error."""
+    for flavor_name in flavor_names_desc:
+        affording = [c for c in candidates if affords(c["stats"], flavor_name)]
+        if not affording:
+            continue
+        best = min(affording, key=lambda c: (
+            host_stats.TIER_SEVERITY[c["verdict"]], c["stats"]["cpu"]["load_pct_1m"],
+        ))
+        return {
+            "peer_id": best["peer_id"], "hostname": best["hostname"],
+            "verdict": best["verdict"], "flavor": flavor_name,
+        }
     return None

@@ -197,6 +197,19 @@ FLAVORS = {
     "standard.medium": (2, 2048, 20),
     "standard.large":  (4, 4096, 40),
     "standard.xlarge":  (6, 8192, 60),
+    # standard.2xlarge -- sized for a dedicated testing host with real
+    # 8 cores / 32GB free (found the coordinator's own default,
+    # standard.large's 4GB, genuinely too tight once running a 14B
+    # model alongside a Firecracker terminal session at once). 6 vCPU,
+    # not 8 -- per direct correction, a flavor must never claim every
+    # physical core a host has; 2 stay free for that host's own OS/
+    # hypervisor overhead (scheduling, I/O, libvirt/qemu itself), same
+    # don't-oversubscribe principle standard.large's own default was
+    # already sized against, just as a margin rather than an exact
+    # match. See api/capacity_gate.py's own HOST_RESERVED_CORES for the
+    # same principle applied generally to live capacity checking, not
+    # just this one flavor's static definition.
+    "standard.2xlarge": (6, 16384, 100),
 }
 
 

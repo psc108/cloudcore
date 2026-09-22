@@ -498,7 +498,24 @@ def recommend_placement():
     broken by lowest CPU load_pct_1m. A peer that can't be reached right
     now is simply not a candidate — this host itself always is, so
     there's always at least one result unless something is badly wrong
-    with this host's own stats collection."""
+    with this host's own stats collection.
+
+    Optional `?flavor_candidates=standard.2xlarge,standard.xlarge,...`
+    (largest first) — per direct request to auto-select "any machine,
+    not locked to one specific" for examples/llm-chat's own coordinator,
+    factoring in what it would actually need to run, not just which
+    host is least loaded right now. When given: `recommended` gains a
+    `flavor` field (the real best (host, flavor) pair — see
+    capacity_gate.best_fit()), and every entry in `hosts` gains a
+    `best_flavor` field (the largest flavor THAT specific host affords
+    from the list, or null) — the latter is what lets a caller with
+    extra constraints recommend_placement() itself doesn't know about
+    (llm-chat's own coordinator can't land on a peer already claimed by
+    a worker) re-rank locally without a second round trip or
+    duplicating the RAM/vCPU/disk math client-side. Omitting the param
+    returns exactly the same response this endpoint always has —
+    existing callers (the Ansible Build Manager, the Scheduler's own
+    Worker Peer Pool) are unaffected."""
     err = _auth()
     if err: return err
 
@@ -526,6 +543,22 @@ def recommend_placement():
 
     if not candidates:
         return jsonify({"recommended": None, "hosts": []})
+
+    flavor_candidates = [f.strip() for f in request.args.get("flavor_candidates", "").split(",") if f.strip()]
+
+    if flavor_candidates:
+        # Deferred import -- capacity_gate.py already imports this
+        # module (for peer_stats()), so importing it back at module
+        # level here would be circular; both modules are fully loaded
+        # by the time a real request actually calls this function.
+        import capacity_gate
+        fit = capacity_gate.best_fit(candidates, flavor_candidates)
+        recommended = fit if fit is not None else None
+        hosts = [{
+            "peer_id": c["peer_id"], "hostname": c["hostname"], "verdict": c["verdict"],
+            "best_flavor": next((f for f in flavor_candidates if capacity_gate.affords(c["stats"], f)), None),
+        } for c in candidates]
+        return jsonify({"recommended": recommended, "hosts": hosts})
 
     best = min(candidates, key=lambda c: (
         host_stats.TIER_SEVERITY[c["verdict"]], c["stats"]["cpu"]["load_pct_1m"],

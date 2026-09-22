@@ -71,6 +71,23 @@ const _TF_PEER_ID_RE = /(^|_)peer_id$/i;
 // above rather than imported.
 const _TF_WORKER_PEERS_VAR = 'worker_peers';
 
+// Per direct request to auto-select "any machine, not locked to one
+// specific" for the coordinator, using real capacity (RAM, vCPU, disk)
+// rather than just current load -- coordinator_flavor gets recommended
+// together with coordinator_peer_id, both from the same
+// recommend-placement call, now flavor-aware (api/peers_routes.py's
+// own ?flavor_candidates param, api/capacity_gate.py's best_fit()).
+// Largest first: the server tries each in order and returns whichever
+// one some real candidate actually affords, which is what implements
+// "use it, or as close to it as it can be" without hardcoding one
+// fixed target. Name-specific (not a generic pattern like
+// _TF_PEER_ID_RE) since only llm-chat's own coordinator needs this
+// today -- same style as _TF_DYNAMIC_LAYERS_VAR/_TF_HTTP_PORT_VAR
+// above, both equally one-off special cases.
+const _TF_COORDINATOR_PEER_ID_VAR = 'coordinator_peer_id';
+const _TF_FLAVOR_VAR = 'coordinator_flavor';
+const _TF_FLAVOR_CANDIDATES_DESC = ['standard.2xlarge', 'standard.xlarge', 'standard.large'];
+
 // Found live: this field's own static Terraform default (24, llm-chat's
 // only consumer today) was being pre-filled into the input and
 // submitted on every single build regardless of whether a real person
@@ -153,18 +170,48 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
   let approvedPeers = [];
   let recommendation = null;
   const hasWorkerPeers = editable.some(([key]) => key === _TF_WORKER_PEERS_VAR);
+  const hasFlavorVar = editable.some(([key]) => key === _TF_FLAVOR_VAR);
   if (editable.some(([key]) => _TF_PEER_ID_RE.test(key)) || hasWorkerPeers) {
     try {
       const peerData = await api('GET', '/v1/peers?status=approved');
       approvedPeers = peerData.items || [];
     } catch (e) { /* field just renders with no options */ }
     try {
-      recommendation = await api('GET', '/v1/peers/recommend-placement');
+      const flavorQuery = hasFlavorVar
+        ? `?flavor_candidates=${_TF_FLAVOR_CANDIDATES_DESC.join(',')}` : '';
+      recommendation = await api('GET', `/v1/peers/recommend-placement${flavorQuery}`);
     } catch (e) { /* fall through — fields fall back to the old local default */ }
   }
   let workerPeersVerdicts = {};
   if (hasWorkerPeers && recommendation) {
     (recommendation.hosts || []).forEach(h => { if (h.peer_id) workerPeersVerdicts[h.peer_id] = h.verdict; });
+  }
+
+  // The coordinator can't land on a peer a worker checkbox is about to
+  // auto-claim -- recommend-placement has no idea worker_peers exists
+  // at all, it just ranks hosts in isolation. Re-rank locally among
+  // whatever's left using the per-host best_flavor annotations the
+  // server already computed (from real RAM/vCPU/disk affordability,
+  // not just current load), rather than duplicating that math here.
+  // One-shot, computed from this same initial fetch -- matches every
+  // other recommendation on this form already being a prefill, not a
+  // live binding that reacts to later checkbox changes.
+  let coordinatorPick = null;
+  if (hasFlavorVar && recommendation) {
+    const claimedByWorker = new Set(
+      Object.entries(workerPeersVerdicts).filter(([, v]) => v === 'active').map(([id]) => id)
+    );
+    const eligible = (recommendation.hosts || []).filter(h =>
+      h.best_flavor && !(h.peer_id && claimedByWorker.has(h.peer_id))
+    );
+    const severity = { active: 0, pending: 1, error: 2 };
+    coordinatorPick = eligible.reduce((best, h) => {
+      if (!best) return h;
+      const rank = _TF_FLAVOR_CANDIDATES_DESC.indexOf(h.best_flavor);
+      const bestRank = _TF_FLAVOR_CANDIDATES_DESC.indexOf(best.best_flavor);
+      if (rank !== bestRank) return rank < bestRank ? h : best;
+      return (severity[h.verdict] ?? 9) < (severity[best.verdict] ?? 9) ? h : best;
+    }, null);
   }
 
   const peerFamilies = _tfPeerFamilies(editable);
@@ -178,7 +225,19 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
     if (key === _TF_WORKER_PEERS_VAR) return _tfRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts);
+    if (key === _TF_COORDINATOR_PEER_ID_VAR && hasFlavorVar) {
+      // Bypasses _tfRenderPeerField's own !hasWorkerPeers guard
+      // (passing hasWorkerPeers=false) -- that guard exists because
+      // the plain recommend-placement response has no idea which peer
+      // a worker checkbox is about to auto-claim, but coordinatorPick
+      // above already excluded those, so it's always safe to show
+      // here. Wrapped to match the {recommended: {...}} shape that
+      // function already expects from the un-flavor-aware endpoint.
+      return _tfRenderPeerField(key, meta, approvedPeers,
+        coordinatorPick ? { recommended: coordinatorPick } : null, false);
+    }
     if (_TF_PEER_ID_RE.test(key)) return _tfRenderPeerField(key, meta, approvedPeers, recommendation, hasWorkerPeers);
+    if (key === _TF_FLAVOR_VAR) return _tfRenderFlavorField(key, meta, coordinatorPick);
     if (cascadeTargetKeys.has(key)) return _tfRenderPeerCascadeField(key, meta);
     if (key === _TF_DYNAMIC_LAYERS_VAR) {
       return `
@@ -437,6 +496,28 @@ function _tfRenderPeerField(key, meta, peers, recommendation, hasWorkerPeers) {
       ${rec && peers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
       ${hasWorkerPeers && peers.length ? `<span class="bm-field-hint">Not auto-selected — must be a different peer than any worker below, so this always starts local. Pick one deliberately if you want it peer-placed.</span>` : ''}
       ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
+    </div>
+  `;
+}
+
+function _tfRenderFlavorField(key, meta, coordinatorPick) {
+  const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
+  // coordinatorPick is the same {peer_id, hostname, verdict,
+  // best_flavor} entry _tfRenderPeerField's own bypass path already
+  // used for coordinator_peer_id -- reused here so the two fields
+  // always agree on which host/flavor pair they're describing. Falls
+  // back to the schema default (today's standard.large) whenever
+  // best_fit() found nothing any real candidate could afford, or the
+  // recommend-placement call itself failed -- never a broken or
+  // empty-looking state.
+  const value = coordinatorPick ? coordinatorPick.best_flavor : (meta.default ?? '');
+  return `
+    <div class="field">
+      <label>${label}</label>
+      <input type="text" id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}"
+             placeholder="${meta.required ? 'Required — no default value' : ''}"
+             value="${_esc(String(value))}">
+      ${coordinatorPick ? `<span class="bm-field-hint">Auto-selected: ${_esc(coordinatorPick.best_flavor)} to match ${_esc(coordinatorPick.hostname)}'s real available capacity (RAM, vCPU, and disk all checked) — change it if you'd rather choose a flavor yourself.</span>` : ''}
     </div>
   `;
 }
