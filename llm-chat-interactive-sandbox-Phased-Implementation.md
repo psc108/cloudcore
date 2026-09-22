@@ -1153,6 +1153,26 @@ thing standing between the student and a working shell. New Terraform/
 Ansible variable `terminal_unresponsive_seconds`, same threading
 convention as the other `terminal_*` tunables.
 
+### Follow-up: F-113 -- a leaked builder hostname, a missing `/etc/hosts`, and no `fdisk`
+
+Direct report from actually using the new features together: running
+`fdisk` from a Terminal session after a Linux Help suggestion showed
+`sudo: unable to resolve host cloudcore-fcrootfs-builder-1790072530:
+Name or service not known` then `sudo: fdisk: command not found`.
+Full detail in `haFullStack-Findings-Log.md`'s own F-113 -- in short,
+`/etc/hostname` had silently leaked the throwaway build instance's own
+real hostname into the golden image (shared by every session since),
+`/etc/hosts` didn't exist in the minbase chroot at all, and `fdisk`
+was genuinely never in the base package list. Rebuilt the rootfs for
+real rather than hand-reasoning about the nested chroot-heredoc
+quoting locally -- a local dry-run reproduction attempt gave
+misleading, contradictory results and was abandoned, directly the
+same F-107 lesson this script's own header comment already documents.
+New pinned artifact deployed live; verified via a real fresh Terminal
+session that the hostname now reads `sandbox` everywhere (including
+the shell prompt itself), `/etc/hosts` has real entries, and
+`sudo fdisk -l`/`lsblk` both run with zero resolution warning.
+
 ---
 
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again

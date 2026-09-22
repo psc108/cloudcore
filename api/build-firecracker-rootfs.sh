@@ -133,16 +133,40 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 echo \"nameserver 8.8.8.8\" > /etc/resolv.conf
 apt-get update
+
+# Found live: /etc/hostname debootstrap leaves in a fresh minbase chroot
+# defaulted to whatever the BUILDER instance's own real hostname was at
+# build time (this script's own \$SUFFIX, cloudcore-fcrootfs-builder-<ts>)
+# -- baked into the golden image and shipped identically to every future
+# session, since every session boots from the same frozen artifact.
+# Harmless on its own, but /etc/hosts doesn't exist in this chroot AT
+# ALL (also a minbase-default gap, not something anything here ever
+# created), so every single sudo invocation prints \"unable to resolve
+# host <that leftover builder name>\" -- confirmed live, a real student-
+# visible wart on every sudo command, though never fatal (sudo still
+# runs the command regardless). A static, student-meaningful hostname
+# plus a real /etc/hosts fixes both -- no per-session uniqueness needed,
+# since this guest is already fully isolated and single-tenant.
+echo \"sandbox\" > /etc/hostname
+cat > /etc/hosts <<\"HOSTSEOF\"
+127.0.0.1 localhost
+127.0.1.1 sandbox
+HOSTSEOF
+
 # systemd/systemd-sysv explicitly -- debootstrap --variant=minbase
 # only pulls Priority:required packages, and systemd itself is only
 # Priority:important, so a minbase chroot has no /bin/systemctl at
 # all unless something else pulls it in as a dependency. Confirmed
 # live: openssh-server alone does not do this on jammy, and every
 # systemctl enable/is-enabled call below fails outright without it.
+# fdisk -- found live (direct report, tried partitioning a disk from a
+# Terminal session) that it's genuinely not pulled in by anything else
+# here: it's its own package on jammy (util-linux itself only carries
+# lsblk/mount/blkid etc.), same class of gap as vim's own earlier fix.
 apt-get install -y --no-install-recommends \
   systemd systemd-sysv \
   openssh-server curl wget ca-certificates iproute2 iputils-ping \
-  python3 nano vim less procps
+  python3 nano vim less procps fdisk
 # A real login shell (not the minbase default of dash-only bare
 # essentials) and a real, unprivileged-by-default student account --
 # sudo works passwordless inside the microVM because the isolation
