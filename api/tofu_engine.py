@@ -189,6 +189,47 @@ def _extract_balanced_block(content: str, open_brace_pos: int) -> str:
     return content[open_brace_pos + 1:]  # unterminated — best effort
 
 
+def _extract_default_value(body: str) -> str | None:
+    """Extract the raw text of a `default = <expr>` line inside a
+    variable block's body. Found live: the old plain `default\\s*=\\s*(\\S+)`
+    fallback truncates at the first internal whitespace, which silently
+    corrupts any unquoted default containing a space -- e.g. examples/
+    llm-chat's own `preview_ports` (`default = [41001, 41002, 41003,
+    41004]`, idiomatic HCL formatting) became the literal string
+    `"[41001,"`, an invalid, unterminated list that `tofu apply` then
+    rejected outright with "Missing expression... found the end of the
+    file" the moment a real build left it untouched (see F-117). Handles
+    three real shapes in order: a quoted string, a bracketed list/tuple
+    or braced object/map (matched by real bracket-depth tracking, same
+    technique _extract_balanced_block already uses for the surrounding
+    variable block, so internal commas/whitespace/nesting can't truncate
+    it), and finally the single-bare-token case (a number, bool, or bare
+    identifier) every other variable in this repo actually uses."""
+    m = re.search(r'default\s*=\s*"', body)
+    if m:
+        m2 = re.match(r'"([^"]*)"', body[m.end() - 1:])
+        if m2:
+            return m2.group(1)
+
+    m = re.search(r'default\s*=\s*([\[{])', body)
+    if m:
+        open_ch = m.group(1)
+        close_ch = "]" if open_ch == "[" else "}"
+        start = m.end() - 1
+        depth = 0
+        for i in range(start, len(body)):
+            if body[i] == open_ch:
+                depth += 1
+            elif body[i] == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return body[start:i + 1]
+        return body[start:]  # unterminated in the source -- best effort
+
+    m = re.search(r'default\s*=\s*(\S+)', body)
+    return m.group(1).strip() if m else None
+
+
 def extract_template_vars(dir_name: str) -> dict:
     # Prefer variables.tf (best-practice layout); fall back to main.tf for legacy examples
     example_dir = EXAMPLES_DIR / dir_name
@@ -204,10 +245,9 @@ def extract_template_vars(dir_name: str) -> dict:
     for header in re.finditer(r'variable\s+"(\w+)"\s*\{', content):
         name = header.group(1)
         body = _extract_balanced_block(content, header.end() - 1)
-        default_match = re.search(r'default\s*=\s*"([^"]*)"', body) or \
-                        re.search(r'default\s*=\s*(\S+)', body)
-        if default_match:
-            schema[name] = {"default": default_match.group(1).strip(), "derived": False, "required": False}
+        default_value = _extract_default_value(body)
+        if default_value is not None:
+            schema[name] = {"default": default_value.strip(), "derived": False, "required": False}
         else:
             # No default = in the block means Terraform will hard-fail
             # the apply if this isn't supplied — surfaced distinctly from
