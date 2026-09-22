@@ -976,6 +976,111 @@ through the real LB.
 
 ---
 
+## Stage 8 — a separate Linux Help panel, general Q&A kept apart from coding
+
+Direct request: "it's time now to allow the llm to provide answers to
+general linux based questions (all questions from admin to use)."
+Asked whether to keep that separate from the existing coding Ask
+panel; agreed, then approved a concrete design: a new panel with its
+own system prompt, grounded not through an automatic re-execution loop
+(the coding panel's own mechanism, which only works because
+`run_sandboxed()` is a disposable, stateless, always-safe sandbox) but
+through the **Terminal panel already built in Stages 5/7** — every
+suggested command gets a **Run in Terminal** button, sent to the
+student's own already-live session only if they click it. A shell
+command suggested for a general question (`rm`, `apt install`,
+`systemctl restart`, `sed -i`) isn't safe to auto-run against a
+student's live, stateful shell the way disposable Python code is, and
+this reads directly off the user's own earlier framing of the Terminal
+feature itself ("don't want them to be able to jailbreak the
+sandbox").
+
+### Backend
+
+`_handle_sandbox_ask`/`_do_handle_sandbox_ask` generalized into a
+shared `_handle_ask`/`_do_handle_ask(system_message, capture_source,
+verify, include_code, endpoint_label)`, called by both the existing
+coding endpoint and a new `POST /sandbox/linux-ask` — same per-IP
+rate-limit and one-in-flight concurrency gate for both (a student only
+ever has one live question regardless of which panel asked it, and
+both hit the same slow shared backend), so `/sandbox/interrupt`'s Stop
+button needed no changes.
+
+`_relay_and_verify_stream` gained a `verify: bool` parameter. When
+`False` (the Linux panel's own path), the whole
+extract-code/auto-run/capture block is skipped entirely — one guard
+realizing both "don't auto-execute a suggested command" and "don't
+capture into the Phase 3 learning corpus" at once, since that corpus
+hard-requires real code/exec grounding data (`generated_code` is
+`NOT NULL`) this panel deliberately never produces.
+
+A new `LINUX_SYSTEM_MESSAGE` (own file-based load mechanism,
+`linux-system-message.txt`, same convention as the coding panel's own
+prompt) covers everyday usage through real sysadmin tasks, is grounded
+in the Terminal's own real constraints (Ubuntu 22.04, `main`-component-
+only apt index, no persistent storage, real preview ports), asks for
+suggested commands in fenced ```bash blocks, and is explicit that a
+suggested command is not automatically run or checked here — unlike
+the coding panel's prompt.
+
+### Frontend
+
+Rather than duplicate the coding Ask panel's ~150 lines of JS a second
+time, `renderTranscript`/`_renderAssistantContent`/`getHistory`/
+`saveHistory`/`askModel`/`regenerateAsk`/`_runAsk`/`stopAsk` were
+refactored into one `makeAskPanel(cfg)` factory, instantiated twice
+(`codeAsk`, `linuxAsk`) with only the real differences — endpoint,
+request body, history key, and what a code block's own button does —
+passed in as config. The Linux panel's code blocks get a **Run in
+Terminal** button instead of **Use this code**, wired to a new
+`runCommandInTerminal(code, statusEl)`: a quoted heredoc piped into a
+fresh `bash` (not the base64-into-a-file mechanism `sendCodeToTerminal()`
+already uses for the editor's own Send to Terminal button — that one
+exists so `python3` can run the result afterward and deliberately
+prevents shell interpretation; this one's whole point IS for the shell
+to interpret `$vars`/backticks normally, which is what "running a
+command" means). The heredoc delimiter carries a random suffix rather
+than a fixed literal, since this panel's own answers can plausibly
+include a heredoc example of their own using a plain "EOF"-style name.
+Clicking the button with no active Terminal session gives real
+feedback ("Start a terminal below first.") in the panel's own status
+line rather than a silent no-op.
+
+### Verified live, 2026-09-22
+
+Full real round trip via Chrome DevTools Protocol against the real
+deployed page: a genuine `/sandbox/linux-ask` question ("how do I
+check disk usage") came back with a real `df -h` suggestion in a
+fenced bash block; a synthetic conversation with a `touch ... && ls
+-lh` command was injected to avoid waiting a second time on this
+host's slow (~1 token/sec) real generation; the **Run in Terminal**
+button was clicked against a real, already-booted Firecracker microVM
+session, and the exact command executed for real — the terminal's own
+buffer showed the heredoc arrive, run, and the real `ls -lh` output
+(the actual created file, actual timestamp) come back. Clicking with
+no Terminal session open showed the real "Start a terminal below
+first." message. Regression-checked the existing coding Ask panel
+end to end (real question, real code, real re-execution, "Use this
+code" button) to confirm the shared-factory refactor changed nothing
+about its behavior. Confirmed the per-IP concurrency gate is correctly
+shared: a Code-ask attempted while a Linux-ask was in flight from the
+same IP got the existing "already have a question in progress" 429.
+Confirmed directly against the examples corpus (`GET
+/v1/llm-chat/examples`) that a Linux-ask turn adds no new row, while a
+coding-ask turn still does, both before and after this change.
+
+One real methodology lesson from this round, not a product bug: the
+coordinator's own port 8620 serves `/sandbox/*` directly (so testing
+against it works for those routes), but `/terminal` only exists via
+the load balancer's own path-based routing to the separate terminal
+service — a test hitting the coordinator's address directly for
+`/terminal` times out with nothing useful logged, not a clean error;
+the fix was testing against the LB's own real listening address
+instead. Worth remembering for the next round of live verification,
+even though nothing in the shipped code was wrong.
+
+---
+
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
 
 - **Non-Python code blocks.** The sandbox stays Python-only, for the

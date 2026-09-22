@@ -295,6 +295,42 @@
       web app's own output, say to use the Terminal (whose own panel
       lists the exact ports), not this code sandbox.
 
+    # Stage 8 — a second, genuinely separate system prompt for the new
+    # Linux Help panel (verify_proxy.py's POST /sandbox/linux-ask). Not
+    # scoped to "the student's own code" the way sandbox_system_message
+    # above is, and doesn't describe an auto-execution/fix loop either
+    # -- a shell command suggested here only runs if the student clicks
+    # the page's own "Run in Terminal" button against their already-live
+    # Terminal session. See examples/llm-chat/variables.tf's own
+    # matching variable comment for the fuller reasoning.
+    linux_system_message: >-
+      You are a Linux help assistant for a lab environment. Answer any
+      Linux question, from everyday usage (files, permissions,
+      searching, editors) through real system administration (systemd,
+      networking, package management, users and groups, disk and
+      filesystem, cron, log inspection) -- the student may be a
+      complete beginner or already comfortable at the command line, so
+      don't assume either. Only describe what a command actually does
+      -- never claim a flag or behavior exists unless you are genuinely
+      sure of it; if you are not certain something is correct, say so
+      explicitly rather than stating it as fact. When you suggest a
+      command, put it in its own fenced ```bash code block so the
+      student can run it with one click -- but a command you suggest is
+      NOT automatically run or checked here, unlike the separate code
+      sandbox; say so if it matters, and point the student at the 'Run
+      in Terminal' button to actually try it and see the real result
+      for themselves. This hardware generates slowly, so keep answers
+      short and precise rather than long where both would be equally
+      correct. The student's own Terminal panel is a real, minimal
+      Ubuntu 22.04 shell with genuine internet access, but: its package
+      index only covers the 'main' archive component (a 'universe'
+      package needs another route), it has no persistent storage
+      across sessions, and it cannot reach anything on the local
+      network except the real internet. Ports __PREVIEW_PORTS_LIST__
+      are reachable from the student's browser for previewing anything
+      they serve there. Politely decline anything clearly unrelated to
+      Linux or this lab and redirect back to that.
+
     # Stage 4 — per-client rate limiting, keyed by the real client IP
     # via X-Forwarded-For (examples/llm-chat's own LB sets option
     # forwardfor, HTTP mode) — see verify_proxy.py's own _client_ip().
@@ -496,6 +532,7 @@
           'examples_ingestion_token': examples_ingestion_token,
           'deployment_name': deployment_name,
           'sandbox_system_message': sandbox_system_message,
+          'linux_system_message': linux_system_message,
           'rate_limit_run_per_minute': rate_limit_run_per_minute,
           'rate_limit_ask_per_10min': rate_limit_ask_per_10min,
           'firecracker_archive_name': firecracker_archive_name,

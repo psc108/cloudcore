@@ -262,6 +262,28 @@ the Terminal panel gives a plain warning shortly before its own idle
 or max-session timeout closes the shell, rather than the session just
 vanishing without notice.
 
+#### Linux Help panel
+
+A separate **Linux Help** panel sits alongside Terminal and Preview —
+general Linux Q&A, from everyday commands through real system
+administration, deliberately kept apart from the coding Ask panel
+above rather than folded into it. The two reasons: its own system
+prompt isn't scoped to "the student's own submitted code" the way the
+coding panel's is, and its grounding works differently. The coding
+panel automatically re-runs every suggested Python script in a
+disposable, stateless sandbox and shows the real result — safe to do
+automatically because nothing about that sandbox has lasting effects.
+A shell command suggested here (`rm`, `apt install`, `systemctl
+restart`, `sed -i`) is not something to run automatically against a
+student's own live, stateful Terminal session, so every suggested
+command instead gets a **Run in Terminal** button: click it to send
+the exact command into your already-open Terminal session and see the
+real result for yourself, same base64/heredoc-safe delivery mechanism
+Send to Terminal already uses. Nothing runs unless you click it. Its
+own conversation is remembered separately from the coding panel's
+(a different `localStorage` key), so clearing your code session
+doesn't touch your Linux Help history or vice versa.
+
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
 precision Q8_0 variant of their own default model on the new
 `standard.xlarge` flavor (6 vCPU / 8GB RAM) instead of the default

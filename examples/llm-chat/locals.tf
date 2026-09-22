@@ -139,6 +139,7 @@ locals {
     examples_ingestion_token = var.examples_ingestion_token
     deployment_name           = local.coordinator_deployment_name
     sandbox_system_message   = var.sandbox_system_message
+    linux_system_message     = var.linux_system_message
     rate_limit_run_per_minute = var.rate_limit_run_per_minute
     rate_limit_ask_per_10min  = var.rate_limit_ask_per_10min
     firecracker_archive_name    = var.firecracker_archive_name

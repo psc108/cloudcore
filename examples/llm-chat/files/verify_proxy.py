@@ -169,6 +169,60 @@ SANDBOX_SYSTEM_MESSAGE = SANDBOX_SYSTEM_MESSAGE.replace(
     "__PREVIEW_PORTS_LIST__",
     ", ".join(PREVIEW_PORTS) if PREVIEW_PORTS else "(none configured)")
 
+# Stage 8 -- a second, genuinely separate system prompt for general
+# Linux Q&A (POST /sandbox/linux-ask), kept apart from the coding Ask
+# panel above per direct decision -- deliberately NOT scoped to "the
+# student's own code", and deliberately NOT auto-executed/re-verified
+# the way a Python code block is: a shell command a student didn't ask
+# to run (rm, apt install, systemctl restart, sed -i) isn't safe to
+# fire automatically against their own live Terminal session the way
+# run_sandboxed()'s disposable namespace is. Grounding here is
+# student-triggered instead -- see SANDBOX_PAGE_HTML's own "Run in
+# Terminal" button on each fenced command block, sendToTerminal().
+# Same file-based convention as SANDBOX_SYSTEM_MESSAGE above, for the
+# same reason (free text can't safely ride a systemd Environment=
+# line), and the same __PREVIEW_PORTS_LIST__ substitution -- F-106
+# already found a prompt for this exact environment confidently
+# inventing a wrong port when it wasn't told the real ones.
+_LINUX_SYSTEM_MESSAGE_DEFAULT = (
+    "You are a Linux help assistant for a lab environment. Answer any "
+    "Linux question, from everyday usage (files, permissions, "
+    "searching, editors) through real system administration (systemd, "
+    "networking, package management, users and groups, disk and "
+    "filesystem, cron, log inspection) -- the student may be a "
+    "complete beginner or already comfortable at the command line, so "
+    "don't assume either. Only describe what a command actually does "
+    "-- never claim a flag or behavior exists unless you are genuinely "
+    "sure of it; if you are not certain something is correct, say so "
+    "explicitly rather than stating it as fact. When you suggest a "
+    "command, put it in its own fenced ```bash code block so the "
+    "student can run it with one click -- but a command you suggest is "
+    "NOT automatically run or checked here, unlike the separate code "
+    "sandbox; say so if it matters, and point the student at the 'Run "
+    "in Terminal' button to actually try it and see the real result "
+    "for themselves. This hardware generates slowly, so keep answers "
+    "short and precise rather than long where both would be equally "
+    "correct. The student's own Terminal panel is a real, minimal "
+    "Ubuntu 22.04 shell with genuine internet access, but: its package "
+    "index only covers the 'main' archive component (a 'universe' "
+    "package needs another route), it has no persistent storage "
+    "across sessions, and it cannot reach anything on the local "
+    "network except the real internet. Ports __PREVIEW_PORTS_LIST__ "
+    "are reachable from the student's browser for previewing anything "
+    "they serve there. Politely decline anything clearly unrelated to "
+    "Linux or this lab and redirect back to that."
+)
+_LINUX_SYSTEM_MESSAGE_PATH = os.environ.get(
+    "LINUX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/linux-system-message.txt")
+try:
+    LINUX_SYSTEM_MESSAGE = open(_LINUX_SYSTEM_MESSAGE_PATH).read().strip() \
+        or _LINUX_SYSTEM_MESSAGE_DEFAULT
+except OSError:
+    LINUX_SYSTEM_MESSAGE = _LINUX_SYSTEM_MESSAGE_DEFAULT
+LINUX_SYSTEM_MESSAGE = LINUX_SYSTEM_MESSAGE.replace(
+    "__PREVIEW_PORTS_LIST__",
+    ", ".join(PREVIEW_PORTS) if PREVIEW_PORTS else "(none configured)")
+
 # Stage 2 -- CodeMirror assets embedded into this guest's own cloud-init
 # (coordinator-cloud-init.yaml.tftpl's own write_files, same mechanism
 # verify_proxy_source itself already proves) and served from here, not
@@ -993,10 +1047,10 @@ footer a { color: #2a5db0; }
   <p class="sub" style="margin-bottom:0.75rem">Leave the code box empty to ask for something new to be written, or ask about the code above to get it explained or fixed. Either way, the answer is always re-run for real before you see it.</p>
   <div id="transcript"></div>
   <div class="row">
-    <input id="question" type="text" placeholder="e.g. write a function that checks if a number is prime — or: why does this fail on an empty list?" onkeydown="if(event.key==='Enter')askModel()">
-    <button id="askBtn" class="primary" onclick="askModel()">Ask</button>
-    <button id="stopBtn" onclick="stopAsk()" disabled>Stop</button>
-    <button id="regenBtn" onclick="regenerateAsk()" disabled title="Ask again with no changes">Regenerate</button>
+    <input id="question" type="text" placeholder="e.g. write a function that checks if a number is prime — or: why does this fail on an empty list?" onkeydown="if(event.key==='Enter')codeAsk.askModel()">
+    <button id="askBtn" class="primary" onclick="codeAsk.askModel()">Ask</button>
+    <button id="stopBtn" onclick="codeAsk.stopAsk()" disabled>Stop</button>
+    <button id="regenBtn" onclick="codeAsk.regenerateAsk()" disabled title="Ask again with no changes">Regenerate</button>
     <span id="askStatus" class="status"></span>
   </div>
 </div>
@@ -1013,6 +1067,19 @@ footer a { color: #2a5db0; }
 </div>
 
 <div class="panel">
+  <h2>Linux Help</h2>
+  <p class="sub" style="margin-bottom:0.75rem">Ask any Linux question -- from everyday commands to real system administration -- kept separate from the coding Ask panel above. Answers aren't automatically run or checked the way code is; use the "Run in Terminal" button on a suggested command to actually try it in the Terminal panel and see the real result.</p>
+  <div id="linuxTranscript"></div>
+  <div class="row">
+    <input id="linuxQuestion" type="text" placeholder="e.g. how do I check disk usage? -- or: how do I add a new user?" onkeydown="if(event.key==='Enter')linuxAsk.askModel()">
+    <button id="linuxAskBtn" class="primary" onclick="linuxAsk.askModel()">Ask</button>
+    <button id="linuxStopBtn" onclick="linuxAsk.stopAsk()" disabled>Stop</button>
+    <button id="linuxRegenBtn" onclick="linuxAsk.regenerateAsk()" disabled title="Ask again with no changes">Regenerate</button>
+    <span id="linuxAskStatus" class="status"></span>
+  </div>
+</div>
+
+<div class="panel">
   <h2>Preview</h2>
   <p class="sub" style="margin-bottom:0.75rem">View whatever your own program is serving on one of the Terminal's ports, right here -- no need to open a new tab yourself. If a page doesn't render (some apps refuse to be embedded), use "Open in new tab" instead; either way it's reaching the exact same thing.</p>
   <div class="row" id="previewPortRow"></div>
@@ -1026,8 +1093,7 @@ footer a { color: #2a5db0; }
 <footer>Published examples from sessions like this one: <a href="/examples">/examples</a></footer>
 
 <script>
-const CODE_KEY = 'sandboxCode', HISTORY_KEY = 'sandboxHistory';
-const transcriptEl = document.getElementById('transcript');
+const CODE_KEY = 'sandboxCode';
 
 // CodeMirror(host, {...}), not .fromTextArea() -- same init pattern
 // the Dashboard's own Editor page already uses (ui/src/js/18-editor.js).
@@ -1037,90 +1103,277 @@ const cm = CodeMirror(document.getElementById('codeHost'), {
 });
 cm.on('change', saveCode);
 
-function loadState() {
-  cm.setValue(localStorage.getItem(CODE_KEY) || '');
-  renderTranscript();
-}
 function saveCode() { localStorage.setItem(CODE_KEY, cm.getValue()); }
 
-function getHistory() {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
-  catch (e) { return []; }
-}
-function saveHistory(h) { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); }
+// Stage 8 -- both the coding "Ask the model" panel and the new
+// "Linux Help" panel share this exact same shape: their own history
+// key, their own transcript/status/buttons, streaming from the model
+// via SSE, and rendering the model's fenced code blocks with a
+// per-panel action button on each one. Built once here, instantiated
+// twice below (codeAsk/linuxAsk) with only the real differences
+// (endpoint, request body, what a code block's own button does)
+// passed in as config -- rather than two ~150-line near-duplicates
+// that would only drift apart over time.
+function makeAskPanel(cfg) {
+  const transcriptEl = document.getElementById(cfg.transcriptId);
+  const questionEl = document.getElementById(cfg.questionId);
+  const askBtn = document.getElementById(cfg.askBtnId);
+  const stopBtn = document.getElementById(cfg.stopBtnId);
+  const regenBtn = document.getElementById(cfg.regenBtnId);
+  const statusEl = document.getElementById(cfg.statusId);
 
-// Splits a fenced triple-backtick code block out of the model's own
-// plain text and gives it a real "Use this code" button -- still never
-// innerHTML'd from the model's own words (every text/code fragment
-// below goes in via createTextNode/.textContent, same no-markup-from-
-// untrusted-text rule renderTranscript() itself already documented),
-// just structured instead of one flat blob. Only applied to the
-// model's own messages -- a student's own submitted question has
-// nothing to "use", they can already see/copy it from the editor above.
-function _renderAssistantContent(el, text) {
-  el.innerHTML = '';
-  const parts = text.split(/```[a-zA-Z0-9_+-]*\\n?([\\s\\S]*?)```/);
-  parts.forEach((part, i) => {
-    if (i % 2 === 0) {
-      if (part) el.appendChild(document.createTextNode(part));
+  function getHistory() {
+    try { return JSON.parse(localStorage.getItem(cfg.historyKey) || '[]'); }
+    catch (e) { return []; }
+  }
+  function saveHistory(h) { localStorage.setItem(cfg.historyKey, JSON.stringify(h)); }
+
+  // Splits a fenced triple-backtick code block out of the model's own
+  // plain text and gives it a real, per-panel action button -- still
+  // never innerHTML'd from the model's own words (every text/code
+  // fragment below goes in via createTextNode/.textContent, same
+  // no-markup-from-untrusted-text rule renderTranscript() below also
+  // follows), just structured instead of one flat blob. Only applied
+  // to the model's own messages -- a student's own submitted question
+  // has nothing to act on.
+  function renderAssistantContent(el, text) {
+    el.innerHTML = '';
+    const parts = text.split(/```[a-zA-Z0-9_+-]*\\n?([\\s\\S]*?)```/);
+    parts.forEach((part, i) => {
+      if (i % 2 === 0) {
+        if (part) el.appendChild(document.createTextNode(part));
+        return;
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'code-block';
+      const pre = document.createElement('pre');
+      pre.textContent = part;
+      const btn = document.createElement('button');
+      btn.className = 'use-code-btn';
+      btn.textContent = cfg.codeBlockLabel;
+      btn.onclick = () => cfg.onCodeBlock(part, statusEl);
+      wrap.appendChild(pre);
+      wrap.appendChild(btn);
+      el.appendChild(wrap);
+    });
+  }
+
+  // Regenerate is only meaningful once at least one question has been
+  // asked -- checked against saved history (not just "did a request
+  // just finish") so a returning student (page reload, history
+  // restored from localStorage) and a post-Clear student both see the
+  // right state without needing to ask a fresh question first.
+  function updateRegenBtnState() {
+    const h = getHistory();
+    regenBtn.disabled = !h.some(m => m.role === 'user');
+  }
+
+  function renderTranscript() {
+    const h = getHistory();
+    transcriptEl.innerHTML = h.map(m => `
+      <div class="msg ${m.role === 'user' ? 'student' : 'model'}">
+        <div class="who">${m.role === 'user' ? 'You' : 'Model'}</div>
+        <div class="content"></div>
+      </div>`).join('');
+    [...transcriptEl.children].forEach((el, i) => {
+      const contentEl = el.querySelector('.content');
+      if (h[i].role === 'user') {
+        // textContent, not innerHTML -- never trust/render student text
+        // as markup either.
+        contentEl.textContent = h[i].content;
+      } else {
+        renderAssistantContent(contentEl, h[i].content);
+      }
+    });
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    updateRegenBtnState();
+  }
+
+  function clearHistory() {
+    localStorage.removeItem(cfg.historyKey);
+    renderTranscript();
+  }
+
+  async function stopAsk() {
+    // Best-effort -- see _handle_ask()'s own docstring: this stops US
+    // from waiting on/relaying the response further, not the model's
+    // own generation on the coordinator, which has no cancellation
+    // endpoint. The streamed response itself (awaited in runAsk()
+    // below) is what reports whether it actually landed. Shared
+    // /sandbox/interrupt across both panels -- a student only ever has
+    // one live question in flight regardless of which one asked it.
+    stopBtn.disabled = true;
+    try { await fetch('/sandbox/interrupt', {method: 'POST'}); } catch (e) { /* best-effort */ }
+  }
+
+  async function askModel() {
+    const question = questionEl.value.trim();
+    if (!question) return;
+    const history = getHistory();
+    history.push({role: 'user', content: question});
+    saveHistory(history);
+    renderTranscript();
+    questionEl.value = '';
+    await runAsk(question, history.slice(0, -1));
+  }
+
+  // Re-asks the same last question with no changes. Doesn't touch
+  // history's own last user entry -- context passed to the model
+  // (history.slice(0, lastUserIdx), same as a first ask) is identical
+  // either way, and the new attempt is appended alongside the old one,
+  // not replacing it, so a student can compare rather than silently
+  // lose the previous answer.
+  async function regenerateAsk() {
+    const history = getHistory();
+    // Find the most recent question, not just the last entry -- by the
+    // time this button is enabled, history normally already ends with
+    // that question's own assistant reply.
+    let lastUserIdx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === 'user') { lastUserIdx = i; break; }
+    }
+    if (lastUserIdx === -1) {
+      statusEl.textContent = 'Ask a question first.';
       return;
     }
-    const wrap = document.createElement('div');
-    wrap.className = 'code-block';
-    const pre = document.createElement('pre');
-    pre.textContent = part;
-    const btn = document.createElement('button');
-    btn.className = 'use-code-btn';
-    btn.textContent = 'Use this code';
-    btn.onclick = () => {
-      cm.setValue(part);
-      const rs = document.getElementById('runStatus');
-      rs.textContent = 'Loaded from Ask.';
-      setTimeout(() => { if (rs.textContent === 'Loaded from Ask.') rs.textContent = ''; }, 2000);
-    };
-    wrap.appendChild(pre);
-    wrap.appendChild(btn);
-    el.appendChild(wrap);
-  });
-}
+    await runAsk(history[lastUserIdx].content, history.slice(0, lastUserIdx));
+  }
 
-function renderTranscript() {
-  const h = getHistory();
-  transcriptEl.innerHTML = h.map(m => `
-    <div class="msg ${m.role === 'user' ? 'student' : 'model'}">
-      <div class="who">${m.role === 'user' ? 'You' : 'Model'}</div>
-      <div class="content"></div>
-    </div>`).join('');
-  [...transcriptEl.children].forEach((el, i) => {
-    const contentEl = el.querySelector('.content');
-    if (h[i].role === 'user') {
-      // textContent, not innerHTML -- never trust/render student text
-      // as markup either.
-      contentEl.textContent = h[i].content;
-    } else {
-      _renderAssistantContent(contentEl, h[i].content);
+  async function runAsk(question, contextHistory) {
+    askBtn.disabled = true;
+    regenBtn.disabled = true;
+    stopBtn.disabled = false;
+    statusEl.textContent = 'Thinking…';
+
+    // Placeholder model bubble, filled in as tokens stream -- textContent
+    // only, same no-markup-from-untrusted-text rule as renderTranscript().
+    // Starts showing "Thinking..." (pulsing, via the .thinking class) so
+    // a long real wait before the first token arrives doesn't look like
+    // the page has just frozen -- found live this needed to be explicit,
+    // an empty bubble alone wasn't enough of a signal.
+    const bubble = document.createElement('div');
+    bubble.className = 'msg model';
+    bubble.innerHTML = '<div class="who">Model</div><div class="content thinking">Thinking…</div>';
+    transcriptEl.appendChild(bubble);
+    const bubbleContent = bubble.querySelector('.content');
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+
+    let assistantText = '';
+    try {
+      const resp = await fetch(cfg.endpoint, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(Object.assign(cfg.buildBody(), {question, history: contextHistory})),
+      });
+      if (!resp.ok || !resp.body) {
+        // 429 (rate limit or "already have a question in progress") comes
+        // back as plain text with the real, useful reason -- show that
+        // instead of just the bare status code.
+        bubbleContent.classList.remove('thinking');
+        bubbleContent.textContent = resp.status === 429 ? await resp.text() : 'Request failed (' + resp.status + ')';
+      } else {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, {stream: true});
+          const events = buf.split('\\n\\n');
+          buf = events.pop();
+          for (const evt of events) {
+            if (evt.startsWith(':')) {
+              // A heartbeat comment (": verifying...") -- sent while a
+              // real sandboxed re-execution or grounded fix round is
+              // running server-side, after the model's own text has
+              // already fully arrived. No new content to show, but this
+              // is the other place a real wait needs a visible signal.
+              statusEl.textContent = 'Verifying…';
+              continue;
+            }
+            const line = evt.split('\\n').find(l => l.startsWith('data: '));
+            if (!line) continue;
+            const payload = line.slice(6);
+            if (payload === '[DONE]') continue;
+            try {
+              const obj = JSON.parse(payload);
+              const delta = (obj.choices[0].delta || {}).content || '';
+              if (delta) {
+                assistantText += delta;
+                bubbleContent.classList.remove('thinking');
+                bubbleContent.textContent = assistantText;
+                transcriptEl.scrollTop = transcriptEl.scrollHeight;
+                statusEl.textContent = 'Thinking…';
+              }
+            } catch (e) { /* skip malformed lines */ }
+          }
+        }
+      }
+    } catch (e) {
+      bubbleContent.classList.remove('thinking');
+      bubbleContent.textContent = 'Request failed: ' + e.message;
+    } finally {
+      askBtn.disabled = false;
+      regenBtn.disabled = false;
+      stopBtn.disabled = true;
+      statusEl.textContent = '';
     }
-  });
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
-  _updateRegenBtnState();
+
+    const h = getHistory();
+    h.push({role: 'assistant', content: assistantText || bubbleContent.textContent});
+    saveHistory(h);
+    // Re-render from the now-saved history -- turns the plain streamed
+    // text just shown above into the same structured, button-equipped
+    // form renderTranscript() gives every other message (and what a page
+    // reload would show anyway), so the code-block button appears
+    // without needing a refresh.
+    renderTranscript();
+  }
+
+  return {askModel, regenerateAsk, stopAsk, renderTranscript, clearHistory};
 }
 
-// Regenerate is only meaningful once at least one question has been
-// asked -- checked against saved history (not just "did a request
-// just finish") so a returning student (page reload, history restored
-// from localStorage) and a post-Clear student both see the right
-// state without needing to ask a fresh question first.
-function _updateRegenBtnState() {
-  const h = getHistory();
-  document.getElementById('regenBtn').disabled = !h.some(m => m.role === 'user');
+const codeAsk = makeAskPanel({
+  historyKey: 'sandboxHistory', endpoint: '/sandbox/ask',
+  transcriptId: 'transcript', questionId: 'question', askBtnId: 'askBtn',
+  stopBtnId: 'stopBtn', regenBtnId: 'regenBtn', statusId: 'askStatus',
+  codeBlockLabel: 'Use this code',
+  buildBody: () => ({code: cm.getValue()}),
+  onCodeBlock: (part) => {
+    cm.setValue(part);
+    const rs = document.getElementById('runStatus');
+    rs.textContent = 'Loaded from Ask.';
+    setTimeout(() => { if (rs.textContent === 'Loaded from Ask.') rs.textContent = ''; }, 2000);
+  },
+});
+
+// Stage 8 -- the Linux Help panel, genuinely separate from codeAsk
+// above: its own endpoint/history, no "current code" in the request
+// body, and its own code-block action (run the suggested command in
+// the live Terminal, rather than load it into the Python editor).
+const linuxAsk = makeAskPanel({
+  historyKey: 'linuxHistory', endpoint: '/sandbox/linux-ask',
+  transcriptId: 'linuxTranscript', questionId: 'linuxQuestion', askBtnId: 'linuxAskBtn',
+  stopBtnId: 'linuxStopBtn', regenBtnId: 'linuxRegenBtn', statusId: 'linuxAskStatus',
+  codeBlockLabel: 'Run in Terminal',
+  buildBody: () => ({}),
+  onCodeBlock: (part, statusEl) => runCommandInTerminal(part, statusEl),
+});
+
+function loadState() {
+  cm.setValue(localStorage.getItem(CODE_KEY) || '');
+  codeAsk.renderTranscript();
+  linuxAsk.renderTranscript();
 }
 
 function clearAll() {
+  // Only clears the code editor and its own Ask conversation -- the
+  // Linux Help panel is a deliberately separate, unrelated
+  // conversation (that's the whole point of keeping them apart), so
+  // clearing a Python session shouldn't silently wipe it too.
   if (!confirm('Clear your code and conversation? This only affects this browser.')) return;
   localStorage.removeItem(CODE_KEY);
-  localStorage.removeItem(HISTORY_KEY);
+  codeAsk.clearHistory();
   cm.setValue('');
-  renderTranscript();
   document.getElementById('runResult').innerHTML = '';
 }
 
@@ -1160,148 +1413,6 @@ async function runCode() {
   } finally {
     btn.disabled = false;
   }
-}
-
-async function stopAsk() {
-  // Best-effort -- see _handle_sandbox_interrupt()'s own docstring:
-  // this stops US from waiting on/relaying the response further, not
-  // the model's own generation on the coordinator, which has no
-  // cancellation endpoint. The streamed response itself (awaited in
-  // askModel() below) is what reports whether it actually landed.
-  const stopBtn = document.getElementById('stopBtn');
-  stopBtn.disabled = true;
-  try { await fetch('/sandbox/interrupt', {method: 'POST'}); } catch (e) { /* best-effort */ }
-}
-
-async function askModel() {
-  const qEl = document.getElementById('question');
-  const question = qEl.value.trim();
-  if (!question) return;
-  const history = getHistory();
-  history.push({role: 'user', content: question});
-  saveHistory(history);
-  renderTranscript();
-  qEl.value = '';
-  await _runAsk(question, history.slice(0, -1));
-}
-
-// Re-asks the same last question with no changes -- reuses whatever
-// code is in the editor *right now* (same as askModel() itself always
-// reading cm.getValue() fresh), not whatever it was the first time
-// this question was asked, since the editor may have changed since.
-// Doesn't touch history's own last user entry -- context passed to the
-// model (history.slice(0, -1), same as a first ask) is identical
-// either way, and the new attempt is appended alongside the old one,
-// not replacing it, so a student can compare rather than silently lose
-// the previous answer.
-async function regenerateAsk() {
-  const history = getHistory();
-  // Find the most recent question, not just the last entry -- by the
-  // time this button is enabled, history normally already ends with
-  // that question's own assistant reply.
-  let lastUserIdx = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'user') { lastUserIdx = i; break; }
-  }
-  if (lastUserIdx === -1) {
-    document.getElementById('askStatus').textContent = 'Ask a question first.';
-    return;
-  }
-  await _runAsk(history[lastUserIdx].content, history.slice(0, lastUserIdx));
-}
-
-async function _runAsk(question, contextHistory) {
-  const btn = document.getElementById('askBtn');
-  const stopBtn = document.getElementById('stopBtn');
-  const regenBtn = document.getElementById('regenBtn');
-  const status = document.getElementById('askStatus');
-  btn.disabled = true;
-  regenBtn.disabled = true;
-  stopBtn.disabled = false;
-  status.textContent = 'Thinking…';
-
-  // Placeholder model bubble, filled in as tokens stream -- textContent
-  // only, same no-markup-from-untrusted-text rule as renderTranscript().
-  // Starts showing "Thinking..." (pulsing, via the .thinking class) so
-  // a long real wait before the first token arrives doesn't look like
-  // the page has just frozen -- found live this needed to be explicit,
-  // an empty bubble alone wasn't enough of a signal.
-  const bubble = document.createElement('div');
-  bubble.className = 'msg model';
-  bubble.innerHTML = '<div class="who">Model</div><div class="content thinking">Thinking…</div>';
-  transcriptEl.appendChild(bubble);
-  const bubbleContent = bubble.querySelector('.content');
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
-
-  let assistantText = '';
-  try {
-    const resp = await fetch('/sandbox/ask', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code: cm.getValue(), question, history: contextHistory}),
-    });
-    if (!resp.ok || !resp.body) {
-      // 429 (rate limit or "already have a question in progress") comes
-      // back as plain text with the real, useful reason -- show that
-      // instead of just the bare status code.
-      bubbleContent.classList.remove('thinking');
-      bubbleContent.textContent = resp.status === 429 ? await resp.text() : 'Request failed (' + resp.status + ')';
-    } else {
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, {stream: true});
-        const events = buf.split('\\n\\n');
-        buf = events.pop();
-        for (const evt of events) {
-          if (evt.startsWith(':')) {
-            // A heartbeat comment (": verifying...") -- sent while a
-            // real sandboxed re-execution or grounded fix round is
-            // running server-side, after the model's own text has
-            // already fully arrived. No new content to show, but this
-            // is the other place a real wait needs a visible signal.
-            status.textContent = 'Verifying…';
-            continue;
-          }
-          const line = evt.split('\\n').find(l => l.startsWith('data: '));
-          if (!line) continue;
-          const payload = line.slice(6);
-          if (payload === '[DONE]') continue;
-          try {
-            const obj = JSON.parse(payload);
-            const delta = (obj.choices[0].delta || {}).content || '';
-            if (delta) {
-              assistantText += delta;
-              bubbleContent.classList.remove('thinking');
-              bubbleContent.textContent = assistantText;
-              transcriptEl.scrollTop = transcriptEl.scrollHeight;
-              status.textContent = 'Thinking…';
-            }
-          } catch (e) { /* skip malformed lines */ }
-        }
-      }
-    }
-  } catch (e) {
-    bubbleContent.classList.remove('thinking');
-    bubbleContent.textContent = 'Request failed: ' + e.message;
-  } finally {
-    btn.disabled = false;
-    regenBtn.disabled = false;
-    stopBtn.disabled = true;
-    status.textContent = '';
-  }
-
-  const h = getHistory();
-  h.push({role: 'assistant', content: assistantText || bubbleContent.textContent});
-  saveHistory(h);
-  // Re-render from the now-saved history -- turns the plain streamed
-  // text just shown above into the same structured, button-equipped
-  // form renderTranscript() gives every other message (and what a page
-  // reload would show anyway), so "Use this code" appears without
-  // needing a refresh.
-  renderTranscript();
 }
 
 // ── Terminal panel ──────────────────────────────────────────────────
@@ -1434,6 +1545,36 @@ function sendCodeToTerminal() {
   setTimeout(() => { if (rs.textContent === 'Sent to Terminal as sandbox_code.py.') rs.textContent = ''; }, 3000);
 }
 
+// Stage 8 -- runs a Linux Help code block's own suggested command(s)
+// directly in the live terminal session, exactly as if typed there.
+// Deliberately NOT the same base64-into-a-file mechanism as
+// sendCodeToTerminal() above -- that one exists so python3 can run the
+// result afterward, and needs the shell to NOT interpret its content.
+// Here the whole point IS for the shell to interpret $vars/backticks/
+// etc. normally -- that's what "running a command" means -- so only
+// the OUTER interactive shell needs protecting from expanding the
+// heredoc body early, which a quoted heredoc (<<'DELIM') already does
+// for arbitrary content, same as the encoded approach guards against
+// shell-special characters elsewhere on this page. The delimiter
+// carries a random suffix rather than a fixed literal -- this panel's
+// own answers can plausibly include a heredoc example of their own
+// using a plain "EOF"-style name, which a fixed delimiter could
+// collide with.
+function runCommandInTerminal(code, statusEl) {
+  if (!code.trim()) return;
+  if (!termState || termState.ws.readyState !== WebSocket.OPEN) {
+    if (statusEl) statusEl.textContent = 'Start a terminal below first.';
+    return;
+  }
+  const delim = 'CLOUDCORE_EOF_' + Math.random().toString(36).slice(2, 10);
+  const cmd = `bash <<'${delim}'\n${code}\n${delim}\n`;
+  termState.ws.send(JSON.stringify({type: 'input', data: cmd}));
+  if (statusEl) {
+    statusEl.textContent = 'Sent to Terminal.';
+    setTimeout(() => { if (statusEl.textContent === 'Sent to Terminal.') statusEl.textContent = ''; }, 3000);
+  }
+}
+
 // ── Preview panel ────────────────────────────────────────────────────
 // A plain <iframe> onto the same per-session proxy the Terminal panel's
 // own reminder already points students at (sandbox_terminal.py's
@@ -1559,6 +1700,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_sandbox_run()
         elif path == "/sandbox/ask":
             self._handle_sandbox_ask()
+        elif path == "/sandbox/linux-ask":
+            self._handle_linux_ask()
         elif path == "/sandbox/interrupt":
             self._handle_sandbox_interrupt()
         else:
@@ -1711,7 +1854,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         the real generation back via the same SSE mechanics the old
         chat endpoint used, then grounds and captures it exactly the
         same way (source="llm-chat-sandbox", distinguishing these rows
-        from chat-originated ones in the shared Phase 3 corpus).
+        from chat-originated ones in the shared Phase 3 corpus)."""
+        self._handle_ask(SANDBOX_SYSTEM_MESSAGE, capture_source="llm-chat-sandbox",
+                          verify=True, include_code=True, endpoint_label="/sandbox/ask")
+
+    def _handle_linux_ask(self):
+        """Stage 8 -- general Linux Q&A, genuinely separate from the
+        coding Ask panel above: its own system prompt
+        (LINUX_SYSTEM_MESSAGE), no "current code" concept
+        (include_code=False), and no automatic execution/grounding
+        (verify=False) -- see LINUX_SYSTEM_MESSAGE's own comment for
+        why an auto-run loop doesn't belong here the way it does for
+        disposable Python code. Not captured into the Phase 3 corpus
+        either (verify=False also skips that, see _relay_and_verify_stream) --
+        there is no code/exec grounding data for this panel to offer,
+        and that corpus requires it."""
+        self._handle_ask(LINUX_SYSTEM_MESSAGE, capture_source="llm-chat-linux",
+                          verify=False, include_code=False, endpoint_label="/sandbox/linux-ask")
+
+    def _handle_ask(self, system_message: str, capture_source: str, verify: bool,
+                     include_code: bool, endpoint_label: str):
+        """Shared by both ask endpoints above -- rate limiting, the
+        one-in-flight-per-IP concurrency gate, and POST
+        /sandbox/interrupt's own Stop button all stay keyed on IP
+        alone, not on which endpoint, since a real student only ever
+        has one live question at a time regardless of which panel it
+        came from, and both hit the same shared, slow backend.
 
         Stage 4: rate-limited (RATE_LIMIT_ASK_PER_10MIN) and capped at
         one in-flight ask per IP -- a real student only ever has one
@@ -1737,15 +1905,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             state["interrupt"] = interrupt_event
 
         try:
-            self._do_handle_sandbox_ask(interrupt_event)
+            self._do_handle_ask(interrupt_event, system_message, capture_source,
+                                 verify, include_code, endpoint_label)
         finally:
             with _client_lock:
                 state["ask_active"] = False
                 state["interrupt"] = None
 
-    def _do_handle_sandbox_ask(self, interrupt_event):
+    def _do_handle_ask(self, interrupt_event, system_message: str, capture_source: str,
+                        verify: bool, include_code: bool, endpoint_label: str):
         req_json = self._read_json_body()
-        code = (req_json.get("code") or "").strip()
+        code = (req_json.get("code") or "").strip() if include_code else ""
         question = (req_json.get("question") or "").strip()
         history = req_json.get("history") or []
         max_tokens = req_json.get("max_tokens")
@@ -1759,7 +1929,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         user_turn = (f"Here is my current code:\n```python\n{code}\n```\n\n{question}"
                      if code else question)
-        messages = ([{"role": "system", "content": SANDBOX_SYSTEM_MESSAGE}]
+        messages = ([{"role": "system", "content": system_message}]
                     + list(history) + [{"role": "user", "content": user_turn}])
 
         upstream_payload = {"messages": messages, "stream": True}
@@ -1788,7 +1958,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 break
             except (ConnectionRefusedError, socket.timeout, OSError) as e:
                 last_err = e
-                print(f"verify-proxy: /sandbox/ask upstream connect attempt "
+                print(f"verify-proxy: {endpoint_label} upstream connect attempt "
                       f"{attempt + 1}/3 failed: {e!r}", flush=True)
                 if conn is not None:
                     conn.close()
@@ -1801,8 +1971,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(f"verify-proxy: upstream unreachable after 3 attempts: {last_err}".encode())
             return
 
-        self._relay_and_verify_stream(resp, messages, max_tokens, capture_source="llm-chat-sandbox",
-                                       interrupt=interrupt_event)
+        self._relay_and_verify_stream(resp, messages, max_tokens, capture_source=capture_source,
+                                       interrupt=interrupt_event, verify=verify)
         conn.close()
 
     def _handle_sandbox_interrupt(self):
@@ -1830,7 +2000,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(out)
 
     def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
-                                  capture_source: str = "llm-chat-coordinator", interrupt=None):
+                                  capture_source: str = "llm-chat-coordinator", interrupt=None,
+                                  verify: bool = True):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1898,7 +2069,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # to an honest note instead of running verify_and_maybe_fix()
             # on a deliberately truncated response.
             self._write_sse_delta("\n\n---\n_Stopped at your request._\n", last_chunk_meta)
-        else:
+        elif verify:
+            # Stage 8 -- verify=False (the Linux Q&A panel) skips this
+            # whole block: no auto-execution of a suggested shell
+            # command (see LINUX_SYSTEM_MESSAGE's own comment for why),
+            # and therefore no capture_example() call either -- that
+            # corpus hard-requires real code/exec grounding data this
+            # panel deliberately never produces.
             code = extract_python_code(full_text) if ENABLE_VERIFICATION else None
             if code:
                 extra, capture = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
