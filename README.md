@@ -221,17 +221,31 @@ when it ends or goes idle — the same KVM guest-kernel boundary that
 already isolates CloudCore tenants from each other, not a container
 sharing the host kernel.
 
+The shell itself is a real, minimal Ubuntu 22.04 guest — `vim` (and
+`nano`) are there from the start, and `apt install` genuinely works
+against a package index refreshed fresh at the start of every session
+over that session's own real internet access (the `main` component
+only, matching a plain `debootstrap`; a package that lives in
+`universe`, e.g. `tree`, needs installing some other way).
+
 A fixed pool of four high ports (`41001`–`41004` by default, set once
 at this example's own deploy time via `preview_ports`) is reachable
 from your browser at the same host, reverse-proxied straight into
 whichever microVM your own terminal session is currently using — start
 a web server on any of them (`python3 -m http.server 41001`, Flask's
-`app.run(host='0.0.0.0', port=41001)`, etc.) and open that port in a
-new tab to see it render for real. A student's own program often needs
-more than one port at once (a frontend plus an API, say), so all four
-are always available together, not requested individually. The
-Terminal panel's own description and the shell's "connected" message
-both remind you which ports are live the moment a session starts.
+`app.run(host='0.0.0.0', port=41001)`, etc.) to see it render for real.
+A student's own program often needs more than one port at once (a
+frontend plus an API, say), so all four are always available together,
+not requested individually. The Terminal panel's own description and
+the shell's "connected" message both remind you which ports are live
+the moment a session starts.
+
+A **Preview** panel next to Terminal renders whichever port you pick
+right there on the page — a port selector, a Refresh button, and an
+"Open in new tab" link always sitting alongside it for the rare app
+that refuses to be embedded in an `<iframe>` at all. Purely a
+convenience over the same reverse proxy above — nothing shown there
+wasn't already reachable by opening the port directly.
 
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
 precision Q8_0 variant of their own default model on the new

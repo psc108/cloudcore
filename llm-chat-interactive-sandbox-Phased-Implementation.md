@@ -697,16 +697,199 @@ Live testing again caught what review didn't:
    guest (`ip route add 169.254.169.254 dev eth0`) — not reachable via
    the normal default route alone.
 
-**Not yet done**: an actual `tofu apply` exercising the new LB
-`routing_rules` end-to-end through the real load balancer (blocked on
-not having this deployment's own `worker_peers` value outside the
-Dashboard's own Build Manager) — the WS service itself was instead
-verified directly against its loopback port, which is everything the
-LB rule needs to forward to correctly.
+**At the time**: not yet done was an actual `tofu apply` exercising the
+new LB `routing_rules` end-to-end through the real load balancer
+(blocked on not having this deployment's own `worker_peers` value
+outside the Dashboard's own Build Manager) — the WS service itself was
+instead verified directly against its loopback port. See Stage 5C
+immediately below for what that real apply actually found.
 
 **Known follow-ups, not silently deferred**: `jailer`-based host-side
 hardening for the VMM process (named above); pre-warming/pooling for
 faster boots; a slightly tighter mid-boot-disconnect cleanup path.
+
+### Stage 5C — the real LB verification, and four real bugs found closing it
+
+The gap named above closed itself the first time the user actually
+built this through the Dashboard's own Build Manager (the first real
+`tofu apply` with a genuine `worker_peers` value) — and immediately hit
+a live 503 outage, reported directly: *"tried building llm-chat and we
+get 503 unvailable after quite some time of waiting."*
+
+Four real, compounding bugs found and fixed chasing it down, each one
+unmasking the next:
+
+1. **`api/server.py`'s every LB mutation endpoint did an unlocked
+   read-modify-write.** Terraform applies independent resources against
+   the same LB concurrently by default (no `depends_on` between two
+   unrelated `cloudcore_lb_target_group` blocks); the two target-group
+   creates in this apply — the coordinator's own, and Stage 5's new
+   terminal one — genuinely raced, and whichever `put_lb()` committed
+   second silently overwrote the first's write. The coordinator's own
+   target group vanished from the stored LB entirely, its listener's
+   `target_group_id` left dangling, haproxy falling back to a bogus
+   port-80 guess for the coordinator itself. Fixed with a new
+   per-`lb_id` lock (`store.lb_lock`) wrapping every such handler's full
+   read-modify-write span — a structural fix, not scoped to this one
+   example, since any LB that picks up more than one target group in
+   the same apply was equally exposed.
+2. **HAProxy's classic health-check directive sends a bare HTTP/1.0
+   request**, and `websockets` 16's own parser rejects HTTP/1.0 outright
+   before it ever reaches `sandbox_terminal.py`'s own health hook.
+   Fixed with a `GET /health` short-circuit plus switching
+   `api/lb.py`'s own health-check generation to HAProxy 2.x's explicit
+   `http-check send ... ver HTTP/1.1` form, for every target group, not
+   just this one.
+3. **`sandbox_terminal.py` bound its WebSocket server to `127.0.0.1`**,
+   but HAProxy reaches a bridge-mode target group's server via the
+   instance's own real `private_ip`, never loopback — every LB-routed
+   request got a genuine connection-refused. Bound `0.0.0.0` instead,
+   matching `verify_proxy.py`'s own already-correct convention (Stage
+   5B's own oversight — that file was added after `verify_proxy.py`'s
+   binding convention was already established, and never matched it).
+4. **A hard JS `SyntaxError` broke Run/Ask/Terminal simultaneously.**
+   `SANDBOX_PAGE_HTML` is a plain (non-raw) Python string, so the two
+   ANSI-color `term.write()` lines added for the Terminal panel's own
+   error styling had their escape sequences collapsed to real control
+   bytes by Python before the page was ever served — a literal,
+   unescaped newline landing inside a single-quoted JS string in the
+   served page, a hard `SyntaxError` that broke the *entire* inline
+   `<script>` tag at once (confirmed directly: extracting the
+   previously-shipped page's own script and running Node's `--check`
+   against it reproduces the exact error; the fixed version passes).
+
+All four deployed live and verified end-to-end through the real load
+balancer: `/`, `/health`, and `/terminal` all healthy, a real terminal
+session usable, the served page's script confirmed syntactically valid.
+
+## Stage 6 — Browser preview for anything the student runs in the Terminal
+
+Direct follow-up, once the Terminal's own real internet access made
+"run a web server and see it" something a student would actually reach
+for: *"we need to provide the student a way to run their code and see
+the results/output... if creating a browser based output program...
+there's no way to connect a browser to see the output."* Clarified via
+direct follow-up into a fixed pool of ports decided once at deploy
+time, not per-session, since a real program often needs more than one
+port at once: *"a student's own program... may be more than one port
+required... create 4 ports with high numbers out of the way of
+anything obviously known... when the student opens the terminal give
+them a reminder."*
+
+**`preview_ports`** (default `41001`–`41004`): `sandbox_terminal.py`
+opens one small reverse-proxy listener per port alongside the existing
+WebSocket terminal, routing each incoming connection to the right
+student's own currently-connected microVM by reading
+`X-Forwarded-For` off its first request — the same IP-keyed session
+model the WS handler already uses for concurrency — then splicing raw
+bytes for the rest of the TCP connection, so whatever the student's
+program returns (HTML, JSON, images, even its own WebSocket upgrade)
+passes through completely unmodified. A plain `GET /health`
+short-circuits before any of that, same fix already applied to the
+terminal target group's own check. `main.tf` gets one target group +
+listener per preview port (`for_each`, not `count`, matching this
+project's own Terraform convention). The Terminal panel's own
+description and the shell's "connected" message both remind the
+student which ports are live the moment a session starts.
+
+Then, per direct follow-up idea — *"we should probably look at
+providing a lab web browser... one that can be used to browse to any
+of the four ports we allow"* — a new **Preview** panel on the sandbox
+page itself, next to Terminal: a port selector (one button per
+configured port, the active one highlighted) driving a plain
+`<iframe>`, a **Refresh** button, and an always-visible **Open in new
+tab** link for anything that refuses to be framed. No new capability
+or attack surface — purely a browser-side convenience over the exact
+same per-session proxy above; everything shown was already reachable
+by opening the same URL in a new tab, the panel just saves the round
+trip. The port list itself is substituted server-side from the real
+configured `preview_ports` at page-load time, never hardcoded.
+
+### Verified live, 2026-09-22
+
+Full round-trip through the real load balancer, twice over. First:
+a real terminal WebSocket session, a real `python3 -m http.server`
+started inside the isolated microVM with real content, fetched from a
+second, independent connection through the LB on the same port — the
+student program's own real content came back, 200 OK; a request with
+no active session got a clean 502 instead of hanging; the microVM
+tore down with zero leftover processes once the session ended. Second,
+with a real headless-Chrome screenshot of the actual rendered sandbox
+page (not just `curl`): the Preview panel's iframe showing the
+student's own live page for real, port buttons rendering correctly
+with the active one highlighted, Refresh/Open-in-new-tab both present.
+
+## The golden rootfs: `vi`/`vim`, and `apt install` actually working
+
+Direct report once students started really using the Terminal for
+real: *"if you start a terminal and try to vi a file (existing or new)
+vi (vim) is not found, if you try to apt install vi (vim) it's not
+found."* `vim` was simply missing from the golden image's own base
+package list (fixed, alongside the existing `nano`); `apt install
+<anything>` failing was a real, general gap, not specific to vim — the
+golden image's own build-time cleanup strips the apt package index to
+keep the shipped artifact small (correct for a frozen image reused
+across many future sessions), but nothing ever refreshed it at boot.
+
+Rebuilding the golden rootfs to fix that surfaced three more real,
+unrelated bugs, each one masking the next until fixed:
+
+1. The build script's own `chroot ... /bin/bash -c '...'` form — three
+   quote-levels deep inside an `ssh "..."` argument — silently
+   corrupted mid-parse on every single real rebuild attempt. Reproduced
+   identically on the completely unmodified, pre-existing script,
+   conclusively ruling out anything specific to this change. Fixed by
+   writing the same provisioning script to a real file and running it
+   with `bash <file>` instead of the fragile inline form.
+2. `network-online.target` is satisfied trivially on this minimal
+   debootstrap image (no NetworkManager/systemd-networkd wait-online
+   unit installed), so the first fix attempt (a one-shot `apt-get
+   update`) raced real network readiness at boot.
+3. Far more persistent: `/etc/resolv.conf` as set at image-build time
+   gets silently replaced at boot by systemd's own resolved-stub
+   symlink, which is never actually running on this minimal image —
+   every DNS query failed permanently, not just transiently at boot,
+   confirmed live with `getent hosts` returning nothing at all
+   indefinitely. Fixed by force-writing a real, static resolver on
+   every retry attempt, not just once at image-build time.
+
+### Verified live, 2026-09-22
+
+End to end, through a real terminal session on the redeployed golden
+image: `which vi vim` resolves to real binaries, `vim --version` runs,
+and `sudo apt-get install -y bc` genuinely downloads, installs, and
+the installed binary computes correctly (`echo 2+2 | bc` → `4`) —
+through the real DNS/network path, not a stub. Known, flagged
+limitation, not silently papered over: debootstrap's own default
+`sources.list` only enables the `main` component, so a package living
+in `universe` (`tree`, the first one tried) still reports not-found
+even with a now-fully-working index.
+
+## The sandbox's own system prompt: closing two real gaps
+
+Asked directly to reflect on what had actually been learned about the
+prompt recently. Two real gaps folded into `sandbox_system_message`'s
+own default:
+
+- **An orphaned anti-hallucination instruction.** `webui_system_message`
+  already carried real wording ("only describe what code actually
+  does... say so explicitly if you're not certain"), written for a real
+  stress-test failure this project found — but that variable went
+  vestigial once Phase 4 closed off llama-server's own webui, so the
+  lesson it encoded just sat unused. Carried across into the prompt
+  that's actually live today.
+- **Zero awareness the Terminal/preview ports exist at all.** The
+  prompt only ever described the Run sandbox, so the model had no
+  grounding to correctly answer whether it could install a package or
+  serve a web page — it could only guess or hallucinate either way.
+
+Live-testing the fix caught a real gap in the fix itself: without a
+concrete port number, the model confidently filled in Flask's own
+conventional default (port 5000, then 8080) instead of a real,
+actually-proxied one — worse than not mentioning ports at all. Fixed
+by substituting the real configured `preview_ports` into the prompt at
+`verify_proxy.py`'s own load time (the same mechanism the Terminal
+panel's own UI reminder already uses), never a hardcoded guess.
 
 ---
 
