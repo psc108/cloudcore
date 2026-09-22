@@ -961,6 +961,10 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 #termHost { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; background: #0d0d0d; padding: 0.4rem; display: none; }
 #termHost.open { display: block; }
 #termHost .xterm { height: 360px; }
+#previewPortRow button.primary { background: #2a5db0; border-color: #2a5db0; color: #fff; }
+#previewHost { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; background: #fff; margin-top: 0.6rem; }
+#previewFrame { width: 100%; height: 420px; border: 0; display: block; }
+#previewOpenLink { font-size: 0.85rem; color: #2a5db0; }
 footer { margin-top: 1.5rem; font-size: 0.8rem; color: #555; }
 footer a { color: #2a5db0; }
 </style></head>
@@ -1000,6 +1004,17 @@ footer a { color: #2a5db0; }
     <span id="termStatus" class="status"></span>
   </div>
   <div id="termHost"></div>
+</div>
+
+<div class="panel">
+  <h2>Preview</h2>
+  <p class="sub" style="margin-bottom:0.75rem">View whatever your own program is serving on one of the Terminal's ports, right here -- no need to open a new tab yourself. If a page doesn't render (some apps refuse to be embedded), use "Open in new tab" instead; either way it's reaching the exact same thing.</p>
+  <div class="row" id="previewPortRow"></div>
+  <div class="row" style="margin-top:0.5rem">
+    <button onclick="refreshPreview()">Refresh</button>
+    <a id="previewOpenLink" href="#" target="_blank" rel="noopener">Open in new tab &#8599;</a>
+  </div>
+  <div id="previewHost"><iframe id="previewFrame"></iframe></div>
 </div>
 
 <footer>Published examples from sessions like this one: <a href="/examples">/examples</a></footer>
@@ -1290,6 +1305,55 @@ function stopTerminal() {
   termState = null;
 }
 
+// ── Preview panel ────────────────────────────────────────────────────
+// A plain <iframe> onto the same per-session proxy the Terminal panel's
+// own reminder already points students at (sandbox_terminal.py's
+// PREVIEW_PORTS listeners) -- this is a browser-side convenience only,
+// not a new capability: everything shown here was already reachable by
+// opening the same URL in a new tab. __PREVIEW_PORTS_JSON__ is
+// substituted server-side (same mechanism __PREVIEW_PORTS_HINT__ above
+// already uses) so this always matches the real deployed port list,
+// never a hardcoded guess.
+const PREVIEW_PORTS = __PREVIEW_PORTS_JSON__;
+let _previewPort = PREVIEW_PORTS.length ? PREVIEW_PORTS[0] : null;
+
+function _previewUrl(port) {
+  // location.hostname, not location.host -- the preview ports are
+  // separate LB listeners on the same host, never the sandbox page's
+  // own port.
+  return `${location.protocol}//${location.hostname}:${port}/`;
+}
+
+function _renderPreviewPorts() {
+  const row = document.getElementById('previewPortRow');
+  if (!PREVIEW_PORTS.length) {
+    row.innerHTML = '<span class="status">No preview ports configured for this deployment.</span>';
+    return;
+  }
+  row.innerHTML = PREVIEW_PORTS.map(p =>
+    `<button class="${p === _previewPort ? 'primary' : ''}" onclick="selectPreviewPort(${p})">${p}</button>`
+  ).join('');
+}
+
+function selectPreviewPort(port) {
+  _previewPort = port;
+  _renderPreviewPorts();
+  refreshPreview();
+}
+
+function refreshPreview() {
+  if (_previewPort === null) return;
+  const url = _previewUrl(_previewPort);
+  // Reassigning .src (even to the same value) forces a real reload --
+  // this is also what the Refresh button relies on to pick up a
+  // student's own newly (re)started server on the same port.
+  document.getElementById('previewFrame').src = url;
+  document.getElementById('previewOpenLink').href = url;
+}
+
+_renderPreviewPorts();
+refreshPreview();
+
 loadState();
 </script>
 </body></html>
@@ -1301,6 +1365,8 @@ SANDBOX_PAGE_HTML = SANDBOX_PAGE_HTML.replace(
      "host -- run a web server on one of them (e.g. Flask's <code>app.run(host='0.0.0.0', "
      "port=" + PREVIEW_PORTS[0] + ")</code>) and open that port in a new tab to see it.")
     if PREVIEW_PORTS else "")
+SANDBOX_PAGE_HTML = SANDBOX_PAGE_HTML.replace(
+    "__PREVIEW_PORTS_JSON__", json.dumps([int(p) for p in PREVIEW_PORTS]))
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
