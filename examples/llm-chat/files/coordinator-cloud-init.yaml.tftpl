@@ -221,6 +221,7 @@ write_files:
       Environment=TERMINAL_MAX_SESSION_MINUTES=${terminal_max_session_minutes}
       Environment=TERMINAL_MAX_CONCURRENT_SESSIONS=${terminal_max_concurrent_sessions}
       Environment=TERMINAL_BOOT_TIMEOUT_SECONDS=${terminal_boot_timeout_seconds}
+      Environment=TERMINAL_UNRESPONSIVE_SECONDS=${terminal_unresponsive_seconds}
       Environment=PREVIEW_PORTS=${preview_ports}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/sandbox_terminal.py
       Restart=on-failure

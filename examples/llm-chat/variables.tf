@@ -542,6 +542,24 @@ variable "terminal_boot_timeout_seconds" {
   default     = 20
 }
 
+# Direct follow-up after discussing whether the platform is prepared
+# for a student running something destructive (e.g. partitioning the
+# running root fs) from a Terminal session started off a Linux Help
+# suggestion. The architecture already recovers cleanly (every session
+# is a disposable microVM, and Disconnect's client-side ws.close() plus
+# the server's SIGKILL-backed teardown() don't depend on the guest
+# responding at all) — the real gap was a guest that's unusable but
+# whose SSH channel doesn't actually error (kernel/sshd still resident
+# in RAM), which the existing idle-timeout can't detect since retyping
+# into a dead shell still counts as activity. This tracks a genuinely
+# different signal instead: real input sent with no real output
+# following it for this long.
+variable "terminal_unresponsive_seconds" {
+  description = "If a sandbox terminal session has sent real input but received no shell output for this long, the student is shown a 'may be stuck — start a fresh session?' hint (with a one-click restart) rather than staring at a silently dead shell. Deliberately generous — a legitimately slow command (a big apt install, a large download) shouldn't false-positive — and phrased as a suggestion, not an assertion, since this signal alone can't distinguish 'stuck' from 'just slow'."
+  type        = number
+  default     = 30
+}
+
 # Per direct request: a student's own program very often needs more
 # than one port at once (a frontend + an API, a websocket alongside an
 # HTTP port, etc.), so this is a fixed pool decided once at this

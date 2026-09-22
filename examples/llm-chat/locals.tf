@@ -155,6 +155,7 @@ locals {
     terminal_max_session_minutes     = var.terminal_max_session_minutes
     terminal_max_concurrent_sessions = var.terminal_max_concurrent_sessions
     terminal_boot_timeout_seconds    = var.terminal_boot_timeout_seconds
+    terminal_unresponsive_seconds    = var.terminal_unresponsive_seconds
     preview_ports                    = join(",", var.preview_ports)
     websockets_wheel_name    = var.websockets_wheel_name
     websockets_wheel_sha256  = var.websockets_wheel_sha256

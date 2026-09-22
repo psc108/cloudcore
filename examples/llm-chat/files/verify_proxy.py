@@ -1062,6 +1062,7 @@ footer a { color: #2a5db0; }
   <div class="row">
     <button id="termStartBtn" class="primary" onclick="startTerminal()">Start terminal</button>
     <button id="termStopBtn" onclick="stopTerminal()" disabled>Disconnect</button>
+    <button id="termRestartBtn" onclick="restartTerminal()" style="display:none">Start a fresh session</button>
     <span id="termStatus" class="status"></span>
   </div>
   <div id="termHost"></div>
@@ -1469,6 +1470,10 @@ function startTerminal() {
       if (msg.type === 'output' || msg.type === 'connected') {
         status.classList.remove('warn');
         status.textContent = '';
+        // Real output arriving is proof the shell isn't actually stuck
+        // (even if sandbox_terminal.py already warned once) -- hide any
+        // earlier "may be stuck" hint rather than leave it lingering.
+        document.getElementById('termRestartBtn').style.display = 'none';
         term.write(msg.data);
       } else if (msg.type === 'error') {
         term.write('\\r\\n\\x1b[31m' + msg.data + '\\x1b[0m\\r\\n');
@@ -1480,6 +1485,16 @@ function startTerminal() {
         // terminal output a student could easily miss scrolling past.
         status.classList.add('warn');
         status.textContent = msg.data;
+      } else if (msg.type === 'unresponsive') {
+        // sandbox_terminal.py's own "input sent, nothing came back"
+        // signal -- a real command that's just slow looks identical
+        // from this signal alone, so this is offered as an option, not
+        // forced: the student can keep waiting, or click through to a
+        // guaranteed-fresh microVM without needing to know that's what
+        // "Disconnect" + "Start terminal" together would also do.
+        status.classList.add('warn');
+        status.textContent = msg.data;
+        document.getElementById('termRestartBtn').style.display = '';
       }
     } catch (e) { /* skip malformed frames */ }
   };
@@ -1489,6 +1504,7 @@ function startTerminal() {
     stopBtn.disabled = true;
     startBtn.disabled = false;
     document.getElementById('sendToTermBtn').disabled = true;
+    document.getElementById('termRestartBtn').style.display = 'none';
     status.classList.remove('warn');
   };
 
@@ -1522,7 +1538,20 @@ function stopTerminal() {
   document.getElementById('termStartBtn').disabled = false;
   document.getElementById('termStopBtn').disabled = true;
   document.getElementById('sendToTermBtn').disabled = true;
+  document.getElementById('termRestartBtn').style.display = 'none';
   termState = null;
+}
+
+// Tears down whatever's there (presumed dead or genuinely unresponsive
+// -- stopTerminal() only ever does a client-side ws.close(), which
+// doesn't depend on the guest responding at all, and the server's own
+// teardown() SIGKILLs the VM process if it doesn't exit cleanly) and
+// immediately starts a completely fresh microVM. One click instead of
+// the student needing to know that Disconnect + Start terminal
+// together is what actually recovers from a stuck session.
+function restartTerminal() {
+  stopTerminal();
+  startTerminal();
 }
 
 // Writes the editor's current content into the terminal session as a

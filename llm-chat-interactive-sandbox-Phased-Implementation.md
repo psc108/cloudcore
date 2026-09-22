@@ -1096,6 +1096,63 @@ enabled) — verified via Chrome DevTools Protocol dispatching real
 keyboard events, distinguishing the two cases directly rather than
 assuming the conditional works.
 
+### Follow-up: a recovery path for a genuinely stuck Terminal session
+
+Direct question, prompted by the Linux Help panel's own "Run in
+Terminal" button now making it easy to run something destructive (e.g.
+a suggested disk-partitioning command) against a real live shell: is
+the platform prepared if that leaves the session unresponsive or
+destroyed beyond use? The architecture already recovers cleanly on its
+own -- every session is a disposable microVM, and Disconnect's
+client-side `ws.close()` plus the server's `SIGTERM`-then-`SIGKILL`
+`teardown()` don't depend on the guest responding at all. The one real
+gap: a guest left unusable (e.g. a trashed root fs) but whose SSH
+channel doesn't itself error, since the kernel/sshd can still be
+resident in RAM -- the existing idle-timeout can't catch this, because
+retyping into a dead shell still counts as activity.
+
+New signal in `sandbox_terminal.py`: `TERMINAL_UNRESPONSIVE_SECONDS`
+(default 30) tracks real input sent with no real shell output
+following it for that long, distinct from the existing idle/max-session
+timers. `ssh_reader()` resets the clock on every real output byte
+relayed; the main loop's periodic check (same cadence as the existing
+idle/max-session warnings) fires a new `{"type": "unresponsive"}` frame
+once per approach, resetting so it can fire again later in the same
+session. The browser shows this as a `.warn`-styled status line plus a
+new **Start a fresh session** button (`termRestartBtn`, hidden except
+when this fires) -- `restartTerminal()` is just `stopTerminal();
+startTerminal();`, one click instead of the student needing to know
+Disconnect-then-Start-terminal is what actually recovers a stuck
+session.
+
+A real discovery from live-testing this, not assumed from reading the
+code: a naive "how long since the last output" signal alone would
+false-positive on any merely slow-but-fine command (a big `apt
+install`, a large download), which is exactly the false alarm the
+design set out to avoid by phrasing the hint as a question rather than
+an assertion. Testing it live with a real, safe `sleep 15` command
+showed the mechanism is actually more precise than that: bash's own
+readline echoes typed input back immediately (proof the shell is alive
+and has acknowledged it) *before* a slow command's own silence begins,
+so the "last input vs last output" comparison never trips for an
+ordinary running command at all -- it only fires when the shell never
+even acknowledges receiving the input in the first place. Confirmed
+directly live with a real, safe simulation of true unresponsiveness
+(`SIGSTOP` on the session's own real Firecracker process on the
+coordinator, not just a slow command): the hint correctly appeared
+after the configured threshold in both a raw WebSocket test and
+through the real browser UI (Chrome DevTools Protocol), the **Start a
+fresh session** button correctly appeared and, clicked, tore down the
+frozen VM and booted a genuinely new one end to end (confirmed via the
+new session's own real "Booting... Connected... Welcome to
+Ubuntu..." transcript); `SIGCONT`-ing the original frozen VM afterward
+confirmed it would otherwise have resumed cleanly with zero data loss
+(the buffered `echo hello` finally completed and printed real output)
+-- proving the freeze itself, not the recovery mechanism, was the only
+thing standing between the student and a working shell. New Terraform/
+Ansible variable `terminal_unresponsive_seconds`, same threading
+convention as the other `terminal_*` tunables.
+
 ---
 
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again

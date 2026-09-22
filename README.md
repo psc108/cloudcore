@@ -219,7 +219,13 @@ stdout-only, no network), this is a real hardware-virtualized
 Firecracker microVM booted fresh per session and torn down completely
 when it ends or goes idle — the same KVM guest-kernel boundary that
 already isolates CloudCore tenants from each other, not a container
-sharing the host kernel.
+sharing the host kernel. Nothing you do in it can leave a lasting
+mess: even something genuinely destructive (partitioning the running
+disk, say) only ever affects that one disposable microVM, and if it
+leaves the shell unresponsive rather than closing outright, a **Start
+a fresh session** button appears after real input goes unanswered for
+too long — one click tears down whatever's left and boots a
+completely clean VM.
 
 The shell itself is a real, minimal Ubuntu 22.04 guest — `vim` (and
 `nano`) are there from the start, and `apt install` genuinely works

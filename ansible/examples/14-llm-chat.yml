@@ -370,6 +370,16 @@
     terminal_max_concurrent_sessions: 4
     terminal_boot_timeout_seconds: 20
 
+    # Direct follow-up — is the platform prepared for a student running
+    # something destructive (e.g. partitioning the running root fs)
+    # from a Terminal session? The architecture already recovers
+    # cleanly on its own; the real gap was a guest left unusable but
+    # whose SSH channel doesn't error (kernel/sshd still resident in
+    # RAM), which the idle timeout can't catch since retyping into a
+    # dead shell still counts as activity. See
+    # examples/llm-chat/variables.tf's own matching variable comment.
+    terminal_unresponsive_seconds: 30
+
     # Fixed pool of high ports reverse-proxied into whichever microVM a
     # student's own terminal session is currently using — see
     # examples/llm-chat/variables.tf's own preview_ports comment for the
@@ -548,6 +558,7 @@
           'terminal_max_session_minutes': terminal_max_session_minutes,
           'terminal_max_concurrent_sessions': terminal_max_concurrent_sessions,
           'terminal_boot_timeout_seconds': terminal_boot_timeout_seconds,
+          'terminal_unresponsive_seconds': terminal_unresponsive_seconds,
           'preview_ports': preview_ports | map('string') | join(','),
           'websockets_wheel_name': websockets_wheel_name,
           'websockets_wheel_sha256': websockets_wheel_sha256,

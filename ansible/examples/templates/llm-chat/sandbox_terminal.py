@@ -16,6 +16,8 @@ Protocol (text frames), unchanged from api/terminal.py:
   server -> browser:  {"type":"output","data":"<chars>"}
                        {"type":"error","data":"<message>"}
                        {"type":"connected","data":"<message>"}
+                       {"type":"warning","data":"<message>"}
+                       {"type":"unresponsive","data":"<message>"}
 
 Deliberately NOT run through jailer (chroot + uid/gid drop + cgroups)
 in this first pass -- firecracker runs directly as root here, same as
@@ -77,6 +79,17 @@ TERMINAL_IDLE_TIMEOUT_S = int(os.environ.get("TERMINAL_IDLE_TIMEOUT_MINUTES", "1
 TERMINAL_MAX_SESSION_S = int(os.environ.get("TERMINAL_MAX_SESSION_MINUTES", "60")) * 60
 TERMINAL_MAX_CONCURRENT = int(os.environ.get("TERMINAL_MAX_CONCURRENT_SESSIONS", "4"))
 TERMINAL_BOOT_TIMEOUT_S = int(os.environ.get("TERMINAL_BOOT_TIMEOUT_SECONDS", "20"))
+# A student can run something genuinely destructive from the Terminal
+# (e.g. partitioning/formatting the running root fs via a Linux Help
+# suggestion) that leaves the guest kernel/sshd resident but the shell
+# itself unusable -- the SSH channel doesn't error in that case, so the
+# existing idle/max-session detection never fires (typing into a dead
+# shell still counts as real activity). This is a genuinely separate
+# signal: real input was sent and no real output followed it for this
+# long. 30s is deliberately generous -- a normal command's own output
+# usually starts well under that, but a legitimately slow one (a big
+# apt install, a large download) shouldn't false-positive.
+TERMINAL_UNRESPONSIVE_S = int(os.environ.get("TERMINAL_UNRESPONSIVE_SECONDS", "30"))
 VCPU_COUNT = 1
 MEM_SIZE_MIB = 256
 
@@ -368,8 +381,20 @@ async def _terminal_handler(websocket):
         # be warned again if they later drift away a second time.
         max_session_warned = False
         idle_warned = False
+        # See TERMINAL_UNRESPONSIVE_S's own module-level comment --
+        # last_output_at starts at "now" (not None) so a guest that
+        # never produces any output at all after connecting is still
+        # correctly measured against the real session start, not
+        # treated as "no signal yet". last_input_sent stays None until
+        # the student actually sends something -- the unresponsive
+        # check only makes sense once there's real input to have gone
+        # unanswered.
+        last_output_at = time.monotonic()
+        last_input_sent = None
+        unresponsive_warned = False
 
         async def ssh_reader():
+            nonlocal last_output_at, unresponsive_warned
             while not stop_event.is_set():
                 try:
                     ready = await loop.run_in_executor(
@@ -380,6 +405,8 @@ async def _terminal_handler(websocket):
                         if not data:
                             break
                         await send({"type": "output", "data": data.decode("utf-8", errors="replace")})
+                        last_output_at = time.monotonic()
+                        unresponsive_warned = False
                 except Exception:
                     break
             stop_event.set()
@@ -404,6 +431,23 @@ async def _terminal_handler(websocket):
                     idle_warned = True
                     await send({"type": "warning",
                                  "data": "This session will close soon due to inactivity."})
+                # Real input was sent and nothing has come back since --
+                # not the same signal as idle_warned above (which only
+                # tracks whether the BROWSER sent anything at all, and a
+                # student retyping into a dead shell keeps that timer
+                # refreshed forever). A suggestion, not an assertion --
+                # a legitimately slow command with no output yet looks
+                # identical from this signal alone, so the message below
+                # phrases it as a question the student can dismiss by
+                # just continuing to wait.
+                if (not unresponsive_warned and last_input_sent is not None
+                        and last_input_sent > last_output_at
+                        and now - last_input_sent > TERMINAL_UNRESPONSIVE_S):
+                    unresponsive_warned = True
+                    await send({"type": "unresponsive",
+                                 "data": "The shell hasn't responded to your last input in a "
+                                         "while -- it may be stuck. You can keep waiting, or "
+                                         "start a fresh session."})
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
                 except asyncio.TimeoutError:
@@ -416,6 +460,7 @@ async def _terminal_handler(websocket):
                     continue
                 if msg.get("type") == "input":
                     channel.send(msg.get("data", ""))
+                    last_input_sent = time.monotonic()
                 elif msg.get("type") == "resize":
                     cols = int(msg.get("cols", _COLS_DEFAULT))
                     rows = int(msg.get("rows", _ROWS_DEFAULT))
