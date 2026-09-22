@@ -447,6 +447,25 @@ RATE_LIMIT_ASK_PER_10MIN = int(os.environ.get("RATE_LIMIT_ASK_PER_10MIN", "10"))
 _client_lock = threading.Lock()
 _client_state: dict[str, dict] = {}
 
+# Direct request: rather than let a second student's question queue up
+# behind whoever's already asking, reject it outright ("we're busy",
+# thrown away -- never sent upstream at all) and let that student know
+# once the coordinator is free again, rather than silently queuing or
+# leaving them guessing when to retry.
+#
+# This isn't only UX polish -- it directly targets a real, confirmed
+# upstream llama.cpp bug (F-119, ggml-org/llama.cpp#28908, unmerged as
+# of this writing): the RPC worker's own accept() loop is single-
+# threaded, so a SECOND concurrent connection from this coordinator to
+# the same worker while a first is still being served starves forever,
+# which is exactly what two different students asking at once could
+# trigger. `_client_state`'s own `ask_active` flag above only caps
+# concurrency PER IP (one student can't double-ask), which does
+# nothing to stop two DIFFERENT students colliding -- this is a
+# separate, global gate on top of that one, checked first.
+_llm_busy_lock = threading.Lock()
+_llm_busy = False
+
 
 def extract_python_code(text: str) -> str | None:
     """First fenced code block that's explicitly tagged python/py, or
@@ -1333,6 +1352,39 @@ function makeAskPanel(cfg) {
     updateRegenBtnState();
   }
 
+  // Started only after a real "someone else is asking" rejection (503
+  // -- see _send_busy()'s own comment on the Python side) -- polls the
+  // trivial, instant /sandbox/ask-status endpoint (no LLM call at all)
+  // every few seconds until the coordinator reports free, then tells
+  // the student directly via statusEl rather than leaving them to
+  // guess-and-retry. A generous overall cap, not an unbounded
+  // background poll forever, in case something stays wedged well past
+  // this platform's own stall-recovery window.
+  let availabilityPollTimer = null;
+
+  function stopAvailabilityPoll() {
+    if (availabilityPollTimer) {
+      clearInterval(availabilityPollTimer);
+      availabilityPollTimer = null;
+    }
+  }
+
+  function startAvailabilityPoll() {
+    stopAvailabilityPoll();
+    const deadline = Date.now() + 10 * 60 * 1000;
+    availabilityPollTimer = setInterval(async () => {
+      if (Date.now() > deadline) { stopAvailabilityPoll(); return; }
+      try {
+        const r = await fetch('/sandbox/ask-status');
+        const data = await r.json();
+        if (!data.busy) {
+          stopAvailabilityPoll();
+          statusEl.textContent = 'Available again -- you can ask your question now.';
+        }
+      } catch (e) { /* transient network hiccup -- keep polling */ }
+    }, 4000);
+  }
+
   function clearHistory() {
     localStorage.removeItem(cfg.historyKey);
     renderTranscript();
@@ -1418,11 +1470,17 @@ function makeAskPanel(cfg) {
         body: JSON.stringify(Object.assign(cfg.buildBody(), {question, history: contextHistory})),
       });
       if (!resp.ok || !resp.body) {
-        // 429 (rate limit or "already have a question in progress") comes
-        // back as plain text with the real, useful reason -- show that
-        // instead of just the bare status code.
+        // 429 (rate limit or "already have a question in progress") and
+        // 503 (someone ELSE is currently asking -- see _send_busy()'s
+        // own comment) both come back as plain text with the real,
+        // useful reason -- show that instead of just the bare status
+        // code. 503 specifically starts polling for availability so
+        // the student is told the moment it's actually worth retrying,
+        // rather than left to guess-and-spam Ask themselves.
         bubbleContent.classList.remove('thinking');
-        bubbleContent.textContent = resp.status === 429 ? await resp.text() : 'Request failed (' + resp.status + ')';
+        bubbleContent.textContent = (resp.status === 429 || resp.status === 503)
+          ? await resp.text() : 'Request failed (' + resp.status + ')';
+        if (resp.status === 503) startAvailabilityPoll();
       } else {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -1946,6 +2004,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._proxy_passthrough()
         elif path == "/llm-stats":
             self._serve_llm_stats()
+        elif path == "/sandbox/ask-status":
+            self._handle_ask_status()
         elif path.startswith("/vendor/"):
             self._serve_vendor_file(path[len("/vendor/"):])
         else:
@@ -2085,6 +2145,34 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
+    def _send_busy(self, message: str):
+        # A distinct status (503, not 429's rate-limit/per-IP-already-
+        # active meaning) so the browser's own JS can tell "someone ELSE
+        # is asking, we're deliberately not queuing you" apart from
+        # those other two 429 cases, and knows to start polling
+        # /sandbox/ask-status rather than just showing a static message.
+        out = message.encode()
+        self.send_response(503)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def _handle_ask_status(self):
+        """GET /sandbox/ask-status -- a trivial, instant read of the
+        global busy flag (see _llm_busy's own comment), no LLM call
+        involved. Polled by the browser only after it's been told
+        "busy" once, to know the moment it's worth telling the student
+        to retry rather than leaving them to guess-and-spam Ask."""
+        with _llm_busy_lock:
+            busy = _llm_busy
+        out = json.dumps({"busy": busy}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
     def _handle_sandbox_run(self):
         """Plain Run -- executes the student's own current buffer as-is,
         synchronously, through the exact same run_sandboxed() Phases 1-2
@@ -2157,7 +2245,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         one in-flight ask per IP -- a real student only ever has one
         live question, and this concurrency cap is also what makes
         POST /sandbox/interrupt unambiguous with no extra token needed:
-        the IP alone identifies which session to stop."""
+        the IP alone identifies which session to stop.
+
+        On top of that per-IP cap, a GLOBAL one-at-a-time gate (see
+        _llm_busy's own comment) rejects a second, DIFFERENT student's
+        question outright -- thrown away, never even sent upstream --
+        rather than queuing it, per direct request. Checked after the
+        per-IP gate so a student re-clicking their OWN in-flight
+        question still gets the friendlier "you already have one"
+        message instead of being told someone else is busy."""
         ip = self._client_ip()
         if not self._check_and_record_rate(ip, "ask", RATE_LIMIT_ASK_PER_10MIN, 600):
             self._send_rate_limited(
@@ -2172,6 +2268,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "You already have a question in progress -- wait for it to finish, "
                     "or stop it, before asking another.")
                 return
+
+        global _llm_busy
+        with _llm_busy_lock:
+            if _llm_busy:
+                self._send_busy(
+                    "The assistant is currently answering another student's question -- "
+                    "your question was not sent. This page will let you know the moment "
+                    "it's free so you can ask again.")
+                return
+            _llm_busy = True
+
+        with _client_lock:
             state["ask_active"] = True
             interrupt_event = threading.Event()
             state["interrupt"] = interrupt_event
@@ -2183,6 +2291,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             with _client_lock:
                 state["ask_active"] = False
                 state["interrupt"] = None
+            with _llm_busy_lock:
+                _llm_busy = False
 
     def _do_handle_ask(self, interrupt_event, system_message: str, capture_source: str,
                         verify: bool, include_code: bool, endpoint_label: str):
