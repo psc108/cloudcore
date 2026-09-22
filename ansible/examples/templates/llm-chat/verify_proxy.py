@@ -196,11 +196,12 @@ _LINUX_SYSTEM_MESSAGE_DEFAULT = (
     "sure of it; if you are not certain something is correct, say so "
     "explicitly rather than stating it as fact. When you suggest a "
     "command, put it in its own fenced ```bash code block so the "
-    "student can run it with one click -- but a command you suggest is "
-    "NOT automatically run or checked here, unlike the separate code "
-    "sandbox; say so if it matters, and point the student at the 'Run "
-    "in Terminal' button to actually try it and see the real result "
-    "for themselves. This hardware generates slowly, so keep answers "
+    "student can run it with one click -- a command you suggest is "
+    "NEVER run without the student clicking 'Run in Terminal' "
+    "themselves, but once they do, the real result IS automatically "
+    "checked: if it fails, you will be shown the real terminal "
+    "transcript and exit code and asked to diagnose it and suggest a "
+    "fix, same as this turn. This hardware generates slowly, so keep answers "
     "short and precise rather than long where both would be equally "
     "correct. The student's own Terminal panel is a real, minimal "
     "Ubuntu 22.04 shell with genuine internet access, but: its package "
@@ -1219,15 +1220,24 @@ function makeAskPanel(cfg) {
     try { await fetch('/sandbox/interrupt', {method: 'POST'}); } catch (e) { /* best-effort */ }
   }
 
-  async function askModel() {
-    const question = questionEl.value.trim();
+  // Shared by askModel() (reads the textarea) and Stage 9's own
+  // automatic fault-diagnosis message (system-constructed, never
+  // touches the textarea at all) -- both are just "ask this question",
+  // the only difference is where the text comes from.
+  async function askWithText(question) {
     if (!question) return;
     const history = getHistory();
     history.push({role: 'user', content: question});
     saveHistory(history);
     renderTranscript();
-    questionEl.value = '';
     await runAsk(question, history.slice(0, -1));
+  }
+
+  async function askModel() {
+    const question = questionEl.value.trim();
+    if (!question) return;
+    questionEl.value = '';
+    await askWithText(question);
   }
 
   // Re-asks the same last question with no changes. Doesn't touch
@@ -1342,7 +1352,7 @@ function makeAskPanel(cfg) {
     renderTranscript();
   }
 
-  return {askModel, regenerateAsk, stopAsk, renderTranscript, clearHistory};
+  return {askModel, askWithText, regenerateAsk, stopAsk, renderTranscript, clearHistory};
 }
 
 const codeAsk = makeAskPanel({
@@ -1608,11 +1618,102 @@ function runCommandInTerminal(code, statusEl) {
     return;
   }
   const delim = 'CLOUDCORE_EOF_' + Math.random().toString(36).slice(2, 10);
-  const cmd = `bash <<'${delim}'\n${code}\n${delim}\n`;
+  // Stage 9 -- a second, separate random-suffixed marker (same
+  // collision reasoning as the heredoc delimiter above), echoed by the
+  // OUTER interactive shell immediately after the heredoc-fed bash
+  // invocation finishes, so $? genuinely reflects that invocation's
+  // real exit status -- lets _captureAndDiagnose() below learn the
+  // real result without guessing.
+  const marker = 'CLOUDCORE_RC_' + Math.random().toString(36).slice(2, 10);
+  const cmd = `bash <<'${delim}'\n${code}\n${delim}\necho "${marker}:$?"\n`;
+  const startLine = termState.term.buffer.active.length;
   termState.ws.send(JSON.stringify({type: 'input', data: cmd}));
-  if (statusEl) {
-    statusEl.textContent = 'Sent to Terminal.';
-    setTimeout(() => { if (statusEl.textContent === 'Sent to Terminal.') statusEl.textContent = ''; }, 3000);
+  if (statusEl) statusEl.textContent = 'Running…';
+  _captureAndDiagnose(code, marker, startLine, statusEl);
+}
+
+// Stage 9 -- watches the real terminal output for the sentinel
+// runCommandInTerminal() just appended, to learn a Linux Help
+// suggested command's real exit code without guessing, then -- only
+// on a real failure -- automatically asks the model to diagnose it
+// with the real transcript, never re-running anything on its own
+// (that stays a real click, same as every command always has). Polls
+// the already-rendered, ANSI-stripped xterm.js buffer rather than the
+// raw WS byte stream, which still carries cursor/color/bracketed-paste
+// escape codes -- the same buffer-reading approach this session's own
+// live CDP verification already relied on for the unresponsive-
+// terminal feature. Deliberately only one capture in flight at a time:
+// a second "Run in Terminal" click while one is pending still sends
+// normally, it just doesn't get its own automatic diagnosis -- a
+// documented simplification, not a silent gap, since queuing or
+// multiplexing several concurrent polls against the one shared buffer
+// isn't worth the complexity for what's realistically one student
+// typing at a time.
+let _captureInFlight = false;
+async function _captureAndDiagnose(command, marker, startLine, statusEl) {
+  if (_captureInFlight) return;
+  _captureInFlight = true;
+  try {
+    const deadline = Date.now() + 45000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 500));
+      if (!termState) return;  // session ended (Disconnect, closed) mid-wait
+      const buf = termState.term.buffer.active;
+      for (let i = startLine; i < buf.length; i++) {
+        const line = buf.getLine(i);
+        if (!line) continue;
+        const text = line.translateToString(true);
+        // Requires real digits right after the marker's own colon --
+        // found live that the shell's own echo of the typed command
+        // (`echo "MARKER:$?"`, shown back before it even runs) also
+        // contains "MARKER:" as literal text, just followed by the
+        // literal characters `$?"` rather than a number. A plain
+        // indexOf+slice matched that echoed line first every time,
+        // parsed NaN, and NaN !== 0 is always true -- misreporting
+        // every single command, success included, as a failure.
+        // marker's own value (CLOUDCORE_RC_ + Math.random().toString(36))
+        // is always plain alphanumeric/underscore -- never contains a
+        // single regex-special character -- so it's embedded directly,
+        // no escaping needed (and, found live, easy to get wrong: an
+        // earlier version tried to defensively escape it and broke the
+        // regex literal entirely).
+        const m = text.match(new RegExp(marker + ':(\\d+)'));
+        if (!m) continue;
+        const rc = parseInt(m[1], 10);
+        const transcriptLines = [];
+        for (let j = startLine; j < i; j++) {
+          const l = buf.getLine(j);
+          if (l) transcriptLines.push(l.translateToString(true));
+        }
+        const transcript = transcriptLines.join('\\n').slice(0, 4000);
+        if (statusEl) statusEl.textContent = `Exited ${rc}.`;
+        if (rc !== 0) {
+          // Plainly labeled, same transparency standard as the coding
+          // panel's own "ACTUALLY EXECUTED" blocks -- never let a
+          // system-constructed turn be mistaken for something the
+          // student typed themselves. Comes back through the exact
+          // same renderAssistantContent() path as any other answer, so
+          // any command the model suggests here gets its own real
+          // "Run in Terminal" button automatically -- no special-
+          // casing needed for a second (or third...) round.
+          await linuxAsk.askWithText(
+            '[Automatic -- result of your last suggested command, sent via Run in Terminal]\\n\\n' +
+            'I ran:\\n```bash\\n' + command + '\\n```\\n\\n' +
+            'Real terminal transcript:\\n```\\n' + transcript + '\\n```\\n\\n' +
+            `It exited with status ${rc} (failure). Explain what went wrong and suggest a corrected command.`
+          );
+        }
+        return;
+      }
+    }
+    // Timed out, not failed -- a genuinely long-running or interactive
+    // command (a server, htop, tail -f) never prints the sentinel at
+    // all until the student stops it themselves. Silence here would
+    // look broken; claiming success or failure would be dishonest --
+    // this is the one message that's actually true.
+    if (statusEl) statusEl.textContent = 'Sent -- no automatic result available (may be long-running).';
+  } finally {
+    _captureInFlight = false;
   }
 }
 

@@ -315,13 +315,14 @@
       sure of it; if you are not certain something is correct, say so
       explicitly rather than stating it as fact. When you suggest a
       command, put it in its own fenced ```bash code block so the
-      student can run it with one click -- but a command you suggest is
-      NOT automatically run or checked here, unlike the separate code
-      sandbox; say so if it matters, and point the student at the 'Run
-      in Terminal' button to actually try it and see the real result
-      for themselves. This hardware generates slowly, so keep answers
-      short and precise rather than long where both would be equally
-      correct. The student's own Terminal panel is a real, minimal
+      student can run it with one click -- a command you suggest is
+      NEVER run without the student clicking 'Run in Terminal'
+      themselves, but once they do, the real result IS automatically
+      checked: if it fails, you will be shown the real terminal
+      transcript and exit code and asked to diagnose it and suggest a
+      fix, same as this turn. This hardware generates slowly, so keep
+      answers short and precise rather than long where both would be
+      equally correct. The student's own Terminal panel is a real, minimal
       Ubuntu 22.04 shell with genuine internet access, but: its package
       index only covers the 'main' archive component (a 'universe'
       package needs another route), it has no persistent storage

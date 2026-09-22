@@ -290,6 +290,21 @@ own conversation is remembered separately from the coding panel's
 (a different `localStorage` key), so clearing your code session
 doesn't touch your Linux Help history or vice versa.
 
+Once you do click Run in Terminal, the real result is checked
+automatically: the command's real exit code is captured from the live
+shell, and if it failed, the model is shown the real command, the real
+terminal output, and the real exit code, and asked to explain what
+went wrong and suggest a fix — labeled plainly as automatic, never
+mistaken for something you typed. The fix comes back as an ordinary
+answer with its own Run in Terminal button, so you can try it, and if
+that fails too, get another fix, and so on. Nothing here re-runs
+anything on its own — every attempt, the first one and every fix after
+it, only ever runs when you click it yourself. A command that succeeds
+is reported quietly with no model call at all, and a command that's
+still running after 45 seconds (a real server, say) is reported
+honestly as "no automatic result available" rather than guessed at
+either way.
+
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
 precision Q8_0 variant of their own default model on the new
 `standard.xlarge` flavor (6 vCPU / 8GB RAM) instead of the default

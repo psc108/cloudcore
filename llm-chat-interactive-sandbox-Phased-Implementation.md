@@ -1202,6 +1202,127 @@ rather than assumed correct from the text alone.
 
 ---
 
+## Stage 9 — closing the loop: run, fault, offer a fix, run again
+
+Direct request: "is there a way we can tie the run in terminal back to
+the llm and check for it's success. if no success offer a fix and
+allow another run in terminal and so on until fixed." Explicitly *not*
+autonomous re-execution -- confirmed directly: "i wasn't wanting
+autonomous, run, fault, offer alternative, offer run in terminal again
+was my idea." The whole reason "Run in Terminal" is student-triggered
+rather than auto-executed (Stage 8's own design) is that a shell
+command can be destructive/stateful, unlike the disposable Python
+sandbox the coding panel auto-re-runs -- so this stays fault
+*detection* and *diagnosis* automatic, every actual execution still a
+real click.
+
+### Design
+
+Every command sent via "Run in Terminal" now carries a second,
+randomized completion sentinel appended after the existing heredoc:
+`echo "MARKER:$?"`, run by the *outer* interactive shell immediately
+after the heredoc-fed `bash` invocation finishes, so `$?` is genuinely
+that invocation's real exit status. The browser polls the real,
+already-rendered `xterm.js` buffer (`term.buffer.active`,
+`translateToString(true)` -- clean, ANSI-stripped text, not the raw WS
+byte stream which still carries cursor/color/bracketed-paste codes)
+for up to 45 seconds. On a genuine non-zero exit, the real command,
+the real captured transcript, and the real exit code are automatically
+relayed back to the model as a new turn, plainly labeled `[Automatic
+-- result of your last suggested command, sent via Run in Terminal]`
+so it's never mistaken for something the student typed themselves
+(same transparency standard as the coding panel's own `ACTUALLY
+EXECUTED` blocks). A genuine success is reported quietly (no model
+call at all -- no need to spend a slow round trip confirming something
+that already visibly worked). A timeout says so honestly ("may be
+long-running") rather than claiming success or failure, since a
+genuinely long-lived or interactive command (a server, `htop`, `tail
+-f`) never prints the sentinel at all until the student stops it
+themselves.
+
+A new `askWithText(question)` on the shared `makeAskPanel` factory
+(`askModel()` itself now a thin wrapper reading the textarea and
+calling it) is what lets this system-constructed turn enter the Linux
+Help conversation exactly like a real question would -- no new backend
+route needed at all; the "diagnosis" is just another turn through the
+existing `/sandbox/linux-ask`, sharing its rate limit and concurrency
+gate. The model's reply comes back through the exact same
+`renderAssistantContent()` path as any other answer, so any new
+command it suggests automatically gets its own "Run in Terminal"
+button -- this is what makes "and so on" work for free, no special-
+casing needed for a second or third round.
+
+### F-115 — two real, self-introduced bugs, both caught by live testing before shipping
+
+Full detail in `haFullStack-Findings-Log.md`'s own F-115. In short:
+the sentinel-matching logic originally misdiagnosed *every* command,
+success included, as a failure -- the shell's own echo of the typed
+`echo "MARKER:$?"` command (shown back before it even runs) also
+contains the literal text `MARKER:`, and a plain `indexOf`+`slice`
+matched that line first, parsed `NaN` from the literal `$?"`, and
+`NaN !== 0` is always `true` in JavaScript. Caught not by the test that
+was designed to find it, but by noticing a stray in-flight model
+generation a *successful* command shouldn't have triggered. The fix
+(require real digits after the colon via a regex) then broke the
+entire live page with a real `SyntaxError` on its first attempt -- a
+defensive `marker`-escaping step had its own backslash-doubling bug in
+this file's own recurring non-raw-Python-string trap (F-105, F-112).
+Root-caused, this time, by importing the actual Python module and
+reading `SANDBOX_PAGE_HTML`'s real runtime string directly -- an
+earlier attempt to verify through a `bash -e`/heredoc reconstruction
+gave misleading results from yet another, uncontrolled layer of shell
+escaping, and was abandoned once that became clear. Fixed by dropping
+the defensive escaping entirely rather than re-fixing it: `marker` is
+always plain alphanumeric/underscore by construction
+(`CLOUDCORE_RC_` + `Math.random().toString(36)`), never a single
+regex-special character, so escaping it was unnecessary complexity in
+the first place -- and the exact thing that caused the second bug.
+
+### Verified live, 2026-09-22
+
+Two independent, real verification methods, neither of which is a
+browser. First: the exact deployed JS was confirmed syntactically
+valid by importing the real Python module and reading
+`SANDBOX_PAGE_HTML`'s actual runtime value through `node --check` --
+not a hand-traced or shell-escaped reconstruction, which had already
+proven unreliable earlier in the same investigation. Second: the exact
+command-construction and matching logic was validated against the
+real, running terminal service via a direct raw-WebSocket test
+(bypassing any browser entirely) covering three cases -- `true`
+(rc=0), `false` (rc=1), `exit 42` (rc=42) -- all resolved correctly
+within roughly 0.1s of the real server's own response, proving both
+the regex fix and the underlying relay pipeline are fast and correct.
+
+The overall mechanism (fault -> automatic diagnosis -> real model fix
+-> a second "Run in Terminal" click -> success reported quietly, loop
+naturally ending) was separately confirmed end to end through the real
+browser earlier in the same investigation, before the regex bug was
+found -- a real `gparted_cli_xyz_does_not_exist --list` failure (rc
+127) triggered a real automatic diagnosis, the model correctly
+suggested `lsblk` as a real alternative, and clicking that fix's own
+"Run in Terminal" button ran it for real (rc 0, correctly quiet, no
+further diagnosis).
+
+Two things found live, worth recording honestly rather than glossing
+over. `llama-server`'s own 14B model was found consuming 87% of the
+coordinator's 3.8GB RAM after this session's own sustained heavy
+use -- a legitimate, expected footprint (not a leak), but severe
+enough at times to degrade real-time responsiveness across the whole
+host; restarting it (standing permission for lab-infra resets between
+phases) restored healthy headroom. Separately, headless Chrome under
+CDP automation showed consistently delayed `xterm.js` buffer updates
+(multiple seconds behind the real, sub-second server relay, confirmed
+directly by the same raw-WebSocket test run in parallel) even on a
+freshly restarted, otherwise-idle coordinator -- concluded, after
+directly ruling out coordinator load, memory, and orphaned sessions as
+causes, to be a rendering-pipeline artifact specific to headless,
+display-less CDP test automation (`xterm.js`'s own buffer sync is
+plausibly tied to a rendering loop a `--disable-gpu` headless instance
+doesn't drive promptly), not a product defect, and not something a
+real student's own visible browser tab would experience.
+
+---
+
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
 
 - **Non-Python code blocks.** The sandbox stays Python-only, for the
