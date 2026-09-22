@@ -29,7 +29,22 @@ KEY="$SCRIPT_DIR/keys/cloudcore_ed25519"
 REPO_DIR="$SCRIPT_DIR/package-repo/jammy"
 API="$CLOUDCORE_API_URL"
 AUTH=(-H "Authorization: Bearer $CLOUDCORE_API_TOKEN")
-SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$KEY")
+# UserKnownHostsFile=/dev/null, not just StrictHostKeyChecking=no --
+# found live: this lab's own small throwaway-instance IP pool recycles
+# addresses, so a later builder run can land on an IP a previous run
+# already has a *different* host key recorded for in the real
+# known_hosts file. StrictHostKeyChecking=no alone only skips the
+# prompt for a genuinely new host; a *changed* key on an existing
+# known_hosts entry is still refused outright (ssh's own real
+# man-in-the-middle protection), which silently corrupted this script's
+# own big multi-line remote command mid-connection rather than failing
+# cleanly -- confirmed by reproducing the exact same run against a
+# fresh IP with no known_hosts history at all, and separately by
+# hitting ssh's own explicit "Offending key" refusal once one of these
+# builder IPs happened to collide with a stale entry. Never treat these
+# throwaway builder hosts as long-lived enough to want persisted host
+# key state at all.
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i "$KEY")
 SUFFIX="cloudcore-fcrootfs-builder-$(date +%s)"
 
 # Same output location build-package-repo.sh's own ARTIFACT_URLS-downloaded
@@ -97,45 +112,61 @@ ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
   sudo rm -rf \"\$ROOTFS_DIR\"
   sudo debootstrap --arch=amd64 --variant=minbase jammy \"\$ROOTFS_DIR\" http://archive.ubuntu.com/ubuntu
 
-  sudo chroot \"\$ROOTFS_DIR\" /bin/bash -c '
-    set -e
-    export DEBIAN_FRONTEND=noninteractive
-    echo \"nameserver 8.8.8.8\" > /etc/resolv.conf
-    apt-get update
-    # systemd/systemd-sysv explicitly -- debootstrap --variant=minbase
-    # only pulls Priority:required packages, and systemd itself is only
-    # Priority:important, so a minbase chroot has no /bin/systemctl at
-    # all unless something else pulls it in as a dependency. Confirmed
-    # live: openssh-server alone does not do this on jammy, and every
-    # systemctl enable/is-enabled call below fails outright without it.
-    apt-get install -y --no-install-recommends \
-      systemd systemd-sysv \
-      openssh-server curl wget ca-certificates iproute2 iputils-ping \
-      python3 nano less procps
-    # A real login shell (not the minbase default of dash-only bare
-    # essentials) and a real, unprivileged-by-default student account —
-    # sudo works passwordless inside the microVM because the isolation
-    # boundary this feature actually relies on is the microVM itself
-    # (KVM + the iptables egress policy), not the in-guest account; root
-    # inside a fully disposable, single-session, network-fenced guest
-    # gains nothing an ordinary account inside the same guest did not
-    # already have. Never gets them anywhere the guest itself cannot go.
-    apt-get install -y --no-install-recommends sudo bash-completion
-    useradd -m -s /bin/bash student
-    usermod -aG sudo student
-    echo \"student ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/90-student
-    chmod 440 /etc/sudoers.d/90-student
-    mkdir -p /home/student/.ssh
-    chmod 700 /home/student/.ssh
-    chown -R student:student /home/student
+  # Written to a real file and run as a real script (chroot ... bash
+  # /build-inner.sh), NOT the classic chroot ... bash -c '...' inline
+  # form -- found live that the latter, nested three quote-levels deep
+  # (ssh's own double-quoted argument, around a single-quoted -c
+  # argument, around this script's own heredocs) reliably corrupted
+  # partway through, bash reporting a phantom \"here-document ...
+  # delimited by end-of-file\" failure that turned out to have nothing
+  # to do with this script's own content at all: the exact same text,
+  # written to a real file and executed with bash <file> instead, ran
+  # start to finish with no error, every single time, across several
+  # independent real rebuilds. The outer heredoc below uses a quoted
+  # delimiter ('BUILDEOF') so nothing in the script body -- including
+  # fetch-mmds-key.sh's own \$-references, meant to survive untouched
+  # into that separate boot-time script -- gets expanded while this
+  # step merely writes it to disk.
+  cat > /tmp/build-inner.sh <<'BUILDEOF'
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+echo \"nameserver 8.8.8.8\" > /etc/resolv.conf
+apt-get update
+# systemd/systemd-sysv explicitly -- debootstrap --variant=minbase
+# only pulls Priority:required packages, and systemd itself is only
+# Priority:important, so a minbase chroot has no /bin/systemctl at
+# all unless something else pulls it in as a dependency. Confirmed
+# live: openssh-server alone does not do this on jammy, and every
+# systemctl enable/is-enabled call below fails outright without it.
+apt-get install -y --no-install-recommends \
+  systemd systemd-sysv \
+  openssh-server curl wget ca-certificates iproute2 iputils-ping \
+  python3 nano vim less procps
+# A real login shell (not the minbase default of dash-only bare
+# essentials) and a real, unprivileged-by-default student account --
+# sudo works passwordless inside the microVM because the isolation
+# boundary this feature actually relies on is the microVM itself
+# (KVM + the iptables egress policy), not the in-guest account; root
+# inside a fully disposable, single-session, network-fenced guest
+# gains nothing an ordinary account inside the same guest did not
+# already have. Never gets them anywhere the guest itself cannot go.
+apt-get install -y --no-install-recommends sudo bash-completion
+useradd -m -s /bin/bash student
+usermod -aG sudo student
+echo \"student ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/90-student
+chmod 440 /etc/sudoers.d/90-student
+mkdir -p /home/student/.ssh
+chmod 700 /home/student/.ssh
+chown -R student:student /home/student
 
-    # MMDS v1 (no session-token dance — kept deliberately simple, the host
-    # side pins mmds-config to version=V1 to match) fetch, one-shot at
-    # every boot: this session own ed25519 public key was PUT into MMDS by
-    # sandbox_terminal.py (Stage 5B) before this microVM ever started, so
-    # by the time sshd comes up the key is already in place. Nothing here
-    # is baked in at image-build time.
-    cat > /usr/local/bin/fetch-mmds-key.sh <<\"EOS\"
+# MMDS v1 (no session-token dance -- kept deliberately simple, the host
+# side pins mmds-config to version=V1 to match) fetch, one-shot at
+# every boot: this session own ed25519 public key was PUT into MMDS by
+# sandbox_terminal.py (Stage 5B) before this microVM ever started, so
+# by the time sshd comes up the key is already in place. Nothing here
+# is baked in at image-build time.
+cat > /usr/local/bin/fetch-mmds-key.sh <<\"EOS\"
 #!/bin/bash
 set -e
 # MMDS's link-local address needs an explicit host-scope route -- it is
@@ -175,9 +206,9 @@ fi
 # without a matching key just fails normally at the SSH layer).
 exit 0
 EOS
-    chmod +x /usr/local/bin/fetch-mmds-key.sh
+chmod +x /usr/local/bin/fetch-mmds-key.sh
 
-    cat > /etc/systemd/system/fetch-mmds-key.service <<EOS
+cat > /etc/systemd/system/fetch-mmds-key.service <<EOS
 [Unit]
 Description=Fetch this session own SSH key from Firecracker MMDS
 Before=ssh.service
@@ -192,17 +223,17 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOS
-    systemctl enable fetch-mmds-key.service
-    systemctl enable ssh.service
+systemctl enable fetch-mmds-key.service
+systemctl enable ssh.service
 
-    # Password auth off — the MMDS-delivered key is the only way in.
-    sed -i \"s/^#\\?PasswordAuthentication.*/PasswordAuthentication no/\" /etc/ssh/sshd_config
-    echo \"PermitRootLogin no\" >> /etc/ssh/sshd_config
+# Password auth off -- the MMDS-delivered key is the only way in.
+sed -i \"s/^#\\?PasswordAuthentication.*/PasswordAuthentication no/\" /etc/ssh/sshd_config
+echo \"PermitRootLogin no\" >> /etc/ssh/sshd_config
 
-    # Regenerate host keys fresh at every boot (not baked into the golden
-    # image) — same one-shot-unit idiom as the MMDS key fetch above.
-    rm -f /etc/ssh/ssh_host_*key*
-    cat > /etc/systemd/system/regen-host-keys.service <<EOS
+# Regenerate host keys fresh at every boot (not baked into the golden
+# image) -- same one-shot-unit idiom as the MMDS key fetch above.
+rm -f /etc/ssh/ssh_host_*key*
+cat > /etc/systemd/system/regen-host-keys.service <<EOS
 [Unit]
 Description=Regenerate SSH host keys fresh every boot
 Before=ssh.service
@@ -216,11 +247,85 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOS
-    systemctl enable regen-host-keys.service
+systemctl enable regen-host-keys.service
 
-    apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-  '
+# The image-build cleanup below strips /var/lib/apt/lists/* to keep
+# the shipped golden image small -- correct for a frozen artifact
+# reused across many future sessions, but it means a student trying
+# apt install anything at runtime hits a bare, empty index and gets
+# an Unable-to-locate-package error regardless of what they ask
+# for, indistinguishable from the package genuinely not existing
+# (found live: reported as vim specifically not installing, but the
+# same failure applies to every package, not just that one). Real
+# internet access is the whole point of this feature (see the
+# top-of-file design note above, and sandbox_system_message own
+# pip install / curl / clone-a-repo wording) so apt should work
+# too. Fixed with a one-shot boot unit that refreshes the index
+# fresh every session, over that session own real internet access,
+# deliberately NOT gating ssh.service the way fetch-mmds-key
+# service does -- a slower-than-usual apt mirror must never delay
+# the terminal actually becoming usable, only apt own readiness a
+# few seconds later.
+#
+# A bare `apt-get update` as ExecStart is not enough on its own -- two
+# real, compounding bugs found live testing this exact unit:
+#
+# 1. network-online.target is satisfied trivially on this minimal
+#    debootstrap image (no NetworkManager/systemd-networkd wait-online
+#    unit installed to give that target real meaning), so it can fire
+#    before the interface/routing is genuinely usable yet.
+# 2. Far more persistent: /etc/resolv.conf as set at image-build time
+#    (a plain, working \"nameserver 8.8.8.8\") gets silently replaced
+#    at boot -- systemd (pulled in as a dependency of installing
+#    systemd-sysv/openssh-server) manages /etc/resolv.conf itself and
+#    points it at 127.0.0.53, systemd-resolved's own stub listener,
+#    which is never actually running on this minimal image (that
+#    package/service was never installed or enabled here). Every DNS
+#    query failed permanently as a result -- \"Temporary failure
+#    resolving archive.ubuntu.com\" -- regardless of how many times
+#    apt-get update was retried, confirmed live with getent hosts
+#    returning nothing at all, indefinitely, not just at boot. Forcing
+#    a real, static resolv.conf on every attempt (not just once at
+#    image-build time) fixes it for good, whatever keeps re-managing
+#    the file.
+cat > /usr/local/bin/refresh-apt-index.sh <<\"EOS\"
+#!/bin/bash
+for i in \$(seq 1 10); do
+  rm -f /etc/resolv.conf
+  echo \"nameserver 8.8.8.8\" > /etc/resolv.conf
+  apt-get update -qq && exit 0
+  sleep 2
+done
+# Best-effort, same reasoning as fetch-mmds-key.sh's own explicit
+# exit 0 -- a still-empty index after 10 real tries just means apt
+# install keeps failing same as before this fix, not a regression;
+# it must never be reported as a hard unit failure.
+exit 0
+EOS
+chmod +x /usr/local/bin/refresh-apt-index.sh
+
+cat > /etc/systemd/system/refresh-apt-index.service <<EOS
+[Unit]
+Description=Refresh the apt package index for a fresh session, over this session own real internet access
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/refresh-apt-index.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl enable refresh-apt-index.service
+
+apt-get clean
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+BUILDEOF
+  sudo cp /tmp/build-inner.sh \"\$ROOTFS_DIR/build-inner.sh\"
+  sudo chroot \"\$ROOTFS_DIR\" /bin/bash /build-inner.sh
+  sudo rm -f \"\$ROOTFS_DIR/build-inner.sh\" /tmp/build-inner.sh
 
   # A serial getty on ttyS0 too, as a fallback console independent of
   # networking/sshd (matches Firecracker's own conventional boot args,

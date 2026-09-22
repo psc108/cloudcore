@@ -92,7 +92,14 @@ KEY="$SCRIPT_DIR/keys/cloudcore_ed25519"
 REPO_DIR="$SCRIPT_DIR/package-repo/$CODENAME"
 API="$CLOUDCORE_API_URL"
 AUTH=(-H "Authorization: Bearer $CLOUDCORE_API_TOKEN")
-SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$KEY")
+# UserKnownHostsFile=/dev/null, not just StrictHostKeyChecking=no --
+# see api/build-firecracker-rootfs.sh's own matching comment: this
+# lab's small throwaway-instance IP pool recycles addresses, so a
+# later builder run can land on an IP a previous run already recorded
+# a *different* host key for, which ssh refuses outright regardless of
+# StrictHostKeyChecking=no (that only skips the prompt for a genuinely
+# new host). Same class of throwaway host, same fix.
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i "$KEY")
 SUFFIX="cloudcore-repo-builder-$(date +%s)"
 
 mkdir -p "$REPO_DIR/apt-repo" "$REPO_DIR/artifacts"
