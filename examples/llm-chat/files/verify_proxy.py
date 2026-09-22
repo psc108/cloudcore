@@ -1016,6 +1016,7 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
 @keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 #question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; }
+#linuxQuestion { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; resize: vertical; line-height: 1.4; }
 #termHost { border: 1px solid #ccc; border-radius: 6px; overflow: hidden; background: #0d0d0d; padding: 0.4rem; display: none; }
 #termHost.open { display: block; }
 #termHost .xterm { height: 360px; }
@@ -1070,8 +1071,8 @@ footer a { color: #2a5db0; }
   <h2>Linux Help</h2>
   <p class="sub" style="margin-bottom:0.75rem">Ask any Linux question -- from everyday commands to real system administration -- kept separate from the coding Ask panel above. Answers aren't automatically run or checked the way code is; use the "Run in Terminal" button on a suggested command to actually try it in the Terminal panel and see the real result.</p>
   <div id="linuxTranscript"></div>
-  <div class="row">
-    <input id="linuxQuestion" type="text" placeholder="e.g. how do I check disk usage? -- or: how do I add a new user?" onkeydown="if(event.key==='Enter')linuxAsk.askModel()">
+  <div class="row" style="align-items:flex-end">
+    <textarea id="linuxQuestion" rows="4" placeholder="e.g. how do I check disk usage? -- or: how do I add a new user? (Shift+Enter for a new line)" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();linuxAsk.askModel();}"></textarea>
     <button id="linuxAskBtn" class="primary" onclick="linuxAsk.askModel()">Ask</button>
     <button id="linuxStopBtn" onclick="linuxAsk.stopAsk()" disabled>Stop</button>
     <button id="linuxRegenBtn" onclick="linuxAsk.regenerateAsk()" disabled title="Ask again with no changes">Regenerate</button>

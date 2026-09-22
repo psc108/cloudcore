@@ -1079,6 +1079,23 @@ the fix was testing against the LB's own real listening address
 instead. Worth remembering for the next round of live verification,
 even though nothing in the shipped code was wrong.
 
+### Follow-up: a bigger question box
+
+Direct report: "the linux text input box (ask) needs to be much
+larger than it is. perhaps at least capable of showing 4 lines of
+typed text." `linuxQuestion` changed from a single-line `<input>` to
+a 4-row `<textarea>` (vertically resizable), with Shift+Enter now
+inserting a newline and a plain Enter still submitting, same
+submit-on-Enter convenience the single-line box had — `askModel()`
+itself needed no change, since `.value`/`.focus()` work identically on
+both element types. Verified live: the element renders as a real
+4-row textarea (confirmed via screenshot and its own computed height);
+a plain Enter correctly still submits (`askBtn` disables, the box
+clears); Shift+Enter correctly does not submit (`askBtn` stays
+enabled) — verified via Chrome DevTools Protocol dispatching real
+keyboard events, distinguishing the two cases directly rather than
+assuming the conditional works.
+
 ---
 
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
