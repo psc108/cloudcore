@@ -945,6 +945,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: #2a5db0; border-color: #2a5db0; color: #fff; }
 button.primary:hover:not(:disabled) { background: #234f96; }
 .status { font-size: 0.85rem; color: #444; }
+.status.warn { color: #b02a2a; font-weight: 600; }
+.code-block { margin: 0.4rem 0; }
+.code-block pre { margin: 0 0 0.3rem; }
+.use-code-btn { font-size: 0.78rem; padding: 0.25rem 0.6rem; }
 pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0.5rem 0 0; color: #1a1a1a; }
 .result h4 { margin: 0.75rem 0 0.25rem; font-size: 0.85rem; }
 .result.pass .exitline { color: #0a7a2f; font-weight: 600; }
@@ -978,6 +982,7 @@ footer a { color: #2a5db0; }
   <div class="row">
     <button id="runBtn" class="primary" onclick="runCode()">Run</button>
     <button onclick="clearAll()">Clear session</button>
+    <button id="sendToTermBtn" onclick="sendCodeToTerminal()" disabled title="Start a terminal below first">Send to Terminal</button>
     <span id="runStatus" class="status"></span>
   </div>
   <div id="runResult"></div>
@@ -991,6 +996,7 @@ footer a { color: #2a5db0; }
     <input id="question" type="text" placeholder="e.g. write a function that checks if a number is prime — or: why does this fail on an empty list?" onkeydown="if(event.key==='Enter')askModel()">
     <button id="askBtn" class="primary" onclick="askModel()">Ask</button>
     <button id="stopBtn" onclick="stopAsk()" disabled>Stop</button>
+    <button id="regenBtn" onclick="regenerateAsk()" disabled title="Ask again with no changes">Regenerate</button>
     <span id="askStatus" class="status"></span>
   </div>
 </div>
@@ -1043,6 +1049,41 @@ function getHistory() {
 }
 function saveHistory(h) { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); }
 
+// Splits a fenced triple-backtick code block out of the model's own
+// plain text and gives it a real "Use this code" button -- still never
+// innerHTML'd from the model's own words (every text/code fragment
+// below goes in via createTextNode/.textContent, same no-markup-from-
+// untrusted-text rule renderTranscript() itself already documented),
+// just structured instead of one flat blob. Only applied to the
+// model's own messages -- a student's own submitted question has
+// nothing to "use", they can already see/copy it from the editor above.
+function _renderAssistantContent(el, text) {
+  el.innerHTML = '';
+  const parts = text.split(/```[a-zA-Z0-9_+-]*\\n?([\\s\\S]*?)```/);
+  parts.forEach((part, i) => {
+    if (i % 2 === 0) {
+      if (part) el.appendChild(document.createTextNode(part));
+      return;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block';
+    const pre = document.createElement('pre');
+    pre.textContent = part;
+    const btn = document.createElement('button');
+    btn.className = 'use-code-btn';
+    btn.textContent = 'Use this code';
+    btn.onclick = () => {
+      cm.setValue(part);
+      const rs = document.getElementById('runStatus');
+      rs.textContent = 'Loaded from Ask.';
+      setTimeout(() => { if (rs.textContent === 'Loaded from Ask.') rs.textContent = ''; }, 2000);
+    };
+    wrap.appendChild(pre);
+    wrap.appendChild(btn);
+    el.appendChild(wrap);
+  });
+}
+
 function renderTranscript() {
   const h = getHistory();
   transcriptEl.innerHTML = h.map(m => `
@@ -1050,10 +1091,28 @@ function renderTranscript() {
       <div class="who">${m.role === 'user' ? 'You' : 'Model'}</div>
       <div class="content"></div>
     </div>`).join('');
-  // textContent, not innerHTML, for the actual message body -- never
-  // trust/render model or student text as markup.
-  [...transcriptEl.children].forEach((el, i) => { el.querySelector('.content').textContent = h[i].content; });
+  [...transcriptEl.children].forEach((el, i) => {
+    const contentEl = el.querySelector('.content');
+    if (h[i].role === 'user') {
+      // textContent, not innerHTML -- never trust/render student text
+      // as markup either.
+      contentEl.textContent = h[i].content;
+    } else {
+      _renderAssistantContent(contentEl, h[i].content);
+    }
+  });
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  _updateRegenBtnState();
+}
+
+// Regenerate is only meaningful once at least one question has been
+// asked -- checked against saved history (not just "did a request
+// just finish") so a returning student (page reload, history restored
+// from localStorage) and a post-Clear student both see the right
+// state without needing to ask a fresh question first.
+function _updateRegenBtnState() {
+  const h = getHistory();
+  document.getElementById('regenBtn').disabled = !h.some(m => m.role === 'user');
 }
 
 function clearAll() {
@@ -1115,19 +1174,49 @@ async function stopAsk() {
 }
 
 async function askModel() {
-  const btn = document.getElementById('askBtn');
-  const stopBtn = document.getElementById('stopBtn');
   const qEl = document.getElementById('question');
-  const status = document.getElementById('askStatus');
   const question = qEl.value.trim();
   if (!question) return;
-
   const history = getHistory();
   history.push({role: 'user', content: question});
   saveHistory(history);
   renderTranscript();
   qEl.value = '';
+  await _runAsk(question, history.slice(0, -1));
+}
+
+// Re-asks the same last question with no changes -- reuses whatever
+// code is in the editor *right now* (same as askModel() itself always
+// reading cm.getValue() fresh), not whatever it was the first time
+// this question was asked, since the editor may have changed since.
+// Doesn't touch history's own last user entry -- context passed to the
+// model (history.slice(0, -1), same as a first ask) is identical
+// either way, and the new attempt is appended alongside the old one,
+// not replacing it, so a student can compare rather than silently lose
+// the previous answer.
+async function regenerateAsk() {
+  const history = getHistory();
+  // Find the most recent question, not just the last entry -- by the
+  // time this button is enabled, history normally already ends with
+  // that question's own assistant reply.
+  let lastUserIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx === -1) {
+    document.getElementById('askStatus').textContent = 'Ask a question first.';
+    return;
+  }
+  await _runAsk(history[lastUserIdx].content, history.slice(0, lastUserIdx));
+}
+
+async function _runAsk(question, contextHistory) {
+  const btn = document.getElementById('askBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const regenBtn = document.getElementById('regenBtn');
+  const status = document.getElementById('askStatus');
   btn.disabled = true;
+  regenBtn.disabled = true;
   stopBtn.disabled = false;
   status.textContent = 'Thinking…';
 
@@ -1148,7 +1237,7 @@ async function askModel() {
   try {
     const resp = await fetch('/sandbox/ask', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code: cm.getValue(), question, history: history.slice(0, -1)}),
+      body: JSON.stringify({code: cm.getValue(), question, history: contextHistory}),
     });
     if (!resp.ok || !resp.body) {
       // 429 (rate limit or "already have a question in progress") comes
@@ -1199,6 +1288,7 @@ async function askModel() {
     bubbleContent.textContent = 'Request failed: ' + e.message;
   } finally {
     btn.disabled = false;
+    regenBtn.disabled = false;
     stopBtn.disabled = true;
     status.textContent = '';
   }
@@ -1206,6 +1296,12 @@ async function askModel() {
   const h = getHistory();
   h.push({role: 'assistant', content: assistantText || bubbleContent.textContent});
   saveHistory(h);
+  // Re-render from the now-saved history -- turns the plain streamed
+  // text just shown above into the same structured, button-equipped
+  // form renderTranscript() gives every other message (and what a page
+  // reload would show anyway), so "Use this code" appears without
+  // needing a refresh.
+  renderTranscript();
 }
 
 // ── Terminal panel ──────────────────────────────────────────────────
@@ -1252,16 +1348,25 @@ function startTerminal() {
     const {cols, rows} = term;
     ws.send(JSON.stringify({type: 'resize', cols, rows}));
     stopBtn.disabled = false;
+    document.getElementById('sendToTermBtn').disabled = false;
   };
 
   ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'output' || msg.type === 'connected') {
+        status.classList.remove('warn');
         status.textContent = '';
         term.write(msg.data);
       } else if (msg.type === 'error') {
         term.write('\\r\\n\\x1b[31m' + msg.data + '\\x1b[0m\\r\\n');
+        status.classList.remove('warn');
+        status.textContent = msg.data;
+      } else if (msg.type === 'warning') {
+        // Sandbox_terminal.py's own idle/max-session countdown -- a
+        // real heads-up before the session just vanishes, not just
+        // terminal output a student could easily miss scrolling past.
+        status.classList.add('warn');
         status.textContent = msg.data;
       }
     } catch (e) { /* skip malformed frames */ }
@@ -1271,6 +1376,8 @@ function startTerminal() {
     term.write('\\r\\n\\x1b[33m[Session closed]\\x1b[0m\\r\\n');
     stopBtn.disabled = true;
     startBtn.disabled = false;
+    document.getElementById('sendToTermBtn').disabled = true;
+    status.classList.remove('warn');
   };
 
   ws.onerror = () => {
@@ -1302,7 +1409,29 @@ function stopTerminal() {
   document.getElementById('termHost').classList.remove('open');
   document.getElementById('termStartBtn').disabled = false;
   document.getElementById('termStopBtn').disabled = true;
+  document.getElementById('sendToTermBtn').disabled = true;
   termState = null;
+}
+
+// Writes the editor's current content into the terminal session as a
+// real file, without retyping it -- base64, not the raw text, since
+// this goes over the exact same channel as real keystrokes (term.onData
+// above) and the editor's own content can contain anything (quotes,
+// backticks, $, newlines) that would otherwise need the same class of
+// careful shell-escaping this project's own build scripts have
+// repeatedly gotten wrong live this session. base64's alphabet has none
+// of those characters, so a quoted heredoc (no $/backtick expansion)
+// can carry it with zero escaping at all.
+function sendCodeToTerminal() {
+  if (!termState || termState.ws.readyState !== WebSocket.OPEN) return;
+  const code = cm.getValue();
+  if (!code.trim()) return;
+  const b64 = btoa(unescape(encodeURIComponent(code)));
+  const cmd = `base64 -d <<'CLOUDCORE_EOF' > sandbox_code.py\n${b64}\nCLOUDCORE_EOF\n`;
+  termState.ws.send(JSON.stringify({type: 'input', data: cmd}));
+  const rs = document.getElementById('runStatus');
+  rs.textContent = 'Sent to Terminal as sandbox_code.py.';
+  setTimeout(() => { if (rs.textContent === 'Sent to Terminal as sandbox_code.py.') rs.textContent = ''; }, 3000);
 }
 
 // ── Preview panel ────────────────────────────────────────────────────
@@ -1353,6 +1482,19 @@ function refreshPreview() {
 
 _renderPreviewPorts();
 refreshPreview();
+
+// A plain timer, not real "did something start listening" detection --
+// found while building this that the browser genuinely can't tell a
+// student's own real app apart from this proxy's own "no session"
+// response cross-origin: fetch() needs CORS cooperation from the
+// student's own program to read a status code at all (mode:'no-cors'
+// makes every response opaque, 200 and 502 indistinguishable), and
+// <img>/iframe load events fire the same way for "connected, got some
+// response" regardless of whether that response was a real page or
+// this proxy's own error text. Reloading on a fixed interval instead
+// -- costs one small proxied request every few seconds, but a student
+// starting a server sees it appear here without hunting for Refresh.
+setInterval(refreshPreview, 5000);
 
 loadState();
 </script>

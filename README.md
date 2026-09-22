@@ -245,7 +245,22 @@ right there on the page — a port selector, a Refresh button, and an
 "Open in new tab" link always sitting alongside it for the rare app
 that refuses to be embedded in an `<iframe>` at all. Purely a
 convenience over the same reverse proxy above — nothing shown there
-wasn't already reachable by opening the port directly.
+wasn't already reachable by opening the port directly. It also
+auto-refreshes every 5 seconds so a page you just started serving
+shows up without a manual click (a plain timer, not real "something's
+now listening" detection — a browser can't actually tell a real 200
+apart from this project's own 502 "no session yet" response).
+
+A handful of smaller conveniences round out the panels: every fenced
+code block in an Ask reply gets its own **Use this code** button,
+loading it straight into the Run editor; **Send to Terminal** pushes
+the Run editor's own contents into a live terminal session as a real
+file (`sandbox_code.py`) without needing to retype or paste it;
+**Regenerate** re-asks the model's last question unchanged, appending
+a fresh answer alongside the original rather than replacing it; and
+the Terminal panel gives a plain warning shortly before its own idle
+or max-session timeout closes the shell, rather than the session just
+vanishing without notice.
 
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
 precision Q8_0 variant of their own default model on the new

@@ -360,6 +360,14 @@ async def _terminal_handler(websocket):
         stop_event = threading.Event()
         last_activity = time.monotonic()
         session_start = time.monotonic()
+        # A real heads-up before the session just vanishes -- found live
+        # (student feedback) that a hard close with no warning reads as
+        # the sandbox breaking, not an expected timeout. Sent once per
+        # approach to each limit; idle_warned resets on real activity so
+        # a student who comes back before actually idling out can still
+        # be warned again if they later drift away a second time.
+        max_session_warned = False
+        idle_warned = False
 
         async def ssh_reader():
             while not stop_event.is_set():
@@ -387,11 +395,21 @@ async def _terminal_handler(websocket):
                 if now - last_activity > TERMINAL_IDLE_TIMEOUT_S:
                     await send({"type": "error", "data": "\r\n\r\nSession closed after being idle too long.\r\n"})
                     break
+                if not max_session_warned and TERMINAL_MAX_SESSION_S - (now - session_start) <= 300:
+                    max_session_warned = True
+                    limit_min = TERMINAL_MAX_SESSION_S // 60
+                    await send({"type": "warning",
+                                 "data": f"This session will close soon -- the {limit_min}-minute time limit is almost up."})
+                if not idle_warned and TERMINAL_IDLE_TIMEOUT_S - (now - last_activity) <= 120:
+                    idle_warned = True
+                    await send({"type": "warning",
+                                 "data": "This session will close soon due to inactivity."})
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
                 except asyncio.TimeoutError:
                     continue
                 last_activity = time.monotonic()
+                idle_warned = False
                 try:
                     msg = json.loads(message)
                 except Exception:

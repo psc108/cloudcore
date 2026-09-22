@@ -893,6 +893,89 @@ panel's own UI reminder already uses), never a hardcoded guess.
 
 ---
 
+## Stage 7 — Five student-experience improvements, and a Regenerate bug caught only by real browser testing
+
+Exploratory ask — "can you think of anything more for the sandbox
+that would improve the student experience?" — followed by direct
+approval to build all five proposed ideas together:
+
+1. **"Use this code" button.** Every fenced code block in the Ask
+   panel's own replies now gets its own button, wiring `cm.setValue()`
+   straight from the model's answer into the Run editor — no more
+   manual copy/paste out of the transcript.
+2. **"Send to Terminal."** Sends the editor's own contents into a live
+   terminal session as a real file, via the same base64+quoted-heredoc
+   pattern this project settled on for the browser→terminal input path
+   after F-107's own hard-won lesson about shell-escaping fragility —
+   chosen specifically because base64's alphabet contains no
+   shell-special characters, so arbitrary code (quotes, `$vars`,
+   backticks, anything) survives byte-perfect regardless of content.
+3. **Terminal session warnings.** `sandbox_terminal.py`'s per-session
+   loop now sends a new `{"type": "warning"}` WS frame once, 300
+   seconds before the hard max-session cutoff and 120 seconds before
+   an idle timeout would fire — giving a student real notice instead
+   of a session just vanishing.
+4. **Preview panel auto-refresh.** A plain 5-second `setInterval`, not
+   genuine "detect when something starts listening" — a browser's
+   CORS-opaque `fetch`/`<img>`/`<iframe>` responses cannot actually
+   distinguish a real 200 from a listening student program vs. this
+   project's own 502 "no active session yet" response, so a real
+   detection mechanism isn't buildable here. Documented as an honest
+   tradeoff in the code itself, not oversold.
+5. **"Regenerate."** Re-asks the model's last question unchanged,
+   appending a fresh reply alongside the original rather than
+   replacing it, so a student can compare answers.
+
+Three of the five were verified directly against the real running
+coordinator through WebSocket/curl test harnesses: send-to-terminal
+round-tripped shell-special-character content byte-perfect and ran
+correctly; the idle-timeout warning fired at the right threshold
+against a temporarily-lowered timeout; the preview panel's own
+screenshot confirmed correct rendering. The remaining two are
+client-side-only DOM/JS behaviour, which needed a real browser rather
+than a WS/curl harness — driven via Chrome DevTools Protocol against a
+real headless Chrome instance pointed at the live page, chosen over
+waiting on this host's own slow (~1 token/sec) real model round trips
+just to get a code block to click.
+
+### F-112 — Regenerate was broken in the exact state it was enabled in
+
+That CDP testing caught a real bug that no static check (`py_compile`,
+`node --check`) could have: `regenerateAsk()` required history's
+*last* entry to be the student's own question before proceeding — but
+by the time the button is actually enabled (inside the ask-completion
+handler, after a full round trip), history's last entry is always the
+model's own just-added reply. Clicking Regenerate immediately after
+any normal Ask — the exact moment the button is designed for —
+failed with "Ask a question first." A second, related bug: the
+button's enabled/disabled state was only ever set inside that same
+completion handler, never synced from saved history itself, so a
+returning student (page reload restoring history from `localStorage`)
+or a student who'd just hit Clear both saw whatever state was left
+over from the last request, not one reflecting what history actually
+held.
+
+Fixed by scanning backward for the most recent question rather than
+requiring it to be the very last entry, and by deriving the button's
+enabled state from saved history on every `renderTranscript()` call —
+page load, post-Ask, post-Regenerate, and post-Clear all now derive it
+from the same single source of truth.
+
+### Verified live, 2026-09-22
+
+Via CDP against the real deployed page, including one real model round
+trip: fresh page → `regenBtn` disabled; `localStorage`-restored
+history (simulating a reload) → correctly enabled with no live ask
+needed; a real `regenerateAsk()` call succeeded with no "Ask a
+question first." bailout; history grew `user, assistant, assistant` —
+the regenerated reply appended alongside the original, not replacing
+it; the button stayed enabled after; Clear correctly reset it to
+disabled. All changes deployed to the redeployed, restarted
+`verify-proxy`/`sandbox-terminal` services and confirmed healthy
+through the real LB.
+
+---
+
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
 
 - **Non-Python code blocks.** The sandbox stays Python-only, for the
