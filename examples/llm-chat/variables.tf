@@ -527,6 +527,26 @@ variable "terminal_boot_timeout_seconds" {
   default     = 20
 }
 
+# Per direct request: a student's own program very often needs more
+# than one port at once (a frontend + an API, a websocket alongside an
+# HTTP port, etc.), so this is a fixed pool decided once at this
+# example's own deploy time ("llm-chat inception time"), not something
+# picked per-session or left to the student to request — same
+# fixed-at-deploy reasoning terminal_port itself already uses. Four high
+# ports, deliberately out of any well-known/commonly-used range, so a
+# student's own choice of port inside their program is very unlikely to
+# collide with anything already meaningful on this host. sandbox_
+# terminal.py opens one small reverse-proxy listener per port (same
+# process that already owns each session's own microVM IP) and routes
+# each incoming connection to whichever student's own currently-open
+# terminal session it came from — see that file's own PREVIEW_PORTS
+# handling for the full mechanism.
+variable "preview_ports" {
+  description = "Fixed pool of high ports reachable from the browser, reverse-proxied into whichever microVM a student's own terminal session is currently using — lets a student run and view a web app (Flask, a static file server, etc.) they wrote in the sandbox terminal."
+  type        = list(number)
+  default     = [41001, 41002, 41003, 41004]
+}
+
 # jammy's own python3-websockets (9.1-1) is confirmed BROKEN on jammy's
 # own current Python 3.10.12 — it calls asyncio.Lock(loop=...), a
 # parameter Python 3.10 removed outright, so every single WS connection

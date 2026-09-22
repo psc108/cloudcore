@@ -73,6 +73,15 @@ VERIFY_MAX_MEMORY_MB = int(os.environ.get("VERIFY_MAX_MEMORY_MB", "256"))
 VERIFY_MAX_FIX_ROUNDS = int(os.environ.get("VERIFY_MAX_FIX_ROUNDS", "3"))
 SANDBOX_USER = "sandboxrunner"
 
+# Same fixed pool sandbox_terminal.py's own preview proxy listens on --
+# read here only to show students a persistent reminder on the Terminal
+# panel itself (SANDBOX_PAGE_HTML's own __PREVIEW_PORTS_HINT__ token,
+# substituted once below at import time). The connected microVM's own
+# fresh "connected" WS message repeats the same list at the moment a
+# session actually starts -- this static copy is the one a student can
+# still see after that scrolls away.
+PREVIEW_PORTS = [p for p in os.environ.get("PREVIEW_PORTS", "").split(",") if p.strip()]
+
 # Phase 3 -- central learning corpus capture (api/examples_listener.py,
 # api/llm_examples_routes.py). Best-effort only: a capture failure must
 # never affect the chat response itself, so every call site wraps this
@@ -955,7 +964,7 @@ footer a { color: #2a5db0; }
 
 <div class="panel">
   <h2>Terminal</h2>
-  <p class="sub" style="margin-bottom:0.75rem">A real, isolated Linux shell with genuine internet access -- separate from the sandbox above, so <code>pip install</code>, <code>curl</code>, and anything else you'd do on a normal machine all work for real. It can't reach anything except the internet: not this lab, not other students, nothing else on the network. Closes automatically after a period of inactivity.</p>
+  <p class="sub" style="margin-bottom:0.75rem">A real, isolated Linux shell with genuine internet access -- separate from the sandbox above, so <code>pip install</code>, <code>curl</code>, and anything else you'd do on a normal machine all work for real. It can't reach anything except the internet: not this lab, not other students, nothing else on the network. Closes automatically after a period of inactivity.__PREVIEW_PORTS_HINT__</p>
   <div class="row">
     <button id="termStartBtn" class="primary" onclick="startTerminal()">Start terminal</button>
     <button id="termStopBtn" onclick="stopTerminal()" disabled>Disconnect</button>
@@ -1256,6 +1265,13 @@ loadState();
 </script>
 </body></html>
 """
+
+SANDBOX_PAGE_HTML = SANDBOX_PAGE_HTML.replace(
+    "__PREVIEW_PORTS_HINT__",
+    (" Ports " + ", ".join(PREVIEW_PORTS) + " are also reachable from your browser at this same "
+     "host -- run a web server on one of them (e.g. Flask's <code>app.run(host='0.0.0.0', "
+     "port=" + PREVIEW_PORTS[0] + ")</code>) and open that port in a new tab to see it.")
+    if PREVIEW_PORTS else "")
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):

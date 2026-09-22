@@ -237,3 +237,45 @@ resource "cloudcore_lb_target_group" "terminal" {
     }
   ]
 }
+
+# Per direct request: a browser-reachable way to see the output of a web
+# app a student wrote and ran in the sandbox terminal. One target group +
+# listener per fixed preview port (var.preview_ports), each a plain 1:1
+# forward straight to sandbox_terminal.py's own port-matching reverse-
+# proxy listener on the coordinator -- that process (not this LB) is what
+# actually resolves "which student's microVM" a given connection belongs
+# to (by the same X-Forwarded-For source IP its WebSocket terminal
+# handler already keys concurrency on) and proxies into it. `for_each`,
+# not `count`, over the fixed port list -- this project's own Terraform
+# convention (CLAUDE.md).
+resource "cloudcore_lb_target_group" "preview" {
+  for_each = toset([for p in var.preview_ports : tostring(p)])
+  lb_id    = module.lb.lb_ids_by_key["chat${local.sfx}"]
+  name     = "${var.project}-${var.environment}-llm-chat-preview-${each.key}-tg${local.sfx}"
+  port     = tonumber(each.key)
+  protocol = "http"
+
+  # sandbox_terminal.py's own preview listener answers a plain GET
+  # /health itself (bypassing the per-connection proxy logic entirely),
+  # same fix already applied to the terminal target group just above --
+  # without it, HAProxy's own health probe would hit the real proxy
+  # path with no matching session and get read as unhealthy.
+  health_check = {
+    path = "/health"
+  }
+
+  targets = [
+    {
+      instance_id = module.coordinator.instance_ids_by_key["01"]
+      port        = tonumber(each.key)
+    }
+  ]
+}
+
+resource "cloudcore_lb_listener" "preview" {
+  for_each        = cloudcore_lb_target_group.preview
+  lb_id           = module.lb.lb_ids_by_key["chat${local.sfx}"]
+  port            = each.value.port
+  protocol        = "http"
+  target_group_id = each.value.id
+}

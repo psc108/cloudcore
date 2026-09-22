@@ -312,6 +312,14 @@
     terminal_max_concurrent_sessions: 4
     terminal_boot_timeout_seconds: 20
 
+    # Fixed pool of high ports reverse-proxied into whichever microVM a
+    # student's own terminal session is currently using — see
+    # examples/llm-chat/variables.tf's own preview_ports comment for the
+    # fuller reasoning. join()'d the same way at the point of use as
+    # examples_ingestion_token/etc. below, since these become one comma-
+    # separated systemd Environment= value both services parse.
+    preview_ports: [41001, 41002, 41003, 41004]
+
     # jammy's own python3-websockets (9.1-1) is confirmed broken on
     # jammy's own current Python 3.10.12 (asyncio.Lock(loop=...), a
     # parameter Python 3.10 removed outright) -- vendored instead. See
@@ -481,6 +489,7 @@
           'terminal_max_session_minutes': terminal_max_session_minutes,
           'terminal_max_concurrent_sessions': terminal_max_concurrent_sessions,
           'terminal_boot_timeout_seconds': terminal_boot_timeout_seconds,
+          'preview_ports': preview_ports | map('string') | join(','),
           'websockets_wheel_name': websockets_wheel_name,
           'websockets_wheel_sha256': websockets_wheel_sha256,
           'codemirror_core_js': codemirror_core_js,
@@ -546,6 +555,20 @@
           Role: ingress
       register: lb
 
+    # Known gap, flagged rather than silently left: this Ansible path
+    # still uses the LB's own simple single-backend model (POST
+    # .../backends, one address:port, no listener/target-group objects
+    # at all — see api/lb.py's own "if lb.listeners: ... else:" fallback).
+    # The Terraform path (examples/llm-chat/main.tf) instead builds real
+    # target groups + a listener with routing_rules, which is what makes
+    # path-based routing to sandbox_terminal.py's own /terminal AND the
+    # new preview ports possible at all. DEPLOYMENT_NAME/PREVIEW_PORTS
+    # are still threaded into both services below for parity and so a
+    # student reaching the coordinator directly (bypassing this LB) can
+    # use them — but neither /terminal nor the preview ports are
+    # reachable through THIS Ansible-created LB today. Migrating this
+    # LB setup to the fuller target-group/listener model is a real,
+    # separate piece of work, not attempted here.
     - name: Register coordinator as the LB backend
       ansible.builtin.uri:
         url: "{{ cloudcore_api_url }}/v1/load-balancers/{{ lb.load_balancer.id }}/backends"

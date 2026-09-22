@@ -172,6 +172,7 @@ write_files:
       Environment=EXAMPLES_API_TOKEN={{ examples_ingestion_token }}
       Environment=EXAMPLES_MODEL_FILENAME={{ model_filename }}
       Environment=DEPLOYMENT_NAME={{ deployment_name }}
+      Environment=PREVIEW_PORTS={{ preview_ports }}
       Environment=RATE_LIMIT_RUN_PER_MINUTE={{ rate_limit_run_per_minute }}
       Environment=RATE_LIMIT_ASK_PER_10MIN={{ rate_limit_ask_per_10min }}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
@@ -208,6 +209,7 @@ write_files:
       Environment=TERMINAL_MAX_SESSION_MINUTES={{ terminal_max_session_minutes }}
       Environment=TERMINAL_MAX_CONCURRENT_SESSIONS={{ terminal_max_concurrent_sessions }}
       Environment=TERMINAL_BOOT_TIMEOUT_SECONDS={{ terminal_boot_timeout_seconds }}
+      Environment=PREVIEW_PORTS={{ preview_ports }}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/sandbox_terminal.py
       Restart=on-failure
       RestartSec=5

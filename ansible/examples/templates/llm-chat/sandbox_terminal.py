@@ -29,6 +29,7 @@ Stage A). Flagged explicitly as a named follow-up, not a silent gap.
 from __future__ import annotations
 
 import asyncio
+import functools
 import ipaddress
 import json
 import os
@@ -79,6 +80,17 @@ TERMINAL_BOOT_TIMEOUT_S = int(os.environ.get("TERMINAL_BOOT_TIMEOUT_SECONDS", "2
 VCPU_COUNT = 1
 MEM_SIZE_MIB = 256
 
+# Per direct request: a browser-reachable way to see the output of a web
+# app a student wrote and ran in their own sandbox terminal. Fixed pool
+# decided once at this example's own deploy time (examples/llm-chat/
+# variables.tf's own preview_ports) -- a student's own program very
+# often needs more than one port at once (a frontend + an API, etc.), so
+# these four are simply always available inside every session, not
+# something requested per-port. See _preview_conn_handler's own
+# docstring for how a connection on one of these gets routed to the
+# right student's own microVM.
+PREVIEW_PORTS = [int(p) for p in os.environ.get("PREVIEW_PORTS", "").split(",") if p.strip()]
+
 # Per-client concurrency tracking -- same shape as verify_proxy.py's own
 # Stage 4 _client_state, but this is a genuinely separate process (a
 # dedicated systemd service, not bolted onto verify-proxy's own
@@ -89,6 +101,18 @@ MEM_SIZE_MIB = 256
 # dict, which a separate process cannot see at all.
 _client_lock = threading.Lock()
 _client_active: dict[str, int] = {}
+
+# Which microVM a given client IP's own terminal session is currently
+# using -- read by the preview proxy below to route a browser connection
+# on one of PREVIEW_PORTS to the right sandbox. Set once a session is
+# genuinely connected (real boot + real SSH, not just requested) and
+# cleared in the same finally block that tears the VM down. If a single
+# IP somehow has more than one concurrent session (TERMINAL_MAX_CONCURRENT
+# allows it; the browser UI itself never opens more than one), the most
+# recently connected one simply wins here -- a deliberate simplification,
+# not a correctness bug, since the frontend's own single Terminal panel
+# never creates that situation in practice.
+_client_vm: dict[str, "MicroVM"] = {}
 
 _ip_lock = threading.Lock()
 _ip_pool = [str(ip) for ip in ipaddress.ip_network(SANDBOX_SUBNET).hosts()][8:-4]
@@ -322,7 +346,16 @@ async def _terminal_handler(websocket):
             await send({"type": "error", "data": f"Could not connect to sandbox: {e}"})
             return
 
-        await send({"type": "connected", "data": "Connected. This shell has real internet access and is fully isolated -- it cannot reach anything else.\r\n"})
+        with _client_lock:
+            _client_vm[ip] = vm
+
+        preview_note = (
+            f"Ports {', '.join(str(p) for p in PREVIEW_PORTS)} are reachable from your browser -- "
+            f"start a web server on any of them and open this same host at that port in a new tab.\r\n"
+        ) if PREVIEW_PORTS else ""
+        await send({"type": "connected",
+                     "data": "Connected. This shell has real internet access and is fully isolated -- "
+                             "it cannot reach anything else.\r\n" + preview_note})
 
         stop_event = threading.Event()
         last_activity = time.monotonic()
@@ -388,6 +421,8 @@ async def _terminal_handler(websocket):
         await loop.run_in_executor(None, vm.teardown)
         with _client_lock:
             _client_active[ip] = max(0, _client_active.get(ip, 1) - 1)
+            if _client_vm.get(ip) is vm:
+                del _client_vm[ip]
 
 
 async def _health_check(path, request_headers):
@@ -406,12 +441,120 @@ async def _health_check(path, request_headers):
     return None
 
 
+def _extract_xff(head: bytes) -> str | None:
+    for line in head.split(b"\r\n"):
+        if line.lower().startswith(b"x-forwarded-for:"):
+            value = line.split(b":", 1)[1].decode(errors="replace").strip()
+            return value.split(",")[0].strip() or None
+    return None
+
+
+async def _pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        while True:
+            chunk = await reader.read(65536)
+            if not chunk:
+                break
+            writer.write(chunk)
+            await writer.drain()
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        try:
+            writer.close()
+        except Exception:
+            pass
+
+
+async def _write_and_close(writer: asyncio.StreamWriter, status_line: bytes, body: bytes) -> None:
+    try:
+        writer.write(
+            status_line + b"\r\nContent-Type: text/plain\r\nConnection: close\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+        await writer.drain()
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        writer.close()
+
+
+async def _preview_conn_handler(port: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """One coordinator-side listener per PREVIEW_PORTS entry (wired into
+    _main() below). HAProxy terminates the browser's own HTTP connection
+    and opens a fresh one to us with `option forwardfor` set (api/lb.py),
+    so the only reason to look at this connection's first request at all
+    is to read X-Forwarded-For off it and learn which student it's
+    actually from -- that resolves to their own currently-connected
+    microVM via _client_vm above, the same IP-keyed concurrency model
+    _terminal_handler itself already uses. After that this is a dumb
+    byte splice for the rest of the TCP connection's lifetime (including
+    the request whose headers were already read, replayed verbatim), so
+    whatever the student's own program actually returns -- HTML, JSON,
+    images, even a WebSocket upgrade of ITS OWN -- passes through
+    completely unmodified. A plain GET /health short-circuits before any
+    of that, same reasoning as _health_check above: HAProxy's own health
+    probe has no real session behind it, and without this it would read
+    as unhealthy and mark the whole backend down."""
+    try:
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=10)
+    except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError):
+        writer.close()
+        return
+
+    request_line = head.split(b"\r\n", 1)[0]
+    if request_line.startswith(b"GET /health "):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n"
+                     b"Content-Length: 3\r\n\r\nok\n")
+        try:
+            await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        writer.close()
+        return
+
+    peer = writer.get_extra_info("peername")
+    ip = _extract_xff(head) or (peer[0] if peer else "")
+    with _client_lock:
+        vm = _client_vm.get(ip)
+
+    if vm is None or not vm.ip:
+        await _write_and_close(
+            writer, b"HTTP/1.1 502 Bad Gateway",
+            b"No active sandbox terminal for this browser -- open the Terminal panel, "
+            b"start a session, then run your program on this port.\n")
+        return
+
+    try:
+        vm_reader, vm_writer = await asyncio.wait_for(asyncio.open_connection(vm.ip, port), timeout=5)
+    except (OSError, asyncio.TimeoutError):
+        await _write_and_close(
+            writer, b"HTTP/1.1 502 Bad Gateway",
+            f"Nothing is listening on port {port} inside your sandbox yet.\n".encode())
+        return
+
+    vm_writer.write(head)
+    try:
+        await vm_writer.drain()
+    except (ConnectionError, OSError):
+        writer.close()
+        vm_writer.close()
+        return
+
+    await asyncio.gather(_pump(reader, vm_writer), _pump(vm_reader, writer), return_exceptions=True)
+
+
 async def _main():
     os.makedirs(SESSION_DIR, mode=0o700, exist_ok=True)
+    preview_servers = [
+        await asyncio.start_server(functools.partial(_preview_conn_handler, port), WS_HOST, port)
+        for port in PREVIEW_PORTS
+    ]
     async with websockets.legacy.server.serve(
         _terminal_handler, WS_HOST, WS_PORT, process_request=_health_check
     ):
         print(f"Sandbox terminal WS server on ws://{WS_HOST}:{WS_PORT}", flush=True)
+        if PREVIEW_PORTS:
+            print(f"Preview proxy listening on {PREVIEW_PORTS}", flush=True)
         await asyncio.Future()
 
 
