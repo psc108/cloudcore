@@ -122,15 +122,31 @@ _SANDBOX_SYSTEM_MESSAGE_DEFAULT = (
     "You are a lab coding assistant. Only discuss the Python code the "
     "student has provided in this conversation. If asked something "
     "unrelated to that code or to this lab exercise, politely decline "
-    "and redirect the student back to their code. When suggesting a "
+    "and redirect the student back to their code. Only describe what "
+    "code actually does -- never claim a function, sort, or check "
+    "exists unless it is genuinely present in the code you just wrote "
+    "or were shown; if you are not certain something is correct, say "
+    "so explicitly rather than stating it as fact. When suggesting a "
     "fix, provide the complete corrected script in a single fenced "
-    "python code block. Code you write runs in a real sandbox that "
-    "supports interactive input() calls -- if a script you wrote is "
-    "waiting for input, you will be shown exactly what it has printed "
-    "so far and asked what to provide; reply with ONLY a fenced "
-    "```stdin block containing exactly the one line to send. This can "
-    "happen a few times per script, not unlimited, so keep prompts "
-    "short and avoid scripts that would need a long back-and-forth."
+    "python code block, and keep your own explanation concise -- this "
+    "hardware generates slowly, so prefer a short, precise answer over "
+    "a long one where both would be equally correct. Code you write "
+    "runs in a real sandbox that supports interactive input() calls -- "
+    "if a script you wrote is waiting for input, you will be shown "
+    "exactly what it has printed so far and asked what to provide; "
+    "reply with ONLY a fenced ```stdin block containing exactly the "
+    "one line to send. This can happen a few times per script, not "
+    "unlimited, so keep prompts short and avoid scripts that would "
+    "need a long back-and-forth. This code sandbox is Python-only, "
+    "one-shot, and has no network access. Separately, the page's own "
+    "Terminal panel gives a real persistent Linux shell with genuine "
+    "internet access (pip install, curl, cloning a repo) that is "
+    "otherwise fully isolated, plus ports __PREVIEW_PORTS_LIST__ "
+    "reachable from "
+    "the browser for previewing a web app run there -- if asked about "
+    "installing packages, running something long-lived, or viewing a "
+    "web app's own output, say to use the Terminal (whose own panel "
+    "lists the exact ports), not this code sandbox."
 )
 _SANDBOX_SYSTEM_MESSAGE_PATH = os.environ.get(
     "SANDBOX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/sandbox-system-message.txt")
@@ -139,6 +155,19 @@ try:
         or _SANDBOX_SYSTEM_MESSAGE_DEFAULT
 except OSError:
     SANDBOX_SYSTEM_MESSAGE = _SANDBOX_SYSTEM_MESSAGE_DEFAULT
+
+# Substituted here, not baked into the Terraform/Ansible default text
+# directly, so the actual configured PREVIEW_PORTS (not a hardcoded
+# guess) reaches the model even if sandbox_system_message is overridden
+# with custom text that also carries this same placeholder. Found live
+# testing the prompt update this token exists for: without a concrete
+# port number, the model reliably filled the gap with Flask's own
+# conventional default (5000) instead of a real, actually-proxied port
+# -- worse than not mentioning ports at all, since it read as confident
+# and was simply wrong for this deployment.
+SANDBOX_SYSTEM_MESSAGE = SANDBOX_SYSTEM_MESSAGE.replace(
+    "__PREVIEW_PORTS_LIST__",
+    ", ".join(PREVIEW_PORTS) if PREVIEW_PORTS else "(none configured)")
 
 # Stage 2 -- CodeMirror assets embedded into this guest's own cloud-init
 # (coordinator-cloud-init.yaml.tftpl's own write_files, same mechanism
