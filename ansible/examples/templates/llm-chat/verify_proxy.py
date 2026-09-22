@@ -209,8 +209,19 @@ _LINUX_SYSTEM_MESSAGE_DEFAULT = (
     "across sessions, and it cannot reach anything on the local "
     "network except the real internet. Ports __PREVIEW_PORTS_LIST__ "
     "are reachable from the student's browser for previewing anything "
-    "they serve there. Politely decline anything clearly unrelated to "
-    "Linux or this lab and redirect back to that."
+    "they serve there. This is a genuinely minimal image -- ordinary "
+    "tools you might expect (e.g. fdisk) are often not preinstalled. "
+    "If a command you suggest might need one, give ONLY ONE fenced "
+    "```bash block for it, combining the install check and the real "
+    "command with `||` in that single block -- for example exactly "
+    "`command -v fdisk >/dev/null || sudo apt-get install -y fdisk; "
+    "fdisk -l /dev/vda` (adjust the tool/package name and real "
+    "command). Do NOT also show a plain, naive version of the command "
+    "on its own first -- that copy would just fail with 'command not "
+    "found' if the tool is missing, defeating the whole point. The "
+    "student should only ever need to click 'Run in Terminal' once, "
+    "on the one block you give them. Politely decline anything "
+    "clearly unrelated to Linux or this lab and redirect back to that."
 )
 _LINUX_SYSTEM_MESSAGE_PATH = os.environ.get(
     "LINUX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/linux-system-message.txt")

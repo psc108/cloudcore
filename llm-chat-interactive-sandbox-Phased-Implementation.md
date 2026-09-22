@@ -1173,6 +1173,33 @@ session that the hostname now reads `sandbox` everywhere (including
 the shell prompt itself), `/etc/hosts` has real entries, and
 `sudo fdisk -l`/`lsblk` both run with zero resolution warning.
 
+### Follow-up: teaching the model to self-check before suggesting a command
+
+Direct follow-up prompted by the fdisk gap above: should "Run in
+Terminal" pre-check whether a suggested command's tool needs
+installing first? Recommended against a real pre-check mechanism --
+reliably detecting which binary an arbitrary, possibly multi-command
+shell block depends on isn't solvable in general -- in favor of
+teaching the model to build its own install-if-missing check into the
+one command it suggests, since the shell already has real internet
+and working `apt`.
+
+Iterated live rather than shipped on a first guess. The first wording
+("build a check into the SAME command") got real, partial compliance:
+asked about `ifconfig`, the model correctly recognized it might be
+missing and added an install step -- but as a second, separate fenced
+block, leaving the naive first block (which would still fail) sitting
+right alongside it. Tightened to an explicit "give ONLY ONE block, do
+NOT also show a plain/naive version" instruction and re-tested against
+two more real, different questions (`traceroute`, `htop`): both came
+back as exactly one correctly-combined `command -v X >/dev/null ||
+sudo apt-get install -y X; X` block, confirming the fix generalizes
+rather than only working for fdisk, the one example spelled out in the
+prompt itself. `linux_system_message` and the live coordinator's
+`linux-system-message.txt` were redeployed after each wording change,
+each round checked against a real `/sandbox/linux-ask` round trip
+rather than assumed correct from the text alone.
+
 ---
 
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
