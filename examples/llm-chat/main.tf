@@ -120,6 +120,7 @@ module "coordinator" {
   security_group_ids  = module.security_groups.security_group_ids_list
   placement_overrides = local.coordinator_placement_overrides
   user_data          = local.coordinator_user_data
+  users              = local.claude_debug_users
 }
 
 # Every worker is peer-placed — there's no "local anchor" instance here
@@ -145,6 +146,7 @@ module "workers" {
   security_group_ids  = module.security_groups.security_group_ids_list
   user_data           = local.worker_user_data
   placement_overrides = local.worker_placement_overrides
+  users               = local.claude_debug_users
 }
 
 module "lb" {

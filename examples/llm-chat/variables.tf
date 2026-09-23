@@ -664,3 +664,30 @@ variable "websockets_wheel_sha256" {
   type        = string
   default     = "1214e673c404684b9bf7154f5cf43b45025b1a6160fac3a9e438e9c1a97e22cb"
 }
+
+# --- Debug access (F-127 follow-up) ---------------------------------------
+# Direct request, short-term: give Claude Code its own real SSH access to
+# every instance this template creates, since diagnosing F-127's own
+# still-open deadlock (and anything like it in the future) needs a live
+# /proc/<pid>/task/*/stack capture -- something impossible to get from the
+# outside, and impossible for Claude Code itself when the instance lands
+# on a peer host it has no other access to (see haFullStack-Findings-Log.md
+# F-127's own "requires the user's own real-time SSH access" note). A
+# dedicated keypair (api/keys/claude_debug_ed25519*, gitignored, generated
+# once locally -- never committed) rather than reusing CloudCore's own
+# inter-instance keypair, so this access is distinguishable in auth logs
+# and independently revocable without touching inter-instance SSH at all.
+# Explicitly toggleable per direct request ("allow it to be turned off via
+# the template should it be required") -- flip to false and rebuild to
+# drop it from every instance this template creates.
+variable "enable_claude_debug_access" {
+  description = "Add a sudo-capable 'claude-debug' user (with the dedicated key in claude_debug_ssh_public_key) to every instance this template creates, for live diagnosis of stalls/deadlocks. Set false to omit it entirely."
+  type        = bool
+  default     = true
+}
+
+variable "claude_debug_ssh_public_key" {
+  description = "Public half of the dedicated claude-debug keypair (api/keys/claude_debug_ed25519.pub) -- a public key, not a secret, safe to bake into this default. Only used when enable_claude_debug_access is true."
+  type        = string
+  default     = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBsvg7yGQHL+ezs9craT31EBXuZb9PzBLs3CX4/7tIii claude-debug@cloudcore"
+}

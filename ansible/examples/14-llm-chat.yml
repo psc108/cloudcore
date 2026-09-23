@@ -440,6 +440,22 @@
     websockets_wheel_name: websockets-16.1.1-cp310-manylinux.whl
     websockets_wheel_sha256: 1214e673c404684b9bf7154f5cf43b45025b1a6160fac3a9e438e9c1a97e22cb
 
+    # F-127 follow-up, direct request, short-term: give Claude Code its
+    # own real SSH access to every instance this playbook creates --
+    # diagnosing F-127's own still-open deadlock (and anything like it
+    # in the future) needs a live /proc/<pid>/task/*/stack capture,
+    # impossible from the outside and impossible for Claude Code itself
+    # when an instance lands on a peer host it has no other access to.
+    # A dedicated keypair (api/keys/claude_debug_ed25519*, gitignored,
+    # never committed), not CloudCore's own inter-instance keypair, so
+    # this access is distinguishable in auth logs and independently
+    # revocable. Explicitly toggleable per direct request ("allow it to
+    # be turned off via the template should it be required") -- flip to
+    # false and rebuild to drop it from every instance. See
+    # examples/llm-chat/variables.tf's matching Terraform variables.
+    enable_claude_debug_access: true
+    claude_debug_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBsvg7yGQHL+ezs9craT31EBXuZb9PzBLs3CX4/7tIii claude-debug@cloudcore"
+
   tasks:
     # F-126: empty is now a real, deliberately supported configuration
     # — direct request to keep worker_peers/RPC offloading fully
@@ -492,6 +508,10 @@
       ansible.builtin.set_fact:
         promtail_config: "{{ lookup('file', 'templates/llm-chat/promtail-config.yml.j2') }}"
 
+    - name: Build the claude-debug users list (empty when disabled)
+      ansible.builtin.set_fact:
+        claude_debug_users: "{{ enable_claude_debug_access | ternary([{'username': 'claude-debug', 'sudo': true, 'ssh_keys': [claude_debug_ssh_public_key]}], []) }}"
+
     - name: Render worker user_data (identical for every worker)
       ansible.builtin.set_fact:
         worker_user_data: "{{ lookup('template', 'templates/llm-chat/worker-cloud-init.yml.j2', template_vars={
@@ -511,6 +531,7 @@
         security_group_ids: ["{{ item.peer_security_group_id }}"]
         peer_id: "{{ item.peer_id }}"
         user_data: "{{ worker_user_data }}"
+        users: "{{ claude_debug_users }}"
         tags:
           Environment: "{{ env }}"
           Project: "{{ project }}"
@@ -655,6 +676,7 @@
         security_group_ids: ["{{ coordinator_peer_security_group_id if coordinator_peer_id else sg.security_group.id }}"]
         peer_id: "{{ coordinator_peer_id }}"
         user_data: "{{ coordinator_user_data }}"
+        users: "{{ claude_debug_users }}"
         tags:
           Environment: "{{ env }}"
           Project: "{{ project }}"

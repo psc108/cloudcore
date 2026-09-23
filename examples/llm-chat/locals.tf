@@ -72,6 +72,17 @@ locals {
   # offload anywhere", exactly what a single-host deployment needs.
   llama_rpc_flags = local.worker_count > 0 ? "-ngl ${var.rpc_offload_layers} --rpc ${local.rpc_servers} " : ""
 
+  # F-127 follow-up: the same `users` block ha-frontend-lb's own "ecs"
+  # user already proves works (modules/instance-group passes it straight
+  # through to cloudcore_instance) — a dedicated, independently
+  # revocable, toggleable-off debug login for every instance this
+  # template creates, not the CloudCore inter-instance keypair.
+  claude_debug_users = var.enable_claude_debug_access ? [{
+    username = "claude-debug"
+    sudo     = true
+    ssh_keys = [var.claude_debug_ssh_public_key]
+  }] : []
+
   # JSON body of llama-server's own --webui-config-file — confirmed live
   # that its keys are flat top-level settings names matching the
   # frontend's own constants map (temperature/systemMessage/etc.), not
