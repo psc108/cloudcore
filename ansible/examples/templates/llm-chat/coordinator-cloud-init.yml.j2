@@ -190,6 +190,7 @@ write_files:
       Environment=VERIFY_MAX_FIX_ROUNDS={{ verify_max_fix_rounds }}
       Environment=MAX_CONTINUATION_ROUNDS={{ max_continuation_rounds }}
       Environment=GENERATION_STALL_TIMEOUT_SECONDS={{ generation_stall_timeout_seconds }}
+      Environment=RELAY_DEBUG={{ relay_debug | ternary('1', '0') }}
       Environment=EXAMPLES_API_BASE={{ examples_api_base }}
       Environment=EXAMPLES_API_TOKEN={{ examples_ingestion_token }}
       Environment=EXAMPLES_MODEL_FILENAME={{ model_filename }}

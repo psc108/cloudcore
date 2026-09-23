@@ -366,6 +366,23 @@ variable "generation_stall_timeout_seconds" {
   default     = 420
 }
 
+# F-130: turns on in-process debug logging inside verify_proxy.py's own
+# _relay_one_stream() read loop (thread id, every poll cycle, every real
+# content chunk) -- added because two independent live strace sessions
+# during a confirmed stall showed zero syscalls from the handler thread
+# the code's own busy-gate logic proves must be alive, a contradiction
+# external tracing couldn't explain. Off by default -- genuinely noisy
+# over a multi-minute generation (a log line per ~5s poll and per
+# generated token) and meant only for actively chasing F-130, not normal
+# operation. Journal-visible immediately (plain stdout, same as every
+# other print() in this file) without needing a rebuild -- flip and
+# `systemctl restart verify-proxy.service` to turn it on/off live too.
+variable "relay_debug" {
+  description = "Enable verify_proxy.py's own internal debug logging of its SSE relay read loop (see RELAY_DEBUG's own comment in verify_proxy.py). Off by default."
+  type        = bool
+  default     = false
+}
+
 # One entry per RPC worker instance — the whole point of this template.
 # Each worker is pinned to a specific paired peer (see the Peers
 # section, or the cloudcore_peers data source, for available hosts) and

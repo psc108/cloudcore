@@ -163,6 +163,7 @@ locals {
     verify_max_fix_rounds   = var.verify_max_fix_rounds
     max_continuation_rounds = var.max_continuation_rounds
     generation_stall_timeout_seconds = var.generation_stall_timeout_seconds
+    relay_debug                      = var.relay_debug ? "1" : "0"
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
     deployment_name           = local.coordinator_deployment_name

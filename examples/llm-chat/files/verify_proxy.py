@@ -147,6 +147,26 @@ def _continuation_user_turn(prior_text: str) -> str:
 # tok/s) so a merely-slow response is never misdiagnosed as stuck.
 GENERATION_STALL_TIMEOUT_S = int(os.environ.get("GENERATION_STALL_TIMEOUT_SECONDS", "120"))
 
+# F-130: two independent live `strace -f` sessions on this process during
+# a confirmed-busy, genuinely-stalled request showed ZERO syscalls of any
+# kind from the thread that _relay_one_stream()'s own busy-gate logic
+# proves must be alive and running -- an unresolved contradiction between
+# external tracing and the code's own behavior. This flag turns on
+# in-process logging of the read loop itself (thread id, every poll
+# cycle, every real-content chunk) so the loop's actual behavior can be
+# observed directly from inside the interpreter, removing the ptrace/
+# strace-interaction variable entirely. Off by default -- a poll cycle
+# fires roughly every _SOCKET_POLL_TIMEOUT_S seconds and a real content
+# chunk roughly every generated token, so this is genuinely noisy over a
+# multi-minute generation and is meant to be switched on only while
+# actively chasing F-130, not left running in normal operation.
+_RELAY_DEBUG = os.environ.get("RELAY_DEBUG", "0") == "1"
+
+
+def _relay_debug(msg: str) -> None:
+    if _RELAY_DEBUG:
+        print(f"RELAY_DEBUG [{time.time():.3f}] tid={threading.get_ident()}: {msg}", flush=True)
+
 # How often _relay_one_stream's read loop wakes up (via a short socket
 # read timeout) to re-check the stall clock -- NOT the stall threshold
 # itself. Short enough that GENERATION_STALL_TIMEOUT_S is honored
@@ -2459,12 +2479,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         finish_reason = None
         buf = b""
         last_real_content_time = time.time()
+        loop_start = last_real_content_time
+        poll_count = 0
+        content_chunks = 0
+        _relay_debug(f"loop start, resp.status={getattr(resp, 'status', '?')}")
         while True:
             if interrupt is not None and interrupt.is_set():
+                _relay_debug(f"interrupted after {poll_count} polls, {content_chunks} content chunks")
                 return "".join(accumulated), finish_reason, "interrupted", last_chunk_meta, last_timings
             try:
                 chunk = resp.read(1)
-            except (socket.timeout, OSError):
+            except (socket.timeout, OSError) as e:
                 # Not necessarily a real failure -- resp's own socket
                 # timeout is deliberately short (_SOCKET_POLL_TIMEOUT_S)
                 # purely so this loop wakes up regularly to check the
@@ -2482,11 +2507,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # rather than crashing the handler thread. A brief sleep
                 # avoids busy-looping in the (rarer) case this really is
                 # a broken/reset connection repeatedly raising instantly.
-                if time.time() - last_real_content_time > GENERATION_STALL_TIMEOUT_S:
+                poll_count += 1
+                elapsed_since_content = time.time() - last_real_content_time
+                _relay_debug(f"poll #{poll_count} {e!r}, elapsed_since_content={elapsed_since_content:.1f}s, "
+                             f"elapsed_total={time.time() - loop_start:.1f}s")
+                if elapsed_since_content > GENERATION_STALL_TIMEOUT_S:
+                    _relay_debug(f"STALL declared after {poll_count} polls, {content_chunks} content chunks")
                     return "".join(accumulated), finish_reason, "stalled", last_chunk_meta, last_timings
                 time.sleep(0.2)
                 continue
+            except Exception as e:
+                # Never seen in practice -- logged loudly rather than
+                # silently caught, since an exception type outside the
+                # pair above would otherwise propagate uncaught and kill
+                # this handler thread with a bare traceback, same as any
+                # other unhandled exception in this file.
+                _relay_debug(f"UNEXPECTED exception from resp.read(1): {e!r}")
+                raise
             if not chunk:
+                _relay_debug(f"EOF (empty read) after {poll_count} polls, {content_chunks} content chunks")
                 break
             buf += chunk
             if not buf.endswith(b"\n"):
@@ -2497,12 +2536,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             text = line.decode(errors="replace").strip()
             is_done = text.startswith("data: ") and text[len("data: "):] == "[DONE]"
             if is_done:
+                _relay_debug(f"[DONE] after {poll_count} polls, {content_chunks} content chunks")
                 break
 
             try:
                 self.wfile.write(line)
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
+                _relay_debug(f"disconnected (client write failed) after {poll_count} polls, "
+                             f"{content_chunks} content chunks")
                 return "".join(accumulated), finish_reason, "disconnected", last_chunk_meta, last_timings
 
             if not text.startswith("data: "):
@@ -2515,15 +2557,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 if "content" in delta and delta["content"]:
                     accumulated.append(delta["content"])
                     last_real_content_time = time.time()
+                    content_chunks += 1
+                    if content_chunks <= 3 or content_chunks % 50 == 0:
+                        _relay_debug(f"content chunk #{content_chunks}: {delta['content']!r}")
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
+                    _relay_debug(f"finish_reason={finish_reason!r} after {content_chunks} content chunks")
                 last_chunk_meta = {k: obj.get(k) for k in ("id", "model", "system_fingerprint")}
                 # llama-server puts this on the final chunk of each
                 # response (timings set) -- see the module-level
                 # docstring on _record_llm_stats for where it's read.
                 if obj.get("timings"):
                     last_timings = obj["timings"]
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+                _relay_debug(f"unparseable SSE line, skipped: {e!r} line={line[:200]!r}")
                 continue
 
         return "".join(accumulated), finish_reason, None, last_chunk_meta, last_timings
