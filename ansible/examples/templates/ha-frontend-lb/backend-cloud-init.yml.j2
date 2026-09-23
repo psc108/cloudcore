@@ -57,6 +57,8 @@ write_files:
 
       curl -fsSL http://192.168.100.1:8090/jammy/artifacts/jasypt-dist.zip -o /tmp/jasypt-dist.zip
       curl -fsSL http://192.168.100.1:8090/jammy/artifacts/bcprov.jar -o /tmp/bcprov.jar
+      echo "{{ jasypt_dist_zip_sha256 }}  /tmp/jasypt-dist.zip" | sha256sum -c -
+      echo "{{ bcprov_jar_sha256 }}  /tmp/bcprov.jar" | sha256sum -c -
 
       unzip -q -o /tmp/jasypt-dist.zip -d /opt
       JASYPT_DIR=$(find /opt -maxdepth 1 -type d -name 'jasypt-*' | head -1)

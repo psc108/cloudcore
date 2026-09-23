@@ -95,6 +95,8 @@ locals {
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password
     step_cli_deb_sha256     = local.step_cli_deb_sha256
+    jasypt_dist_zip_sha256  = local.jasypt_dist_zip_sha256
+    bcprov_jar_sha256       = local.bcprov_jar_sha256
     nfs_ip                  = local.nfs_ip
     nfs_share               = local.nfs_share
     nfs_mount_dir           = local.nfs_mount_dir
@@ -104,6 +106,14 @@ locals {
   # Pinned, checksum-verified — same pattern as proxysql_deb_sha256 below.
   step_ca_deb_sha256  = "f8e43f0f2ba1e37121b75623993ea0bece5cc3a02b73eefc16e414d41c9fec71"
   step_cli_deb_sha256 = "5845c181251ffe43ca2331bc171e0b92324a71be9cf4ef76cd6fbbba4f2a3cc6"
+
+  # F-132-follow-up: setup-jasypt.sh downloaded both of these with no
+  # checksum verification at all, unlike every other pinned artifact in
+  # this project — computed directly against the real cached files in
+  # api/package-repo/jammy/artifacts/ (not transcribed from a release
+  # page; neither project publishes its own checksums file).
+  jasypt_dist_zip_sha256 = "069cdf825ec7e362d52d023496f283c218a61a0a731dc88eef5ad9932adfaaf7"
+  bcprov_jar_sha256      = "e8ad209f8c58d291a37ca9750e9e9fac60596956c983e49dd8282381dd8b3249"
 
   # vpc_id/subnet_id/security_group_ids/peer_id swap together to the
   # peer's own catalogue when ca_peer_id is set -- see variables.tf's
@@ -354,6 +364,8 @@ locals {
     ca_ip                   = local.ca_ip
     ca_provisioner_password = local.ca_provisioner_password
     step_cli_deb_sha256     = local.step_cli_deb_sha256
+    jasypt_dist_zip_sha256  = local.jasypt_dist_zip_sha256
+    bcprov_jar_sha256       = local.bcprov_jar_sha256
     nfs_ip                  = local.nfs_ip
     nfs_share               = local.nfs_share
     nfs_mount_dir           = local.nfs_mount_dir
