@@ -384,6 +384,21 @@ variable "generation_stall_timeout_seconds" {
 # RPC port (var.rpc_port) to var.cidr_block (this build's own local
 # subnet, where the coordinator lives) — never 0.0.0.0/0. Reusing a
 # broader existing security group defeats this protection.
+# F-126: empty is now a real, deliberately supported configuration —
+# direct request to keep this whole worker_peers/RPC-offload mechanism
+# fully intact for later (better hardware) while letting the
+# coordinator run the entire model itself in the meantime, on
+# whichever single host (including a peer, via coordinator_peer_id)
+# can actually carry it alone. The old validation rule below required
+# at least one entry, on the reasoning that cross-host splitting was
+# this template's whole purpose — true when it was written, but no
+# longer the only supported shape once a real, current-hardware
+# constraint (this build's own coordinator host being a shared dev
+# desktop, not a dedicated inference box) made "run it all on one
+# other, more capable peer instead" the right call right now.
+# llama_rpc_flags (locals.tf) already degrades correctly to "no
+# offload, run every layer locally" when this is empty — nothing else
+# assumes a worker exists.
 variable "worker_peers" {
   type = list(object({
     peer_id                = string
@@ -391,11 +406,7 @@ variable "worker_peers" {
     peer_subnet_id         = string
     peer_security_group_id = string
   }))
-
-  validation {
-    condition     = length(var.worker_peers) > 0
-    error_message = "At least one worker_peers entry is required — this template's whole purpose is cross-host distributed inference."
-  }
+  default = []
 }
 
 # --- Coordinator placement -----------------------------------------------

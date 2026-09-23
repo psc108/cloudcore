@@ -441,13 +441,17 @@
     websockets_wheel_sha256: 1214e673c404684b9bf7154f5cf43b45025b1a6160fac3a9e438e9c1a97e22cb
 
   tasks:
-    - name: Fail fast if worker_peers is empty
-      ansible.builtin.fail:
-        msg: >-
-          worker_peers is empty -- this playbook's whole purpose is
-          cross-host distributed inference. Set at least one entry
-          (peer_id/peer_vpc_id/peer_subnet_id/peer_security_group_id).
-      when: worker_peers | length == 0
+    # F-126: empty is now a real, deliberately supported configuration
+    # — direct request to keep worker_peers/RPC offloading fully
+    # intact for later (better hardware) while letting the coordinator
+    # run the entire model itself in the meantime, on whichever single
+    # host (including a peer, via coordinator_peer_id) can actually
+    # carry it alone. The old fail-fast guard here assumed cross-host
+    # splitting was this playbook's only supported shape — true when
+    # it was written, but no longer the only one a real, current-
+    # hardware constraint can call for. llama_rpc_flags (below) already
+    # degrades correctly to "no offload, run every layer locally" when
+    # this is empty — nothing else assumes a worker exists.
 
     - name: Create VPC
       cloudcore.cloudcore.vpc:
