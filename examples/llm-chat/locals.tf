@@ -56,6 +56,22 @@ locals {
   # user_data is even rendered).
   rpc_servers = join(",", [for ip in module.workers.private_ips_list : "${ip}:${var.rpc_port}"])
 
+  # Direct request: keep worker_peers/RPC offloading fully intact for
+  # later (better hardware), but make "coordinator alone, zero
+  # workers" a genuinely, cleanly supported configuration right now —
+  # not just "leave worker_peers empty and hope it degrades
+  # gracefully". It didn't: with worker_count == 0, rpc_servers above
+  # is an EMPTY string, and the old unconditional
+  # `-ngl ${rpc_offload_layers} --rpc ${rpc_servers}` in the coordinator's
+  # own ExecStart line would have collapsed to `--rpc  -ngl 37` (the
+  # empty substitution merging two flags' own whitespace) — command-
+  # line parsing would then read "-ngl" itself as --rpc's own value,
+  # not a separate flag, breaking llama-server's own startup outright.
+  # With zero workers this is now omitted entirely instead -- llama.cpp
+  # already treats no -ngl / no --rpc as "run every layer locally, no
+  # offload anywhere", exactly what a single-host deployment needs.
+  llama_rpc_flags = local.worker_count > 0 ? "-ngl ${var.rpc_offload_layers} --rpc ${local.rpc_servers} " : ""
+
   # JSON body of llama-server's own --webui-config-file — confirmed live
   # that its keys are flat top-level settings names matching the
   # frontend's own constants map (temperature/systemMessage/etc.), not
@@ -126,8 +142,7 @@ locals {
     http_port           = var.http_port
     context_size        = var.context_size
     threads              = var.threads
-    rpc_offload_layers   = var.rpc_offload_layers
-    rpc_servers          = local.rpc_servers
+    llama_rpc_flags      = local.llama_rpc_flags
     promtail_config      = local.promtail_config
     webui_config_json    = local.webui_config_json
     verify_proxy_source     = local.verify_proxy_source

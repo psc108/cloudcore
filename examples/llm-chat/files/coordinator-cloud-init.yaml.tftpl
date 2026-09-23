@@ -1,10 +1,13 @@
 #cloud-config
-# LLM chat coordinator — loads the GGUF model and splits its layers
-# across itself plus every RPC worker in ${rpc_servers} (llama.cpp's
-# own --rpc mechanism), serving both an OpenAI-compatible HTTP API and
-# llama-server's own built-in browser chat Web UI at GET / (enabled by
-# default — no extra flag needed, no custom frontend written here).
-# See worker-cloud-init.yaml.tftpl for the worker side and its own
+# LLM chat coordinator — loads the GGUF model, serving both an
+# OpenAI-compatible HTTP API and llama-server's own built-in browser
+# chat Web UI at GET / (enabled by default — no extra flag needed, no
+# custom frontend written here). When worker_peers is non-empty,
+# llama_rpc_flags (locals.tf) splits its layers across itself plus
+# every RPC worker (llama.cpp's own --rpc mechanism); left empty (the
+# genuinely, cleanly supported zero-workers case, not just an
+# accident) it runs every layer locally instead. See
+# worker-cloud-init.yaml.tftpl for the worker side and its own
 # security note on the RPC backend.
 apt_preserve_sources_list: true
 bootcmd:
@@ -151,7 +154,7 @@ write_files:
       [Service]
       WorkingDirectory=/opt/llama.cpp
       Environment=LD_LIBRARY_PATH=/opt/llama.cpp
-      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/${model_filename} --host 127.0.0.1 --port 8721 -c ${context_size} -ngl ${rpc_offload_layers} --rpc ${rpc_servers} -t ${threads} --webui-config-file /opt/llama.cpp/webui-config.json
+      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/${model_filename} --host 127.0.0.1 --port 8721 -c ${context_size} ${llama_rpc_flags}-t ${threads} --webui-config-file /opt/llama.cpp/webui-config.json
       Restart=on-failure
       RestartSec=5
       User=root
