@@ -155,6 +155,18 @@ write_files:
       Restart=on-failure
       RestartSec=5
       User=root
+      # F-119/F-125: a real, live-confirmed deadlock (RPC offloading's
+      # own upstream starvation bug, ggml-org/llama.cpp#28908) can wedge
+      # this process so completely it doesn't even respond to SIGTERM --
+      # confirmed live: systemd waited its own default 90s
+      # TimeoutStopSec, then had to SIGKILL every child process anyway.
+      # llama-server has no state worth a graceful shutdown for (a
+      # stateless inference server, no transactions/writes to flush), so
+      # there's nothing to lose by escalating fast -- this cuts a real
+      # recovery (whether triggered by verify_proxy.py's own watchdog or
+      # systemd's own Restart=on-failure after a crash) from ~90 extra
+      # seconds of dead time down to ~5.
+      TimeoutStopSec=5
 
       [Install]
       WantedBy=multi-user.target
