@@ -1111,6 +1111,34 @@ def _llm_stats_snapshot() -> dict:
     return snap
 
 
+def _log_ask_outcome(endpoint_label: str, outcome: str, duration_s: float,
+                      question_chars: int = 0, answer_chars: int = 0,
+                      continuation_rounds: int = 0, tokens=None, tps=None) -> None:
+    """One structured line per ask request, whatever happened to it --
+    direct request, prompted by a real incident (F-119/F-122 and
+    friends) where the only way to understand a student's own report
+    after the fact was live SSH into the coordinator mid-investigation.
+    _record_llm_stats() above only ever sees the SUCCESS case (it's fed
+    from llama-server's own timings block, which only exists on a
+    genuine completion) -- this covers every outcome, including the
+    ones that matter most for understanding a real failure: stalled,
+    disconnected, interrupted, upstream_unreachable, and
+    length_exhausted (hit MAX_CONTINUATION_ROUNDS without ever landing
+    a real "stop"). Plain print(..., flush=True) to stdout, same as
+    every other diagnostic line in this file -- captured by
+    verify-proxy.service's own journal (`journalctl -u verify-proxy`),
+    no new log file or service to manage. JSON, not a hand-rolled
+    key=value format, so a future analysis pass can just
+    json.loads() each ASK_OUTCOME line rather than write a parser."""
+    entry = {
+        "event": "ask_outcome", "endpoint": endpoint_label, "outcome": outcome,
+        "duration_s": round(duration_s, 2), "question_chars": question_chars,
+        "answer_chars": answer_chars, "continuation_rounds": continuation_rounds,
+        "tokens": tokens, "tokens_per_second": tps,
+    }
+    print(f"ASK_OUTCOME {json.dumps(entry)}", flush=True)
+
+
 # Phase 4 -- the interactive sandbox itself. Stdlib-rendered, no new
 # frontend framework, matching /examples' own convention. Plain
 # <textarea> for Stage 1 (see the Interactive Sandbox phased-
@@ -2296,6 +2324,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _do_handle_ask(self, interrupt_event, system_message: str, capture_source: str,
                         verify: bool, include_code: bool, endpoint_label: str):
+        ask_started_at = time.time()
         req_json = self._read_json_body()
         code = (req_json.get("code") or "").strip() if include_code else ""
         question = (req_json.get("question") or "").strip()
@@ -2320,10 +2349,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(f"verify-proxy: upstream unreachable after 3 attempts: {last_err}".encode())
+            _log_ask_outcome(endpoint_label, "upstream_unreachable", time.time() - ask_started_at,
+                              question_chars=len(user_turn))
             return
 
         self._relay_and_verify_stream(resp, messages, max_tokens, capture_source=capture_source,
-                                       interrupt=interrupt_event, verify=verify, conn=conn)
+                                       interrupt=interrupt_event, verify=verify, conn=conn,
+                                       endpoint_label=endpoint_label, question_chars=len(user_turn),
+                                       started_at=ask_started_at)
         conn.close()  # redundant once _relay_and_verify_stream closes it early -- harmless, idempotent
 
     def _open_upstream_completion(self, messages: list, max_tokens=None,
@@ -2497,7 +2530,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
                                   capture_source: str = "llm-chat-coordinator", interrupt=None,
-                                  verify: bool = True, conn=None):
+                                  verify: bool = True, conn=None, endpoint_label: str = "ask",
+                                  question_chars: int = 0, started_at=None):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -2507,6 +2541,27 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         text, finish_reason, stop_reason, last_chunk_meta, last_timings = \
             self._relay_one_stream(resp, interrupt)
         accumulated_text = [text]
+
+        # Found live, via a direct A/B comparison against the LB path:
+        # an upstream connection that gets accepted (a real HTTP
+        # response, status included) but whose body then closes with
+        # ZERO bytes -- no delta content, no finish_reason -- used to
+        # be silently treated as an ordinary, if content-free,
+        # "success": stop_reason stays None (the loop's own default)
+        # and finish_reason stays None (never "length", so the
+        # continuation loop correctly never enters either), so nothing
+        # in the rest of this function ever flagged it as wrong. The
+        # actual visible result was a bare "data: [DONE]" and nothing
+        # else -- exactly the confusing artifact a student reported
+        # live. This happens right as the backend is transitioning
+        # (e.g. mid-restart-cascade, see F-119/F-120's own Requires=
+        # chain) -- HAProxy's own health check correctly refuses to
+        # route to a backend in that state at all (a clean 503), but a
+        # direct connection can land in the split-second window where
+        # the TCP connect succeeds yet the process is already tearing
+        # its own response stream down.
+        if stop_reason is None and finish_reason is None and not text:
+            stop_reason = "empty_response"
 
         # Found live, chasing a real recurring stall: the caller
         # (_do_handle_ask) used to hold this connection open until this
@@ -2571,6 +2626,27 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             _record_llm_stats(last_chunk_meta.get("model"), last_timings)
 
         full_text = "".join(accumulated_text)
+
+        if started_at is not None:
+            # See _log_ask_outcome's own comment -- covers every real
+            # outcome, not just the success case _record_llm_stats above
+            # already captures. finish_reason == "length" with
+            # stop_reason still None is only reachable here at all
+            # because the continuation loop's own condition just exited
+            # it -- i.e. MAX_CONTINUATION_ROUNDS got exhausted (or a
+            # continuation round itself failed to reach the upstream).
+            if stop_reason:
+                outcome = stop_reason
+            elif finish_reason == "length":
+                outcome = "length_exhausted"
+            else:
+                outcome = "success"
+            _log_ask_outcome(endpoint_label, outcome, time.time() - started_at,
+                              question_chars=question_chars, answer_chars=len(full_text),
+                              continuation_rounds=continuation_rounds,
+                              tokens=(last_timings or {}).get("predicted_n"),
+                              tps=(last_timings or {}).get("predicted_per_second"))
+
         if stop_reason == "disconnected":
             return  # student navigated away mid-stream -- nothing more to do
         elif stop_reason == "interrupted":
@@ -2591,6 +2667,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "automatically restarted -- please try again in about a minute._\n",
                 last_chunk_meta)
             threading.Thread(target=_restart_llama_server, daemon=True).start()
+        elif stop_reason == "empty_response":
+            # See this function's own comment above on the exact
+            # accepted-connection-then-zero-bytes race this catches --
+            # told honestly rather than silently showing nothing. A
+            # plain retry is genuinely the right advice here (unlike
+            # "stalled", this isn't a hung backend needing a restart --
+            # it's a momentary transition window that's almost
+            # certainly already over by the time the student re-asks).
+            self._write_sse_delta(
+                "\n\n---\n_The model backend closed the connection unexpectedly "
+                "before answering (likely a momentary restart in progress) -- "
+                "please try again._\n", last_chunk_meta)
         elif verify:
             # Stage 8 -- verify=False (the Linux Q&A panel) skips this
             # whole block: no auto-execution of a suggested shell

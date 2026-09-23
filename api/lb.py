@@ -218,7 +218,23 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
             f"fall {hc.get('unhealthy_threshold', 3)}\n"
         )
 
-    http_opts = "    option  forwardfor\n    option  http-server-close\n" if mode == "http" else ""
+    # Direct request, prompted by chasing a real, still-unexplained
+    # silent request failure through the LB (a genuinely different
+    # failure mode than going straight to the backend -- see the
+    # comment on the 300s timeouts below): this LB previously had NO
+    # `log` directive at all, so nothing was ever recorded anywhere for
+    # a past incident to check against after the fact. Ubuntu's own
+    # haproxy package already ships /etc/rsyslog.d/49-haproxy.conf,
+    # routing anything with a "haproxy"-prefixed syslog programname
+    # into /var/log/haproxy.log -- confirmed live this file already
+    # exists, group-readable (adm) with no sudo needed -- so `log
+    # /dev/log local0` is enough to start populating it, no new syslog
+    # config required. option httplog gives full per-request detail
+    # (method, path, status, timers, which backend server handled it,
+    # termination reason) rather than just startup/error lines.
+    log_opts = "    log /dev/log local0\n"
+    http_opts = ("    option  forwardfor\n    option  http-server-close\n    option  httplog\n"
+                 if mode == "http" else "    option  tcplog\n")
 
     # Extra backend sections for all TGs referenced by routing rules
     extra_backends = "".join(
@@ -241,9 +257,11 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
             daemon
             pidfile {_pid_path(lb.id)}
             stats socket {_sock_path(lb.id)} mode 660 level admin
+    """) + log_opts + textwrap.dedent(f"""\
 
         defaults
             mode {mode}
+            log     global
             timeout connect 5s
             timeout client  300s
             timeout server  300s
