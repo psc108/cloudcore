@@ -2399,21 +2399,31 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             payload["max_tokens"] = max_tokens
         body = json.dumps(payload).encode()
 
-        # A short timeout, not the original 600s -- this governs every
-        # subsequent resp.read(1) too (see _relay_one_stream), which is
-        # what lets that loop periodically re-check GENERATION_STALL_
-        # TIMEOUT_S's own clock instead of blocking indefinitely.
-        # Confirmed live this doesn't false-positive on a merely-busy
-        # (not deadlocked) llama-server: a new request gets a slot
-        # assigned and starts streaming near-instantly even under real
-        # load -- the observed deadlock only ever blocks actual token
-        # generation, never the initial connect/response-headers phase.
+        # F-130: this used to be _SOCKET_POLL_TIMEOUT_S (5s), on the
+        # assumption that a timed-out resp.read(1) could just be caught
+        # and retried indefinitely -- confirmed live, via internal
+        # RELAY_DEBUG instrumentation and CPython's own socket.py
+        # source, that this was wrong: socket.SocketIO.readinto() sets
+        # self._timeout_occurred = True the FIRST time a real
+        # socket.timeout fires, and every subsequent read on that same
+        # file object raises OSError("cannot read from timed out
+        # object") *without ever calling recv() again* -- permanently,
+        # for the life of the connection, regardless of how long real
+        # content keeps arriving on the (perfectly healthy) underlying
+        # socket. That single stray timeout was effectively guaranteed
+        # on any real generation, since prefill alone routinely exceeds
+        # 5s -- this connection-level timeout is now large enough that
+        # a genuine socket.timeout() essentially never fires in
+        # practice; _relay_one_stream's own read loop instead uses
+        # select() to wait for actual readability, which operates on
+        # the raw fd and never touches this internal CPython state at
+        # all, so it stays the thing that makes the loop interruptible.
         conn = None
         last_err = None
         for attempt in range(3):
             try:
                 conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT,
-                                                    timeout=_SOCKET_POLL_TIMEOUT_S)
+                                                    timeout=GENERATION_STALL_TIMEOUT_S + 60)
                 conn.request("POST", "/v1/chat/completions", body=body,
                               headers={"Content-Type": "application/json",
                                        "Content-Length": str(len(body))})
@@ -2452,7 +2462,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
-    def _relay_one_stream(self, resp, interrupt=None) -> tuple:
+    def _relay_one_stream(self, resp, interrupt=None, sock=None) -> tuple:
         """Read one streamed /v1/chat/completions response chunk by
         chunk, forwarding each raw SSE line to the client as it arrives
         (so the browser sees one continuous typing effect regardless of
@@ -2466,13 +2476,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         relay one or more continuation rounds, or a verification block,
         first.
 
+        `sock` is the raw socket behind `resp` (conn.sock) -- see
+        F-130's own root-cause note above _open_upstream_completion's
+        connection timeout for why polling happens via select() on this
+        raw fd rather than via resp.read()'s own built-in timeout. If
+        `sock` is None (should not happen in practice, but defensive),
+        falls back to the old read-with-timeout behavior, which is
+        still correct for a genuinely fast response -- it just loses
+        the ability to survive one real stall-check wakeup.
+
         Returns (text, finish_reason, stop_reason, meta, timings), where
         stop_reason is None (finished normally), "interrupted" (the
         student's own Stop button), "disconnected" (the student
         navigated away -- a dead pipe, nothing left to write to), or
         "stalled" (no real content for over GENERATION_STALL_TIMEOUT_S
-        -- see that constant's own comment for the real, live-confirmed
-        llama-server/RPC deadlock this guards against)."""
+        -- a genuinely slow, not deadlocked, backend -- see F-129)."""
         accumulated = []
         last_chunk_meta: dict = {}
         last_timings: dict = {}
@@ -2482,31 +2500,53 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         loop_start = last_real_content_time
         poll_count = 0
         content_chunks = 0
-        _relay_debug(f"loop start, resp.status={getattr(resp, 'status', '?')}")
+        _relay_debug(f"loop start, resp.status={getattr(resp, 'status', '?')}, sock={'yes' if sock else 'NONE'}")
         while True:
             if interrupt is not None and interrupt.is_set():
                 _relay_debug(f"interrupted after {poll_count} polls, {content_chunks} content chunks")
                 return "".join(accumulated), finish_reason, "interrupted", last_chunk_meta, last_timings
+            if sock is not None:
+                # F-130 root cause, confirmed against CPython's own
+                # socket.py source: resp.read()'s underlying
+                # socket.SocketIO.readinto() sets self._timeout_occurred
+                # = True the FIRST time its own settimeout()-governed
+                # read genuinely times out, and every subsequent read on
+                # that same file object raises OSError("cannot read
+                # from timed out object") WITHOUT ever calling recv()
+                # again -- permanently, for the rest of the connection's
+                # life, regardless of how much real content keeps
+                # arriving on the (perfectly healthy) underlying socket.
+                # That single stray timeout was effectively guaranteed
+                # on any real generation (prefill alone routinely
+                # exceeds a few seconds), which is exactly why every
+                # slow-but-working response was misdiagnosed as
+                # "stalled" with zero content. select() on the raw fd
+                # never touches this internal state at all, so it's
+                # what actually provides the periodic wakeup now --
+                # _open_upstream_completion's own connection timeout is
+                # large enough that resp.read() itself essentially never
+                # times out in practice.
+                ready, _, _ = select.select([sock], [], [], _SOCKET_POLL_TIMEOUT_S)
+                if not ready:
+                    poll_count += 1
+                    elapsed_since_content = time.time() - last_real_content_time
+                    _relay_debug(f"poll #{poll_count} not readable, elapsed_since_content={elapsed_since_content:.1f}s, "
+                                 f"elapsed_total={time.time() - loop_start:.1f}s")
+                    if elapsed_since_content > GENERATION_STALL_TIMEOUT_S:
+                        _relay_debug(f"STALL declared after {poll_count} polls, {content_chunks} content chunks")
+                        return "".join(accumulated), finish_reason, "stalled", last_chunk_meta, last_timings
+                    continue
             try:
                 chunk = resp.read(1)
             except (socket.timeout, OSError) as e:
-                # Not necessarily a real failure -- resp's own socket
-                # timeout is deliberately short (_SOCKET_POLL_TIMEOUT_S)
-                # purely so this loop wakes up regularly to check the
-                # stall clock below, not because a few seconds of
-                # silence is itself meaningful (llama-server's own
-                # keep-alive pings, and ordinary inter-token gaps, are
-                # both well under GENERATION_STALL_TIMEOUT_S in normal
-                # operation). Found live: after the FIRST socket.timeout
-                # on a chunked-transfer response, http.client's own
-                # buffered reader latches into a state where every
-                # SUBSEQUENT timed-out read raises a plain OSError
-                # ("cannot read from timed out object"), not another
-                # socket.timeout -- a real stdlib quirk, not a genuine
-                # connection failure, so it's handled identically here
-                # rather than crashing the handler thread. A brief sleep
-                # avoids busy-looping in the (rarer) case this really is
-                # a broken/reset connection repeatedly raising instantly.
+                # Defensive fallback for sock=None only in ordinary
+                # operation -- see this function's own docstring. If
+                # this fires with sock set, resp.fp's own
+                # _timeout_occurred latch has already tripped (e.g.
+                # during the initial getresponse() headers read, before
+                # this loop ever started) and every future read on this
+                # object will raise the same way forever; nothing left
+                # to do but surface it as a stall rather than spin.
                 poll_count += 1
                 elapsed_since_content = time.time() - last_real_content_time
                 _relay_debug(f"poll #{poll_count} {e!r}, elapsed_since_content={elapsed_since_content:.1f}s, "
@@ -2586,7 +2626,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         text, finish_reason, stop_reason, last_chunk_meta, last_timings = \
-            self._relay_one_stream(resp, interrupt)
+            self._relay_one_stream(resp, interrupt, sock=conn.sock if conn else None)
         accumulated_text = [text]
 
         # Found live, via a direct A/B comparison against the LB path:
@@ -2650,7 +2690,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "\n\n_[Automatic continuation failed — the model backend became "
                     "unreachable. The answer above may be incomplete.]_\n", last_chunk_meta)
                 break
-            text, finish_reason, stop_reason, meta, timings = self._relay_one_stream(cresp, interrupt)
+            text, finish_reason, stop_reason, meta, timings = \
+                self._relay_one_stream(cresp, interrupt, sock=conn.sock if conn else None)
             conn.close()
             accumulated_text.append(text)
             if meta:
