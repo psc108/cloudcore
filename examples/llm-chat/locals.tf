@@ -41,6 +41,17 @@ locals {
     }
   } : {}
 
+  # Same shape again for the retrieval-grounding kiwix instance
+  # (F-132) — its own independent placement, empty (local) by default.
+  kiwix_placement_overrides = var.kiwix_peer_id != "" ? {
+    "01" = {
+      peer_id            = var.kiwix_peer_id
+      vpc_id             = var.kiwix_peer_vpc_id
+      subnet_id          = var.kiwix_peer_subnet_id
+      security_group_ids = [var.kiwix_peer_security_group_id]
+    }
+  } : {}
+
   worker_user_data = templatefile("${path.module}/files/worker-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256
@@ -49,12 +60,36 @@ locals {
     promtail_config    = local.promtail_config
   })
 
+  kiwix_user_data = templatefile("${path.module}/files/kiwix-cloud-init.yaml.tftpl", {
+    kiwix_port             = var.kiwix_port
+    kiwix_tools_version    = var.kiwix_tools_version
+    kiwix_tools_url        = var.kiwix_tools_url
+    kiwix_tools_sha256     = var.kiwix_tools_sha256
+    wikipedia_zim_filename = var.wikipedia_zim_filename
+    wikipedia_zim_url      = var.wikipedia_zim_url
+    wikipedia_zim_sha256   = var.wikipedia_zim_sha256
+    mankier_zim_filename   = var.mankier_zim_filename
+    mankier_zim_url        = var.mankier_zim_url
+    mankier_zim_sha256     = var.mankier_zim_sha256
+    archwiki_zim_filename  = var.archwiki_zim_filename
+    archwiki_zim_url       = var.archwiki_zim_url
+    archwiki_zim_sha256    = var.archwiki_zim_sha256
+    promtail_config        = local.promtail_config
+  })
+
   # The coordinator's own --rpc argument needs every worker's real
   # private IP — a genuine data dependency on module.workers, not a
   # hardcoded assumption: OpenTofu sequences this automatically (workers
   # are created, and their IPs known, before the coordinator's own
   # user_data is even rendered).
   rpc_servers = join(",", [for ip in module.workers.private_ips_list : "${ip}:${var.rpc_port}"])
+
+  # Same real data-dependency shape as rpc_servers above, for the
+  # retrieval-grounding kiwix instance (F-132) — the coordinator's own
+  # verify_proxy.py needs this real IP to query kiwix-serve's /search
+  # endpoint; OpenTofu sequences kiwix's own creation (and IP
+  # allocation) before the coordinator's user_data is rendered.
+  kiwix_host = module.kiwix.private_ips_list[0]
 
   # Direct request: keep worker_peers/RPC offloading fully intact for
   # later (better hardware), but make "coordinator alone, zero
@@ -164,6 +199,8 @@ locals {
     max_continuation_rounds = var.max_continuation_rounds
     generation_stall_timeout_seconds = var.generation_stall_timeout_seconds
     relay_debug                      = var.relay_debug ? "1" : "0"
+    kiwix_host                       = local.kiwix_host
+    kiwix_port                       = var.kiwix_port
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
     deployment_name           = local.coordinator_deployment_name

@@ -62,7 +62,9 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 UPSTREAM_HOST = "127.0.0.1"
 UPSTREAM_PORT = 8721
@@ -166,6 +168,114 @@ _RELAY_DEBUG = os.environ.get("RELAY_DEBUG", "0") == "1"
 def _relay_debug(msg: str) -> None:
     if _RELAY_DEBUG:
         print(f"RELAY_DEBUG [{time.time():.3f}] tid={threading.get_ident()}: {msg}", flush=True)
+
+# F-132: retrieval-grounding for Linux Help, direct request after a real
+# hallucination ("explain ring 3 in detail" claimed other applications
+# run in "different rings" -- they don't, every user app is Ring 3, only
+# the kernel differs). KIWIX_HOST empty (e.g. a template built before
+# this round, or kiwix_peer_id pointed somewhere unreachable) means
+# _kiwix_search() always returns "" -- grounding is strictly additive,
+# Linux Help must keep working exactly as before if it's ever missing.
+KIWIX_HOST = os.environ.get("KIWIX_HOST", "")
+KIWIX_PORT = int(os.environ.get("KIWIX_PORT", "8621"))
+_KIWIX_TIMEOUT_S = 3
+_KIWIX_TAG_RE = re.compile(r"<[^>]+>")
+
+# Found live verifying this same round's own retrieval mechanism: a
+# large-corpus full-text search engine is very sensitive to exact query
+# phrasing. The keyword-dense "ring 3 x86 privilege" correctly returns
+# "Protection ring" as the #1 hit; the SAME topic asked the way a real
+# student actually phrased it -- "explain ring 3 in detail" -- returns
+# Tolkien novels and pop songs instead (common words like "explain"/
+# "detail" swamp the ranking; confirmed the real article doesn't even
+# appear in the top 30 results for that phrasing). Stripping filler
+# words client-side doesn't reliably fix this either (tested: "ring 3"
+# alone matches boxing rankings). The one thing that does: asking the
+# model itself for a short, keyword-dense reformulation first.
+_SEARCH_TERMS_TIMEOUT_S = 30
+_SEARCH_TERMS_SYSTEM = (
+    "Extract 3-6 specific technical search keywords from the user's "
+    "question, suitable for a full-text search engine. Respond with "
+    "ONLY the keywords, space-separated, no punctuation, no "
+    "explanation. Prefer precise technical terms (protocol names, "
+    "command names, CPU/kernel terminology) over generic words."
+)
+
+
+def _extract_search_terms(question: str) -> str:
+    """One small, fast, non-streaming generation asking the model for a
+    keyword-dense reformulation of `question`, used as the kiwix search
+    pattern instead of the raw question text -- see the comment above
+    for why this is necessary, not just an optimization. Adds one
+    small round-trip of latency to this student's own request (the
+    busy-gate already holds this slot for them; no other student is
+    affected). Falls back to the raw question on ANY failure -- this
+    is a quality improvement, never a blocking dependency, matching
+    _kiwix_search's own defensive shape."""
+    try:
+        payload = {
+            "messages": [
+                {"role": "system", "content": _SEARCH_TERMS_SYSTEM},
+                {"role": "user", "content": question},
+            ],
+            "max_tokens": 32,
+            "stream": False,
+            "temperature": 0.1,
+        }
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
+            data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=_SEARCH_TERMS_TIMEOUT_S) as resp:
+            obj = json.loads(resp.read())
+        terms = obj["choices"][0]["message"]["content"].strip()
+        return terms if terms else question
+    except Exception as e:
+        print(f"verify-proxy: search-term extraction failed, using raw question: {e!r}", flush=True)
+        return question
+
+
+def _kiwix_search(search_pattern: str) -> str:
+    """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
+    ManKier man pages + ArchWiki, all three loaded into one instance --
+    see kiwix-cloud-init.yaml.tftpl) for real reference snippets
+    relevant to `search_pattern` (the output of _extract_search_terms(),
+    NOT the raw student question -- see that function's own comment for
+    why), returning a short block to prepend to the model's own prompt,
+    or "" if nothing useful came back. Never raises -- unreachable,
+    slow, or empty all just mean no grounding this turn, the same
+    defensive shape _open_upstream_completion() already uses for
+    llama-server itself. A short, hard timeout: this sits on the
+    critical path of every Linux Help question, so a slow/stuck kiwix
+    instance must never meaningfully delay -- let alone stall -- a real
+    answer over an optional accuracy improvement."""
+    if not KIWIX_HOST or not search_pattern:
+        return ""
+    try:
+        qs = urllib.parse.urlencode({"pattern": search_pattern, "format": "xml", "pageLength": 3})
+        url = f"http://{KIWIX_HOST}:{KIWIX_PORT}/search?{qs}"
+        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+            body = resp.read()
+        root = ET.fromstring(body)
+        lines = []
+        for item in root.findall(".//item")[:2]:
+            title_el = item.find("title")
+            desc_el = item.find("description")
+            if title_el is None or desc_el is None or not (desc_el.text or "").strip():
+                continue
+            title = (title_el.text or "").strip()
+            snippet = _KIWIX_TAG_RE.sub("", desc_el.text or "").strip()
+            book_title_el = item.find("book/title")
+            source = (book_title_el.text or "").strip() if book_title_el is not None else "Reference"
+            lines.append(f'[{source}] "{title}": {snippet}')
+        if not lines:
+            return ""
+        return ("Reference material (for fact-checking only -- explain in your own "
+                "words, and note plainly if this doesn't fully answer the question):\n"
+                + "\n".join(lines) + "\n\n")
+    except Exception as e:
+        print(f"verify-proxy: kiwix search failed, answering without grounding: {e!r}", flush=True)
+        return ""
 
 # How often _relay_one_stream's read loop wakes up (via a short socket
 # read timeout) to re-check the stall clock -- NOT the stall threshold
@@ -2360,8 +2470,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         user_turn = (f"Here is my current code:\n```python\n{code}\n```\n\n{question}"
                      if code else question)
+        # F-132: only Linux Help, not the coding Ask panel -- Wikipedia/
+        # man-page/ArchWiki content doesn't help code-execution questions,
+        # and grounding stays strictly additive to the model's own input
+        # (question_chars/history below stay based on the clean
+        # user_turn, not the grounded version actually sent). The raw
+        # question is reformulated into keyword-dense search terms
+        # first -- confirmed live that full-text search against a large
+        # corpus is too sensitive to natural phrasing otherwise (see
+        # _extract_search_terms's own comment for the real evidence).
+        if endpoint_label == "/sandbox/linux-ask":
+            search_terms = _extract_search_terms(question)
+            grounding = _kiwix_search(search_terms)
+        else:
+            grounding = ""
         messages = ([{"role": "system", "content": system_message}]
-                    + list(history) + [{"role": "user", "content": user_turn}])
+                    + list(history) + [{"role": "user", "content": grounding + user_turn}])
 
         conn, resp, last_err = self._open_upstream_completion(messages, max_tokens, endpoint_label)
         if resp is None:

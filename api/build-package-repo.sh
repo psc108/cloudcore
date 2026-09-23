@@ -146,6 +146,19 @@ declare -A ARTIFACT_URLS=(
   # This one dwarfs every other artifact in this list; skip it with
   # SKIP_ZIM=1 if disk space is a concern — everything else still builds.
   [wikipedia_en_top_nopic_2026-06.zim]="https://download.kiwix.org/zim/wikipedia/wikipedia_en_top_nopic_2026-06.zim"
+  # llm-chat's own retrieval-grounding backend (haFullStack-Findings-Log.md
+  # F-132) -- three real reference corpora kiwix-serve loads together,
+  # queried by verify_proxy.py's own _kiwix_search() before answering a
+  # Linux Help question. Full Wikipedia (nopic, ~49GB -- deliberately
+  # NOT the smaller "mini" flavour, which drops to abridged/summary
+  # article text; the whole point is depth, and _details:yes vs
+  # _details:no is a real, meaningful difference here), ManKier's own
+  # Linux man-page mirror (~190MB), and ArchWiki (~36MB). All three
+  # covered by the same SKIP_ZIM guard below as the top-articles ZIM
+  # above -- this list adds ~49GB total.
+  [wikipedia_en_all_nopic_2026-06.zim]="https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2026-06.zim"
+  [www.mankier.com_en_all_2026-07.zim]="https://download.kiwix.org/zim/zimit/www.mankier.com_en_all_2026-07.zim"
+  [archlinux_en_all_maxi_2026-07.zim]="https://download.kiwix.org/zim/other/archlinux_en_all_maxi_2026-07.zim"
   # distributed-llm — the llama.cpp CPU build (contains both llama-server,
   # the coordinator's own OpenAI-compatible HTTP server, and
   # ggml-rpc-server, the worker binary — one archive covers both roles).
@@ -231,6 +244,9 @@ declare -A ARTIFACT_URLS=(
 )
 if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_top_nopic_2026-06.zim]"
+  unset "ARTIFACT_URLS[wikipedia_en_all_nopic_2026-06.zim]"
+  unset "ARTIFACT_URLS[www.mankier.com_en_all_2026-07.zim]"
+  unset "ARTIFACT_URLS[archlinux_en_all_maxi_2026-07.zim]"
 fi
 if [ "${SKIP_LLM_MODEL:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]"

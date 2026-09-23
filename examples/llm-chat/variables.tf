@@ -710,3 +710,145 @@ variable "claude_debug_ssh_public_key" {
   type        = string
   default     = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBsvg7yGQHL+ezs9craT31EBXuZb9PzBLs3CX4/7tIii claude-debug@cloudcore"
 }
+
+# --- Retrieval-grounding for Linux Help (haFullStack-Findings-Log.md F-132) ----
+# Direct request: "explain ring 3 in detail" produced a fluent but
+# partly wrong answer (claimed other user applications run in
+# "different rings" -- they don't, every user app is Ring 3, only the
+# kernel differs). The system prompt already asks the model to hedge on
+# uncertain claims -- insufficient on its own, since the model can't
+# reliably introspect on which of its own claims are shaky. This wires
+# examples/kiwix-library's own already-proven kiwix-serve mechanism
+# into verify_proxy.py's Linux Help path so answers can be checked
+# against real reference text instead of reconstructed purely from the
+# model's own (quantized, compressed) weights.
+variable "kiwix_flavor" {
+  description = "Instance size for the kiwix retrieval-grounding instance. Sized for DISK, not CPU/RAM -- kiwix-serve itself is a lightweight, mostly-idle static binary that mmaps its ZIM files rather than loading them into RAM, but the three real content archives together need ~53GB, so standard.2xlarge (100GB disk) is the smallest existing flavor tier that actually fits; its 6 vCPU/16GB are real overkill for this workload, a known minor inefficiency of reusing the existing flavor table rather than a real cost concern."
+  type        = string
+  default     = "standard.2xlarge"
+}
+
+variable "kiwix_port" {
+  description = "Port the retrieval-grounding kiwix-serve instance listens on -- internal only (verify_proxy.py's own _kiwix_search() is its only real client), distinct from http_port/rpc_port/terminal_port."
+  type        = number
+  default     = 8621
+}
+
+variable "kiwix_tools_version" {
+  description = "kiwix-tools release -- same pinned version examples/kiwix-library already uses and already has cached on the host-level repo."
+  type        = string
+  default     = "3.8.2"
+}
+
+variable "kiwix_tools_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
+}
+
+variable "kiwix_tools_sha256" {
+  type    = string
+  default = "b0ae98dd344aa0469a15ab42feff6d5aafb79541a82fb4e2647c74b073123815"
+}
+
+# Full English Wikipedia, no pictures/video, but full article detail
+# (_details:yes in Kiwix's own catalog -- the "mini" flavour at a
+# fraction of the size drops to _details:no, abridged text, which risks
+# losing exactly the kind of depth that corrects a hallucination like
+# the ring-3 case above). Confirmed live via the real Kiwix catalog
+# (library.kiwix.org/catalog/v2/entries) and by testing the smaller,
+# already-cached "top articles" subset directly against the motivating
+# question -- "Protection ring" was the #1 result with genuinely
+# relevant, correct detail, confirming this general mechanism works
+# before committing to the much larger full corpus.
+variable "wikipedia_zim_filename" {
+  type    = string
+  default = "wikipedia_en_all_nopic_2026-06.zim"
+}
+
+variable "wikipedia_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/wikipedia_en_all_nopic_2026-06.zim"
+}
+
+variable "wikipedia_zim_sha256" {
+  description = "Confirmed by downloading the real file and re-hashing locally -- not trusted blindly from any upstream-published value."
+  type        = string
+  default     = "441a56d9e05b2d98f8ae9acb7986a513ed47904d73852c92dc6b7d50baa122e5"
+}
+
+# ManKier's own dedicated Linux man-page mirror -- chosen over the
+# alternative on the same catalog (devdocs_en_man, 29.6MB, a generic
+# programming-doc aggregator's own smaller curated slice) because this
+# sandbox is real Ubuntu 22.04 and ManKier mirrors real package man
+# pages comprehensively rather than a generic subset.
+variable "mankier_zim_filename" {
+  type    = string
+  default = "www.mankier.com_en_all_2026-07.zim"
+}
+
+variable "mankier_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/www.mankier.com_en_all_2026-07.zim"
+}
+
+variable "mankier_zim_sha256" {
+  type    = string
+  default = "4ee596a7a7aa1f9c645030f4f2ec3b40109cbc1dc9047a7fb25a12a9c69cc0e3"
+}
+
+# ArchWiki -- not explicitly requested, found alongside man pages while
+# scoping this out and included as a small (35.6MB), low-cost addition:
+# widely regarded as some of the best community Linux documentation
+# that exists, and most of it (kernel, systemd, filesystems,
+# networking) is distro-agnostic even though some content (pacman/AUR)
+# is Arch-specific and won't apply to this Ubuntu-based sandbox.
+variable "archwiki_zim_filename" {
+  type    = string
+  default = "archlinux_en_all_maxi_2026-07.zim"
+}
+
+variable "archwiki_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/archlinux_en_all_maxi_2026-07.zim"
+}
+
+variable "archwiki_zim_sha256" {
+  type    = string
+  default = "c3df551010a953d2c173af8d65a596a7ce434a7fa0771741bc800feeccad1942"
+}
+
+# --- Kiwix placement --------------------------------------------------------
+# Own, independent peer-placement variables (not hard-wired to
+# coordinator_peer_id) so this instance can be moved separately later if
+# co-location turns out to be the wrong call -- same shape as
+# coordinator_peer_id's own variables, applied to a different instance.
+# Full-text search against a pre-built Xapian index is fast and cheap
+# (nothing like running the model itself), so the sensible default is
+# whoever submits the build pointing this at the SAME peer as the
+# coordinator, for the lowest-latency retrieval hop -- not automatic,
+# since nothing in this codebase auto-inherits another resource's
+# placement (worker_peers/coordinator_peer_id are already independently
+# specified today).
+variable "kiwix_peer_id" {
+  description = "Approved peer to place the kiwix retrieval-grounding instance on instead of this host. Empty (default) keeps it local."
+  type        = string
+  default     = ""
+}
+
+variable "kiwix_peer_vpc_id" {
+  description = "The chosen kiwix_peer_id's own VPC. Ignored when kiwix_peer_id is empty."
+  type        = string
+  default     = ""
+}
+
+variable "kiwix_peer_subnet_id" {
+  description = "The chosen kiwix_peer_id's own subnet. Ignored when kiwix_peer_id is empty."
+  type        = string
+  default     = ""
+}
+
+variable "kiwix_peer_security_group_id" {
+  description = "The chosen kiwix_peer_id's own existing security group -- must allow kiwix_port from wherever the coordinator's own outbound traffic originates. Ignored when kiwix_peer_id is empty."
+  type        = string
+  default     = ""
+}

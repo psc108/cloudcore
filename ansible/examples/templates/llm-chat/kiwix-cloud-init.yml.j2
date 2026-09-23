@@ -1,0 +1,110 @@
+#cloud-config
+# Retrieval-grounding backend for Linux Help (haFullStack-Findings-Log.md
+# F-132 and onward) -- kiwix-serve (the same static, dependency-free
+# binary examples/kiwix-library already proves works) serving three
+# reference corpora over plain HTTP: full English Wikipedia (no
+# pictures, complete article text), ManKier's real Linux man-page
+# mirror, and ArchWiki. verify_proxy.py's own _kiwix_search() queries
+# this instance's /search endpoint before answering a Linux Help
+# question, so the model has real reference text to check itself
+# against instead of reconstructing everything from its own weights.
+#
+# Deliberately simpler than examples/kiwix-library's own cloud-init:
+# this instance is never opened directly in a browser (verify_proxy.py
+# is its only real client), so there's no placeholder "still building"
+# page and no public-facing load balancer -- verify_proxy.py's own
+# _kiwix_search() already degrades gracefully (skips grounding, answers
+# as before) if this instance isn't reachable yet or ever, the same
+# defensive shape _open_upstream_completion() already uses for
+# llama-server itself.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - curl
+  - ca-certificates
+  - promtail
+
+write_files:
+  - path: /etc/promtail/config.yml
+    content: |
+      {{ promtail_config | indent(6) }}
+
+  - path: /etc/systemd/system/kiwix-serve.service
+    content: |
+      [Unit]
+      Description=kiwix-serve — Linux Help retrieval-grounding backend (Wikipedia + man pages + ArchWiki)
+
+      [Service]
+      Type=simple
+      ExecStart=/opt/kiwix/kiwix-serve --port={{ kiwix_port }} --address=all --nodatealiases /opt/kiwix/data/{{ wikipedia_zim_filename }} /opt/kiwix/data/{{ mankier_zim_filename }} /opt/kiwix/data/{{ archwiki_zim_filename }}
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # F-073/F-072 promtail fix — see coordinator-cloud-init.yaml.tftpl's
+  # own identical comment for why this runs first, before anything
+  # else that might log.
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
+
+  # kiwix-serve itself: download, verify checksum, unpack. Statically
+  # linked — no runtime dependencies. Same stall-tolerant retry loop
+  # examples/kiwix-library's own cloud-init already established as
+  # necessary for this platform's guest networking.
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/kiwix-tools.tar.gz '{{ kiwix_tools_url }}' && break
+      echo "kiwix-tools download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ kiwix_tools_sha256 }}  /tmp/kiwix-tools.tar.gz' | sha256sum -c -
+  - [ mkdir, -p, /opt/kiwix/data ]
+  - [ sh, -c, "tar -xzf /tmp/kiwix-tools.tar.gz -C /tmp" ]
+  - [ sh, -c, "cp /tmp/kiwix-tools_linux-x86_64-{{ kiwix_tools_version }}/kiwix-serve /opt/kiwix/kiwix-serve" ]
+  - [ chmod, "755", /opt/kiwix/kiwix-serve ]
+  - [ rm, -rf, "/tmp/kiwix-tools_linux-x86_64-{{ kiwix_tools_version }}", /tmp/kiwix-tools.tar.gz ]
+
+  # Three content archives, same stall-tolerant download pattern.
+  # sha256 (not Kiwix's own usually-published MD5) — each file was
+  # downloaded once for real and re-hashed locally to confirm a
+  # byte-for-byte match, matching this project's own established
+  # pinned-artifact convention, rather than trusting a published
+  # checksum blindly.
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/{{ wikipedia_zim_filename }} '{{ wikipedia_zim_url }}' && break
+      echo "Wikipedia ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ wikipedia_zim_sha256 }}  /opt/kiwix/data/{{ wikipedia_zim_filename }}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/{{ mankier_zim_filename }} '{{ mankier_zim_url }}' && break
+      echo "ManKier ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ mankier_zim_sha256 }}  /opt/kiwix/data/{{ mankier_zim_filename }}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/{{ archwiki_zim_filename }} '{{ archwiki_zim_url }}' && break
+      echo "ArchWiki ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '{{ archwiki_zim_sha256 }}  /opt/kiwix/data/{{ archwiki_zim_filename }}' | sha256sum -c -
+
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, --now, kiwix-serve.service ]

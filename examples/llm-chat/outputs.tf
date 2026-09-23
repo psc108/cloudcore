@@ -17,3 +17,8 @@ output "worker_private_ips" {
   description = "Each worker's own private IP, keyed by two-digit index — the same addresses baked into the coordinator's own --rpc argument."
   value       = module.workers.private_ips_by_key
 }
+
+output "kiwix_search_url" {
+  description = "Direct URL to the retrieval-grounding kiwix-serve instance's own /search endpoint (F-132) — the same one verify_proxy.py's own _kiwix_search() queries. Useful for manually confirming corpus coverage: append ?pattern=<query>&format=xml. Not reachable from a browser off this build's own network without SSH access to the instance."
+  value       = "http://${local.kiwix_host}:${var.kiwix_port}/search"
+}

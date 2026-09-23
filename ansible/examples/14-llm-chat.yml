@@ -273,6 +273,60 @@
     coordinator_peer_subnet_id: ""
     coordinator_peer_security_group_id: ""
 
+    # --- Retrieval-grounding for Linux Help (haFullStack-Findings-Log.md
+    # F-132) --- direct request after a real hallucination ("explain
+    # ring 3 in detail" claimed other applications run in "different
+    # rings" -- wrong, every user app is Ring 3, only the kernel
+    # differs). kiwix-serve (the same binary examples/kiwix-library
+    # already proves works) serving three real reference corpora --
+    # full English Wikipedia (no pictures, full article detail -- the
+    # smaller "mini" flavour drops to abridged text, which risks losing
+    # exactly the kind of depth that corrects a hallucination like this
+    # one), ManKier's own Linux man-page mirror (chosen over the
+    # devdocs_en_man alternative -- this sandbox is real Ubuntu 22.04,
+    # ManKier mirrors real package man pages comprehensively rather than
+    # a generic doc-aggregator's smaller curated slice), and ArchWiki
+    # (not explicitly requested, included as a small 35.6MB addition --
+    # widely regarded as some of the best community Linux documentation
+    # that exists, mostly distro-agnostic).
+    #
+    # kiwix_flavor sized for DISK, not CPU/RAM -- kiwix-serve itself is
+    # a lightweight, mostly-idle static binary that mmaps its ZIM files
+    # rather than loading them into RAM, but the three archives together
+    # need ~53GB, so standard.2xlarge (100GB disk) is the smallest
+    # existing flavor tier that fits; its 6 vCPU/16GB are real overkill
+    # for this workload, a known minor inefficiency of reusing the
+    # existing flavor table rather than a real cost concern.
+    kiwix_flavor: standard.2xlarge
+    kiwix_port: 8621
+    kiwix_tools_version: "3.8.2"
+    kiwix_tools_url: "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
+    kiwix_tools_sha256: "b0ae98dd344aa0469a15ab42feff6d5aafb79541a82fb4e2647c74b073123815"
+    wikipedia_zim_filename: "wikipedia_en_all_nopic_2026-06.zim"
+    wikipedia_zim_url: "http://192.168.100.1:8090/jammy/artifacts/wikipedia_en_all_nopic_2026-06.zim"
+    # Confirmed by downloading the real file and re-hashing locally --
+    # not trusted blindly from any upstream-published value.
+    wikipedia_zim_sha256: "441a56d9e05b2d98f8ae9acb7986a513ed47904d73852c92dc6b7d50baa122e5"
+    mankier_zim_filename: "www.mankier.com_en_all_2026-07.zim"
+    mankier_zim_url: "http://192.168.100.1:8090/jammy/artifacts/www.mankier.com_en_all_2026-07.zim"
+    mankier_zim_sha256: "4ee596a7a7aa1f9c645030f4f2ec3b40109cbc1dc9047a7fb25a12a9c69cc0e3"
+    archwiki_zim_filename: "archlinux_en_all_maxi_2026-07.zim"
+    archwiki_zim_url: "http://192.168.100.1:8090/jammy/artifacts/archlinux_en_all_maxi_2026-07.zim"
+    archwiki_zim_sha256: "c3df551010a953d2c173af8d65a596a7ce434a7fa0771741bc800feeccad1942"
+
+    # Own, independent peer-placement (not auto-inherited from
+    # coordinator_peer_id -- nothing in this playbook auto-inherits
+    # another resource's placement, worker_peers/coordinator_peer_id
+    # are already independently specified today). Full-text search
+    # against a pre-built Xapian index is fast and cheap, so the
+    # sensible default is pointing this at the SAME peer as the
+    # coordinator for the lowest-latency retrieval hop -- not automatic,
+    # set both explicitly if that's wanted.
+    kiwix_peer_id: ""
+    kiwix_peer_vpc_id: ""
+    kiwix_peer_subnet_id: ""
+    kiwix_peer_security_group_id: ""
+
     # --- Phase 3: central learning corpus capture ---------------------
     # Fixed host-level address, same convention as promtail's own Loki
     # target — api/examples_listener.py's own dedicated, always-on bind,
@@ -577,6 +631,85 @@
       ansible.builtin.set_fact:
         rpc_servers: "{{ worker_poll.results | map(attribute='json.private_ip') | map('regex_replace', '$', ':' + (rpc_port | string)) | join(',') }}"
 
+    - name: Create kiwix security group (SSH + retrieval-grounding search API)
+      cloudcore.cloudcore.security_group:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-kiwix"
+        vpc_id: "{{ vpc.vpc.id }}"
+        description: "LLM chat retrieval-grounding (kiwix-serve) — SSH + search API, scoped to admin_cidr"
+        ingress_rules:
+          - protocol: tcp
+            from_port: 22
+            to_port: 22
+            cidr: "{{ admin_cidr }}"
+          - protocol: tcp
+            from_port: "{{ kiwix_port }}"
+            to_port: "{{ kiwix_port }}"
+            cidr: "{{ admin_cidr }}"
+        egress_rules:
+          - protocol: "-1"
+            cidr: 0.0.0.0/0
+      register: kiwix_sg
+
+    - name: Render kiwix user_data
+      ansible.builtin.set_fact:
+        kiwix_user_data: "{{ lookup('template', 'templates/llm-chat/kiwix-cloud-init.yml.j2', template_vars={
+          'kiwix_port': kiwix_port,
+          'kiwix_tools_version': kiwix_tools_version,
+          'kiwix_tools_url': kiwix_tools_url,
+          'kiwix_tools_sha256': kiwix_tools_sha256,
+          'wikipedia_zim_filename': wikipedia_zim_filename,
+          'wikipedia_zim_url': wikipedia_zim_url,
+          'wikipedia_zim_sha256': wikipedia_zim_sha256,
+          'mankier_zim_filename': mankier_zim_filename,
+          'mankier_zim_url': mankier_zim_url,
+          'mankier_zim_sha256': mankier_zim_sha256,
+          'archwiki_zim_filename': archwiki_zim_filename,
+          'archwiki_zim_url': archwiki_zim_url,
+          'archwiki_zim_sha256': archwiki_zim_sha256,
+          'promtail_config': promtail_config }) }}"
+
+    - name: Create kiwix instance (retrieval-grounding backend, F-132)
+      # vpc_id/subnet_id/security_group_ids/peer_id fall back to this
+      # build's own local resources when kiwix_peer_id is empty (the
+      # default) — otherwise switch to the chosen peer's own existing
+      # catalogue entries, same pattern the coordinator's own placement
+      # already proves works.
+      cloudcore.cloudcore.instance:
+        api_url: "{{ cloudcore_api_url }}"
+        api_token: "{{ cloudcore_api_token }}"
+        name: "{{ project }}-{{ env }}-{{ build_suffix }}-llm-chat-kiwix"
+        image_id: ubuntu-22.04
+        flavor: "{{ kiwix_flavor }}"
+        vpc_id: "{{ kiwix_peer_vpc_id if kiwix_peer_id else vpc.vpc.id }}"
+        subnet_id: "{{ kiwix_peer_subnet_id if kiwix_peer_id else 'subnet-local-01' }}"
+        security_group_ids: ["{{ kiwix_peer_security_group_id if kiwix_peer_id else kiwix_sg.security_group.id }}"]
+        peer_id: "{{ kiwix_peer_id }}"
+        user_data: "{{ kiwix_user_data }}"
+        users: "{{ claude_debug_users }}"
+        tags:
+          Environment: "{{ env }}"
+          Project: "{{ project }}"
+          Owner: "{{ default_owner }}"
+          ManagedBy: ansible
+          Role: llm-chat-kiwix
+      register: kiwix
+
+    - name: Wait for kiwix to reach running
+      ansible.builtin.uri:
+        url: "{{ cloudcore_api_url }}/v1/instances/{{ kiwix.instance.id }}"
+        headers:
+          Authorization: "Bearer {{ cloudcore_api_token }}"
+      register: kiwix_poll
+      until: kiwix_poll.json.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: Capture kiwix's real private IP for the coordinator's own verify-proxy.service
+      ansible.builtin.set_fact:
+        kiwix_host: "{{ kiwix_poll.json.private_ip }}"
+
     # Direct request: keep worker_peers/RPC offloading fully intact for
     # later (better hardware), but make "coordinator alone, zero
     # workers" a genuinely, cleanly supported configuration right now.
@@ -642,6 +775,8 @@
           'max_continuation_rounds': max_continuation_rounds,
           'generation_stall_timeout_seconds': generation_stall_timeout_seconds,
           'relay_debug': relay_debug,
+          'kiwix_host': kiwix_host,
+          'kiwix_port': kiwix_port,
           'examples_api_base': examples_api_base,
           'examples_ingestion_token': examples_ingestion_token,
           'deployment_name': deployment_name,

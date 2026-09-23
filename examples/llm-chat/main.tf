@@ -97,6 +97,21 @@ module "security_groups" {
         all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
       }
     }
+    # Retrieval-grounding backend (F-132) — SSH + kiwix-serve's own
+    # port, scoped to admin_cidr same as the coordinator's own SG.
+    # Only used when kiwix stays local; a peer-placed kiwix instance
+    # uses kiwix_peer_security_group_id (that peer's own existing SG)
+    # instead, same pattern coordinator_peer_id already established.
+    "kiwix${local.sfx}" = {
+      description = "LLM chat retrieval-grounding (kiwix-serve) — SSH + search API, scoped to admin_cidr"
+      ingress_rules = {
+        ssh   = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+        kiwix = { ip_protocol = "tcp", from_port = var.kiwix_port, to_port = var.kiwix_port, cidr = var.admin_cidr }
+      }
+      egress_rules = {
+        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
+      }
+    }
   }
 }
 
@@ -121,6 +136,30 @@ module "coordinator" {
   placement_overrides = local.coordinator_placement_overrides
   user_data          = local.coordinator_user_data
   users              = local.claude_debug_users
+}
+
+# Retrieval-grounding backend (F-132) — kiwix-serve, queried by
+# verify_proxy.py's own _kiwix_search() before answering a Linux Help
+# question. Own independent placement (kiwix_peer_id), defaulting to
+# local same as the coordinator — see kiwix_peer_id's own comment for
+# why this isn't auto-inherited from coordinator_peer_id.
+module "kiwix" {
+  source = "../../modules/instance-group"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  name                = "llm-chat-kiwix${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.kiwix_flavor
+  count_instances     = 1
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["chat${local.sfx}"]
+  security_group_ids  = module.security_groups.security_group_ids_list
+  placement_overrides = local.kiwix_placement_overrides
+  user_data           = local.kiwix_user_data
+  users               = local.claude_debug_users
 }
 
 # Every worker is peer-placed — there's no "local anchor" instance here
