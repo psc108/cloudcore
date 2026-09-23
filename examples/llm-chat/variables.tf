@@ -77,10 +77,25 @@ variable "coordinator_flavor" {
   default     = "standard.large"
 }
 
+
+# Direct live incident: a worker running at standard.xlarge (8GB)
+# crashed (ggml_abort(), "Remote RPC server crashed or returned
+# malformed response") holding 34 offloaded layers of the 14B model --
+# `free -h` on the worker at the time showed only ~1.7GB free out of
+# 7.8GB total, with the rpc-server process itself already using ~5GB
+# just for its own share of the model + KV cache. The comment above
+# sized this flavor by matching the peer's real CORE count (8) when
+# worker_flavor was first split from coordinator_flavor -- but that
+# was before the model default stepped up from 7B to 14B (see this
+# file's own comment on model_filename), and the RAM figure was never
+# revisited after that jump. standard.2xlarge (16GB) restores a real,
+# comfortable margin -- confirmed live via GET /v1/peers/<id>/stats
+# that llwyn-y-groes genuinely has 17GB+ available right now, so this
+# isn't oversubscribing the host, just correcting a stale default.
 variable "worker_flavor" {
   description = "Compute flavor for each RPC worker instance. Workers are peer-placed, and api/capacity_gate.py checks the target peer's own real capacity before the build is submitted, so this can safely be sized larger than coordinator_flavor when a peer genuinely has the cores/RAM for it."
   type        = string
-  default     = "standard.xlarge"
+  default     = "standard.2xlarge"
 }
 
 variable "admin_cidr" {

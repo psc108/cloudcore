@@ -107,7 +107,7 @@ func (r *NFSServerResource) Schema(ctx context.Context, _ resource.SchemaRequest
 				Description: "Compute flavor for the NFS server VM. Defaults to standard.medium.",
 				Default:     stringdefault.StaticString("standard.medium"),
 				Validators: []validator.String{
-					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large", "standard.xlarge"),
+					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large", "standard.xlarge", "standard.2xlarge"),
 				},
 			},
 			"disk_gb": schema.Int64Attribute{

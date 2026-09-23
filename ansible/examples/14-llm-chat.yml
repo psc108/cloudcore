@@ -76,8 +76,19 @@
     # Every worker peer's own real available RAM is still checked
     # against whichever worker_flavor is chosen BEFORE the build is
     # even submitted (api/capacity_gate.py) regardless.
+    #
+    # Direct live incident: a worker at standard.xlarge (8GB) crashed
+    # (ggml_abort(), "Remote RPC server crashed or returned malformed
+    # response") holding 34 offloaded layers of the 14B model -- only
+    # ~1.7GB free out of 7.8GB total at the time, with the rpc-server
+    # process itself already using ~5GB. This flavor was sized by
+    # matching the peer's real 8 cores when worker_flavor was first
+    # split from coordinator_flavor, before the model default stepped
+    # up from 7B to 14B -- the RAM figure was never revisited after
+    # that jump. standard.2xlarge (16GB) restores real headroom;
+    # confirmed live the paired peer genuinely has 17GB+ available.
     coordinator_flavor: standard.large
-    worker_flavor: standard.xlarge
+    worker_flavor: standard.2xlarge
 
     # llama.cpp's own -ngl flag means "how many of the model's layers to
     # offload to non-CPU backends" (GPU normally, but --rpc's own workers

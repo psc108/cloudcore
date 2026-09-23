@@ -116,9 +116,9 @@ func (r *InstanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			"image_id": schema.StringAttribute{Required: true, Description: "OS image identifier to boot from."},
 			"flavor": schema.StringAttribute{
 				Required:    true,
-				Description: "Compute flavor: standard.nano, standard.small, standard.medium, standard.large, or standard.xlarge.",
+				Description: "Compute flavor: standard.nano, standard.small, standard.medium, standard.large, standard.xlarge, or standard.2xlarge.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large", "standard.xlarge"),
+					stringvalidator.OneOf("standard.nano", "standard.small", "standard.medium", "standard.large", "standard.xlarge", "standard.2xlarge"),
 				},
 			},
 			"vpc_id": schema.StringAttribute{
