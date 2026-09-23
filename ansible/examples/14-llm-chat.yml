@@ -198,17 +198,22 @@
     # triggered by a truncated response instead of a failed execution.
     max_continuation_rounds: 3
 
-    # Found live while verifying the continuation feature above: a real
-    # generation can silently DEADLOCK inside llama-server's own thread
-    # scheduling when RPC offloading (worker_peers) is in play —
-    # confirmed via /proc/<pid>/task/*/stack on both the coordinator and
-    # the worker that every llama-server thread except its plain HTTP
-    # listener sits genuinely stuck (futex_wait), while the RPC worker
-    # itself sits healthily idle waiting for a request that never comes.
-    # A real bug in llama-server/ggml-rpc itself, not fixable from this
-    # deployment's own code — verify_proxy.py can only detect it and
-    # self-heal the service for whoever asks next.
-    generation_stall_timeout_seconds: 120
+    # F-129 correction: earlier /proc/<pid>/task/*/stack snapshots that
+    # looked like a permanent llama-server/ggml-rpc deadlock were, as far
+    # as this deployment has been able to confirm, genuinely slow,
+    # in-progress work, not a hang — a direct request to llama-server,
+    # bypassing this whole watchdog, completed successfully with real
+    # content after 297s; llama-server's own timings object put prefill
+    # alone at 142.6s (4.03 tok/s) for the real production system-message
+    # length, already past the old 120s default before a single token
+    # could exist. Raw network throughput (20MB in 0.9s) rules out link
+    # bandwidth — this is compute-bound (a large model, RPC-split
+    # compute, a coordinator host under real contention), not a protocol
+    # bug. Raised well above the measured 297s worst case. See
+    # haFullStack-Findings-Log.md F-129/F-130 — this alone does not
+    # guarantee a working end-to-end answer (F-130 is a separate, still-
+    # open issue in verify_proxy.py's own relay).
+    generation_stall_timeout_seconds: 420
 
     # One entry per RPC worker instance — the whole point of this
     # playbook. Each worker is pinned to a specific paired peer (see the

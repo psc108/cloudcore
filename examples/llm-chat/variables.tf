@@ -344,24 +344,26 @@ variable "max_continuation_rounds" {
   default     = 3
 }
 
-# Found live while verifying the continuation feature above: a real
-# generation can silently DEADLOCK inside llama-server's own thread
-# scheduling when RPC offloading (worker_peers) is in play -- confirmed
-# via /proc/<pid>/task/*/stack on both the coordinator and the worker
-# that every llama-server thread except its plain HTTP listener sits
-# genuinely stuck (futex_wait), not doing real compute or I/O, while
-# the RPC worker itself sits healthily idle waiting for a request that
-# never comes. Once this happens the whole coordinator is wedged for
-# every future request, not just the one that triggered it -- a real
-# bug in llama-server/ggml-rpc itself (documented upstream as an
-# experimental, not fully hardened backend), not something fixable
-# from this deployment's own code. verify_proxy.py can only detect it
-# and self-heal the service for whoever asks next (see its own
-# GENERATION_STALL_TIMEOUT_S comment for the full mechanism).
+# F-129 correction: earlier /proc/<pid>/task/*/stack snapshots (F-118,
+# F-128) that looked like a permanent llama-server/ggml-rpc deadlock
+# were, as far as this deployment has been able to confirm, genuinely
+# slow, in-progress work, not a hang -- a direct request to
+# llama-server, bypassing this whole watchdog, completed successfully
+# with real content after 297s; llama-server's own `timings` object
+# put prefill alone at 142.6s (4.03 tok/s) for the real production
+# system-message length, already past the old 120s default before a
+# single token could exist. Raw network throughput (20MB in 0.9s)
+# rules out link bandwidth -- this is compute-bound (a large model,
+# RPC-split compute, and a coordinator host under real contention),
+# not a protocol bug. Raised well above the measured 297s worst case.
+# See haFullStack-Findings-Log.md F-129/F-130 -- this alone does not
+# guarantee a working end-to-end answer (F-130 is a separate, still-
+# open issue in verify_proxy.py's own relay), only that a genuinely
+# slow-but-successful response isn't killed before it can finish.
 variable "generation_stall_timeout_seconds" {
-  description = "How long a response can go with zero real content (not just any byte -- llama-server's own SSE keep-alive pings keep the raw connection alive even while fully deadlocked) before verify_proxy.py treats it as a stalled/deadlocked llama-server and automatically restarts llama-server.service in the background. Well above this platform's own measured worst-case per-token latency so a merely-slow response is never misdiagnosed as stuck."
+  description = "How long a response can go with zero real content (not just any byte -- llama-server's own SSE keep-alive pings keep the raw connection alive even during a long, legitimate prefill/generation) before verify_proxy.py treats it as stalled and automatically restarts llama-server.service in the background. Set with real margin above this platform's own measured worst-case total latency (prefill + generation) for a realistic prompt, not just per-token latency -- see F-129's own direct timing measurement."
   type        = number
-  default     = 120
+  default     = 420
 }
 
 # One entry per RPC worker instance — the whole point of this template.
