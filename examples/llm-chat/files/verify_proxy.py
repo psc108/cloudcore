@@ -2323,8 +2323,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         self._relay_and_verify_stream(resp, messages, max_tokens, capture_source=capture_source,
-                                       interrupt=interrupt_event, verify=verify)
-        conn.close()
+                                       interrupt=interrupt_event, verify=verify, conn=conn)
+        conn.close()  # redundant once _relay_and_verify_stream closes it early -- harmless, idempotent
 
     def _open_upstream_completion(self, messages: list, max_tokens=None,
                                    endpoint_label: str = "ask") -> tuple:
@@ -2497,7 +2497,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
                                   capture_source: str = "llm-chat-coordinator", interrupt=None,
-                                  verify: bool = True):
+                                  verify: bool = True, conn=None):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -2507,6 +2507,23 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         text, finish_reason, stop_reason, last_chunk_meta, last_timings = \
             self._relay_one_stream(resp, interrupt)
         accumulated_text = [text]
+
+        # Found live, chasing a real recurring stall: the caller
+        # (_do_handle_ask) used to hold this connection open until this
+        # whole function returned, meaning it stayed open through every
+        # continuation round below -- each of which opens its OWN
+        # separate connection to llama-server, on top of this
+        # already-fully-consumed one. Two connections open at once is
+        # exactly the kind of concurrent-connection condition F-119's
+        # own #28908 starvation bug is triggered by, self-inflicted by
+        # this feature rather than just an unlucky collision. This
+        # response's own body is fully read at this point (whatever
+        # stop_reason/finish_reason came back), so nothing further
+        # needs it -- close it now, immediately, same as every
+        # continuation round already closes its own conn right after
+        # its own _relay_one_stream call returns, not at the very end.
+        if conn is not None:
+            conn.close()
 
         # Direct report: real answers were regularly cut off mid-word by
         # llama-server's own context_size ceiling, not a genuine model
