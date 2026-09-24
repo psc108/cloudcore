@@ -181,6 +181,23 @@ KIWIX_PORT = int(os.environ.get("KIWIX_PORT", "8621"))
 _KIWIX_TIMEOUT_S = 3
 _KIWIX_TAG_RE = re.compile(r"<[^>]+>")
 
+# Direct follow-up, after confirming grounding actually worked on a real
+# question: "are we able to tell what resources the llama server used"
+# -- the honest answer was "probably, but not provably" (only failures
+# were ever logged). This round: grounding extended to the coding Ask
+# panel too (not just Linux Help), and every completed ask on either
+# panel is now pushed to Sentinel -- a fixed, pre-existing host-level
+# service (unlike kiwix, not something this template provisions itself,
+# so a plain host/port pair with a real default rather than a module
+# output). Empty SENTINEL_HOST would disable the push the same way
+# empty KIWIX_HOST disables search -- not currently offered as a toggle
+# since Sentinel is always expected to be present, but the same "just
+# returns/no-ops" shape is kept for consistency and so a build that
+# genuinely doesn't have Sentinel reachable degrades the same way.
+SENTINEL_HOST = os.environ.get("SENTINEL_HOST", "")
+SENTINEL_PORT = int(os.environ.get("SENTINEL_PORT", "8900"))
+_SENTINEL_PUSH_TIMEOUT_S = 5
+
 # Found live verifying this same round's own retrieval mechanism: a
 # large-corpus full-text search engine is very sensitive to exact query
 # phrasing. The keyword-dense "ring 3 x86 privilege" correctly returns
@@ -235,22 +252,27 @@ def _extract_search_terms(question: str) -> str:
         return question
 
 
-def _kiwix_search(search_pattern: str) -> str:
+def _kiwix_search(search_pattern: str) -> tuple[str, list[dict]]:
     """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
     ManKier man pages + ArchWiki, all three loaded into one instance --
     see kiwix-cloud-init.yaml.tftpl) for real reference snippets
     relevant to `search_pattern` (the output of _extract_search_terms(),
     NOT the raw student question -- see that function's own comment for
-    why), returning a short block to prepend to the model's own prompt,
-    or "" if nothing useful came back. Never raises -- unreachable,
-    slow, or empty all just mean no grounding this turn, the same
-    defensive shape _open_upstream_completion() already uses for
-    llama-server itself. A short, hard timeout: this sits on the
-    critical path of every Linux Help question, so a slow/stuck kiwix
-    instance must never meaningfully delay -- let alone stall -- a real
-    answer over an optional accuracy improvement."""
+    why). Returns (block, references): `block` is a short prompt-ready
+    string to prepend to the model's own prompt (or "" if nothing useful
+    came back), `references` is the same hits as a list of
+    {source, title, snippet} dicts -- kept separate rather than
+    re-parsed later so _log_grounding() (see its own comment) can record
+    exactly what was actually shown to the model, not a re-derived
+    guess. Never raises -- unreachable, slow, or empty all just mean no
+    grounding this turn, the same defensive shape
+    _open_upstream_completion() already uses for llama-server itself. A
+    short, hard timeout: this sits on the critical path of every ask
+    request, so a slow/stuck kiwix instance must never meaningfully
+    delay -- let alone stall -- a real answer over an optional accuracy
+    improvement."""
     if not KIWIX_HOST or not search_pattern:
-        return ""
+        return "", []
     try:
         qs = urllib.parse.urlencode({"pattern": search_pattern, "format": "xml", "pageLength": 3})
         url = f"http://{KIWIX_HOST}:{KIWIX_PORT}/search?{qs}"
@@ -258,6 +280,7 @@ def _kiwix_search(search_pattern: str) -> str:
             body = resp.read()
         root = ET.fromstring(body)
         lines = []
+        references = []
         for item in root.findall(".//item")[:2]:
             title_el = item.find("title")
             desc_el = item.find("description")
@@ -268,14 +291,69 @@ def _kiwix_search(search_pattern: str) -> str:
             book_title_el = item.find("book/title")
             source = (book_title_el.text or "").strip() if book_title_el is not None else "Reference"
             lines.append(f'[{source}] "{title}": {snippet}')
+            references.append({"source": source, "title": title, "snippet": snippet})
         if not lines:
-            return ""
-        return ("Reference material (for fact-checking only -- explain in your own "
-                "words, and note plainly if this doesn't fully answer the question):\n"
-                + "\n".join(lines) + "\n\n")
+            return "", []
+        return (("Reference material (for fact-checking only -- explain in your own "
+                 "words, and note plainly if this doesn't fully answer the question):\n"
+                 + "\n".join(lines) + "\n\n"), references)
     except Exception as e:
         print(f"verify-proxy: kiwix search failed, answering without grounding: {e!r}", flush=True)
-        return ""
+        return "", []
+
+
+def _push_grounding_to_sentinel(entry: dict) -> None:
+    """Best-effort POST of one grounding-log entry to Sentinel's own
+    /api/grounding-log -- same shape as api/scheduler.py's own
+    _sentinel_post() (plain urllib, no auth header, matching that
+    endpoint's own already-established precedent). Always called from a
+    background thread (see _log_grounding below), never on the request-
+    handling path itself, so a slow or unreachable Sentinel can never
+    add latency to -- let alone block -- the student's own answer."""
+    try:
+        body = json.dumps(entry).encode()
+        req = urllib.request.Request(
+            f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/grounding-log",
+            data=body, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=_SENTINEL_PUSH_TIMEOUT_S).close()
+    except Exception as e:
+        print(f"verify-proxy: Sentinel grounding-log push failed (non-fatal): {e!r}", flush=True)
+
+
+def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms: str,
+                    references: list, code_verified) -> None:
+    """Records what actually happened for one completed ask -- the
+    search terms used, what (if anything) kiwix found, and for the
+    coding panel, whether its own execution-verification passed. Direct
+    follow-up to confirming grounding worked on a real question ("are
+    we able to tell what resources the llama server used") -- until
+    now only kiwix *failures* were ever logged (see _kiwix_search's own
+    comment), never what was actually used on success. Called for
+    every completed ask on either panel (grounded=False is itself real,
+    useful data -- "no reference material existed for this question"),
+    from _relay_and_verify_stream() once the full answer text (and, for
+    the coding panel, its own verification outcome) are known -- not
+    from _do_handle_ask() right after the search, so the record
+    reflects the whole turn, not just the retrieval step.
+
+    Two channels, both best-effort: a GROUNDING_LOG line to stdout,
+    matching ASK_OUTCOME's own convention exactly (flows to Loki via
+    the same journald->Promtail pipeline already proven zero-extra-work
+    in F-132's own history) for local/Grafana visibility; and a direct
+    push to Sentinel's own DB (see _push_grounding_to_sentinel), off
+    the request-handling thread, for a queryable, browsable record --
+    Sentinel's own Loki-polling watch loop is purpose-built for
+    trouble-detection windows, not a general audit trail, so this
+    mirrors the *other* existing precedent instead (api/scheduler.py's
+    own direct pushes to /api/kb/import et al)."""
+    entry = {
+        "endpoint": endpoint_label, "question": question, "answer": answer,
+        "search_terms": search_terms, "references": references,
+        "grounded": bool(references), "code_verified": code_verified,
+    }
+    print(f"GROUNDING_LOG {json.dumps(entry)}", flush=True)
+    if SENTINEL_HOST:
+        threading.Thread(target=_push_grounding_to_sentinel, args=(entry,), daemon=True).start()
 
 # How often _relay_one_stream's read loop wakes up (via a short socket
 # read timeout) to re-check the stall clock -- NOT the stall threshold
@@ -2487,20 +2565,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         user_turn = (f"Here is my current code:\n```python\n{code}\n```\n\n{question}"
                      if code else question)
-        # F-132: only Linux Help, not the coding Ask panel -- Wikipedia/
-        # man-page/ArchWiki content doesn't help code-execution questions,
-        # and grounding stays strictly additive to the model's own input
+        # Grounding stays strictly additive to the model's own input
         # (question_chars/history below stay based on the clean
         # user_turn, not the grounded version actually sent). The raw
         # question is reformulated into keyword-dense search terms
         # first -- confirmed live that full-text search against a large
         # corpus is too sensitive to natural phrasing otherwise (see
         # _extract_search_terms's own comment for the real evidence).
-        if endpoint_label == "/sandbox/linux-ask":
-            search_terms = _extract_search_terms(question)
-            grounding = _kiwix_search(search_terms)
-        else:
-            grounding = ""
+        # Originally Linux Help only (F-132: Wikipedia/man-page/ArchWiki
+        # content was judged unlikely to help code-execution questions);
+        # extended to the coding panel too per direct request, on the
+        # same defensive shape -- a question this corpus genuinely has
+        # nothing for still costs one small extraction round-trip, but
+        # never blocks or degrades the answer either way.
+        search_terms = _extract_search_terms(question)
+        grounding, references = _kiwix_search(search_terms)
         messages = ([{"role": "system", "content": system_message}]
                     + list(history) + [{"role": "user", "content": grounding + user_turn}])
 
@@ -2517,7 +2596,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._relay_and_verify_stream(resp, messages, max_tokens, capture_source=capture_source,
                                        interrupt=interrupt_event, verify=verify, conn=conn,
                                        endpoint_label=endpoint_label, question_chars=len(user_turn),
-                                       started_at=ask_started_at)
+                                       started_at=ask_started_at, question=question,
+                                       search_terms=search_terms, references=references)
         conn.close()  # redundant once _relay_and_verify_stream closes it early -- harmless, idempotent
 
     def _open_upstream_completion(self, messages: list, max_tokens=None,
@@ -2759,7 +2839,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _relay_and_verify_stream(self, resp, request_messages: list, request_max_tokens=None,
                                   capture_source: str = "llm-chat-coordinator", interrupt=None,
                                   verify: bool = True, conn=None, endpoint_label: str = "ask",
-                                  question_chars: int = 0, started_at=None):
+                                  question_chars: int = 0, started_at=None, question: str = "",
+                                  search_terms: str = "", references: list | None = None):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -2876,6 +2957,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                               tokens=(last_timings or {}).get("predicted_n"),
                               tps=(last_timings or {}).get("predicted_per_second"))
 
+        capture = None  # only the verify branch below ever sets this -- see _log_grounding's own call
         if stop_reason == "disconnected":
             return  # student navigated away mid-stream -- nothing more to do
         elif stop_reason == "interrupted":
@@ -2921,6 +3003,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                                         max_tokens=request_max_tokens, interrupt=interrupt)
                 self._write_sse_delta(extra, last_chunk_meta)
                 capture_example(request_messages, capture, source=capture_source)
+
+        # stop_reason == "disconnected" already returned above, before
+        # this point -- unreachable here, so every remaining path
+        # (including interrupted/stalled/empty_response) still gets a
+        # real record; a partial full_text there is itself informative.
+        # Explicit "passed"/"failed" strings, not a bare bool -- a raw
+        # Python True/False stored into grounding_log's own TEXT column
+        # would get silently coerced by SQLite's own TEXT affinity into
+        # "1"/"0" on the way in, breaking a clean boolean comparison on
+        # the way back out; spelling it out avoids that entirely.
+        code_verified = None
+        if capture is not None:
+            code_verified = "passed" if capture.get("passed") else "failed"
+        _log_grounding(endpoint_label, question, full_text, search_terms, references or [], code_verified)
 
         try:
             self.wfile.write(b"data: [DONE]\n\n")

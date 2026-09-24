@@ -201,6 +201,8 @@ locals {
     relay_debug                      = var.relay_debug ? "1" : "0"
     kiwix_host                       = local.kiwix_host
     kiwix_port                       = var.kiwix_port
+    sentinel_host             = var.sentinel_host
+    sentinel_port             = var.sentinel_port
     examples_api_base        = local.examples_api_base
     examples_ingestion_token = var.examples_ingestion_token
     deployment_name           = local.coordinator_deployment_name

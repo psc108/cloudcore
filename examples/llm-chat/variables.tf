@@ -734,6 +734,18 @@ variable "kiwix_port" {
   default     = 8621
 }
 
+variable "sentinel_host" {
+  description = "Host-level Sentinel instance's own bridge-reachable address -- unlike kiwix_host, not a module output, since Sentinel is a fixed, pre-existing host-level service this template doesn't provision itself (confirmed live reachable from the coordinator over the same 192.168.100.1 bridge the host-level package repo already uses). verify_proxy.py's own _log_grounding() pushes every completed ask's search terms + references here; empty disables the push the same way empty kiwix_host disables search."
+  type        = string
+  default     = "192.168.100.1"
+}
+
+variable "sentinel_port" {
+  description = "Port Sentinel's own web UI/API listens on (sentinel-ui.service's default, see sentinel/src/sentinel/config.py's own SENTINEL_UI_PORT)."
+  type        = number
+  default     = 8900
+}
+
 variable "kiwix_tools_version" {
   description = "kiwix-tools release -- same pinned version examples/kiwix-library already uses and already has cached on the host-level repo."
   type        = string

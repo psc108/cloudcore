@@ -193,6 +193,8 @@ write_files:
       Environment=RELAY_DEBUG={{ relay_debug | ternary('1', '0') }}
       Environment=KIWIX_HOST={{ kiwix_host }}
       Environment=KIWIX_PORT={{ kiwix_port }}
+      Environment=SENTINEL_HOST={{ sentinel_host }}
+      Environment=SENTINEL_PORT={{ sentinel_port }}
       Environment=EXAMPLES_API_BASE={{ examples_api_base }}
       Environment=EXAMPLES_API_TOKEN={{ examples_ingestion_token }}
       Environment=EXAMPLES_MODEL_FILENAME={{ model_filename }}

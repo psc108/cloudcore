@@ -299,6 +299,12 @@
     # existing flavor table rather than a real cost concern.
     kiwix_flavor: standard.2xlarge
     kiwix_port: 8621
+    # Fixed, pre-existing host-level service, not provisioned by this
+    # playbook -- see examples/llm-chat/variables.tf's own identical
+    # sentinel_host/sentinel_port for why this isn't computed like
+    # kiwix_host is.
+    sentinel_host: "192.168.100.1"
+    sentinel_port: 8900
     kiwix_tools_version: "3.8.2"
     kiwix_tools_url: "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
     kiwix_tools_sha256: "b0ae98dd344aa0469a15ab42feff6d5aafb79541a82fb4e2647c74b073123815"
@@ -777,6 +783,8 @@
           'relay_debug': relay_debug,
           'kiwix_host': kiwix_host,
           'kiwix_port': kiwix_port,
+          'sentinel_host': sentinel_host,
+          'sentinel_port': sentinel_port,
           'examples_api_base': examples_api_base,
           'examples_ingestion_token': examples_ingestion_token,
           'deployment_name': deployment_name,
