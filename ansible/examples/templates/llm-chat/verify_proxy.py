@@ -1643,6 +1643,17 @@ function makeAskPanel(cfg) {
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
+        // F-133/F-134: a mid-stream connection drop (the backend VM
+        // itself dying, not just a network blip) makes reader.read()
+        // resolve with done:true -- indistinguishable, at this level,
+        // from a real, complete response. The server always writes a
+        // final "data: [DONE]" once it's genuinely finished (see
+        // _do_handle_ask's own last line, common to every stop_reason
+        // branch including its own "stalled"/"empty_response" messages)
+        // -- sawDone tracks whether that sentinel actually arrived, so
+        // a truncated answer can be told apart from a real one instead
+        // of silently being shown as if it were complete.
+        let sawDone = false;
         while (true) {
           const {done, value} = await reader.read();
           if (done) break;
@@ -1662,7 +1673,7 @@ function makeAskPanel(cfg) {
             const line = evt.split('\\n').find(l => l.startsWith('data: '));
             if (!line) continue;
             const payload = line.slice(6);
-            if (payload === '[DONE]') continue;
+            if (payload === '[DONE]') { sawDone = true; continue; }
             try {
               const obj = JSON.parse(payload);
               const delta = (obj.choices[0].delta || {}).content || '';
@@ -1675,6 +1686,12 @@ function makeAskPanel(cfg) {
               }
             } catch (e) { /* skip malformed lines */ }
           }
+        }
+        if (!sawDone) {
+          bubbleContent.classList.remove('thinking');
+          assistantText += '\\n\\n---\\n_Connection to the model backend was lost before ' +
+            'this answer finished -- the text above may be incomplete. Please try again._';
+          bubbleContent.textContent = assistantText;
         }
       }
     } catch (e) {
