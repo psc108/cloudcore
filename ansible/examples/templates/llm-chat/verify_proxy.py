@@ -348,8 +348,14 @@ def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
             snippet = (hit.get("snippet") or "").strip()
             if not path or not snippet:
                 continue
-            lines.append(f'[CloudCore source] "{path}": {snippet}')
-            references.append({"source": "CloudCore source", "title": path, "snippet": snippet})
+            # F-140 follow-up: the index moved from one row per whole
+            # file to one row per chunk -- start_line is real
+            # provenance (this chunk, not a claim about the whole
+            # file), not just a display nicety.
+            start_line = hit.get("start_line")
+            title = f"{path}:{start_line}" if start_line else path
+            lines.append(f'[CloudCore source] "{title}": {snippet}')
+            references.append({"source": "CloudCore source", "title": title, "snippet": snippet})
         if not lines:
             return "", []
         block = ("Reference material (for fact-checking only -- explain in your own "
