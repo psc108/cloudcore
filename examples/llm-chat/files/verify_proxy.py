@@ -209,7 +209,29 @@ _SENTINEL_PUSH_TIMEOUT_S = 5
 # words client-side doesn't reliably fix this either (tested: "ring 3"
 # alone matches boxing rankings). The one thing that does: asking the
 # model itself for a short, keyword-dense reformulation first.
-_SEARCH_TERMS_TIMEOUT_S = 30
+# Direct report: a student pasted a full multi-line pip error (a few
+# hundred characters) and got an answer with a real factual mistake in
+# it, traced back to this call timing out ("TimeoutError('timed out')")
+# at the old 30s -- prefill time scales with input length, and a long
+# pasted error/log is exactly the shape that pushes this past a timeout
+# tuned for a normal short question. Raised 30 -> 90 for real headroom
+# (measured prefill throughput on this hardware has been as low as
+# ~4.75 tok/s -- see F-129 -- so even a few hundred extra tokens of
+# input meaningfully add to this call's own prefill time), *and*
+# _SEARCH_TERMS_MAX_QUESTION_CHARS below bounds the worst case rather
+# than just raising the timeout indefinitely to chase an unbounded
+# paste.
+_SEARCH_TERMS_TIMEOUT_S = 90
+# A student pasting a full stack trace or a long terminal error dump,
+# not a short question, is exactly the case that (a) risks exhausting
+# even the raised timeout above and (b) makes a poor full-text search
+# query on its own regardless (the earlier "ring 3" investigation's own
+# finding -- excess words dilute ranking -- applies just as much to an
+# excess wall of text as to filler words). Only the text handed to
+# *this* extraction call is truncated; the model still sees and answers
+# the student's full, untruncated question either way -- this only
+# ever affects what's used to search for reference material.
+_SEARCH_TERMS_MAX_QUESTION_CHARS = 1000
 _SEARCH_TERMS_SYSTEM = (
     "Extract 3-6 specific technical search keywords from the user's "
     "question, suitable for a full-text search engine. Respond with "
@@ -226,9 +248,10 @@ def _extract_search_terms(question: str) -> str:
     for why this is necessary, not just an optimization. Adds one
     small round-trip of latency to this student's own request (the
     busy-gate already holds this slot for them; no other student is
-    affected). Falls back to the raw question on ANY failure -- this
-    is a quality improvement, never a blocking dependency, matching
-    _kiwix_search's own defensive shape."""
+    affected). Falls back to the (still-truncated) question on ANY
+    failure -- this is a quality improvement, never a blocking
+    dependency, matching _kiwix_search's own defensive shape."""
+    question = question[:_SEARCH_TERMS_MAX_QUESTION_CHARS]
     try:
         payload = {
             "messages": [
@@ -1516,6 +1539,7 @@ footer a { color: #2a5db0; }
     <button id="linuxAskBtn" class="primary" onclick="linuxAsk.askModel()">Ask</button>
     <button id="linuxStopBtn" onclick="linuxAsk.stopAsk()" disabled>Stop</button>
     <button id="linuxRegenBtn" onclick="linuxAsk.regenerateAsk()" disabled title="Ask again with no changes">Regenerate</button>
+    <button onclick="clearLinuxHelp()">Clear session</button>
     <span id="linuxAskStatus" class="status"></span>
   </div>
 </div>
@@ -1881,6 +1905,15 @@ function clearAll() {
   codeAsk.clearHistory();
   cm.setValue('');
   document.getElementById('runResult').innerHTML = '';
+}
+
+function clearLinuxHelp() {
+  // Mirrors clearAll() above, scoped to just this panel -- direct
+  // request for a real "start fresh" button on Linux Help too, not
+  // just the coding panel (the two conversations stay deliberately
+  // independent, same reasoning as clearAll()'s own comment).
+  if (!confirm('Clear your Linux Help conversation? This only affects this browser.')) return;
+  linuxAsk.clearHistory();
 }
 
 async function runCode() {
@@ -2620,6 +2653,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # same defensive shape -- a question this corpus genuinely has
         # nothing for still costs one small extraction round-trip, but
         # never blocks or degrades the answer either way.
+        # Direct report: a long pasted error, not the model itself, was
+        # the actual cause of a wrong answer -- extraction timed out on
+        # it, silently producing no grounding at all. Told to the
+        # student directly (see the note appended near _log_grounding's
+        # own call below) rather than left as a silent quality drop,
+        # since they have no way to otherwise know grounding quietly
+        # didn't help this time.
+        question_truncated_for_search = len(question) > _SEARCH_TERMS_MAX_QUESTION_CHARS
         search_terms = _extract_search_terms(question)
         # Check-corpus-first, direct follow-up to F-136: a human-approved
         # past answer (see _local_corpus_search's own comment) is tried
@@ -2650,7 +2691,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                        endpoint_label=endpoint_label, question_chars=len(user_turn),
                                        started_at=ask_started_at, question=question,
                                        search_terms=search_terms, references=references,
-                                       grounding_source=grounding_source)
+                                       grounding_source=grounding_source,
+                                       question_truncated_for_search=question_truncated_for_search)
         conn.close()  # redundant once _relay_and_verify_stream closes it early -- harmless, idempotent
 
     def _open_upstream_completion(self, messages: list, max_tokens=None,
@@ -2894,7 +2936,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                   verify: bool = True, conn=None, endpoint_label: str = "ask",
                                   question_chars: int = 0, started_at=None, question: str = "",
                                   search_terms: str = "", references: list | None = None,
-                                  grounding_source: str = "none"):
+                                  grounding_source: str = "none",
+                                  question_truncated_for_search: bool = False):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -3070,6 +3113,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         code_verified = None
         if capture is not None:
             code_verified = "passed" if capture.get("passed") else "failed"
+        # Direct report: a long pasted error caused search-term
+        # extraction to time out, silently producing no grounding --
+        # the student had no way to know that had happened, or why the
+        # answer might be less reliable as a result. Told plainly,
+        # regardless of whether a reference was still found afterward
+        # (see question_truncated_for_search's own comment in
+        # _do_handle_ask) -- a truncated search query can retrieve
+        # something for the wrong facet of a long question just as
+        # easily as it can retrieve nothing.
+        if question_truncated_for_search:
+            self._write_sse_delta(
+                "\n\n---\n_Your question was quite long, so it was shortened before searching "
+                "for reference material -- this can make the answer above less reliable. For "
+                "best results, paste just the most relevant part of a long error or log rather "
+                "than the whole output._\n", last_chunk_meta)
+
         _log_grounding(endpoint_label, question, full_text, search_terms, references or [],
                         code_verified, grounding_source)
 
