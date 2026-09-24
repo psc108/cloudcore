@@ -252,6 +252,47 @@ def _extract_search_terms(question: str) -> str:
         return question
 
 
+def _local_corpus_search(search_terms: str) -> tuple[str, list[dict]]:
+    """Direct follow-up to F-136's own grounding_log: "could we benefit
+    by checking that corpus first... and then grounding in the other
+    areas?" -- checked first, before _kiwix_search() below, against
+    Sentinel's own /api/grounding-log/match, which only ever returns a
+    *human-approved* past entry (see grounding.find_match()'s own
+    comment on the Sentinel side for the matching rules) -- an
+    unreviewed or rejected entry, even an exact text match, is never
+    returned. Same defensive shape as _kiwix_search(): empty
+    SENTINEL_HOST, no match, or any failure all just mean "nothing
+    local, fall through to kiwix" -- never blocks, never raises. The
+    one real hit this returns is labeled "Verified Q&A" (not a source
+    name like "Wikipedia") so the model's own prompt, this file's own
+    log, and Sentinel's own UI can all tell a reused vetted answer
+    apart from a fresh general-corpus one."""
+    if not SENTINEL_HOST or not search_terms:
+        return "", []
+    try:
+        qs = urllib.parse.urlencode({"q": search_terms})
+        url = f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/grounding-log/match?{qs}"
+        # Same short, hard timeout as _kiwix_search()'s own -- this call
+        # is synchronous, on the critical path of every ask (unlike the
+        # backgrounded push below), so a slow Sentinel must never
+        # meaningfully delay an answer over an optional local-corpus hit.
+        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+            match = json.loads(resp.read())
+        if not match:
+            return "", []
+        snippet = (match.get("answer") or "").strip()
+        if not snippet:
+            return "", []
+        reference = {"source": "Verified Q&A", "title": match.get("question", ""), "snippet": snippet}
+        block = ("Reference material (for fact-checking only -- explain in your own "
+                 "words, and note plainly if this doesn't fully answer the question):\n"
+                 f'[Verified Q&A] "{reference["title"]}": {snippet}\n\n')
+        return block, [reference]
+    except Exception as e:
+        print(f"verify-proxy: local corpus lookup failed, trying kiwix instead: {e!r}", flush=True)
+        return "", []
+
+
 def _kiwix_search(search_pattern: str) -> tuple[str, list[dict]]:
     """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
     ManKier man pages + ArchWiki, all three loaded into one instance --
@@ -321,7 +362,7 @@ def _push_grounding_to_sentinel(entry: dict) -> None:
 
 
 def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms: str,
-                    references: list, code_verified) -> None:
+                    references: list, code_verified, grounding_source: str = "none") -> None:
     """Records what actually happened for one completed ask -- the
     search terms used, what (if anything) kiwix found, and for the
     coding panel, whether its own execution-verification passed. Direct
@@ -350,6 +391,7 @@ def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms
         "endpoint": endpoint_label, "question": question, "answer": answer,
         "search_terms": search_terms, "references": references,
         "grounded": bool(references), "code_verified": code_verified,
+        "grounding_source": grounding_source,
     }
     print(f"GROUNDING_LOG {json.dumps(entry)}", flush=True)
     if SENTINEL_HOST:
@@ -2579,7 +2621,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # nothing for still costs one small extraction round-trip, but
         # never blocks or degrades the answer either way.
         search_terms = _extract_search_terms(question)
-        grounding, references = _kiwix_search(search_terms)
+        # Check-corpus-first, direct follow-up to F-136: a human-approved
+        # past answer (see _local_corpus_search's own comment) is tried
+        # before the general-purpose kiwix corpus, not alongside it --
+        # kiwix is the fallback for whatever the local corpus doesn't
+        # yet cover, not a second opinion on every question.
+        grounding, references = _local_corpus_search(search_terms)
+        grounding_source = "local_corpus" if references else "none"
+        if not references:
+            grounding, references = _kiwix_search(search_terms)
+            if references:
+                grounding_source = "kiwix"
         messages = ([{"role": "system", "content": system_message}]
                     + list(history) + [{"role": "user", "content": grounding + user_turn}])
 
@@ -2597,7 +2649,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                        interrupt=interrupt_event, verify=verify, conn=conn,
                                        endpoint_label=endpoint_label, question_chars=len(user_turn),
                                        started_at=ask_started_at, question=question,
-                                       search_terms=search_terms, references=references)
+                                       search_terms=search_terms, references=references,
+                                       grounding_source=grounding_source)
         conn.close()  # redundant once _relay_and_verify_stream closes it early -- harmless, idempotent
 
     def _open_upstream_completion(self, messages: list, max_tokens=None,
@@ -2840,7 +2893,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                   capture_source: str = "llm-chat-coordinator", interrupt=None,
                                   verify: bool = True, conn=None, endpoint_label: str = "ask",
                                   question_chars: int = 0, started_at=None, question: str = "",
-                                  search_terms: str = "", references: list | None = None):
+                                  search_terms: str = "", references: list | None = None,
+                                  grounding_source: str = "none"):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -3016,7 +3070,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         code_verified = None
         if capture is not None:
             code_verified = "passed" if capture.get("passed") else "failed"
-        _log_grounding(endpoint_label, question, full_text, search_terms, references or [], code_verified)
+        _log_grounding(endpoint_label, question, full_text, search_terms, references or [],
+                        code_verified, grounding_source)
 
         try:
             self.wfile.write(b"data: [DONE]\n\n")
