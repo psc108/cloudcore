@@ -252,6 +252,23 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  # F-133-adjacent template fix, first of all: the declarative
+  # `packages:` list above can abort partway through if promtail's own
+  # postinst hits an interactive dpkg conffile prompt -- write_files
+  # (below) always runs before the packages: phase, so
+  # /etc/promtail/config.yml already exists by the time promtail's own
+  # package installs, and with no TTY to answer "keep the local
+  # version?" the whole apt transaction aborts, silently skipping
+  # every package after it in the same run (confirmed live, twice, on
+  # this exact template: libgomp1/promtail/dnsmasq/python3-paramiko
+  # all missing at once -- llama-server then fails with "error while
+  # loading shared libraries: libgomp.so.1"). --force-confold answers
+  # that prompt non-interactively (keep the local file, the correct
+  # choice here since write_files already wrote the real config);
+  # idempotent and harmless to re-run whether the packages: phase
+  # already succeeded or not.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1 python3 util-linux dnsmasq python3-paramiko
+
   # Promtail fix first, before any other service — same F-072/F-073
   # ordering every other example in this project already follows.
   - systemctl stop promtail || true

@@ -58,6 +58,19 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  # F-133-adjacent template fix, first of all -- same as
+  # coordinator-cloud-init.yml.j2's own identical fix: the declarative
+  # `packages:` list above can abort partway through if promtail's own
+  # postinst hits an interactive dpkg conffile prompt (write_files
+  # below always runs before the packages: phase, so
+  # /etc/promtail/config.yml already exists by the time promtail's own
+  # package installs, and with no TTY to answer, the whole apt
+  # transaction aborts -- silently skipping every package after it,
+  # including libgomp1, which the worker's own ggml-rpc-server binary
+  # also needs). --force-confold answers that prompt non-interactively;
+  # idempotent and harmless whether packages: already succeeded or not.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1
+
   # Promtail fix first, before any other service — same F-072/F-073
   # ordering every other example in this project already follows.
   - systemctl stop promtail || true

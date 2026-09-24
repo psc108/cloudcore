@@ -49,6 +49,13 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  # F-133-adjacent template fix -- see coordinator-cloud-init.yml.j2's
+  # own identical comment: promtail's own postinst can hit an
+  # interactive dpkg conffile prompt against the config write_files
+  # already wrote, aborting the whole packages: transaction with no
+  # TTY to answer. --force-confold re-run is idempotent either way.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl ca-certificates promtail
+
   # F-073/F-072 promtail fix — see coordinator-cloud-init.yaml.tftpl's
   # own identical comment for why this runs first, before anything
   # else that might log.
