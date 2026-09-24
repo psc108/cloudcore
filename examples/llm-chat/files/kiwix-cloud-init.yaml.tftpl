@@ -42,7 +42,7 @@ write_files:
 
       [Service]
       Type=simple
-      ExecStart=/opt/kiwix/kiwix-serve --port=${kiwix_port} --address=all --nodatealiases /opt/kiwix/data/${wikipedia_zim_filename} /opt/kiwix/data/${mankier_zim_filename} /opt/kiwix/data/${archwiki_zim_filename}
+      ExecStart=/opt/kiwix/kiwix-serve --port=${kiwix_port} --address=all --nodatealiases /opt/kiwix/data/${wikipedia_zim_filename} /opt/kiwix/data/${mankier_zim_filename} /opt/kiwix/data/${archwiki_zim_filename} /opt/kiwix/data/${pydocs_zim_filename} /opt/kiwix/data/${pypeps_zim_filename} /opt/kiwix/data/${devdocs_python_zim_filename} /opt/kiwix/data/${devdocs_numpy_zim_filename} /opt/kiwix/data/${devdocs_pandas_zim_filename} /opt/kiwix/data/${devdocs_django_zim_filename} /opt/kiwix/data/${devdocs_flask_zim_filename} /opt/kiwix/data/${devdocs_fastapi_zim_filename} /opt/kiwix/data/${devdocs_matplotlib_zim_filename} /opt/kiwix/data/${devdocs_scikit_learn_zim_filename} /opt/kiwix/data/${devdocs_requests_zim_filename} /opt/kiwix/data/${devdocs_jinja_zim_filename} /opt/kiwix/data/${devdocs_click_zim_filename} /opt/kiwix/data/${devdocs_pygame_zim_filename}
       Restart=on-failure
 
       [Install]
@@ -112,6 +112,118 @@ runcmd:
       sleep 5
     done
     echo '${archwiki_zim_sha256}  /opt/kiwix/data/${archwiki_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${pydocs_zim_filename} '${pydocs_zim_url}' && break
+      echo "Python docs ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${pydocs_zim_sha256}  /opt/kiwix/data/${pydocs_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${pypeps_zim_filename} '${pypeps_zim_url}' && break
+      echo "PEPs ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${pypeps_zim_sha256}  /opt/kiwix/data/${pypeps_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_python_zim_filename} '${devdocs_python_zim_url}' && break
+      echo "DevDocs Python ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_python_zim_sha256}  /opt/kiwix/data/${devdocs_python_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_numpy_zim_filename} '${devdocs_numpy_zim_url}' && break
+      echo "DevDocs numpy ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_numpy_zim_sha256}  /opt/kiwix/data/${devdocs_numpy_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_pandas_zim_filename} '${devdocs_pandas_zim_url}' && break
+      echo "DevDocs pandas ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_pandas_zim_sha256}  /opt/kiwix/data/${devdocs_pandas_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_django_zim_filename} '${devdocs_django_zim_url}' && break
+      echo "DevDocs Django ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_django_zim_sha256}  /opt/kiwix/data/${devdocs_django_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_flask_zim_filename} '${devdocs_flask_zim_url}' && break
+      echo "DevDocs Flask ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_flask_zim_sha256}  /opt/kiwix/data/${devdocs_flask_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_fastapi_zim_filename} '${devdocs_fastapi_zim_url}' && break
+      echo "DevDocs FastAPI ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_fastapi_zim_sha256}  /opt/kiwix/data/${devdocs_fastapi_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_matplotlib_zim_filename} '${devdocs_matplotlib_zim_url}' && break
+      echo "DevDocs matplotlib ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_matplotlib_zim_sha256}  /opt/kiwix/data/${devdocs_matplotlib_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_scikit_learn_zim_filename} '${devdocs_scikit_learn_zim_url}' && break
+      echo "DevDocs scikit-learn ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_scikit_learn_zim_sha256}  /opt/kiwix/data/${devdocs_scikit_learn_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_requests_zim_filename} '${devdocs_requests_zim_url}' && break
+      echo "DevDocs requests ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_requests_zim_sha256}  /opt/kiwix/data/${devdocs_requests_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_jinja_zim_filename} '${devdocs_jinja_zim_url}' && break
+      echo "DevDocs Jinja ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_jinja_zim_sha256}  /opt/kiwix/data/${devdocs_jinja_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_click_zim_filename} '${devdocs_click_zim_url}' && break
+      echo "DevDocs Click ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_click_zim_sha256}  /opt/kiwix/data/${devdocs_click_zim_filename}' | sha256sum -c -
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/kiwix/data/${devdocs_pygame_zim_filename} '${devdocs_pygame_zim_url}' && break
+      echo "DevDocs pygame ZIM download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${devdocs_pygame_zim_sha256}  /opt/kiwix/data/${devdocs_pygame_zim_filename}' | sha256sum -c -
 
   - [ systemctl, daemon-reload ]
   - [ systemctl, enable, --now, kiwix-serve.service ]

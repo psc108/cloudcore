@@ -319,6 +319,48 @@
     archwiki_zim_filename: "archlinux_en_all_maxi_2026-07.zim"
     archwiki_zim_url: "http://192.168.100.1:8090/jammy/artifacts/archlinux_en_all_maxi_2026-07.zim"
     archwiki_zim_sha256: "c3df551010a953d2c173af8d65a596a7ce434a7fa0771741bc800feeccad1942"
+    pydocs_zim_filename: "docs.python.org_en_all_2026-08a.zim"
+    pydocs_zim_url: "http://192.168.100.1:8090/jammy/artifacts/docs.python.org_en_all_2026-08a.zim"
+    pydocs_zim_sha256: "506cdfbd37d68b36a90943dea60f6a149d78eb5dd73999d62052d5dd2021b7bc"
+    pypeps_zim_filename: "peps.python_en_all_2026-08.zim"
+    pypeps_zim_url: "http://192.168.100.1:8090/jammy/artifacts/peps.python_en_all_2026-08.zim"
+    pypeps_zim_sha256: "1940dfa5c2067625ce2d05bc978d54a1f4ff6b2ae1b6969acd994c3549cb3d41"
+    devdocs_python_zim_filename: "devdocs_en_python_2026-08.zim"
+    devdocs_python_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_python_2026-08.zim"
+    devdocs_python_zim_sha256: "289e5d3e0e8c3d3470bf183e5c913be3be0b61a730ce52a247c23812799baa51"
+    devdocs_numpy_zim_filename: "devdocs_en_numpy_2026-07.zim"
+    devdocs_numpy_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_numpy_2026-07.zim"
+    devdocs_numpy_zim_sha256: "21b90bf9680d2e1b319e260487078accba5d7faccea443f4245208c53fcefbfa"
+    devdocs_pandas_zim_filename: "devdocs_en_pandas_2026-07.zim"
+    devdocs_pandas_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_pandas_2026-07.zim"
+    devdocs_pandas_zim_sha256: "605c74f9035d029318d6db627c7b81b76a513e57831e2108fda0942fcfc2a8a9"
+    devdocs_django_zim_filename: "devdocs_en_django_2026-07.zim"
+    devdocs_django_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_django_2026-07.zim"
+    devdocs_django_zim_sha256: "a1db7b72d56dd3d752b2b73d812736462ce7108a39cbf9ba9a22006e97b78f4c"
+    devdocs_flask_zim_filename: "devdocs_en_flask_2026-07.zim"
+    devdocs_flask_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_flask_2026-07.zim"
+    devdocs_flask_zim_sha256: "249ee1e64ccb341055950f02d3810192a4de532eb0b636536f162e1f6482f6d7"
+    devdocs_fastapi_zim_filename: "devdocs_en_fastapi_2026-04.zim"
+    devdocs_fastapi_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_fastapi_2026-04.zim"
+    devdocs_fastapi_zim_sha256: "3d863e2a7b5ec9c98c293f8befccf31f49e24c8a299fdc0013d89cbff39cf782"
+    devdocs_matplotlib_zim_filename: "devdocs_en_matplotlib_2026-07.zim"
+    devdocs_matplotlib_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_matplotlib_2026-07.zim"
+    devdocs_matplotlib_zim_sha256: "ba77b461a491e4e8f62c9feec195fa86ea976fdc0444687f6ed0be2a5e10a973"
+    devdocs_scikit_learn_zim_filename: "devdocs_en_scikit-learn_2026-04.zim"
+    devdocs_scikit_learn_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_scikit-learn_2026-04.zim"
+    devdocs_scikit_learn_zim_sha256: "e709638a3681d51cae9ebad01e09c16d343f5e617c46ec358b0c3ca9738cfafb"
+    devdocs_requests_zim_filename: "devdocs_en_requests_2026-07.zim"
+    devdocs_requests_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_requests_2026-07.zim"
+    devdocs_requests_zim_sha256: "f393b589d0958e8de7cc7d39ce3fc2f907ab588e3f38d17fb5adcfdcd2f06a3a"
+    devdocs_jinja_zim_filename: "devdocs_en_jinja_2026-07.zim"
+    devdocs_jinja_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_jinja_2026-07.zim"
+    devdocs_jinja_zim_sha256: "8b462baa3ec0529eb5908a1c2b6a06d683b62665f212aad20505a59a3b0d1100"
+    devdocs_click_zim_filename: "devdocs_en_click_2026-04.zim"
+    devdocs_click_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_click_2026-04.zim"
+    devdocs_click_zim_sha256: "53066c248be7719544f3adcef842dbc83da9a88791e6796ef265cce62479a8e5"
+    devdocs_pygame_zim_filename: "devdocs_en_pygame_2026-07.zim"
+    devdocs_pygame_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_pygame_2026-07.zim"
+    devdocs_pygame_zim_sha256: "27c4e2b8ce94c620199b61f900363028350890a7bc9779c5c77f01b1040bef1e"
 
     # Own, independent peer-placement (not auto-inherited from
     # coordinator_peer_id -- nothing in this playbook auto-inherits
@@ -674,6 +716,20 @@
           'archwiki_zim_filename': archwiki_zim_filename,
           'archwiki_zim_url': archwiki_zim_url,
           'archwiki_zim_sha256': archwiki_zim_sha256,
+          'pydocs_zim_filename': pydocs_zim_filename, 'pydocs_zim_url': pydocs_zim_url, 'pydocs_zim_sha256': pydocs_zim_sha256,
+          'pypeps_zim_filename': pypeps_zim_filename, 'pypeps_zim_url': pypeps_zim_url, 'pypeps_zim_sha256': pypeps_zim_sha256,
+          'devdocs_python_zim_filename': devdocs_python_zim_filename, 'devdocs_python_zim_url': devdocs_python_zim_url, 'devdocs_python_zim_sha256': devdocs_python_zim_sha256,
+          'devdocs_numpy_zim_filename': devdocs_numpy_zim_filename, 'devdocs_numpy_zim_url': devdocs_numpy_zim_url, 'devdocs_numpy_zim_sha256': devdocs_numpy_zim_sha256,
+          'devdocs_pandas_zim_filename': devdocs_pandas_zim_filename, 'devdocs_pandas_zim_url': devdocs_pandas_zim_url, 'devdocs_pandas_zim_sha256': devdocs_pandas_zim_sha256,
+          'devdocs_django_zim_filename': devdocs_django_zim_filename, 'devdocs_django_zim_url': devdocs_django_zim_url, 'devdocs_django_zim_sha256': devdocs_django_zim_sha256,
+          'devdocs_flask_zim_filename': devdocs_flask_zim_filename, 'devdocs_flask_zim_url': devdocs_flask_zim_url, 'devdocs_flask_zim_sha256': devdocs_flask_zim_sha256,
+          'devdocs_fastapi_zim_filename': devdocs_fastapi_zim_filename, 'devdocs_fastapi_zim_url': devdocs_fastapi_zim_url, 'devdocs_fastapi_zim_sha256': devdocs_fastapi_zim_sha256,
+          'devdocs_matplotlib_zim_filename': devdocs_matplotlib_zim_filename, 'devdocs_matplotlib_zim_url': devdocs_matplotlib_zim_url, 'devdocs_matplotlib_zim_sha256': devdocs_matplotlib_zim_sha256,
+          'devdocs_scikit_learn_zim_filename': devdocs_scikit_learn_zim_filename, 'devdocs_scikit_learn_zim_url': devdocs_scikit_learn_zim_url, 'devdocs_scikit_learn_zim_sha256': devdocs_scikit_learn_zim_sha256,
+          'devdocs_requests_zim_filename': devdocs_requests_zim_filename, 'devdocs_requests_zim_url': devdocs_requests_zim_url, 'devdocs_requests_zim_sha256': devdocs_requests_zim_sha256,
+          'devdocs_jinja_zim_filename': devdocs_jinja_zim_filename, 'devdocs_jinja_zim_url': devdocs_jinja_zim_url, 'devdocs_jinja_zim_sha256': devdocs_jinja_zim_sha256,
+          'devdocs_click_zim_filename': devdocs_click_zim_filename, 'devdocs_click_zim_url': devdocs_click_zim_url, 'devdocs_click_zim_sha256': devdocs_click_zim_sha256,
+          'devdocs_pygame_zim_filename': devdocs_pygame_zim_filename, 'devdocs_pygame_zim_url': devdocs_pygame_zim_url, 'devdocs_pygame_zim_sha256': devdocs_pygame_zim_sha256,
           'promtail_config': promtail_config }) }}"
 
     - name: Create kiwix instance (retrieval-grounding backend, F-132)

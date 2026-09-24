@@ -159,6 +159,34 @@ declare -A ARTIFACT_URLS=(
   [wikipedia_en_all_nopic_2026-06.zim]="https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_2026-06.zim"
   [www.mankier.com_en_all_2026-07.zim]="https://download.kiwix.org/zim/zimit/www.mankier.com_en_all_2026-07.zim"
   [archlinux_en_all_maxi_2026-07.zim]="https://download.kiwix.org/zim/other/archlinux_en_all_maxi_2026-07.zim"
+  # llm-chat's own coding Ask panel, direct follow-up to F-132/F-136/F-137
+  # ("are there any other downloadable resources for grounding... in
+  # the python field"): official Python documentation plus a curated
+  # DevDocs bundle (DevDocs mirrors each project's own official docs
+  # verbatim, not third-party writeups) covering the libraries most
+  # likely to come up in a Python coding sandbox. Deliberately NOT the
+  # much larger corey Schafer tutorial-video ZIMs also in the Kiwix
+  # catalog (thin text content relative to their size, a poor fit for
+  # full-text search grounding regardless of the presenter's own
+  # reputation), and NOT the whole 231-entry DevDocs catalog (the
+  # sandbox only ever executes Python, so non-Python language docs
+  # wouldn't be used) -- covered by the same SKIP_ZIM guard below as
+  # every other ZIM in this list, adds ~4.2GB total, ~4GB of that being
+  # the official docs.python.org mirror alone.
+  [docs.python.org_en_all_2026-08a.zim]="https://download.kiwix.org/zim/zimit/docs.python.org_en_all_2026-08a.zim"
+  [peps.python_en_all_2026-08.zim]="https://download.kiwix.org/zim/zimit/peps.python_en_all_2026-08.zim"
+  [devdocs_en_python_2026-08.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_python_2026-08.zim"
+  [devdocs_en_numpy_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_numpy_2026-07.zim"
+  [devdocs_en_pandas_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_pandas_2026-07.zim"
+  [devdocs_en_django_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_django_2026-07.zim"
+  [devdocs_en_flask_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_flask_2026-07.zim"
+  [devdocs_en_fastapi_2026-04.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_fastapi_2026-04.zim"
+  [devdocs_en_matplotlib_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_matplotlib_2026-07.zim"
+  [devdocs_en_scikit-learn_2026-04.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_scikit-learn_2026-04.zim"
+  [devdocs_en_requests_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_requests_2026-07.zim"
+  [devdocs_en_jinja_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_jinja_2026-07.zim"
+  [devdocs_en_click_2026-04.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_click_2026-04.zim"
+  [devdocs_en_pygame_2026-07.zim]="https://download.kiwix.org/zim/devdocs/devdocs_en_pygame_2026-07.zim"
   # distributed-llm — the llama.cpp CPU build (contains both llama-server,
   # the coordinator's own OpenAI-compatible HTTP server, and
   # ggml-rpc-server, the worker binary — one archive covers both roles).
@@ -247,6 +275,20 @@ if [ "${SKIP_ZIM:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[wikipedia_en_all_nopic_2026-06.zim]"
   unset "ARTIFACT_URLS[www.mankier.com_en_all_2026-07.zim]"
   unset "ARTIFACT_URLS[archlinux_en_all_maxi_2026-07.zim]"
+  unset "ARTIFACT_URLS[docs.python.org_en_all_2026-08a.zim]"
+  unset "ARTIFACT_URLS[peps.python_en_all_2026-08.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_python_2026-08.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_numpy_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_pandas_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_django_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_flask_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_fastapi_2026-04.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_matplotlib_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_scikit-learn_2026-04.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_requests_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_jinja_2026-07.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_click_2026-04.zim]"
+  unset "ARTIFACT_URLS[devdocs_en_pygame_2026-07.zim]"
 fi
 if [ "${SKIP_LLM_MODEL:-0}" = "1" ]; then
   unset "ARTIFACT_URLS[Mistral-7B-Instruct-v0.3-Q4_K_M.gguf]"

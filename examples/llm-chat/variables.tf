@@ -829,6 +829,236 @@ variable "archwiki_zim_sha256" {
   default = "c3df551010a953d2c173af8d65a596a7ce434a7fa0771741bc800feeccad1942"
 }
 
+# llm-chat's own coding Ask panel corpus, direct follow-up to
+# F-132/F-136/F-137 -- official Python docs + a curated DevDocs bundle
+# for the libraries most likely to come up in a Python coding sandbox.
+# See build-package-repo.sh's own matching comment for what was
+# deliberately excluded (tutorial-video ZIMs, non-Python languages)
+# and why.
+variable "pydocs_zim_filename" {
+  type    = string
+  default = "docs.python.org_en_all_2026-08a.zim"
+}
+
+variable "pydocs_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/docs.python.org_en_all_2026-08a.zim"
+}
+
+variable "pydocs_zim_sha256" {
+  description = "official Python documentation -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "506cdfbd37d68b36a90943dea60f6a149d78eb5dd73999d62052d5dd2021b7bc"
+}
+
+variable "pypeps_zim_filename" {
+  type    = string
+  default = "peps.python_en_all_2026-08.zim"
+}
+
+variable "pypeps_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/peps.python_en_all_2026-08.zim"
+}
+
+variable "pypeps_zim_sha256" {
+  description = "official Python Enhancement Proposals -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "1940dfa5c2067625ce2d05bc978d54a1f4ff6b2ae1b6969acd994c3549cb3d41"
+}
+
+variable "devdocs_python_zim_filename" {
+  type    = string
+  default = "devdocs_en_python_2026-08.zim"
+}
+
+variable "devdocs_python_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_python_2026-08.zim"
+}
+
+variable "devdocs_python_zim_sha256" {
+  description = "DevDocs Python quick reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "289e5d3e0e8c3d3470bf183e5c913be3be0b61a730ce52a247c23812799baa51"
+}
+
+variable "devdocs_numpy_zim_filename" {
+  type    = string
+  default = "devdocs_en_numpy_2026-07.zim"
+}
+
+variable "devdocs_numpy_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_numpy_2026-07.zim"
+}
+
+variable "devdocs_numpy_zim_sha256" {
+  description = "DevDocs numpy reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "21b90bf9680d2e1b319e260487078accba5d7faccea443f4245208c53fcefbfa"
+}
+
+variable "devdocs_pandas_zim_filename" {
+  type    = string
+  default = "devdocs_en_pandas_2026-07.zim"
+}
+
+variable "devdocs_pandas_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_pandas_2026-07.zim"
+}
+
+variable "devdocs_pandas_zim_sha256" {
+  description = "DevDocs pandas reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "605c74f9035d029318d6db627c7b81b76a513e57831e2108fda0942fcfc2a8a9"
+}
+
+variable "devdocs_django_zim_filename" {
+  type    = string
+  default = "devdocs_en_django_2026-07.zim"
+}
+
+variable "devdocs_django_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_django_2026-07.zim"
+}
+
+variable "devdocs_django_zim_sha256" {
+  description = "DevDocs Django reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "a1db7b72d56dd3d752b2b73d812736462ce7108a39cbf9ba9a22006e97b78f4c"
+}
+
+variable "devdocs_flask_zim_filename" {
+  type    = string
+  default = "devdocs_en_flask_2026-07.zim"
+}
+
+variable "devdocs_flask_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_flask_2026-07.zim"
+}
+
+variable "devdocs_flask_zim_sha256" {
+  description = "DevDocs Flask reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "249ee1e64ccb341055950f02d3810192a4de532eb0b636536f162e1f6482f6d7"
+}
+
+variable "devdocs_fastapi_zim_filename" {
+  type    = string
+  default = "devdocs_en_fastapi_2026-04.zim"
+}
+
+variable "devdocs_fastapi_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_fastapi_2026-04.zim"
+}
+
+variable "devdocs_fastapi_zim_sha256" {
+  description = "DevDocs FastAPI reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "3d863e2a7b5ec9c98c293f8befccf31f49e24c8a299fdc0013d89cbff39cf782"
+}
+
+variable "devdocs_matplotlib_zim_filename" {
+  type    = string
+  default = "devdocs_en_matplotlib_2026-07.zim"
+}
+
+variable "devdocs_matplotlib_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_matplotlib_2026-07.zim"
+}
+
+variable "devdocs_matplotlib_zim_sha256" {
+  description = "DevDocs matplotlib reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "ba77b461a491e4e8f62c9feec195fa86ea976fdc0444687f6ed0be2a5e10a973"
+}
+
+variable "devdocs_scikit_learn_zim_filename" {
+  type    = string
+  default = "devdocs_en_scikit-learn_2026-04.zim"
+}
+
+variable "devdocs_scikit_learn_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_scikit-learn_2026-04.zim"
+}
+
+variable "devdocs_scikit_learn_zim_sha256" {
+  description = "DevDocs scikit-learn reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "e709638a3681d51cae9ebad01e09c16d343f5e617c46ec358b0c3ca9738cfafb"
+}
+
+variable "devdocs_requests_zim_filename" {
+  type    = string
+  default = "devdocs_en_requests_2026-07.zim"
+}
+
+variable "devdocs_requests_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_requests_2026-07.zim"
+}
+
+variable "devdocs_requests_zim_sha256" {
+  description = "DevDocs requests reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "f393b589d0958e8de7cc7d39ce3fc2f907ab588e3f38d17fb5adcfdcd2f06a3a"
+}
+
+variable "devdocs_jinja_zim_filename" {
+  type    = string
+  default = "devdocs_en_jinja_2026-07.zim"
+}
+
+variable "devdocs_jinja_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_jinja_2026-07.zim"
+}
+
+variable "devdocs_jinja_zim_sha256" {
+  description = "DevDocs Jinja reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "8b462baa3ec0529eb5908a1c2b6a06d683b62665f212aad20505a59a3b0d1100"
+}
+
+variable "devdocs_click_zim_filename" {
+  type    = string
+  default = "devdocs_en_click_2026-04.zim"
+}
+
+variable "devdocs_click_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_click_2026-04.zim"
+}
+
+variable "devdocs_click_zim_sha256" {
+  description = "DevDocs Click reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "53066c248be7719544f3adcef842dbc83da9a88791e6796ef265cce62479a8e5"
+}
+
+variable "devdocs_pygame_zim_filename" {
+  type    = string
+  default = "devdocs_en_pygame_2026-07.zim"
+}
+
+variable "devdocs_pygame_zim_url" {
+  type    = string
+  default = "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_pygame_2026-07.zim"
+}
+
+variable "devdocs_pygame_zim_sha256" {
+  description = "DevDocs pygame reference -- confirmed by downloading the real file and re-hashing locally."
+  type        = string
+  default     = "27c4e2b8ce94c620199b61f900363028350890a7bc9779c5c77f01b1040bef1e"
+}
+
 # --- Kiwix placement --------------------------------------------------------
 # Own, independent peer-placement variables (not hard-wired to
 # coordinator_peer_id) so this instance can be moved separately later if
