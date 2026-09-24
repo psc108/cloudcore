@@ -316,6 +316,51 @@ def _local_corpus_search(search_terms: str) -> tuple[str, list[dict]]:
         return "", []
 
 
+def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
+    """A third grounding tier, direct follow-up ("can we include this
+    repo's codebase... in the ask the model and linux help"): checked
+    after _local_corpus_search() above (a human-approved answer still
+    wins) but before _kiwix_search() below -- a real hit here is
+    narrower and more specific to how this platform actually works
+    than general reference material, so it should win over Wikipedia/
+    DevDocs when both might match. Queries Sentinel's own
+    /api/codebase-search, an FTS5 index over this project's own source
+    (see codebase_index.py on the Sentinel side for what's indexed and
+    why it's a full-rebuild-every-time index, kept fresh with one CLI
+    command rather than a ZIM-style rebuild+redeploy). Same defensive
+    shape as the other two tiers: empty SENTINEL_HOST, no match, or any
+    failure all just mean "nothing here, try the next tier" -- never
+    blocks, never raises. References are labeled "CloudCore source"
+    (the file path as the title) so the model's own prompt, this
+    file's own log, and Sentinel's own UI can all tell this apart from
+    a Verified Q&A or a kiwix hit."""
+    if not SENTINEL_HOST or not search_terms:
+        return "", []
+    try:
+        qs = urllib.parse.urlencode({"q": search_terms})
+        url = f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/codebase-search?{qs}"
+        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+            hits = json.loads(resp.read())
+        lines = []
+        references = []
+        for hit in (hits or [])[:2]:
+            path = (hit.get("path") or "").strip()
+            snippet = (hit.get("snippet") or "").strip()
+            if not path or not snippet:
+                continue
+            lines.append(f'[CloudCore source] "{path}": {snippet}')
+            references.append({"source": "CloudCore source", "title": path, "snippet": snippet})
+        if not lines:
+            return "", []
+        block = ("Reference material (for fact-checking only -- explain in your own "
+                 "words, and note plainly if this doesn't fully answer the question):\n"
+                 + "\n".join(lines) + "\n\n")
+        return block, references
+    except Exception as e:
+        print(f"verify-proxy: codebase search failed, trying kiwix instead: {e!r}", flush=True)
+        return "", []
+
+
 def _kiwix_search(search_pattern: str) -> tuple[str, list[dict]]:
     """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
     ManKier man pages + ArchWiki, all three loaded into one instance --
@@ -2664,11 +2709,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         search_terms = _extract_search_terms(question)
         # Check-corpus-first, direct follow-up to F-136: a human-approved
         # past answer (see _local_corpus_search's own comment) is tried
-        # before the general-purpose kiwix corpus, not alongside it --
-        # kiwix is the fallback for whatever the local corpus doesn't
-        # yet cover, not a second opinion on every question.
+        # before this platform's own source code, which is in turn
+        # tried before the general-purpose kiwix corpus -- each tier is
+        # the fallback for whatever the one before it doesn't cover,
+        # not a second opinion run alongside it.
         grounding, references = _local_corpus_search(search_terms)
         grounding_source = "local_corpus" if references else "none"
+        if not references:
+            grounding, references = _codebase_search(search_terms)
+            if references:
+                grounding_source = "codebase"
         if not references:
             grounding, references = _kiwix_search(search_terms)
             if references:
