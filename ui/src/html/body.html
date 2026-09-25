@@ -1057,6 +1057,8 @@
             Announce this host on the network
           </label>
           <span class="bm-field-hint">Off by default. Only when this is on does this host broadcast its presence (hostname + pairing fingerprint, nothing else) so other CloudCore hosts can find it under <a href="#" onclick="showSectionByName('peers');return false">Peers → Discover &amp; Pair</a> — and only then is the peer-facing port even open at all. Turning this off closes it again and stops all broadcasting immediately, no restart needed. A host can still be paired-with by address even while this is off (see Peers → Pair Manually) — this setting only controls whether it announces itself.</span>
+          <span class="bm-field-hint">Announcing yourself only makes you <em>findable</em> — a peer that pairs with this host still can't actually place a worker, coordinator, or anything else here until this host has its own VPC, subnet, and security group ready to receive it. That's what "Create infrastructure" below is for.</span>
+          <div id="settings-peer-infra-status" style="display:none;margin-top:8px"></div>
         </div>
         <div class="field full">
           <label for="settings-bridge-octet">Bridge subnet octet</label>

@@ -322,6 +322,7 @@ function _tfRenderWorkerPeersField(key, peers, verdicts) {
           <input type="text" id="tf-worker-manual-peer_security_group_id" placeholder="peer_security_group_id">
         </div>
       </div>
+      <span class="bm-field-hint bm-required" id="tf-worker-peers-warn" style="display:none"></span>
       <input type="hidden" id="tf-var-${key}" data-key="${key}" data-required="1" value="">
     </div>`;
 }
@@ -352,8 +353,33 @@ async function _tfResolvePeerPlacement(peerId) {
 async function _tfUpdateWorkerPeersValue(key) {
   const hidden = document.getElementById(`tf-var-${key}`);
   if (!hidden) return;
-  const checked = Array.from(document.querySelectorAll('.tf-worker-peer-cb:checked')).map(cb => cb.value);
-  let entries = (await Promise.all(checked.map(_tfResolvePeerPlacement))).filter(Boolean);
+  const checkedBoxes = Array.from(document.querySelectorAll('.tf-worker-peer-cb:checked'));
+  const resolved = await Promise.all(checkedBoxes.map(cb => _tfResolvePeerPlacement(cb.value)));
+  let entries = resolved.filter(Boolean);
+
+  // A checked peer silently vanishing from the submitted value (no
+  // VPC/subnet/SG found there -- _tfResolvePeerPlacement's own null
+  // return) used to surface only as a generic "Missing required
+  // value: worker_peers" toast at submit time, indistinguishable from
+  // an actual code bug. Confirmed live as a real, recurring case, not
+  // hypothetical: worker_peers/coordinator_peer_id/kiwix_peer_* all
+  // require the peer's own VPC/subnet/SG to already exist (created
+  // outside this template -- see the variable's own comment), and a
+  // peer that had one can legitimately lose it (e.g. an earlier
+  // orphaned-resource cleanup that also removed the peer's VPC).
+  // Naming exactly which checked peer(s) can't resolve, and why, lets
+  // a real "no VPC on that peer yet" case be told apart from a genuine
+  // bug at a glance.
+  const unresolved = checkedBoxes.filter((cb, i) => !resolved[i]).map(cb => cb.dataset.hostname);
+  const warn = document.getElementById('tf-worker-peers-warn');
+  if (warn) {
+    if (unresolved.length) {
+      warn.textContent = `${unresolved.join(', ')} ${unresolved.length > 1 ? 'have' : 'has'} no VPC/subnet/security group yet on this peer — create one on the Peers/VPCs page first, or uncheck it above.`;
+      warn.style.display = 'block';
+    } else {
+      warn.style.display = 'none';
+    }
+  }
 
   const manual = {
     peer_id: (document.getElementById('tf-worker-manual-peer_id') || {}).value?.trim(),
