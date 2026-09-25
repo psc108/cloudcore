@@ -50,6 +50,12 @@ API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 PEER_REACHABLE_ENDPOINTS = {
     "peers.pairing_request_bootstrap",
     "peers.complete_pairing",
+    # peers.self_info: lets an already-approved peer's own reconciler
+    # (api/peer_reconciler.py) confirm a freshly-discovered address is
+    # really who it claims, after an IP change -- see that route's own
+    # docstring. Same unauthenticated-but-signed trust shape as
+    # pairing_request_bootstrap immediately below, not a new tier.
+    "peers.self_info",
     # Cross-blueprint exceptions, not this blueprint's own routes: same
     # reasoning as server.py's own list_vpcs/list_subnets addition to
     # _PEER_REACHABLE_LOCAL_ENDPOINTS — sg.list_sgs lets a peer's
@@ -122,6 +128,30 @@ def _my_wg_info() -> dict:
         "wg_endpoint": f"{discovery._local_ip()}:{wg_port}",
         "wg_bridge_subnet": compute.bridge_cidr(),
     }
+
+
+@peers_bp.get("/v1/peers/self-info")
+def self_info():
+    """Peer-reachable, intentionally unauthenticated -- direct follow-up
+    to a real incident: a network outage changed a paired host's IP,
+    breaking the relationship until a human manually revoked and
+    re-paired on both machines. mDNS discovery (discovery.browse())
+    already finds a peer's current address correctly after an IP
+    change, but its advertised fpr is unsigned wire data -- not
+    something safe to trust before acting on it. This route lets an
+    already-approved peer's own reconciler (api/peer_reconciler.py)
+    confirm a freshly-discovered address really is who it claims,
+    the same way pairing_request_bootstrap() below already proves a
+    first-contact claim: a signature over the payload, not a bearer
+    token. No new trust tier -- the data returned here (hostname,
+    pubkey, wg_pubkey, wg_endpoint, wg_bridge_subnet) is exactly what
+    _my_wg_info() already sends unauthenticated-but-signed during the
+    original pairing handshake, just re-servable on demand afterward."""
+    if not _check_rate_limit(request.remote_addr or "unknown"):
+        return jsonify({"status": 429, "title": "Too Many Requests",
+                         "detail": "Too many self-info requests from this source -- try again later."}), 429
+    payload = {"hostname": socket.gethostname(), "pubkey": identity.peer_pubkey_text(), **_my_wg_info()}
+    return jsonify({"payload": payload, "signature": peer_crypto.sign(payload, identity.PEER_PRIVKEY)})
 
 
 @peers_bp.get("/v1/peers/discovered")

@@ -22,6 +22,7 @@ import identity
 import discovery
 import settings_store
 import peer_listener
+import peer_reconciler
 import examples_listener
 import peer_client
 import peers_store
@@ -2048,6 +2049,13 @@ if __name__ == "__main__":
         # explicit settings PUT, not implicitly.
         discovery.advertise()
         peer_listener.start(discovery.peer_listener_port())
+        # Direct follow-up to a real incident: a network outage changed
+        # a paired host's IP, silently breaking the relationship until
+        # a human manually revoked and re-paired on both machines. See
+        # peer_reconciler.py's own module docstring. Gated the same as
+        # advertise()/peer_listener above -- a host that never opted
+        # into peering has nothing here to reconcile.
+        peer_reconciler.start()
     # Unconditional, unlike peer_listener above — deliberately not tied
     # to discovery.enabled (see examples_listener.py's own docstring).
     examples_listener.init(app)
