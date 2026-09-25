@@ -5,6 +5,8 @@ category is just a new route + validation function, no schema change."""
 from __future__ import annotations
 
 import os
+import subprocess
+from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 import settings_store
@@ -14,6 +16,39 @@ import peer_listener
 settings_bp = Blueprint("settings", __name__)
 
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+
+_SETUP_NETWORK_SH = Path(__file__).parent / "setup-network.sh"
+_TEARDOWN_NETWORK_SH = Path(__file__).parent / "teardown-network.sh"
+
+
+def _rebuild_bridge(new_octet: int) -> dict:
+    """Actually move ccbr0 onto the new subnet, rather than letting
+    bridge_subnet_octet become a DB value with no bearing on live
+    state — confirmed live as a real incident otherwise: the setting
+    was changed weeks ago, nothing rebuilt the interface to match, and
+    it silently diverged until a WireGuard route-add collision with a
+    peer's own bridge subnet surfaced it days later as a confusing,
+    unrelated-looking tunnel failure. Deliberately does NOT pass
+    --force to teardown-network.sh — that script's own guard (refusing
+    to cut off cloudcore-repo/loki/grafana-server without confirmation)
+    is exactly the check that should still apply here; failing loudly
+    in the API response is the fix, not bypassing the guard.
+    Requires the NOPASSWD grant setup-network.sh's own sudoers block
+    installs for exactly these two scripts — on a host that hasn't
+    re-run setup-network.sh since that grant was added, this fails
+    with a clear permission-denied detail rather than hanging."""
+    teardown = subprocess.run(
+        ["sudo", "-n", "bash", str(_TEARDOWN_NETWORK_SH)],
+        capture_output=True, text=True, timeout=30)
+    if teardown.returncode != 0:
+        return {"status": "blocked", "detail": (teardown.stderr or teardown.stdout).strip()}
+
+    setup = subprocess.run(
+        ["sudo", "-n", "bash", str(_SETUP_NETWORK_SH), str(new_octet)],
+        capture_output=True, text=True, timeout=30)
+    if setup.returncode != 0:
+        return {"status": "failed", "detail": (setup.stderr or setup.stdout).strip()}
+    return {"status": "ok", "detail": (setup.stdout or "").strip().splitlines()[0] if setup.stdout else "rebuilt"}
 
 
 def _auth():
@@ -68,6 +103,7 @@ def update_network_settings():
     if err: return err
     body = request.get_json(force=True) or {}
 
+    bridge_rebuild = None
     if "bridge_subnet_octet" in body:
         val = body["bridge_subnet_octet"]
         try:
@@ -76,18 +112,24 @@ def update_network_settings():
             return jsonify({"status": 400, "title": "Bad Request",
                              "detail": "bridge_subnet_octet must be an integer"}), 400
         # 0 and 255 are broadcast/network-reserved for a /24; kept out of
-        # range rather than merely discouraged. Changing this only takes
-        # effect once setup-network.sh is re-run with the new octet (it's
-        # the actual owner of the bridge/dnsmasq state) — this just
-        # records the intended value for compute.py's own bridge_cidr()
-        # and for anything advertising this host's subnet to a peer.
+        # range rather than merely discouraged.
         if not (1 <= val <= 254):
             return jsonify({"status": 400, "title": "Bad Request",
                              "detail": "bridge_subnet_octet must be between 1 and 254"}), 400
+        old_val = settings_store.get("network.bridge_subnet_octet", 100)
         settings_store.set("network.bridge_subnet_octet", val)
+        # Keep live state from ever silently diverging from this setting
+        # again — see _rebuild_bridge()'s own docstring for the incident
+        # this closes. Only when it's an actual change: re-running the
+        # rebuild on every PUT that merely repeats the current value
+        # would needlessly bounce a live bridge (and any guests on it).
+        if val != old_val:
+            bridge_rebuild = _rebuild_bridge(val)
 
     settings = settings_store.get_prefixed("network")
     settings.setdefault("bridge_subnet_octet", 100)
+    if bridge_rebuild is not None:
+        settings["bridge_rebuild"] = bridge_rebuild
     return jsonify(settings)
 
 

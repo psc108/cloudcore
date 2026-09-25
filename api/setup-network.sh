@@ -13,6 +13,9 @@
 #   not read or write the API's settings DB itself.
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+BASH_BIN=$(command -v bash)
+
 BRIDGE=ccbr0
 SUBNET=192.168.${1:-100}
 GW=${SUBNET}.1
@@ -102,6 +105,37 @@ elif [ ! -f "$SG_SUDOERS_FILE" ] || ! grep -qxF "${SG_SUDOERS_USER} ALL=(root) N
     echo "Granted $SG_SUDOERS_USER passwordless sudo for iptables/ip6tables (security-group enforcement)."
   else
     echo "WARNING: generated sudoers rule failed validation, not installed: $SG_SUDOERS_LINE" >&2
+    rm -f "$TMP_SUDOERS"
+  fi
+fi
+
+# Lets the running (unprivileged) API process re-invoke this script and
+# teardown-network.sh itself, non-interactively, when an operator
+# changes network.bridge_subnet_octet via PUT /v1/settings/network —
+# confirmed live as a real incident otherwise: that setting is stored
+# in the API's own DB independently of the live ccbr0 interface, and
+# nothing previously rebuilt the interface to match, so a changed
+# setting silently diverged from live reality (ccbr0 stayed on its old
+# subnet) until a completely unrelated symptom surfaced it days later
+# (a WireGuard route-add collision with a peer host's bridge subnet).
+# Exact script paths only, any arguments (the octet argument, or
+# teardown's own --force) — same "narrow binary/path grant, unbounded
+# args" shape as the wg/tee grant above, not a blanket root grant.
+NET_SUDOERS_FILE=/etc/sudoers.d/cloudcore-netrebuild
+NET_SUDOERS_LINE="${SG_SUDOERS_USER} ALL=(root) NOPASSWD: ${BASH_BIN} ${SCRIPT_DIR}/setup-network.sh, ${BASH_BIN} ${SCRIPT_DIR}/teardown-network.sh"
+if [ -z "$SG_SUDOERS_USER" ]; then
+  : # already warned above
+elif [ -f "$NET_SUDOERS_FILE" ] && grep -qxF "$NET_SUDOERS_LINE" "$NET_SUDOERS_FILE" 2>/dev/null; then
+  : # already granted
+else
+  TMP_SUDOERS=$(mktemp)
+  echo "$NET_SUDOERS_LINE" > "$TMP_SUDOERS"
+  chmod 440 "$TMP_SUDOERS"
+  if visudo -c -f "$TMP_SUDOERS" >/dev/null 2>&1; then
+    mv "$TMP_SUDOERS" "$NET_SUDOERS_FILE"
+    echo "Granted $SG_SUDOERS_USER passwordless sudo to re-run setup-network.sh/teardown-network.sh (live bridge-subnet rebuild)."
+  else
+    echo "WARNING: generated sudoers rule failed validation, not installed: $NET_SUDOERS_LINE" >&2
     rm -f "$TMP_SUDOERS"
   fi
 fi

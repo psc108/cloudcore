@@ -88,6 +88,44 @@ def revoke_peer(peer_id: str) -> Optional[dict]:
     return update_peer(peer_id, status="revoked", local_token=None, remote_token=None)
 
 
+# Every resource table that records which peer a remote (or peer-built)
+# resource actually lives on — see db.py's own host_id ALTER TABLEs.
+_HOST_ID_TABLES = ("instances", "vpcs", "subnets", "security_groups")
+
+
+def migrate_host_id_references(pubkey_fpr: str, new_peer_id: str) -> int:
+    """A revoke + re-pair with the same physical host (proven by
+    pubkey_fpr, not just hostname/address which can both change) mints
+    a brand new peers.id — every local resource row still carrying the
+    *old* id as its host_id silently breaks (peers_store.get_peer(old_id)
+    now resolves to a revoked row) until something re-points it.
+    Confirmed live as exactly the failure that made deleting an
+    orphaned remote instance need a manual sqlite UPDATE after a real
+    outage-driven revoke/re-pair (F-147's own follow-up). Called right
+    after a peer transitions into 'approved', for both directions of
+    the handshake, so this never needs doing by hand again.
+
+    Deliberately not folded into revoke_peer() itself — at revoke time
+    there's no new id yet to migrate *to*, and a peer can stay revoked
+    indefinitely with no re-pairing at all, so the fix belongs at the
+    moment a fresh identity match is confirmed, not at the moment the
+    old row dies."""
+    old_ids = [p["id"] for p in list_peers()
+               if p["pubkey_fpr"] == pubkey_fpr and p["id"] != new_peer_id]
+    if not old_ids:
+        return 0
+    c = db.get_db()
+    placeholders = ",".join("?" for _ in old_ids)
+    migrated = 0
+    for table in _HOST_ID_TABLES:
+        cur = c.execute(
+            f"UPDATE {table} SET host_id=? WHERE host_id IN ({placeholders})",
+            [new_peer_id, *old_ids])
+        migrated += cur.rowcount
+    c.commit()
+    return migrated
+
+
 # --- pairing_requests ---
 
 def list_pairing_requests(status: Optional[str] = None) -> list[dict]:

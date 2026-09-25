@@ -26,6 +26,7 @@ import peer_reconciler
 import examples_listener
 import peer_client
 import peers_store
+import wireguard
 from models import (
     VPC, VPCStatus, Instance, LoadBalancer, InstanceStatus, Subnet, SubnetStatus,
     InternetGateway, RouteTable, now_iso,
@@ -2049,6 +2050,24 @@ if __name__ == "__main__":
         # explicit settings PUT, not implicitly.
         discovery.advertise()
         peer_listener.start(discovery.peer_listener_port())
+        # cc0 itself was never re-created on a process restart —
+        # api/wireguard.py's apply() only ever ran from a peer
+        # approve/revoke request, so a real reboot (or even just this
+        # service bouncing) silently dropped an already-approved peer's
+        # tunnel back to nonexistent until the next approval event.
+        # Confirmed live as part of the same incident peer_reconciler.py
+        # exists for. Best-effort and non-fatal to startup — a bad
+        # config or missing sudoers grant here shouldn't take the whole
+        # API down, but it must never fail silently like
+        # on_peer_approved() does, so it's logged loudly either way.
+        approved_peers = peers_store.list_peers(status="approved")
+        if approved_peers:
+            try:
+                ok, msg = wireguard.apply(approved_peers)
+                app.logger.info("[wireguard] startup apply for %d approved peer(s): %s (%s)",
+                                 len(approved_peers), "ok" if ok else "FAILED", msg)
+            except Exception as e:
+                app.logger.error("[wireguard] startup apply raised: %s", e)
         # Direct follow-up to a real incident: a network outage changed
         # a paired host's IP, silently breaking the relationship until
         # a human manually revoked and re-paired on both machines. See

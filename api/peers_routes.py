@@ -327,6 +327,10 @@ def approve_pairing_request(request_id: str):
     )
     wg_result = wireguard.on_peer_approved(peer_row, peers_store.list_peers(status="approved"))
     peer_row = peers_store.update_peer(peer_row["id"], **wg_result)
+    migrated = peers_store.migrate_host_id_references(peer_row["pubkey_fpr"], peer_row["id"])
+    if migrated:
+        print(f"[peers] re-pair with {peer_row['hostname']}: migrated {migrated} local "
+              f"resource record(s) off a stale prior peer id onto {peer_row['id']}", flush=True)
 
     callback_delivered = False
     callback_error = None
@@ -393,7 +397,11 @@ def complete_pairing():
         wg_bridge_subnet=body.get("wg_bridge_subnet", ""), approved_at=now_iso(),
     )
     wg_result = wireguard.on_peer_approved(peer_row, peers_store.list_peers(status="approved"))
-    peers_store.update_peer(peer_row["id"], **wg_result)
+    peer_row = peers_store.update_peer(peer_row["id"], **wg_result)
+    migrated = peers_store.migrate_host_id_references(pubkey_fpr, peer_row["id"])
+    if migrated:
+        print(f"[peers] re-pair with {peer_row['hostname']}: migrated {migrated} local "
+              f"resource record(s) off a stale prior peer id onto {peer_row['id']}", flush=True)
     return jsonify({})
 
 
