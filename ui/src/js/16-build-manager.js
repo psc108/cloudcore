@@ -205,6 +205,30 @@ async function _bmRenderVarForm(filename, tpl, schema) {
     </div>
   `;
     }
+    // Dispatched by real JS type, not variable name -- build_engine.py's
+    // own extract_template_vars() is YAML-native (yaml.safe_load), so a
+    // playbook var written as `foo: false` already arrives here as a
+    // genuine JS boolean, not a string needing separate type-parsing the
+    // way the Tofu side's HCL `type = bool` line does. data-bool="1"
+    // marks this element for bmSubmitBuild's own collection loop --
+    // without it, a plain el.value.trim() would collect the STRING
+    // "false", and at least one real consumer (coordinator-cloud-init.
+    // yml.j2's `{{ relay_debug | ternary('1','0') }}`) evaluates that
+    // string's truthiness, not its text -- a non-empty string "false" is
+    // truthy in Jinja, silently turning the flag on regardless of what
+    // was actually selected. Confirmed live as a real, previously-latent
+    // bug, not a hypothetical one (F-144).
+    if (typeof meta.default === 'boolean') {
+      return `
+    <div class="field">
+      <label>${key.replace(/_/g, ' ')}</label>
+      <select id="bm-var-${key}" data-key="${key}" data-bool="1">
+        <option value="true"${meta.default ? ' selected' : ''}>true</option>
+        <option value="false"${!meta.default ? ' selected' : ''}>false</option>
+      </select>
+    </div>
+  `;
+    }
     return `
     <div class="field">
       <label>${key.replace(/_/g, ' ')}</label>
@@ -420,7 +444,15 @@ async function bmSubmitBuild() {
 
   const vars = {};
   document.querySelectorAll('#bm-var-fields input[data-key], #bm-var-fields select[data-key]').forEach(el => {
-    if (el.value.trim()) vars[el.dataset.key] = el.value.trim();
+    if (!el.value.trim()) return;
+    // data-bool="1" fields (see _bmRenderVarForm's own comment) need a
+    // real JS boolean here, not the select's own string value -- a
+    // string "false" survives JSON.stringify as the JSON string
+    // "false", which build_engine.py passes straight through to
+    // Ansible's extra-vars untouched, and a non-empty string is truthy
+    // to Jinja regardless of its text (confirmed live: relay_debug's
+    // own {{ ... | ternary(...) }} template, F-144).
+    vars[el.dataset.key] = el.dataset.bool === '1' ? el.value === 'true' : el.value.trim();
   });
   if (vars[_BM_WORKER_PEERS_VAR]) vars[_BM_WORKER_PEERS_VAR] = JSON.parse(vars[_BM_WORKER_PEERS_VAR]);
 

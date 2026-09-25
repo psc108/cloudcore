@@ -230,6 +230,19 @@ def _extract_default_value(body: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def _extract_type_value(body: str) -> str:
+    """Extract the bare token after `type = ` inside a variable block's
+    body -- every real `type = ...` declaration in this repo's own .tf
+    files is an unquoted bare token (bool/string/number/list(...)/etc,
+    see examples/full-stack/variables.tf), so unlike
+    _extract_default_value above there's no quoting/bracket-depth case
+    to handle here. Defaults to "string" (Terraform's own implicit
+    default when a variable block omits `type =` entirely) so every
+    schema entry always carries a usable value, not None."""
+    m = re.search(r'type\s*=\s*(\w+)', body)
+    return m.group(1) if m else "string"
+
+
 def extract_template_vars(dir_name: str) -> dict:
     # Prefer variables.tf (best-practice layout); fall back to main.tf for legacy examples
     example_dir = EXAMPLES_DIR / dir_name
@@ -246,14 +259,15 @@ def extract_template_vars(dir_name: str) -> dict:
         name = header.group(1)
         body = _extract_balanced_block(content, header.end() - 1)
         default_value = _extract_default_value(body)
+        var_type = _extract_type_value(body)
         if default_value is not None:
-            schema[name] = {"default": default_value.strip(), "derived": False, "required": False}
+            schema[name] = {"default": default_value.strip(), "derived": False, "required": False, "type": var_type}
         else:
             # No default = in the block means Terraform will hard-fail
             # the apply if this isn't supplied — surfaced distinctly from
             # "has a default that happens to be empty" so the UI can flag
             # it rather than silently omitting it from the build request.
-            schema[name] = {"default": "", "derived": False, "required": True}
+            schema[name] = {"default": "", "derived": False, "required": True, "type": var_type}
 
     schema.update(_connection_vars())
     return schema
@@ -261,8 +275,8 @@ def extract_template_vars(dir_name: str) -> dict:
 
 def _connection_vars() -> dict:
     return {
-        "cloudcore_api_url":   {"default": "http://127.0.0.1:8080", "derived": False, "required": False},
-        "cloudcore_api_token": {"default": "dev-token",             "derived": False, "required": False},
+        "cloudcore_api_url":   {"default": "http://127.0.0.1:8080", "derived": False, "required": False, "type": "string"},
+        "cloudcore_api_token": {"default": "dev-token",             "derived": False, "required": False, "type": "string"},
     }
 
 

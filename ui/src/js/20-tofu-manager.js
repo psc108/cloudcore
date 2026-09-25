@@ -249,6 +249,7 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
         </div>
       `;
     }
+    if (meta.type === 'bool') return _tfRenderBoolField(key, meta);
     return `
       <div class="field">
         <label>${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}</label>
@@ -496,6 +497,32 @@ function _tfRenderPeerField(key, meta, peers, recommendation, hasWorkerPeers) {
       ${rec && peers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
       ${hasWorkerPeers && peers.length ? `<span class="bm-field-hint">Not auto-selected — must be a different peer than any worker below, so this always starts local. Pick one deliberately if you want it peer-placed.</span>` : ''}
       ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
+    </div>
+  `;
+}
+
+// Dispatched by meta.type === 'bool' (extract_template_vars() now reads
+// the real `type = ...` line, not just variable name) -- every other
+// dropdown in this file is name/regex-dispatched because it needs
+// async-fetched data (peers/USB devices) to build its own option list;
+// a bool needs neither, so it's the one case simple enough to dispatch
+// generically by type instead of a hardcoded variable name. Options are
+// the literal strings "true"/"false" -- tfSubmitBuild's existing
+// generic select[data-key] collection loop already reads .value as a
+// plain string for every field, and OpenTofu's own -var mechanism
+// already parses "true"/"false" text into the variable's real
+// `type = bool` regardless of how that text was typed/selected, exactly
+// like the old free-text box already worked for this same variable.
+function _tfRenderBoolField(key, meta) {
+  const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
+  const def = String(meta.default ?? '').trim().toLowerCase() === 'true';
+  return `
+    <div class="field">
+      <label>${label}</label>
+      <select id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}">
+        <option value="true"${def ? ' selected' : ''}>true</option>
+        <option value="false"${!def ? ' selected' : ''}>false</option>
+      </select>
     </div>
   `;
 }
