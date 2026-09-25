@@ -305,6 +305,53 @@ still running after 45 seconds (a real server, say) is reported
 honestly as "no automatic result available" rather than guessed at
 either way.
 
+#### Retrieval grounding
+
+Both the coding Ask panel and Linux Help check for real reference
+material before answering, rather than relying purely on the model's
+own parametric memory — the model is asked to fact-check itself
+against what's found and explain in its own words, not to copy it
+verbatim. Checked in order, each tier only the fallback for the one
+before it, not queried alongside it:
+
+1. **A human-approved local corpus** — a past question/answer pair a
+   reviewer explicitly marked "worked as expected" in Sentinel's own
+   **Grounding** tab. Only ever reused once approved; an unreviewed or
+   rejected entry is never matched against, even on an exact
+   search-term hit.
+2. **This project's own source code** — a full-text index over
+   CloudCore's own Python/Terraform/Ansible/shell/Go, kept current
+   with one command (`sentinel index-codebase <path>`, run again any
+   time this repo's source changes — not a rebuild-and-redeploy
+   cycle), for questions about how this platform actually works. Works
+   for genuinely generic patterns too (file I/O, retry loops, argument
+   parsing), not only CloudCore-specific architecture.
+3. **Kiwix** — an offline content library (Wikipedia, man pages,
+   ArchWiki, Python's own docs/PEPs, and DevDocs bundles for common
+   libraries), served by a dedicated kiwix instance this template
+   builds for itself (`module "kiwix"`, the same already-proven
+   mechanism `examples/kiwix-library` uses, not a dependency on that
+   separate example), for everything the first two tiers don't cover.
+
+A miss at every tier still gets an answer — grounding is additive,
+never a blocker — but the model is asked to say so plainly rather than
+guess with false confidence. Every completed ask (grounded or not) is
+logged to Sentinel's own Grounding tab: the real search terms used,
+what was found, and for the coding panel, whether the suggested code's
+actual re-execution verified — the one place to see, and
+approve/reject, what a student was actually told. Requires
+`SENTINEL_HOST`/`SENTINEL_PORT` and `KIWIX_HOST`/`KIWIX_PORT` pointed
+at real, reachable instances; either being unreachable just skips that
+tier, never breaks an Ask.
+
+By default, a second student's question arriving while the coordinator
+is still answering someone else's is rejected outright — a real,
+working single-model-at-a-time limit of this hardware, not a bug.
+Setting `ask_queue_enabled = true` (off by default — a dropdown when
+building this template from the Dashboard's own Build Manager) queues
+it instead and reports a real, live position back rather than a bare
+"try again", visible in Sentinel's own **Ask Queue** tab.
+
 Both `llm-chat` and `distributed-llm` can also run the larger, higher-
 precision Q8_0 variant of their own default model on the new
 `standard.xlarge` flavor (6 vCPU / 8GB RAM) instead of the default
