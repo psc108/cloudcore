@@ -231,6 +231,7 @@ locals {
     context_size        = var.context_size
     threads              = var.threads
     llama_rpc_flags      = local.llama_rpc_flags
+    rpc_servers          = local.rpc_servers
     promtail_config      = local.promtail_config
     webui_config_json    = local.webui_config_json
     verify_proxy_source     = local.verify_proxy_source

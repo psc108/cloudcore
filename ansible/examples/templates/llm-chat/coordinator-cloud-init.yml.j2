@@ -137,6 +137,56 @@ write_files:
     encoding: b64
     content: "{{ xterm_fit_addon_js | b64encode }}"
 
+  - path: /opt/llama.cpp/wait-for-rpc-workers.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # ExecStartPre for llama-server.service -- direct follow-up to
+      # real, repeated crash-looping ("we do get a lot of rpc or crash
+      # looping with this"): llama-server's own --rpc client calls
+      # ggml_abort() (a hard SIGABRT, not a graceful error) if a
+      # configured RPC worker is unreachable AT STARTUP -- confirmed
+      # live via the real journal backtrace (ggml-rpc.cpp:547 "Failed
+      # to connect to ..." -> ggml_backend_rpc_add_server ->
+      # ggml_abort). That abort happens only after llama-server has
+      # already fully loaded the model (several minutes on this
+      # hardware for the real GGUF), so a worker that goes unreachable
+      # well after a successful build (not a build-time ordering
+      # problem -- OpenTofu/Ansible already wait for instance creation)
+      # turned every single Restart=on-failure cycle into a wasted
+      # multi-minute reload before crashing again seconds later --
+      # confirmed live, ~2m10s-2m15s between crashes, 66 restarts over
+      # ~2.5 hours. This runs BEFORE llama-server even starts, so a
+      # genuinely unreachable worker fails here in seconds: systemd's
+      # own Restart=on-failure then retries this cheap check instead of
+      # the expensive full process, recovering within one such cycle of
+      # the worker coming back rather than whatever the next multi-
+      # minute cycle happens to land on.
+      set -euo pipefail
+
+      RPC_SERVERS="${1:-}"
+      [[ -z "${RPC_SERVERS}" ]] && exit 0  # zero-worker build -- nothing to check, matches F-126's own supported case
+
+      MAX_ATTEMPTS=6
+      SLEEP_S=5
+
+      IFS=',' read -ra ADDRS <<< "${RPC_SERVERS}"
+      for addr in "${ADDRS[@]}"; do
+        host="${addr%%:*}"
+        port="${addr##*:}"
+        attempt=1
+        until timeout 3 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null; do
+          if (( attempt >= MAX_ATTEMPTS )); then
+            echo "wait-for-rpc-workers: ${addr} still unreachable after ${MAX_ATTEMPTS} attempts -- giving up this cycle" >&2
+            exit 1
+          fi
+          echo "wait-for-rpc-workers: ${addr} not reachable yet (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${SLEEP_S}s..." >&2
+          sleep "${SLEEP_S}"
+          ((attempt++))
+        done
+      done
+      exit 0
+
   - path: /etc/systemd/system/llama-server.service
     content: |
       [Unit]
@@ -147,6 +197,7 @@ write_files:
       [Service]
       WorkingDirectory=/opt/llama.cpp
       Environment=LD_LIBRARY_PATH=/opt/llama.cpp
+      ExecStartPre=/opt/llama.cpp/wait-for-rpc-workers.sh '{{ rpc_servers }}'
       ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/{{ model_filename }} --host 127.0.0.1 --port 8721 -c {{ context_size }} {{ llama_rpc_flags }}-t {{ threads }} --webui-config-file /opt/llama.cpp/webui-config.json
       Restart=on-failure
       RestartSec=5
@@ -178,8 +229,32 @@ write_files:
       [Unit]
       Description=llm-chat grounded code verification proxy
       After=network-online.target llama-server.service
-      Wants=network-online.target
-      Requires=llama-server.service
+      Wants=network-online.target llama-server.service
+      # Direct follow-up to wait-for-rpc-workers.sh above: this was
+      # Requires=llama-server.service until a real live test exposed a
+      # genuine risk in that -- Requires (confirmed live, not just per
+      # the systemd docs) restarts this unit in lockstep whenever
+      # llama-server.service restarts, which _restart_llama_server()'s
+      # own comment already relied on deliberately, on the assumption
+      # that llama-server always reaches "active" again within a few
+      # seconds. wait-for-rpc-workers.sh's own fast-fail changes that:
+      # llama-server's own START JOB can now genuinely fail (not just
+      # crash after starting) while a worker stays unreachable, and a
+      # failed *job* is what makes a Requires= dependent's own start
+      # fail too ("Dependency failed") -- a failure Restart=on-failure
+      # does NOT retry, since the process never started for the main-
+      # process-exit trigger to fire on. Confirmed live: this left
+      # verify-proxy.service permanently inactive (hard connection-
+      # refused for every student) until manually started again, a
+      # materially worse failure than the wasted-model-reload problem
+      # this whole fix exists to solve. Wants= keeps the same startup
+      # ordering (After=) and still starts llama-server alongside this
+      # unit, but no longer hard-fails this one over the other's own
+      # job outcome -- confirmed live: verify-proxy now starts and
+      # stays active regardless, and a request arriving while
+      # llama-server is down gets the real, already-existing graceful
+      # 502 "upstream unreachable" from _open_upstream_completion's own
+      # retry logic, not a bare connection refused.
 
       [Service]
       WorkingDirectory=/opt/llama.cpp

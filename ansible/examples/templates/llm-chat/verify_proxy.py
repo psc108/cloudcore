@@ -438,7 +438,9 @@ def _push_grounding_to_sentinel(entry: dict) -> None:
 
 
 def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms: str,
-                    references: list, code_verified, grounding_source: str = "none") -> None:
+                    references: list, code_verified, grounding_source: str = "none",
+                    outcome=None, duration_s=None, tokens=None, tokens_per_second=None,
+                    continuation_rounds=None) -> None:
     """Records what actually happened for one completed ask -- the
     search terms used, what (if anything) kiwix found, and for the
     coding panel, whether its own execution-verification passed. Direct
@@ -452,6 +454,17 @@ def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms
     the coding panel, its own verification outcome) are known -- not
     from _do_handle_ask() right after the search, so the record
     reflects the whole turn, not just the retrieval step.
+
+    outcome/duration_s/tokens/tokens_per_second/continuation_rounds:
+    direct follow-up, "we need an actual performance dashboard...
+    quality of questions, failures to answer" -- the exact same facts
+    _log_ask_outcome() (below) already computes at this same call site
+    moments earlier, for ASK_OUTCOME's own stdout-only/Loki-only line.
+    Rather than a second push mechanism, this one call now also carries
+    them into grounding_log's own row -- one logical event (this
+    completed ask) gaining more recorded facts, not a different
+    lifecycle needing its own table the way ask_queue_events' own
+    before-the-ask transitions genuinely do.
 
     Two channels, both best-effort: a GROUNDING_LOG line to stdout,
     matching ASK_OUTCOME's own convention exactly (flows to Loki via
@@ -468,10 +481,29 @@ def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms
         "search_terms": search_terms, "references": references,
         "grounded": bool(references), "code_verified": code_verified,
         "grounding_source": grounding_source,
+        "outcome": outcome, "duration_s": duration_s, "tokens": tokens,
+        "tokens_per_second": tokens_per_second, "continuation_rounds": continuation_rounds,
     }
     print(f"GROUNDING_LOG {json.dumps(entry)}", flush=True)
     if SENTINEL_HOST:
         threading.Thread(target=_push_grounding_to_sentinel, args=(entry,), daemon=True).start()
+
+
+def _push_llm_stats_to_sentinel(entry: dict) -> None:
+    """Best-effort POST of this deployment's own current _llm_stats
+    snapshot to Sentinel's own /api/llm-stats -- same shape as
+    _push_grounding_to_sentinel above. Sentinel upserts by
+    deployment_name (see its own llm_stats.py), so this is always
+    "latest known state", not a history -- matches _llm_stats itself
+    being a live snapshot, not a log."""
+    try:
+        body = json.dumps(entry).encode()
+        req = urllib.request.Request(
+            f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/llm-stats",
+            data=body, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=_SENTINEL_PUSH_TIMEOUT_S).close()
+    except Exception as e:
+        print(f"verify-proxy: Sentinel llm-stats push failed (non-fatal): {e!r}", flush=True)
 
 
 def _push_ask_queue_event(entry: dict) -> None:
@@ -538,17 +570,26 @@ def _restart_llama_server() -> None:
     itself runs as root (see its own systemd unit), so this needs no
     sudo/password prompt.
 
-    Confirmed live: verify-proxy.service's own unit has
-    `Requires=llama-server.service`, so this restart briefly restarts
-    verify-proxy.service TOO (systemd's own dependency propagation,
-    pre-existing, not something this function causes deliberately) --
-    including the very process this function is running in. That's an
-    acceptable, low-cost side effect, not a bug: verify-proxy's own
-    restart takes a couple of seconds (no model to reload), so the only
-    real impact is any OTHER concurrent request landing in that brief
-    window gets its own connection reset -- a clear, honest failure a
-    retry resolves, not a silent hang. Nothing here waits for or
-    depends on this process surviving past this point."""
+    verify-proxy.service's own unit used to be
+    `Requires=llama-server.service`, which restarted verify-proxy.service
+    itself in lockstep with this restart (systemd's own dependency
+    propagation) -- accepted at the time as a brief, low-cost side
+    effect. Changed to `Wants=` after wait-for-rpc-workers.sh's own
+    fast-fail (a direct follow-up, "we do get a lot of rpc or crash
+    looping with this") exposed a real problem with that: once
+    llama-server.service's own START JOB can genuinely fail (not just
+    crash after a successful start), a `Requires=` dependent's own start
+    fails right along with it ("Dependency failed") -- a failure
+    Restart=on-failure does NOT retry, confirmed live to leave
+    verify-proxy.service permanently inactive (hard connection-refused
+    for every student) rather than the brief bounce this comment used to
+    describe. `Wants=` keeps the same startup ordering and still starts
+    llama-server alongside verify-proxy, but no longer hard-fails this
+    process over that one's own job outcome -- a request arriving while
+    llama-server is down now gets the real, already-existing graceful
+    502 "upstream unreachable" from _open_upstream_completion's own
+    retry logic instead. Nothing here waits for or depends on
+    llama-server surviving past this point either way."""
     global _llama_last_restart_time
     with _llama_restart_lock:
         if time.time() - _llama_last_restart_time < _LLAMA_RESTART_COOLDOWN_S:
@@ -3239,6 +3280,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         full_text = "".join(accumulated_text)
 
+        # Defaulted here, not just inside the block below -- outcome/
+        # duration_s now also feed _log_grounding()'s own call further
+        # down (see its own comment on why), which must never NameError
+        # on whatever rare path leaves started_at unset.
+        outcome = None
+        duration_s = None
         if started_at is not None:
             # See _log_ask_outcome's own comment -- covers every real
             # outcome, not just the success case _record_llm_stats above
@@ -3253,7 +3300,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 outcome = "length_exhausted"
             else:
                 outcome = "success"
-            _log_ask_outcome(endpoint_label, outcome, time.time() - started_at,
+            duration_s = time.time() - started_at
+            _log_ask_outcome(endpoint_label, outcome, duration_s,
                               question_chars=question_chars, answer_chars=len(full_text),
                               continuation_rounds=continuation_rounds,
                               tokens=(last_timings or {}).get("predicted_n"),
@@ -3335,7 +3383,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "than the whole output._\n", last_chunk_meta)
 
         _log_grounding(endpoint_label, question, full_text, search_terms, references or [],
-                        code_verified, grounding_source)
+                        code_verified, grounding_source, outcome=outcome, duration_s=duration_s,
+                        tokens=(last_timings or {}).get("predicted_n"),
+                        tokens_per_second=(last_timings or {}).get("predicted_per_second"),
+                        continuation_rounds=continuation_rounds)
+        if SENTINEL_HOST:
+            snapshot = _llm_stats_snapshot()
+            snapshot["deployment_name"] = DEPLOYMENT_NAME
+            threading.Thread(target=_push_llm_stats_to_sentinel, args=(snapshot,), daemon=True).start()
 
         try:
             self.wfile.write(b"data: [DONE]\n\n")

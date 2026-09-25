@@ -836,7 +836,7 @@
           'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
           'model_filename': model_filename, 'model_sha256': model_sha256,
           'http_port': http_port, 'context_size': context_size, 'threads': threads,
-          'llama_rpc_flags': llama_rpc_flags, 'promtail_config': promtail_config,
+          'llama_rpc_flags': llama_rpc_flags, 'rpc_servers': rpc_servers, 'promtail_config': promtail_config,
           'webui_config_json': webui_config_json,
           'verify_proxy_source': verify_proxy_source,
           'enable_verification': enable_verification,
