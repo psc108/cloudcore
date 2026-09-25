@@ -69,7 +69,19 @@ runcmd:
   # including libgomp1, which the worker's own ggml-rpc-server binary
   # also needs). --force-confold answers that prompt non-interactively;
   # idempotent and harmless whether packages: already succeeded or not.
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1
+  # F-142 -- see coordinator-cloud-init.yml.j2's own identical comment:
+  # a stalled fetch against this repo's unsigned "[trusted=yes]" source
+  # during the packages: phase's own apt-get update can silently cache
+  # a truncated index, making libgomp1 look genuinely nonexistent.
+  # Retried with a fresh apt-get update each attempt, not just the
+  # install alone.
+  - |
+    for attempt in 1 2 3 4 5; do
+      apt-get update -qq && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1 && break
+      echo "apt-get install attempt $attempt failed (F-142: truncated package index), retrying with a fresh apt-get update..." >&2
+      sleep 5
+    done
 
   # Promtail fix first, before any other service — same F-072/F-073
   # ordering every other example in this project already follows.

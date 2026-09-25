@@ -269,7 +269,26 @@ runcmd:
   # choice here since write_files already wrote the real config);
   # idempotent and harmless to re-run whether the packages: phase
   # already succeeded or not.
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1 python3 util-linux dnsmasq python3-paramiko
+  # F-142: a fresh boot hit this exact reinstall line still missing
+  # libgomp1/promtail/dnsmasq/python3-paramiko -- not the F-133-adjacent
+  # conffile-prompt abort above (that reruns fine), but a stalled fetch
+  # against this repo's own unsigned "[trusted=yes]" sources.list entry
+  # during the earlier packages: phase's own apt-get update: with no
+  # Release/hash verification, apt silently accepted a truncated
+  # Packages listing as complete instead of erroring, so every package
+  # past the truncation point looked genuinely nonexistent ("E: Unable
+  # to locate package") even though the repo really has it (confirmed
+  # live: a manual apt-get update moments later found all four
+  # instantly, no repo-side fix needed). Retried with a fresh
+  # apt-get update each attempt, not just the install -- an install
+  # retry alone would keep reusing the same truncated index forever.
+  - |
+    for attempt in 1 2 3 4 5; do
+      apt-get update -qq && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1 python3 util-linux dnsmasq python3-paramiko && break
+      echo "apt-get install attempt $attempt failed (F-142: truncated package index), retrying with a fresh apt-get update..." >&2
+      sleep 5
+    done
 
   # Promtail fix first, before any other service — same F-072/F-073
   # ordering every other example in this project already follows.

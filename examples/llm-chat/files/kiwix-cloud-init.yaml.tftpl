@@ -54,7 +54,18 @@ runcmd:
   # interactive dpkg conffile prompt against the config write_files
   # already wrote, aborting the whole packages: transaction with no
   # TTY to answer. --force-confold re-run is idempotent either way.
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl ca-certificates promtail
+  # F-142 -- see coordinator-cloud-init.yaml.tftpl's own identical
+  # comment: a stalled fetch against this repo's unsigned
+  # "[trusted=yes]" source during the packages: phase's own apt-get
+  # update can silently cache a truncated index. Retried with a fresh
+  # apt-get update each attempt, not just the install alone.
+  - |
+    for attempt in 1 2 3 4 5; do
+      apt-get update -qq && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl ca-certificates promtail && break
+      echo "apt-get install attempt $attempt failed (F-142: truncated package index), retrying with a fresh apt-get update..." >&2
+      sleep 5
+    done
 
   # F-073/F-072 promtail fix — see coordinator-cloud-init.yaml.tftpl's
   # own identical comment for why this runs first, before anything
