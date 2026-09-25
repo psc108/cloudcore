@@ -118,11 +118,28 @@ fi
 # setting silently diverged from live reality (ccbr0 stayed on its old
 # subnet) until a completely unrelated symptom surfaced it days later
 # (a WireGuard route-add collision with a peer host's bridge subnet).
-# Exact script paths only, any arguments (the octet argument, or
-# teardown's own --force) — same "narrow binary/path grant, unbounded
-# args" shape as the wg/tee grant above, not a blanket root grant.
+# Exact script paths, trailing "*" wildcard for the octet argument (or
+# teardown's own --force) — confirmed live as a real requirement, not
+# stylistic: sudoers only treats a command as "any arguments allowed"
+# when the RULE ITSELF has none. Here the rule already specifies one
+# argument (the script path, since /usr/bin/bash is the actual command
+# and the script is bash's own argv[1]), so without a trailing wildcard
+# sudo requires an *exact* match — zero additional arguments — and
+# silently falls through to a password prompt for "setup-network.sh
+# 100" even though "setup-network.sh" alone matches fine. Unlike the
+# wg/tee grant above (a genuinely bare command, no args in the rule at
+# all, where "any arguments" already applies with no wildcard needed).
 NET_SUDOERS_FILE=/etc/sudoers.d/cloudcore-netrebuild
-NET_SUDOERS_LINE="${SG_SUDOERS_USER} ALL=(root) NOPASSWD: ${BASH_BIN} ${SCRIPT_DIR}/setup-network.sh, ${BASH_BIN} ${SCRIPT_DIR}/teardown-network.sh"
+NET_SETUP="${BASH_BIN} ${SCRIPT_DIR}/setup-network.sh"
+NET_TEARDOWN="${BASH_BIN} ${SCRIPT_DIR}/teardown-network.sh"
+# Listed both bare (zero arguments — e.g. this script's own steady-
+# state re-run, or teardown with no flags) and with a trailing "*"
+# (an octet argument, or teardown's own --force): a bare "*" alone
+# would only match when at least a literal space is present in the
+# actual invoked command line, which the zero-argument case doesn't
+# have, so relying on the wildcard form alone would have silently
+# broken the already-working no-args case.
+NET_SUDOERS_LINE="${SG_SUDOERS_USER} ALL=(root) NOPASSWD: ${NET_SETUP}, ${NET_SETUP} *, ${NET_TEARDOWN}, ${NET_TEARDOWN} *"
 if [ -z "$SG_SUDOERS_USER" ]; then
   : # already warned above
 elif [ -f "$NET_SUDOERS_FILE" ] && grep -qxF "$NET_SUDOERS_LINE" "$NET_SUDOERS_FILE" 2>/dev/null; then
