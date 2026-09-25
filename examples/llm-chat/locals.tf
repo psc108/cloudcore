@@ -252,6 +252,7 @@ locals {
     linux_system_message     = var.linux_system_message
     rate_limit_run_per_minute = var.rate_limit_run_per_minute
     rate_limit_ask_per_10min  = var.rate_limit_ask_per_10min
+    ask_queue_enabled         = var.ask_queue_enabled
     firecracker_archive_name    = var.firecracker_archive_name
     firecracker_sha256          = var.firecracker_sha256
     firecracker_kernel_name     = var.firecracker_kernel_name

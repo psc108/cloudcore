@@ -45,6 +45,7 @@ this codebase (examples/ha-frontend-lb's serve-ca-certs.py).
 """
 from __future__ import annotations
 
+import collections
 import html
 import http.client
 import http.server
@@ -64,6 +65,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 
 UPSTREAM_HOST = "127.0.0.1"
@@ -471,6 +473,42 @@ def _log_grounding(endpoint_label: str, question: str, answer: str, search_terms
     if SENTINEL_HOST:
         threading.Thread(target=_push_grounding_to_sentinel, args=(entry,), daemon=True).start()
 
+
+def _push_ask_queue_event(entry: dict) -> None:
+    """Best-effort POST of one ask-queue event to Sentinel's own
+    /api/ask-queue -- same shape as _push_grounding_to_sentinel above
+    (plain urllib, no auth, always backgrounded, a slow/unreachable
+    Sentinel must never add latency to a student's own request)."""
+    try:
+        body = json.dumps(entry).encode()
+        req = urllib.request.Request(
+            f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/ask-queue",
+            data=body, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=_SENTINEL_PUSH_TIMEOUT_S).close()
+    except Exception as e:
+        print(f"verify-proxy: Sentinel ask-queue push failed (non-fatal): {e!r}", flush=True)
+
+
+def _log_ask_queue_event(request_id: str, endpoint_label: str, event: str,
+                          queue_position: int | None = None, queue_depth: int | None = None,
+                          wait_seconds: float | None = None) -> None:
+    """Records one queued/started/finished transition for one ask,
+    correlated by request_id -- direct follow-up to "some sort of
+    monitor running from sentinel to oversee the llm, the questions
+    posted... the order". Only called when ASK_QUEUE_ENABLED (see
+    _ask_queue's own comment) -- with the feature off there is no
+    queue to report order/wait-time for. Same two-channel, best-effort
+    shape as _log_grounding above: a stdout line (Loki, free) plus a
+    backgrounded push to Sentinel's own DB for a queryable record."""
+    entry = {
+        "request_id": request_id, "endpoint": endpoint_label, "event": event,
+        "queue_position": queue_position, "queue_depth": queue_depth,
+        "wait_seconds": wait_seconds,
+    }
+    print(f"ASK_QUEUE_EVENT {json.dumps(entry)}", flush=True)
+    if SENTINEL_HOST:
+        threading.Thread(target=_push_ask_queue_event, args=(entry,), daemon=True).start()
+
 # How often _relay_one_stream's read loop wakes up (via a short socket
 # read timeout) to re-check the stall clock -- NOT the stall threshold
 # itself. Short enough that GENERATION_STALL_TIMEOUT_S is honored
@@ -789,6 +827,46 @@ _client_state: dict[str, dict] = {}
 # separate, global gate on top of that one, checked first.
 _llm_busy_lock = threading.Lock()
 _llm_busy = False
+
+# Configurable module, direct follow-up to the above: "we might even
+# need to send the messages to something like rabbitmq... so that we
+# don't try to overload the llm" -- discussed and deliberately NOT
+# RabbitMQ (this coordinator has exactly one consumer, one model, so a
+# broker's own durability/multi-consumer value doesn't apply here; the
+# real ask is a visible position instead of an outright reject).
+# Default OFF: with this False, every code path below that checks it
+# is skipped and _handle_ask behaves exactly as it did before this
+# existed. `_ask_queue` is an IP-keyed FIFO (an OrderedDict, not
+# queue.Queue -- there's no producer/consumer thread split here, just
+# an ordered membership test under a lock already held for other
+# reasons) guarded ENTIRELY by _llm_busy_lock above, not a new lock:
+# queue order and _llm_busy are one invariant, and two locks here
+# would only add a real ordering-bug risk for no benefit.
+ASK_QUEUE_ENABLED = os.environ.get("ASK_QUEUE_ENABLED", "false").lower() == "true"
+_ASK_QUEUE_TTL_S = 60  # a few multiples of the frontend's own 4s ask-status poll
+_ask_queue: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+
+
+def _prune_stale_queue_entries_locked() -> None:
+    """Caller must already hold _llm_busy_lock. No background sweep
+    thread -- an abandoned ticket (closed tab, or rate-limited on
+    retry before ever reaching the busy-gate below) simply ages out
+    the next time ANYONE touches the queue (their own ask-status poll,
+    every 4s, or a fresh ask attempt), since a live student's own
+    ticket is refreshed by that exact same traffic. Self-healing, no
+    new thread or scheduler needed."""
+    now = time.time()
+    for stale_ip in [ip for ip, t in _ask_queue.items() if now - t["last_seen"] > _ASK_QUEUE_TTL_S]:
+        del _ask_queue[stale_ip]
+
+
+def _queue_position_locked(ip: str) -> int | None:
+    """Caller must already hold _llm_busy_lock. 1-based position, or
+    None if `ip` isn't currently queued. list(dict.keys()).index() is
+    fine at these sizes (a handful of students at once, never a real
+    hot loop) -- no secondary index worth the complexity."""
+    ips = list(_ask_queue.keys())
+    return ips.index(ip) + 1 if ip in ips else None
 
 
 def extract_python_code(text: str) -> str | None:
@@ -1733,6 +1811,12 @@ function makeAskPanel(cfg) {
         if (!data.busy) {
           stopAvailabilityPoll();
           statusEl.textContent = 'Available again -- you can ask your question now.';
+        } else if (data.queue_position) {
+          // ASK_QUEUE_ENABLED only -- queue_position is always null
+          // with the feature off, so this branch never fires then and
+          // the message below is unchanged from before this existed.
+          statusEl.textContent = `You're #${data.queue_position} in the queue`
+            + (data.queue_depth ? ` (${data.queue_depth} waiting)` : '') + '...';
         }
       } catch (e) { /* transient network hiccup -- keep polling */ }
     }, 4000);
@@ -1823,16 +1907,25 @@ function makeAskPanel(cfg) {
         body: JSON.stringify(Object.assign(cfg.buildBody(), {question, history: contextHistory})),
       });
       if (!resp.ok || !resp.body) {
-        // 429 (rate limit or "already have a question in progress") and
-        // 503 (someone ELSE is currently asking -- see _send_busy()'s
-        // own comment) both come back as plain text with the real,
-        // useful reason -- show that instead of just the bare status
-        // code. 503 specifically starts polling for availability so
-        // the student is told the moment it's actually worth retrying,
-        // rather than left to guess-and-spam Ask themselves.
+        // 429 (rate limit or "already have a question in progress") is
+        // plain text with the real, useful reason. 503 (someone ELSE
+        // is currently asking -- see _send_busy()'s own comment) is
+        // JSON -- {message, queue_position, queue_depth}, the latter
+        // two null unless ASK_QUEUE_ENABLED -- so a real live position
+        // can be appended when there is one. 503 specifically starts
+        // polling for availability so the student is told the moment
+        // it's actually worth retrying, rather than left to guess-
+        // and-spam Ask themselves.
         bubbleContent.classList.remove('thinking');
-        bubbleContent.textContent = (resp.status === 429 || resp.status === 503)
-          ? await resp.text() : 'Request failed (' + resp.status + ')';
+        if (resp.status === 429) {
+          bubbleContent.textContent = await resp.text();
+        } else if (resp.status === 503) {
+          const data = await resp.json();
+          bubbleContent.textContent = data.message
+            + (data.queue_position ? ` You're #${data.queue_position} in the queue.` : '');
+        } else {
+          bubbleContent.textContent = 'Request failed (' + resp.status + ')';
+        }
         if (resp.status === 503) startAvailabilityPoll();
       } else {
         const reader = resp.body.getReader();
@@ -2524,28 +2617,50 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(out)
 
-    def _send_busy(self, message: str):
+    def _send_busy(self, message: str, queue_position: int | None = None,
+                    queue_depth: int | None = None):
         # A distinct status (503, not 429's rate-limit/per-IP-already-
         # active meaning) so the browser's own JS can tell "someone ELSE
-        # is asking, we're deliberately not queuing you" apart from
-        # those other two 429 cases, and knows to start polling
-        # /sandbox/ask-status rather than just showing a static message.
-        out = message.encode()
+        # is asking" apart from those other two 429 cases, and knows to
+        # start polling /sandbox/ask-status rather than just showing a
+        # static message. Always a small JSON body (not plain text) --
+        # queue_position/queue_depth ride the same envelope ask-status
+        # already uses, rather than inventing a second, plain-text-only
+        # encoding for the same concept. With ASK_QUEUE_ENABLED off,
+        # both are always None here (see _handle_ask's own call site),
+        # so this degrades to {"message": ..., "queue_position": null,
+        # "queue_depth": null} -- same information as before, just
+        # JSON-shaped; no threading/business-logic change either way.
+        out = json.dumps({
+            "message": message, "queue_position": queue_position, "queue_depth": queue_depth,
+        }).encode()
         self.send_response(503)
-        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
 
     def _handle_ask_status(self):
         """GET /sandbox/ask-status -- a trivial, instant read of the
-        global busy flag (see _llm_busy's own comment), no LLM call
-        involved. Polled by the browser only after it's been told
-        "busy" once, to know the moment it's worth telling the student
-        to retry rather than leaving them to guess-and-spam Ask."""
+        global busy flag (see _llm_busy's own comment) plus, when
+        ASK_QUEUE_ENABLED, this caller's own live queue position -- no
+        LLM call involved either way. Polled by the browser every 4s
+        once it's been told "busy" once, to know the moment it's worth
+        telling the student to retry rather than leaving them to
+        guess-and-spam Ask. This poll is also what keeps a genuinely-
+        still-waiting student's own queue ticket alive (see
+        _prune_stale_queue_entries_locked's own comment) -- every call
+        here refreshes `last_seen` for the calling IP if it's queued."""
+        ip = self._client_ip()
         with _llm_busy_lock:
+            if ASK_QUEUE_ENABLED:
+                _prune_stale_queue_entries_locked()
+                if ip in _ask_queue:
+                    _ask_queue[ip]["last_seen"] = time.time()
             busy = _llm_busy
-        out = json.dumps({"busy": busy}).encode()
+            pos = _queue_position_locked(ip) if ASK_QUEUE_ENABLED else None
+            depth = len(_ask_queue) if ASK_QUEUE_ENABLED else None
+        out = json.dumps({"busy": busy, "queue_position": pos, "queue_depth": depth}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out)))
@@ -2628,12 +2743,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         On top of that per-IP cap, a GLOBAL one-at-a-time gate (see
         _llm_busy's own comment) rejects a second, DIFFERENT student's
-        question outright -- thrown away, never even sent upstream --
-        rather than queuing it, per direct request. Checked after the
-        per-IP gate so a student re-clicking their OWN in-flight
-        question still gets the friendlier "you already have one"
-        message instead of being told someone else is busy."""
+        question outright by default -- thrown away, never even sent
+        upstream. With ASK_QUEUE_ENABLED on (see its own comment),
+        that reject instead registers a FIFO ticket and reports this
+        IP's live position, still never auto-resubmitted -- the
+        student sees a real "#N in the queue" and retries themselves
+        once told it's free, same manual-retry shape as before, just
+        with an honest position instead of a bare "busy" message.
+        Checked after the per-IP gate so a student re-clicking their
+        OWN in-flight question still gets the friendlier "you already
+        have one" message instead of being told someone else is busy."""
         ip = self._client_ip()
+        request_id = str(uuid.uuid4())[:8]
         if not self._check_and_record_rate(ip, "ask", RATE_LIMIT_ASK_PER_10MIN, 600):
             self._send_rate_limited(
                 f"Too many Ask requests -- limit is {RATE_LIMIT_ASK_PER_10MIN} per 10 minutes. "
@@ -2650,13 +2771,39 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         global _llm_busy
         with _llm_busy_lock:
-            if _llm_busy:
+            if ASK_QUEUE_ENABLED:
+                _prune_stale_queue_entries_locked()
+            # ASK_QUEUE_ENABLED's own real fix, not just "is the model
+            # busy": the model can go idle while this IP still isn't at
+            # the front of _ask_queue (the front-of-queue student just
+            # hasn't polled/retried yet) -- letting a brand-new IP
+            # through in that window would let it silently jump a real,
+            # already-displayed queue position. front_ip is None (and
+            # this whole check a no-op) whenever the queue is empty,
+            # which is every request when the feature is off.
+            front_ip = next(iter(_ask_queue), None)
+            must_wait = _llm_busy or (ASK_QUEUE_ENABLED and front_ip is not None and front_ip != ip)
+            if must_wait:
+                pos = depth = None
+                is_new = False
+                if ASK_QUEUE_ENABLED:
+                    is_new = ip not in _ask_queue
+                    _ask_queue.setdefault(ip, {"enqueued_at": time.time()})["last_seen"] = time.time()
+                    pos, depth = _queue_position_locked(ip), len(_ask_queue)
                 self._send_busy(
                     "The assistant is currently answering another student's question -- "
                     "your question was not sent. This page will let you know the moment "
-                    "it's free so you can ask again.")
+                    "it's free so you can ask again.",
+                    queue_position=pos, queue_depth=depth)
+                if ASK_QUEUE_ENABLED and is_new:
+                    _log_ask_queue_event(request_id, endpoint_label, "queued",
+                                          queue_position=pos, queue_depth=depth)
                 return
+            ticket = _ask_queue.pop(ip, None) if ASK_QUEUE_ENABLED else None
             _llm_busy = True
+        if ASK_QUEUE_ENABLED:
+            wait_seconds = (time.time() - ticket["enqueued_at"]) if ticket else 0.0
+            _log_ask_queue_event(request_id, endpoint_label, "started", wait_seconds=wait_seconds)
 
         with _client_lock:
             state["ask_active"] = True
@@ -2672,6 +2819,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 state["interrupt"] = None
             with _llm_busy_lock:
                 _llm_busy = False
+            if ASK_QUEUE_ENABLED:
+                _log_ask_queue_event(request_id, endpoint_label, "finished")
 
     def _do_handle_ask(self, interrupt_event, system_message: str, capture_source: str,
                         verify: bool, include_code: bool, endpoint_label: str):

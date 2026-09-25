@@ -503,6 +503,15 @@
     rate_limit_run_per_minute: 10
     rate_limit_ask_per_10min: 10
 
+    # Configurable module, direct follow-up to discussing whether to
+    # send asks through something like RabbitMQ to avoid overloading
+    # the LLM -- deliberately not that (this coordinator has exactly
+    # one consumer, one model); the real ask was a visible queue
+    # position instead of an outright reject. Off by default, per
+    # direct request -- see ASK_QUEUE_ENABLED's own comment in
+    # verify_proxy.py for the queue mechanics.
+    ask_queue_enabled: false
+
     # Stage 5 — Firecracker sandbox shell. Same pinned-download-plus-
     # checksum convention as llama_release_tag/llama_archive_name/
     # llama_sha256 above; kept in sync by hand with
@@ -848,6 +857,7 @@
           'linux_system_message': linux_system_message,
           'rate_limit_run_per_minute': rate_limit_run_per_minute,
           'rate_limit_ask_per_10min': rate_limit_ask_per_10min,
+          'ask_queue_enabled': ask_queue_enabled,
           'firecracker_archive_name': firecracker_archive_name,
           'firecracker_sha256': firecracker_sha256,
           'firecracker_kernel_name': firecracker_kernel_name,

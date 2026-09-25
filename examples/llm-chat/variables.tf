@@ -285,6 +285,23 @@ variable "rate_limit_ask_per_10min" {
   default     = 10
 }
 
+# Configurable module, direct follow-up to discussing whether to send
+# asks through something like RabbitMQ to avoid overloading the LLM --
+# deliberately not that (this coordinator has exactly one consumer, one
+# model, so a broker's own durability/multi-consumer value doesn't
+# apply here); the real ask was a visible queue position instead of an
+# outright reject when a second student asks while the first is still
+# being answered. Off by default, per direct request: with this false,
+# verify_proxy.py's own _handle_ask() behaves exactly as it did before
+# this existed (a second, different student's question is rejected
+# outright, never queued). See ASK_QUEUE_ENABLED's own comment in
+# verify_proxy.py for the queue mechanics.
+variable "ask_queue_enabled" {
+  description = "Whether a second student's question, arriving while the coordinator is busy with another, is queued (with a real, visible position reported back) instead of rejected outright. Off by default -- today's reject-outright behaviour is unchanged unless this is turned on."
+  type        = bool
+  default     = false
+}
+
 # --- Grounded code verification ----------------------------------------
 # Per direct request: prompting alone couldn't be trusted to prevent
 # hallucination ("the lab students can't be allowed to walk away with

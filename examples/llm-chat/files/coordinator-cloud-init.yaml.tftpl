@@ -209,6 +209,7 @@ write_files:
       Environment=PREVIEW_PORTS=${preview_ports}
       Environment=RATE_LIMIT_RUN_PER_MINUTE=${rate_limit_run_per_minute}
       Environment=RATE_LIMIT_ASK_PER_10MIN=${rate_limit_ask_per_10min}
+      Environment=ASK_QUEUE_ENABLED=${ask_queue_enabled}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
       Restart=on-failure
       RestartSec=5
