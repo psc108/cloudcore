@@ -283,7 +283,11 @@ def _iw_link_info(name: str) -> dict:
         elif line.startswith("signal:"):
             result["signal_dbm"] = line.partition(":")[2].strip()
         elif line.startswith("tx bitrate:"):
-            m = re.match(r"tx bitrate:\s*([\d.]+)", line.partition(":")[2].strip())
+            # e.g. "866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" —
+            # the numeric prefix is what's wanted, not a re-match of
+            # "tx bitrate:" against a string that no longer contains it
+            # (the partition below already stripped that prefix off).
+            m = re.match(r"([\d.]+)", line.partition(":")[2].strip())
             if m:
                 result["tx_bitrate_mbps"] = m.group(1)
     return result
