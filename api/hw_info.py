@@ -165,10 +165,17 @@ def _dimm_info() -> tuple[list[dict], bool]:
 
     dimms: list[dict] = []
     for block in raw.stdout.split("\n\n"):
-        if "Memory Device" not in block.splitlines()[:1] and not block.lstrip().startswith("Memory Device"):
+        lines = block.splitlines()
+        # Every real dmidecode record is prefixed with its own
+        # "Handle 0x.., DMI type N, M bytes" line, so "Memory Device"
+        # is always the *second* line of the block, never the first —
+        # confirmed live against this host's own real dmidecode output
+        # after the first version of this check (which only looked at
+        # line 0) silently skipped every genuine DIMM.
+        if not any(line.strip() == "Memory Device" for line in lines):
             continue
         fields: dict[str, str] = {}
-        for line in block.splitlines()[1:]:
+        for line in lines:
             key, sep, value = line.partition(":")
             if sep:
                 fields[key.strip()] = value.strip()
