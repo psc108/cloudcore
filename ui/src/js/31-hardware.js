@@ -40,11 +40,22 @@ function loadHardware() {
     _hwListTable('hw-gpus', data.gpus || [], g =>
       `<tr><td>${_esc(g.vendor)}</td><td>${_esc(g.model)}</td></tr>`, 2);
 
-    _hwListTable('hw-network', data.network || [], n =>
-      `<tr><td>${_esc(n.name)}</td><td>${_esc(n.mac) || '—'}</td>` +
-      `<td>${n.speed_mbps ? n.speed_mbps + ' Mbps' : '—'}</td>` +
-      `<td><span class="badge badge-${n.operstate === 'up' ? 'active' : ''}">${_esc(n.operstate) || 'unknown'}</span></td></tr>`,
-      4);
+    _hwListTable('hw-network', data.network || [], n => {
+      const speedDuplex = n.speed_mbps
+        ? `${n.speed_mbps} Mbps${n.duplex ? ' / ' + n.duplex : ''}`
+        : (n.tx_bitrate_mbps ? `${n.tx_bitrate_mbps} Mbps (negotiated)` : '—');
+      const wireless = n.wireless
+        ? (n.ssid
+            ? `${_esc(n.ssid)}${n.signal_dbm ? ` (${_esc(n.signal_dbm)})` : ''}${n.frequency_mhz ? `, ${_esc(n.frequency_mhz)} MHz` : ''}`
+            : '<span class="bm-field-hint" style="margin:0">install <code>iw</code> for link detail</span>')
+        : '—';
+      const firmware = n.firmware_version ? `${_esc(n.firmware_version)}` : '—';
+      const driver = n.driver ? `${_esc(n.driver)}${n.driver_version ? ' (' + _esc(n.driver_version) + ')' : ''}` : '—';
+      return `<tr><td>${_esc(n.name)}</td><td>${_esc(n.mac) || '—'}</td>` +
+        `<td>${driver}</td><td>${firmware}</td><td>${_esc(n.bus_info) || '—'}</td>` +
+        `<td>${speedDuplex}</td><td>${wireless}</td>` +
+        `<td><span class="badge badge-${n.operstate === 'up' ? 'active' : ''}">${_esc(n.operstate) || 'unknown'}</span></td></tr>`;
+    }, 8);
   }).catch(() => {
     ['hw-system', 'hw-bios', 'hw-cpu', 'hw-memory'].forEach(id => {
       document.getElementById(id).innerHTML = '<tr><td colspan="2" class="empty-row">Failed to load</td></tr>';

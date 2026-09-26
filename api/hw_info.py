@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -234,6 +235,60 @@ def _gpus() -> list[dict]:
     return gpus
 
 
+def _ethtool_driver_info(name: str) -> dict:
+    """`ethtool -i <iface>` — driver name/version, firmware version, and
+    the PCI/USB bus address, for both wired and wireless. Confirmed
+    live: unlike plain `ethtool <iface>` (link speed/duplex/negotiated
+    modes — that subcommand needs root on this host), `-i` specifically
+    needs no privilege at all, so this needed no new sudoers grant."""
+    raw = _cmd("ethtool", "-i", name)
+    fields: dict[str, str] = {}
+    for line in raw.splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip()] = value.strip()
+    return {
+        "driver": fields.get("driver", ""),
+        "driver_version": fields.get("version", ""),
+        "firmware_version": fields.get("firmware-version", ""),
+        "bus_info": fields.get("bus-info", ""),
+    }
+
+
+def _iw_link_info(name: str) -> dict:
+    """SSID/frequency/signal/real negotiated bitrate for a wireless
+    interface, via `iw dev <iface> link` + `iw dev <iface> info` — the
+    sysfs `speed` file this module otherwise reads doesn't exist for
+    WiFi at all (there's no fixed link speed the way a wired NIC has
+    one), so this is the only way to show anything meaningful here.
+    Needs the `iw` package (not `ethtool`, not root) — not installed on
+    the host this was implemented against, so this specific function's
+    real parsing is implementation-only, not yet live-confirmed against
+    a genuine `iw` install; every other function in this module was
+    verified against this host's own real output before being called
+    done. Silently returns {} on any failure (not installed, not
+    associated, unexpected output shape) rather than guessing."""
+    if not shutil.which("iw"):
+        return {}
+    link = _cmd("iw", "dev", name, "link")
+    if not link or "Not connected" in link:
+        return {}
+    result: dict[str, str] = {}
+    for line in link.splitlines():
+        line = line.strip()
+        if line.startswith("SSID:"):
+            result["ssid"] = line.partition(":")[2].strip()
+        elif line.startswith("freq:"):
+            result["frequency_mhz"] = line.partition(":")[2].strip()
+        elif line.startswith("signal:"):
+            result["signal_dbm"] = line.partition(":")[2].strip()
+        elif line.startswith("tx bitrate:"):
+            m = re.match(r"tx bitrate:\s*([\d.]+)", line.partition(":")[2].strip())
+            if m:
+                result["tx_bitrate_mbps"] = m.group(1)
+    return result
+
+
 def _network_interfaces() -> list[dict]:
     ifaces = []
     net_dir = Path("/sys/class/net")
@@ -243,18 +298,27 @@ def _network_interfaces() -> list[dict]:
         name = iface_dir.name
         if name == "lo" or not (iface_dir / "device").exists():
             continue  # virtual (bridge/veth/tap/loopback) — no real backing device
+
         def _read(f: str) -> str:
             try:
                 return (iface_dir / f).read_text().strip()
             except OSError:
                 return ""
+
+        wireless = (iface_dir / "phy80211").exists()
         speed = _read("speed")
-        ifaces.append({
+        entry = {
             "name": name,
             "mac": _read("address"),
             "speed_mbps": speed if speed and speed != "-1" else "",
+            "duplex": _read("duplex"),
             "operstate": _read("operstate"),
-        })
+            "wireless": wireless,
+            **_ethtool_driver_info(name),
+        }
+        if wireless:
+            entry.update(_iw_link_info(name))
+        ifaces.append(entry)
     return ifaces
 
 
