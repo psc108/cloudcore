@@ -52,6 +52,7 @@ function showSection(name, btn) {
   if (name === 'editor')         loadEditor();
   if (name === 'settings')       loadSettings();
   if (name === 'about')          loadAbout();
+  if (name === 'hardware')       loadHardware();
   if (name === 'help')           loadHelpManager();
 }
 

@@ -50,6 +50,7 @@
     <button id="nav-editor" onclick="showSection('editor', this)">Editor</button>
     <button id="nav-settings" onclick="showSection('settings', this)">Settings</button>
     <button id="nav-about" onclick="showSection('about', this)">About</button>
+    <button id="nav-hardware" onclick="showSection('hardware', this)">Hardware</button>
     <button id="nav-help" onclick="showSection('help', this)">Help</button>
   </nav>
   <div class="status-dot" id="api-dot"></div>
@@ -1092,6 +1093,51 @@
 
       <h3 class="about-heading">System Tools</h3>
       <table class="about-table"><tbody id="about-system"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ Hardware ═══════════════════════════ -->
+  <div id="section-hardware" class="section">
+    <div class="card" style="max-width:900px">
+      <div class="card-header">
+        <h2>Hardware</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadHardware()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:24px">
+        The physical machine this CloudCore instance (and, in practice, Sentinel) is running on.
+      </p>
+
+      <h3 class="about-heading">System</h3>
+      <table class="about-table"><tbody id="hw-system"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+
+      <h3 class="about-heading">BIOS &amp; Board</h3>
+      <table class="about-table"><tbody id="hw-bios"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+
+      <h3 class="about-heading">CPU</h3>
+      <table class="about-table"><tbody id="hw-cpu"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+      <div id="hw-cpu-vulns" style="margin:8px 0 20px"></div>
+
+      <h3 class="about-heading">Memory</h3>
+      <table class="about-table"><tbody id="hw-memory"><tr><td colspan="2" class="empty-row">Loading…</td></tr></tbody></table>
+      <div id="hw-dimms-wrap" style="margin-top:10px"></div>
+
+      <h3 class="about-heading">Disks</h3>
+      <div class="table-wrap">
+        <table><thead><tr><th>Device</th><th>Model</th><th>Vendor</th><th>Size</th><th>Media</th><th>Transport</th></tr></thead>
+        <tbody id="hw-disks"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody></table>
+      </div>
+
+      <h3 class="about-heading">GPU</h3>
+      <div class="table-wrap">
+        <table><thead><tr><th>Vendor</th><th>Model</th></tr></thead>
+        <tbody id="hw-gpus"><tr class="empty-row"><td colspan="2">Loading…</td></tr></tbody></table>
+      </div>
+
+      <h3 class="about-heading">Network Interfaces</h3>
+      <div class="table-wrap">
+        <table><thead><tr><th>Interface</th><th>MAC Address</th><th>Link Speed</th><th>State</th></tr></thead>
+        <tbody id="hw-network"><tr class="empty-row"><td colspan="4">Loading…</td></tr></tbody></table>
+      </div>
     </div>
   </div>
 

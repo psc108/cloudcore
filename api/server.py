@@ -45,6 +45,7 @@ from stats_routes import stats_bp
 from scheduler_routes import scheduler_bp
 from llm_examples_routes import examples_bp, EXAMPLES_REACHABLE_ENDPOINTS
 from llm_deployments_routes import llm_deployments_bp, LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
+from hw_routes import hw_bp
 import scheduler
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
@@ -61,6 +62,7 @@ app.register_blueprint(nfs_bp)
 app.register_blueprint(sg_bp)
 app.register_blueprint(editor_bp)
 app.register_blueprint(about_bp)
+app.register_blueprint(hw_bp)
 app.register_blueprint(tofu_bp)
 app.register_blueprint(usb_bp)
 app.register_blueprint(help_bp)
