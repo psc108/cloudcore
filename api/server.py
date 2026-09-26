@@ -49,6 +49,13 @@ import scheduler
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
+# See db.close_db's own docstring: without this, Werkzeug's threaded
+# dev server leaks one open sqlite3 file descriptor per HTTP request
+# (a new OS thread each time, db.get_db()'s thread-local connection
+# never otherwise explicitly closed) -- confirmed live as a real
+# production outage on a long-running peer (OSError: Too many open
+# files, every request and background tick failing).
+app.teardown_appcontext(db.close_db)
 app.register_blueprint(build_manager_blueprint)
 app.register_blueprint(nfs_bp)
 app.register_blueprint(sg_bp)

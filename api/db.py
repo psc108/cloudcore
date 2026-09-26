@@ -707,6 +707,38 @@ def get_db() -> sqlite3.Connection:
     return _local.conn
 
 
+def close_db(exception=None) -> None:
+    """Registered as a Flask `teardown_appcontext` hook (see server.py) —
+    explicitly closes and drops this thread's own get_db() connection at
+    the end of every request, rather than leaving it to whenever CPython
+    happens to garbage-collect the now-unreferenced thread-local dict
+    entry. Confirmed live as a real, severe bug otherwise: Werkzeug's
+    threaded dev server (`app.run(..., threaded=True)`) spawns a brand
+    new OS thread per incoming request, so every single request opened
+    one more never-explicitly-closed sqlite3 connection (one open file
+    descriptor each) — on a long-running process under any real polling
+    traffic (the Dashboard's own live UI polls, a peer's recurring
+    recommend-placement/system-stats proxy calls, peer_reconciler's own
+    60s tick), this reliably exhausts the process's file-descriptor
+    ulimit over enough uptime, at which point *every* request and
+    background tick starts failing with `OSError: Too many open files`
+    (and, one level further down the same failure, `sqlite3.
+    OperationalError: unable to open database file`, since SQLite
+    itself needs a free descriptor for a new connection attempt) — a
+    real production outage, not a theoretical leak. Safe to call
+    unconditionally on every request even though `_new_conn()` is cheap
+    to redo (a fresh WAL/foreign_keys pragma pair on each new
+    connection, already how every other thread's first-ever call here
+    behaves): a background thread that lives for the process's whole
+    lifetime (peer_reconciler.py's own loop, scheduler.py's own loop)
+    opens exactly one connection ever regardless, since it never goes
+    through a Flask request context to trigger this teardown at all."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        conn.close()
+        _local.conn = None
+
+
 # ---------------------------------------------------------------------------
 # JSON migration (runs once — renames files after import)
 # ---------------------------------------------------------------------------
