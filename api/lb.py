@@ -21,6 +21,66 @@ def _cfg_path(lb_id: str) -> Path:
     return _LB_DIR / f"{lb_id}.cfg"
 
 
+# Direct request: "instead of just giving 503 service unavailable that
+# we test whether llama is coming up... print a message to say we're
+# waiting for the chat server to become ready" — the bare 503 shows up
+# during the real, ordinary window right after a build where the
+# backend instance's own health check hasn't passed yet (nothing
+# listening on the target port at all while cloud-init is still
+# installing packages / llama-server is still loading an 8GB+ model),
+# not a genuine outage. HAProxy's own `errorfile` directive replaces
+# its default plain-text 503 body with this one, on every http-mode LB
+# this project creates (a generic "still starting up" message is a
+# correct, useful improvement everywhere a backend can be slow to
+# become healthy, not just examples/llm-chat) — a meta-refresh does
+# the actual "test whether it's coming up" part: the browser just
+# re-requests the same URL every few seconds, and HAProxy serves this
+# page for exactly as long as its own health check keeps failing, then
+# transparently starts proxying through once a server passes it, with
+# no separate polling endpoint or JS needed.
+#
+# HAProxy's errorfile must be a complete, literal HTTP/1.0 response —
+# status line, headers, blank line, body — with a `Content-Length`
+# HAProxy trusts as-is rather than computing itself; built here instead
+# of hand-maintained as a static file so an edit to the message can
+# never silently drift out of sync with a stale byte count.
+_STARTUP_PAGE_BODY = b"""<!doctype html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
+<title>Starting up</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;display:flex;
+     height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}
+div{max-width:420px;padding:0 20px}
+h1{font-size:20px;font-weight:600}
+p{color:#aaa;font-size:14px;line-height:1.5}
+</style></head>
+<body><div>
+<h1>Starting up&hellip;</h1>
+<p>The service behind this address is still starting &mdash; this can take a
+few minutes while it finishes booting.</p>
+<p>This page checks again automatically every 5 seconds.</p>
+</div></body></html>
+"""
+
+
+def _startup_errorfile_path() -> Path:
+    """Written once per call (cheap, idempotent) rather than cached —
+    matches _write_config's own "always regenerate from source" style,
+    and means an edit to _STARTUP_PAGE_BODY above takes effect on the
+    very next LB start/reload with no separate migration step."""
+    body = _STARTUP_PAGE_BODY
+    response = (
+        b"HTTP/1.0 503 Service Unavailable\r\n"
+        b"Cache-Control: no-cache\r\n"
+        b"Content-Type: text/html; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+        b"\r\n" + body
+    )
+    path = _LB_DIR / "starting-up-503.http"
+    path.write_bytes(response)
+    return path
+
+
 def _pid_path(lb_id: str) -> Path:
     return _LB_DIR / f"{lb_id}.pid"
 
@@ -235,6 +295,10 @@ def _write_config(lb: LoadBalancer, listen_port: int, vpc_instances=None) -> Pat
     log_opts = "    log /dev/log local0\n"
     http_opts = ("    option  forwardfor\n    option  http-server-close\n    option  httplog\n"
                  if mode == "http" else "    option  tcplog\n")
+    # tcp-mode LBs (NLB-style, non-HTTP workloads) have no HTTP response
+    # to replace the body of in the first place.
+    if mode == "http":
+        http_opts += f"    errorfile 503 {_startup_errorfile_path()}\n"
 
     # Extra backend sections for all TGs referenced by routing rules
     extra_backends = "".join(
