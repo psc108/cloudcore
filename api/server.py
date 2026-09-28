@@ -45,6 +45,8 @@ from stats_routes import stats_bp
 from scheduler_routes import scheduler_bp
 from llm_examples_routes import examples_bp, EXAMPLES_REACHABLE_ENDPOINTS
 from llm_deployments_routes import llm_deployments_bp, LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
+import llm_client_capture
+from llm_client_capture import client_capture_bp, CLIENT_REACHABLE_ENDPOINTS
 from hw_routes import hw_bp
 import scheduler
 
@@ -72,6 +74,7 @@ app.register_blueprint(stats_bp)
 app.register_blueprint(scheduler_bp)
 app.register_blueprint(examples_bp)
 app.register_blueprint(llm_deployments_bp)
+app.register_blueprint(client_capture_bp)
 API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
 
 
@@ -134,9 +137,11 @@ def _peer_bind_gate():
     # gated by discovery.enabled) — restricted to exactly the llm-chat
     # example-capture endpoints plus LLM-deployment self-registration,
     # regardless of any token presented, same defense-in-depth reasoning
-    # as the peer bind above.
+    # as the peer bind above. llm-chat Stage 13 adds the two local-capture
+    # client routes, which carry their own per-student token auth.
     if request.environ.get("SERVER_PORT") == str(examples_listener.PORT):
-        if request.endpoint not in (EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS):
+        if request.endpoint not in (EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
+                                    | CLIENT_REACHABLE_ENDPOINTS):
             abort(403)
 
 
@@ -2088,6 +2093,9 @@ if __name__ == "__main__":
     # to discovery.enabled (see examples_listener.py's own docstring).
     examples_listener.init(app)
     examples_listener.start()
+    # llm-chat Stage 13: re-verifies local-capture submissions on a
+    # running coordinator; idles harmlessly when there are none.
+    llm_client_capture.start()
     dns_store.load()
     reconcile()
     dns_server.start()

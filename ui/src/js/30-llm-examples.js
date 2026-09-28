@@ -10,6 +10,7 @@
 // capture one.
 
 let _llmExItems = [];
+let _llmTokLabels = {};   // client_token_id -> label, for local-client rows
 
 function _llmExPassBadge(passed) {
   return passed ? '<span class="badge badge-active">passed</span>' : '<span class="badge badge-error">failed</span>';
@@ -20,8 +21,13 @@ async function loadLlmExamples() {
   tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Loading…</td></tr>';
   document.getElementById('llmex-detail-card').style.display = 'none';
   try {
-    const data = await api('GET', '/v1/llm-chat/examples');
-    _llmExItems = data.items || [];
+    const [data, toks] = await Promise.all([
+      api('GET', '/v1/llm-chat/examples'),
+      api('GET', '/v1/llm-chat/client-tokens').catch(() => ({ items: [] })),
+    ]);
+    _llmTokLabels = Object.fromEntries((toks.items || []).map(t => [t.id, t.label]));
+    const sourceFilter = document.getElementById('llmex-source-filter')?.value || '';
+    _llmExItems = (data.items || []).filter(it => !sourceFilter || it.source === sourceFilter);
     if (!_llmExItems.length) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No examples captured yet — they appear here once a student\'s chat session produces a fenced code block that gets sandboxed-executed.</td></tr>';
       return;
@@ -29,7 +35,7 @@ async function loadLlmExamples() {
     tbody.innerHTML = _llmExItems.map((item, idx) => `
       <tr>
         <td class="mono">${fmtDate(item.created_at)}</td>
-        <td><span class="mono">${_esc(item.language || 'python')}</span> · ${_esc(item.model_filename)}</td>
+        <td><span class="mono">${_esc(item.language || 'python')}</span> · ${_esc(item.model_filename)}${_llmExSourceTag(item)}</td>
         <td>${_llmExPassBadge(item.passed)}</td>
         <td>${item.fix_explanation ? _llmExPassBadge(item.fix_passed) : '—'}</td>
         <td>${badge(item.status)}</td>
@@ -42,6 +48,62 @@ async function loadLlmExamples() {
       </tr>`).join('');
   } catch (e) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="7">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function _llmExSourceTag(item) {
+  if (item.source !== 'local-client') return '';
+  const who = _llmTokLabels[item.client_token_id] || 'unknown token';
+  return `<br><span class="badge" title="Submitted by the local-capture client; re-run on a coordinator">local · ${_esc(who)}</span>`;
+}
+
+async function loadLlmClientTokens() {
+  const tbody = document.getElementById('llmtok-tbody');
+  try {
+    const data = await api('GET', '/v1/llm-chat/client-tokens');
+    const items = data.items || [];
+    if (!items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No capture tokens yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(t => `
+      <tr>
+        <td>${_esc(t.label)}</td>
+        <td class="mono">${fmtDate(t.created_at)}</td>
+        <td class="mono">${t.last_used_at ? fmtDate(t.last_used_at) : '—'}</td>
+        <td>${t.submissions}</td>
+        <td>${t.revoked_at ? '<span class="badge badge-error">revoked</span>' : '<span class="badge badge-active">active</span>'}</td>
+        <td>${t.revoked_at ? '' : `<button class="btn btn-sm" onclick="_llmTokRevoke('${t.id}')">Revoke</button>`}</td>
+      </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">Error: ${_esc(e.message)}</td></tr>`;
+  }
+}
+
+async function _llmTokCreate() {
+  const input = document.getElementById('llmtok-label');
+  const label = input.value.trim();
+  if (!label) { input.focus(); return; }
+  try {
+    const t = await api('POST', '/v1/llm-chat/client-tokens', { label });
+    input.value = '';
+    const box = document.getElementById('llmtok-new');
+    box.style.display = '';
+    box.innerHTML = `<div class="field"><label>Token for ${_esc(t.label)} — copy it now, it will not be shown again</label>
+      <pre class="mono" style="white-space:pre-wrap;word-break:break-all;background:var(--bg-alt);padding:8px;border-radius:4px">${_esc(t.token)}</pre></div>`;
+    await loadLlmClientTokens();
+  } catch (e) {
+    alert(`Failed to create token: ${e.message}`);
+  }
+}
+
+async function _llmTokRevoke(id) {
+  if (!confirm('Revoke this capture token? The student\'s client stops working immediately.')) return;
+  try {
+    await api('DELETE', `/v1/llm-chat/client-tokens/${id}`);
+    await loadLlmClientTokens();
+  } catch (e) {
+    alert(`Failed to revoke: ${e.message}`);
   }
 }
 

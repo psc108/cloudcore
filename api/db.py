@@ -475,7 +475,42 @@ CREATE TABLE IF NOT EXISTS llm_verification_examples (
     fix_passed       INTEGER,
     status           TEXT NOT NULL DEFAULT 'pending',
     created_at       TEXT NOT NULL,
-    language         TEXT NOT NULL DEFAULT 'python'
+    language         TEXT NOT NULL DEFAULT 'python',
+    client_token_id  TEXT NOT NULL DEFAULT ''
+);
+
+-- llm-chat Stage 13: per-student tokens for the local-capture client
+-- (llm_client_capture.py). Only a SHA-256 of each token is stored; the
+-- token itself is shown once, at creation. Revocation is a timestamp,
+-- never a delete, so submissions keep a resolvable label.
+CREATE TABLE IF NOT EXISTS llm_client_tokens (
+    id            TEXT PRIMARY KEY,
+    label         TEXT NOT NULL,
+    token_sha256  TEXT NOT NULL UNIQUE,
+    created_at    TEXT NOT NULL,
+    revoked_at    TEXT,
+    last_used_at  TEXT
+);
+
+-- What a local-capture client submitted: prompt + code only. Execution
+-- evidence is never accepted from a client -- a coordinator re-runs the
+-- code and the resulting llm_verification_examples row (example_id) holds
+-- the coordinator's own result. `pending` rows are retried until a
+-- coordinator is reachable or they expire.
+CREATE TABLE IF NOT EXISTS llm_client_submissions (
+    id              TEXT PRIMARY KEY,
+    token_id        TEXT NOT NULL,
+    model_filename  TEXT NOT NULL,
+    prompt          TEXT NOT NULL,
+    code            TEXT NOT NULL,
+    language        TEXT NOT NULL,
+    client_note     TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'pending',
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT NOT NULL DEFAULT '',
+    example_id      TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
 );
 
 -- The LLM Performance page's "live deployments" section — separate
@@ -620,6 +655,9 @@ def _migrate_columns() -> None:
     ex_cols = {row[1] for row in _conn.execute("PRAGMA table_info(llm_verification_examples)").fetchall()}
     if ex_cols and "language" not in ex_cols:
         _conn.execute("ALTER TABLE llm_verification_examples ADD COLUMN language TEXT NOT NULL DEFAULT 'python'")
+    # llm-chat Stage 13: which local-capture token (if any) a row came from.
+    if ex_cols and "client_token_id" not in ex_cols:
+        _conn.execute("ALTER TABLE llm_verification_examples ADD COLUMN client_token_id TEXT NOT NULL DEFAULT ''")
     _conn.commit()
 
 

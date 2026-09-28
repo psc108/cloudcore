@@ -48,7 +48,7 @@ function showSection(name, btn) {
   if (name === 'tofu')           loadTofuManager();
   if (name === 'scheduler')     { loadScheduler(); startSchedulerPoll(); }
   if (name === 'llmperf')        { loadLlmPerformance(); startLlmPerfPoll(); }
-  if (name === 'llmexamples')    loadLlmExamples();
+  if (name === 'llmexamples')    { loadLlmExamples(); loadLlmClientTokens(); }
   if (name === 'editor')         loadEditor();
   if (name === 'settings')       loadSettings();
   if (name === 'about')          loadAbout();

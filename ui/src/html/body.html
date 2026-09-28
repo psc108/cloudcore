@@ -955,13 +955,41 @@
       <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
         Every real prompt → code → execution (→ fix → re-execution) transaction captured by an llm-chat coordinator's own verify-proxy.service. Capture is unconditional — this list is the full corpus, exportable as JSONL below regardless of status. Publishing here only controls what appears on that deployment's own unauthenticated student review page (<span class="mono">GET /examples</span>) — it never affects what's captured.
       </p>
-      <button class="btn btn-sm" onclick="_llmExExport()" style="margin-bottom:12px">Export JSONL (full corpus)</button>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <button class="btn btn-sm" onclick="_llmExExport()">Export JSONL (full corpus)</button>
+        <select id="llmex-source-filter" onchange="loadLlmExamples()" title="Filter by where the example came from">
+          <option value="">All sources</option>
+          <option value="local-client">Local-capture client only</option>
+          <option value="llm-chat-sandbox">Sandbox Ask only</option>
+        </select>
+      </div>
       <div class="table-wrap">
         <table id="llmex-table">
           <thead><tr>
             <th>Created</th><th>Model</th><th>Initial</th><th>Fix</th><th>Status</th><th>Prompt</th><th></th>
           </tr></thead>
           <tbody id="llmex-tbody"><tr class="empty-row"><td colspan="7">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Capture Tokens</h2>
+        <button class="refresh-btn" title="Refresh" onclick="loadLlmClientTokens()">↻</button>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+        One token per student for <span class="mono">scripts/llm-capture-client/</span>, which submits code their own local model wrote. Submissions carry no results: a running llm-chat coordinator re-runs the code and only that result is recorded. A token is shown once, at creation. Revoking stops it immediately; its past submissions keep their label.
+      </p>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <input id="llmtok-label" type="text" placeholder="Student name / label" maxlength="100" style="max-width:260px">
+        <button class="btn btn-sm" onclick="_llmTokCreate()">Create token</button>
+      </div>
+      <div id="llmtok-new" style="display:none;margin-bottom:12px"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Submissions</th><th>State</th><th></th></tr></thead>
+          <tbody id="llmtok-tbody"><tr class="empty-row"><td colspan="6">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>

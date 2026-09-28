@@ -21,7 +21,8 @@ def record_example(source: str, build_id: str, model_filename: str,
                     exec_stdout: str, exec_stderr: str, exec_exit_code,
                     passed: bool, fix_explanation: str = "", fixed_code: str = "",
                     fix_exec_stdout: str = "", fix_exec_stderr: str = "",
-                    fix_passed: bool | None = None, language: str = "python") -> str:
+                    fix_passed: bool | None = None, language: str = "python",
+                    client_token_id: str = "") -> str:
     example_id = str(uuid.uuid4())
     c = db.get_db()
     c.execute(
@@ -29,13 +30,13 @@ def record_example(source: str, build_id: str, model_filename: str,
            (id, source, build_id, model_filename, prompt, generated_code,
             exec_stdout, exec_stderr, exec_exit_code, passed,
             fix_explanation, fixed_code, fix_exec_stdout, fix_exec_stderr,
-            fix_passed, status, created_at, language)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            fix_passed, status, created_at, language, client_token_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (example_id, source, build_id, model_filename, prompt, generated_code,
          exec_stdout, exec_stderr, exec_exit_code, int(passed),
          fix_explanation, fixed_code, fix_exec_stdout, fix_exec_stderr,
          None if fix_passed is None else int(fix_passed),
-         "pending", now_iso(), language))
+         "pending", now_iso(), language, client_token_id))
     c.commit()
     return example_id
 

@@ -48,6 +48,7 @@ from __future__ import annotations
 import array
 import collections
 import fcntl
+import hmac
 import html
 import http.client
 import http.server
@@ -3149,6 +3150,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_linux_ask()
         elif path == "/sandbox/interrupt":
             self._handle_sandbox_interrupt()
+        elif path == "/sandbox/reverify":
+            self._handle_sandbox_reverify()
         else:
             self._not_found()
 
@@ -3354,6 +3357,40 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
+
+    def _handle_sandbox_reverify(self):
+        """POST /sandbox/reverify -- Stage 13. The CloudCore API asks this
+        coordinator to re-run code a local-capture client submitted, so the
+        corpus records OUR execution result, never the client's. Plain,
+        non-interactive execute(): stdin is closed, exactly like a Run.
+
+        This port is reachable by students through the LB, so it requires
+        the same shared token this coordinator already uses to POST
+        captures to the API (EXAMPLES_API_TOKEN). Without one configured
+        the route stays disabled rather than open."""
+        def reply(status: int, obj: dict):
+            out = json.dumps(obj).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        presented = self.headers.get("Authorization", "")
+        if not EXAMPLES_API_TOKEN or not hmac.compare_digest(
+                presented.encode(), f"Bearer {EXAMPLES_API_TOKEN}".encode()):
+            reply(401, {"error": "unauthorized"})
+            return
+        req_json = self._read_json_body()
+        language = req_json.get("language") or ""
+        code = req_json.get("code") or ""
+        if language not in LANGUAGES:
+            reply(400, {"error": f"unsupported language: {language}"})
+            return
+        if not code.strip():
+            reply(400, {"error": "code is required"})
+            return
+        reply(200, execute(language, code))
 
     def _handle_run_status(self):
         """GET /sandbox/run-status?ticket=<id> -- where the caller's own
