@@ -45,7 +45,9 @@ this codebase (examples/ha-frontend-lb's serve-ca-certs.py).
 """
 from __future__ import annotations
 
+import array
 import collections
+import fcntl
 import html
 import http.client
 import http.server
@@ -60,6 +62,7 @@ import signal
 import socket
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import urllib.error
@@ -823,6 +826,27 @@ STDIN_BLOCK_RE = re.compile(r"```stdin[ \t]*\n(.*?)```", re.DOTALL)
 # being so short it misfires on ordinary brief pauses.
 INTERACTIVE_QUIET_S = 3
 
+# Stage 11 -- exact detection, tried before the quiet-period heuristic
+# above. verify-proxy runs as root, so it can read /proc/<pid>/syscall
+# for every task in the sandboxed process tree: a task blocked in
+# read(2) on fd 0, where fd 0 is the stdin pipe we hold, is waiting for
+# input with certainty -- no need to wait out INTERACTIVE_QUIET_S. A
+# task that is running, or sleeping in nanosleep, is definitely NOT
+# waiting, however long it stays silent. Anything else (epoll/futex
+# waits, e.g. an event-loop runtime reading stdin) is genuinely
+# ambiguous from the outside and falls back to the heuristic. x86_64
+# syscall numbers; the coordinator is always x86_64 (llama.cpp and
+# Firecracker artifacts are both pinned to it).
+_SYS_READ = 0
+_SYS_POLL = 7
+_SYS_SELECT = 23
+_SYS_NANOSLEEP = 35
+_SYS_WAIT4 = 61
+_SYS_CLOCK_NANOSLEEP = 230
+_SYS_WAITID = 247
+_SYS_PSELECT6 = 270
+_SYS_PPOLL = 271
+
 # Hard caps enforced regardless of what the model/provide_input
 # callback decides -- real generation latency observed this session
 # ranges from ~170s (quiet host) to 1200s+ (contended host) *per
@@ -1004,6 +1028,88 @@ def run_sandboxed(code: str) -> dict:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _descendant_pids(root_pid: int) -> list[int]:
+    """root_pid plus every process below it, from one scan of /proc.
+    The sandboxed interpreter sits one or two levels below the Popen
+    PID (unshare -> its forked child in the new PID namespace)."""
+    children: dict[int, list[int]] = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as f:
+                stat = f.read()
+        except OSError:
+            continue
+        # comm (field 2) may contain spaces or parens; everything after
+        # the LAST ')' is fixed-format: state, ppid, ...
+        fields = stat[stat.rfind(")") + 2:].split()
+        children.setdefault(int(fields[1]), []).append(int(entry))
+    found, stack = [], [root_pid]
+    while stack:
+        pid = stack.pop()
+        found.append(pid)
+        stack.extend(children.get(pid, []))
+    return found
+
+
+def _pipe_unread(fd: int) -> int:
+    """Bytes written to a pipe and not yet read by the other end.
+    FIONREAD works on either end of a Linux pipe."""
+    buf = array.array("i", [0])
+    fcntl.ioctl(fd, termios.FIONREAD, buf, True)
+    return buf[0]
+
+
+def _stdin_wait_state(root_pid: int, stdin_pipe_ino: int) -> str:
+    """"waiting" (a task is blocked reading our stdin pipe), "busy" (a
+    task is running or sleeping on a timer -- never hand it input), or
+    "unknown" (only ambiguous waits seen; use the heuristic). Processes
+    that vanish mid-scan are skipped, not treated as errors."""
+    pipe_target = f"pipe:[{stdin_pipe_ino}]"
+    busy = False
+    for pid in _descendant_pids(root_pid):
+        try:
+            tids = os.listdir(f"/proc/{pid}/task")
+        except OSError:
+            continue
+        for tid in tids:
+            base = f"/proc/{pid}/task/{tid}"
+            try:
+                with open(f"{base}/stat") as f:
+                    stat = f.read()
+                with open(f"{base}/syscall") as f:
+                    syscall = f.read().split()
+            except OSError:
+                continue
+            state = stat[stat.rfind(")") + 2:].split()[0]
+            if state == "R" or not syscall or syscall[0] == "running":
+                busy = True
+                continue
+            try:
+                nr = int(syscall[0])
+            except ValueError:
+                continue
+            if nr == _SYS_READ and len(syscall) > 1 and int(syscall[1], 16) == 0:
+                try:
+                    if os.readlink(f"/proc/{pid}/fd/0") == pipe_target:
+                        return "waiting"
+                except OSError:
+                    pass
+            elif nr in (_SYS_NANOSLEEP, _SYS_CLOCK_NANOSLEEP):
+                busy = True
+            # select/poll with no fds at all is a pure timer sleep --
+            # Python 3.10's time.sleep() is exactly pselect6(0, ...),
+            # found live on the coordinator (jammy's python3).
+            elif nr in (_SYS_SELECT, _SYS_PSELECT6) and len(syscall) > 1 and int(syscall[1], 16) == 0:
+                busy = True
+            elif nr in (_SYS_POLL, _SYS_PPOLL) and len(syscall) > 2 and int(syscall[2], 16) == 0:
+                busy = True
+            # wait4/waitid: the unshare wrapper waiting on its child --
+            # says nothing about the program itself, so it's ignored.
+    return "busy" if busy else "unknown"
+
+
 def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
     """Like run_sandboxed(), same isolation exactly (same unshare +
     unprivileged user + resource.setrlimit CPU/memory/proc/fsize
@@ -1011,9 +1117,11 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
     bounds a longer-lived session), but the process's stdin stays open
     and live instead of DEVNULL.
 
-    Whenever the process goes quiet (no new stdout/stderr for
-    INTERACTIVE_QUIET_S seconds) while still running,
-    `provide_input(transcript_so_far)` is called and expected to
+    Whenever the process is waiting for input -- detected exactly via
+    _stdin_wait_state() where possible, otherwise by going quiet (no new
+    stdout/stderr for INTERACTIVE_QUIET_S seconds) while neither
+    running nor sleeping on a timer -- `provide_input(transcript_so_far)`
+    is called and expected to
     return either a string to send as the next stdin line (no trailing
     newline -- one is added), or None to stop the session there (the
     process is then killed; whatever real output already happened
@@ -1028,7 +1136,9 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
     pause point.
 
     Returns {"transcript", "stdout", "stderr", "exit_code",
-    "timed_out", "interrupted", "exchanges"}. `transcript` interleaves
+    "timed_out", "interrupted", "exchanges", "detections"}.
+    `detections` lists, per exchange, whether it was triggered "exact"
+    or "heuristic". `transcript` interleaves
     stdout/stderr in the real order they arrived, with an inline
     marker at each point input was actually provided -- the honest,
     readable record of what really happened, not just two separate
@@ -1043,6 +1153,7 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
     stderr_parts: list[str] = []
     transcript: list[str] = []
     exchanges = 0
+    detections: list[str] = []
     session_timed_out = False
     was_interrupted = False
     try:
@@ -1073,6 +1184,7 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
             start_new_session=True,
         )
         out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+        stdin_pipe_ino = os.fstat(proc.stdin.fileno()).st_ino
         os.set_blocking(out_fd, False)
         os.set_blocking(err_fd, False)
 
@@ -1108,7 +1220,22 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
             if proc.poll() is not None:
                 break  # process exited on its own
 
-            if time.monotonic() - last_output_at >= INTERACTIVE_QUIET_S:
+            wait_state = _stdin_wait_state(proc.pid, stdin_pipe_ino)
+            # A task still shows as blocked in read(0) for a moment after
+            # we write, until the scheduler runs it -- on a contended
+            # coordinator that window can span a whole poll. Unread bytes
+            # in the pipe mean our last input hasn't been consumed yet,
+            # so it can't be waiting for the next one.
+            if wait_state == "waiting" and _pipe_unread(proc.stdin.fileno()) > 0:
+                wait_state = "busy"
+            if wait_state == "waiting":
+                detection = "exact"
+            elif (wait_state == "unknown"
+                  and time.monotonic() - last_output_at >= INTERACTIVE_QUIET_S):
+                detection = "heuristic"
+            else:
+                detection = None
+            if detection is not None:
                 if exchanges >= INTERACTIVE_MAX_EXCHANGES:
                     session_timed_out = True
                     break
@@ -1116,7 +1243,8 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
                 if value is None:
                     break
                 exchanges += 1
-                transcript.append(f"\n>>> INPUT PROVIDED: {value!r}\n")
+                detections.append(detection)
+                transcript.append(f"\n>>> INPUT PROVIDED ({detection}): {value!r}\n")
                 try:
                     proc.stdin.write((value + "\n").encode())
                     proc.stdin.flush()
@@ -1163,6 +1291,7 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
             "timed_out": session_timed_out,
             "interrupted": was_interrupted,
             "exchanges": exchanges,
+            "detections": detections,
         }
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
