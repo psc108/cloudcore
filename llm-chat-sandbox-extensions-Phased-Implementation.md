@@ -30,7 +30,7 @@ as in every prior phase.
 |---|---|---|
 | 10 | Firecracker under `jailer` + a shared microVM launcher module | Done — verified live 2026-09-28 |
 | 11 | Exact input-wait detection via `/proc/<pid>/syscall` | Done — verified live 2026-09-28 (11.3 guest helper moves into Stage 12's rootfs rebuild) |
-| 12 | Bash, JavaScript (Node), C/C++, Go in Run/Ask — Firecracker per run | Not started |
+| 12 | Bash, JavaScript (Node), C/C++, Go in Run/Ask — Firecracker per run | Done — verified live 2026-09-28 (corpus `language` column pending an API restart; see below) |
 | 13 | Local-capture client with per-student tokens and server-side re-verification | Not started |
 
 ---
@@ -343,6 +343,71 @@ rebuild instead of forcing a separate rebuild now.
 | Fork bomb in Bash | Contained inside the VM (the guest's own limits plus the VMM cgroup); host unaffected |
 | Go program allocating 2GB | Guest OOM; honest error returned; host `MemAvailable` never drops below the floor |
 | Run requested while llama-server is mid-generation | Either runs within budget or queues/refuses honestly. Never OOM-kills llama-server |
+
+### Verified live, 2026-09-28
+
+On a clean rebuild of llm-chat, with the toolchain rootfs (`4396aea0…`,
+2048MB image, about 1GB used). It carries Node 12.22 (jammy's own
+nodejs, universe), gcc/g++ 11, Go 1.18, and the Stage 11 guest helper,
+and its runtime `sources.list` is back to main-only.
+
+| Check | Result |
+|---|---|
+| 12.1 Toolchains in guest | `node`, `gcc`, `g++`, `go`, `stdin-wait-check` all present |
+| 12.2 `fcrun0` isolation, from inside a per-run VM | Internet, the coordinator's own address, the `fcrun0` gateway, `fcbr0` and the CloudCore host all unreachable |
+| 12.3 Hello world × 5 languages | All exit 0 with the right output |
+| 12.3 Runtime errors | Reported verbatim: Bash exit 3; Node stack trace; C `SIGSEGV` (139); C++ `std::runtime_error` → `SIGABRT` (134); Go panic (2) |
+| 12.4 Compile errors | C, C++ and Go come back as `phase=compile` with the compiler's own text; the result block says "compilation failed" |
+| 12.5 Through the real LB | Page has the language picker; all four new editor modes served; C Run, C compile error, unknown language (400), `/sandbox/run-status`, and an unchanged Python Run all correct |
+| 12.6 Queue | Second concurrent Run shows `queued, position 1`, waits 10.75s, then runs |
+| 12.7 Interactive | C `scanf` × 2 → `exact, exact`, `sum=10`; Bash `read -p` → `exact`, `hi 5` |
+| Stage 10 regression on this build | 24/24 checks + 8/8 failure matrix |
+| 12.4 Real model, through the LB | Ask with language C on code missing a `;`: the model's fix was compiled and run **as C** in a per-run VM (`15`, exit 0). It was right first time, so the "model's own code fails to compile → fix round" path was exercised with scripted compile failures (above), not by a real model answer |
+| `verify-proxy` restarted mid-Run | Startup sweep logged "removed 1 per-run microVM(s) orphaned"; no jail, VMM, TAP or cgroup left |
+| Corpus `language` column | Migration + route verified on a copy of the real DB (27 existing rows → `python`; `c`/`go` stored; unknown → `other`). **Not yet live**: needs the CloudCore API process restarted to load the new code |
+
+Measured cost per non-Python Run (task 12.6), idle coordinator:
+
+| Language | Boot | Compile | Run |
+|---|---|---|---|
+| Bash | 5.98s | — | 0.05s |
+| JavaScript (Node) | 6.95s | — | 0.81s |
+| C | 7.79s | 0.36s | 0.05s |
+| C++ | 6.17s | 0.36s | 0.05s |
+| Go | 6.33s | 1.56s | 0.05s |
+
+Boot is the whole cost. From the guest journal: the kernel reaches
+`overlay-init` at 2.1s, sshd is up at 4.2s, and the rest is host-side
+jail/scratch setup plus the SSH handshake. With the coordinator busy
+(llama-server loading its model right after cloud-init), the same
+boots took 11.7–16.2s. That is the price of the per-run microVM choice
+on this 4-vCPU coordinator, recorded here rather than tuned away.
+
+Failure-mode matrix:
+
+| Test | Expected | Actual |
+|---|---|---|
+| Infinite loop in C | Killed at the run limit, next Run works | `SIGXCPU` at 15.3s, named in the output ("exceeded the 15s CPU-time limit") |
+| Fork bomb in Bash | Contained in the VM | `ulimit -u 128` held it; the script's own `echo` after it still ran; host memory unchanged |
+| Go allocating 2GB (512MB guest) | Guest-side failure | Go runtime out-of-memory panic, exit 2; host `MemAvailable` 2726 → 2730MB |
+| Everything above, with llama-server running | Never OOM-kills llama-server | llama-server still active; nothing left behind |
+
+**Found live or locally, fixed (F-159):**
+- **A signal death showed as `exit code -1` with empty stderr** (C
+  segfault). sshd reports it as a signal, which paramiko surfaces only
+  as -1. The program now runs as a child of a small shell that names
+  the signal.
+- **`ulimit -t` sets soft = hard,** so a CPU overrun was an anonymous
+  `SIGKILL`. The soft limit is now 1s under the hard one, so it's
+  `SIGXCPU` and the message can say which limit was hit.
+- **The wrapper failed open.** A failed `ulimit` chain followed by `;`
+  still ran the program, with no CPU limit (found locally, before
+  shipping, when a stray test process spun forever). The limits now
+  have to apply or the program doesn't run (exit 125, said so).
+
+**Known limitations, not fixed:** Node is jammy's 12.22 (end-of-life;
+no `??=` and friends); Go is 1.18. Both are what the pinned Ubuntu base
+ships. Newer versions would mean pulling from outside the apt mirror.
 
 ---
 

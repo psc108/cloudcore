@@ -2735,6 +2735,45 @@ A `FIONREAD` check stops a task that hasn't yet consumed our last write from cou
 
 Eight local cases also pass: `input()`, busy loop, sleep, stdin from `/dev/null`, bash `read`, fd 0 redirected elsewhere, `input()` under a wrapper shell, and the unread-bytes guard.
 
+### F-159 — Bash, Node, C, C++ and Go in llm-chat's Run/Ask, each Run in its own network-less jailed microVM; found on the way: signal deaths showed as a bare "exit code -1", CPU overruns were anonymous SIGKILLs, and the limits wrapper failed open
+
+**Where:** `examples/llm-chat/files/verify_proxy.py` (`LANGUAGES`, `extract_code()`, `_RunQueue`, `run_in_microvm()`, `execute()`, `/sandbox/run-status`, language picker + editor modes), `microvm.py` (`extra_boot_args`), `coordinator-cloud-init.yaml.tftpl` (isolated `fcrun0` bridge, new tunables, editor-mode assets), `api/build-firecracker-rootfs.sh` (toolchains + `stdin-wait-check`), `api/db.py` / `llm_examples_store.py` / `llm_examples_routes.py` (`language` column), `ui/src/js/30-llm-examples.js`, and the Ansible mirrors. Stage 12 of `llm-chat-sandbox-extensions-Phased-Implementation.md`.
+
+**Symptom:** Run/Ask could only execute Python. While building per-run microVMs for the other languages, three problems showed up:
+1. A C program that segfaulted came back as `exit code -1` with empty stderr, which is honest but tells a student nothing.
+2. An infinite loop was killed by a bare `SIGKILL` with no indication that a CPU limit was involved.
+3. Locally, a test run whose `ulimit` call failed went on to run the program anyway, with no CPU limit, and spun until killed by hand.
+
+**Root cause:**
+1. With a signal death, sshd sends an `exit-signal` rather than an exit status, and paramiko surfaces that only as `-1`.
+2. Bash's `ulimit -t N` sets the soft and hard CPU limits to the same value, and at the hard limit the kernel sends `SIGKILL` directly instead of `SIGXCPU` first.
+3. The run command chained the limits with `&&` but then started the program after a `;`, so a failed limit chain fell through to running the program anyway. The first trigger was `ulimit -H -t` lowering the hard limit below a still-unlimited soft limit, which fails with EINVAL.
+
+**Fix:** non-Python code runs in a fresh jailed Firecracker microVM per Run (F-157's launcher) on a new `fcrun0` bridge with no NAT and interface-matched DROP rules in FORWARD and INPUT, except replies to the coordinator's own SSH. Model-generated code therefore has no network, like the Python runner.
+- Admission: a FIFO queue (capacity 1 by default, with a visible position via `/sandbox/run-status`) and a `MemAvailable` floor, so a Run never boots at the expense of llama-server.
+- Compile and run are separate phases, and a compile failure is a first-class result that feeds the existing fix loop.
+- Interactive stdin uses the guest-side `stdin-wait-check`, which applies F-158's rules inside the VM.
+
+For the three problems:
+- The program now runs as a child of a small shell that names any signal: `[program killed by signal SIGSEGV]`.
+- The soft CPU limit is set first and the hard limit 1s above it, so an overrun is `SIGXCPU` and is reported as `exceeded the 15s CPU-time limit`.
+- The whole limits chain is `|| exit 125`: if any limit fails to apply, the program does not run.
+
+The corpus gains a `language` column (existing rows default to `python`; unknown values are stored as `other`).
+
+**Verified by:** a clean llm-chat rebuild on 2026-09-28:
+- Hello world in all five languages.
+- Runtime errors reported verbatim (Bash exit 3, Node stack trace, `SIGSEGV`, `SIGABRT`, Go panic).
+- C, C++ and Go compile errors returned as `phase=compile` with the compiler's own text.
+- From inside a per-run VM, the internet, the coordinator, the `fcrun0` gateway, `fcbr0` and the CloudCore host are all unreachable.
+- C infinite loop → `SIGXCPU` at 15.3s, named in the output. Bash fork bomb contained. Go 2GB allocation → guest-side out-of-memory, with host `MemAvailable` unchanged and llama-server unaffected.
+- A second concurrent Run is queued at position 1 and waits 10.75s.
+- C `scanf` and Bash `read` detected `exact`.
+- A real model Ask in C through the LB was fixed and re-verified as C.
+- Restarting `verify-proxy` mid-Run sweeps the orphaned VM.
+- Idle-host cost per Run: 6.0–7.8s boot, 0.36–1.56s compile. Boot rises to 11.7–16.2s while llama-server is loading its model.
+- The corpus migration was verified on a copy of the live DB. Using it live needs an API restart.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2854,3 +2893,4 @@ Eight local cases also pass: `input()`, busy loop, sleep, stdin from `/dev/null`
 | v2.3 | 2026-09-27 | Paul Scott | Direct follow-up: "can we query the network h/w better than this?" — the wireless row's own Link Speed column was always blank with nothing explaining why. F-156: added `ethtool -i` (driver, driver version, firmware version, bus address — confirmed live to need no privilege, unlike plain `ethtool` for speed/duplex, which does need root here) and sysfs `duplex` for every physical interface, plus best-effort wireless link detail (SSID/frequency/signal/real negotiated bitrate) via `iw` when that package is present, with a clear inline hint when it isn't rather than a blank cell with no explanation. Verified directly against this host's real two NICs (`e1000e` wired, `iwlwifi` wireless — real firmware version strings, real PCI bus addresses, real full-duplex reading) end-to-end through a real `GET /v1/hardware` call; the `iw`-based parsing itself is implementation-only and disclosed as such, since `iw` isn't installed on this host to verify against. |
 | v2.4 | 2026-09-27 | Paul Scott | Direct report right after installing `iw` per F-156's own suggestion: SSID/signal/frequency all showed correctly, but the Speed/Duplex column stayed blank for the wireless row instead of showing its negotiated bitrate. Root cause: `_iw_link_info()`'s own "tx bitrate" parsing partitioned the line on its first colon to get the value ("866.7 MBit/s...") *then* tried to `re.match` that value against a pattern still requiring the literal "tx bitrate:" prefix — a string that no longer contained it, since the partition had already stripped it off — so the regex could never match. Fixed to match the numeric prefix directly against the already-extracted value. Verified directly against this host's own real, now-installed `iw` (`iw dev wlp2s0 link`), correctly extracting `866.7` from the real "tx bitrate: 866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" line, then end-to-end through a real `GET /v1/hardware` call — the last piece of F-156 that couldn't be verified when it shipped is now fully confirmed working. |
 | v2.5 | 2026-09-28 | Paul Scott | llm-chat sandbox extensions (Stages 10-11 of `llm-chat-sandbox-extensions-Phased-Implementation.md`), picking up the Phase 4 doc's still-open out-of-scope items. F-157: Firecracker under `jailer` with a shared read-only rootfs + per-session overlay; found a fcrunner-owned golden image and a dead-VMM session hang. F-158: exact stdin-wait detection via `/proc/<pid>/syscall`; found Python 3.10's `time.sleep()` is `pselect6(0, …)`. |
+| v2.6 | 2026-09-28 | Paul Scott | Stage 12 of `llm-chat-sandbox-extensions-Phased-Implementation.md`: Bash/Node/C/C++/Go in Run/Ask, each Run in its own network-less jailed microVM on an isolated `fcrun0` bridge, with a FIFO queue, memory floor, separate compile phase and guest-side stdin detection. F-159: signal deaths surfaced as a bare `-1`, CPU overruns as anonymous `SIGKILL`, and a limits wrapper that failed open (caught locally before shipping). Measured: 6–8s per non-Python Run on an idle coordinator, dominated by microVM boot. |
