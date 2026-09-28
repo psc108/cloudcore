@@ -126,3 +126,19 @@ runcmd:
   # Only now that every ZIM is verified and registered.
   - [ systemctl, daemon-reload ]
   - [ systemctl, enable, --now, kiwix-serve.service ]
+
+  # Warm the full-text indexes before the first real question. Measured
+  # live (llm-chat-kiwix-expansion K5): the first searches against the
+  # freshly written 59-ZIM library took 1.2-2.0s -- close to verify_proxy's
+  # 3s cutoff, past which grounding is silently skipped -- then 0.14s
+  # median once the index pages were in page cache. A handful of broad
+  # searches across every book pulls those pages in up front.
+  - |
+    for i in $(seq 1 30); do
+      curl -fs -o /dev/null "http://127.0.0.1:${kiwix_port}/kiwix/" && break
+      sleep 2
+    done
+    for q in linux memory process network file error function server kernel python; do
+      curl -fs -o /dev/null --max-time 60 "http://127.0.0.1:${kiwix_port}/kiwix/search?pattern=$q&pageLength=5" || true
+    done
+    echo "kiwix: search indexes warmed" >&2
