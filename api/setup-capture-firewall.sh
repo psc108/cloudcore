@@ -52,7 +52,7 @@ main() {
   # `systemctl is-active ufw` only says the unit ran at boot; whether rules
   # are enforced is `ufw status` (found live: unit active, firewall
   # inactive, so an added rule changed nothing).
-  if [[ "${dry_run}" -eq 0 ]] && ufw status | grep -q '^Status: inactive'; then
+  if [[ "${dry_run}" -eq 0 ]] && grep -q '^Status: inactive' <<<"$(ufw status)"; then
     log "WARNING: ufw is INACTIVE -- this rule will be stored but not enforced, and port ${PORT}"
     log "is currently reachable from every network this host is on. Enabling ufw applies a"
     log "default-deny to ALL incoming traffic; review what else this host serves before doing so."

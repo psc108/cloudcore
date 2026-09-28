@@ -2797,6 +2797,34 @@ The corpus gains a `language` column (existing rows default to `python`; unknown
 
 Correction, same day: the host's ufw is **inactive** (`systemctl is-active ufw` reports only that the unit ran at boot; `ufw status` is what counts). The LAN rule the new script added is stored but not enforced, and port 8083 is reachable from every network the host is on. Its protection is the port gate plus token auth, over plain HTTP. Enabling ufw is a separate host-hardening decision (default-deny would hit the peer listener, WireGuard and LB ports), not part of this stage. The script now warns when ufw is inactive. A submit from a second LAN machine is still untested.
 
+### F-161 — CloudCore hosts ran with no host firewall at all; a script now enables ufw from an editable per-host inventory without cutting off the lab, the peer link or co-hosted projects
+
+**Where:** new `api/setup-host-firewall.sh` (run on each CloudCore host: stourport, Llwyn-y-Groes). Follow-up to F-160's correction.
+
+**Symptom:** ufw's systemd unit was active but `ufw status` was `inactive`, so every service on the host listening on all interfaces was reachable from every network the host is on. On stourport that includes CloudCore's own ports (peer listener 8082, capture 8083, WireGuard 51820, Grafana 3000, Loki 3100, Sentinel 8900) and unrelated ones (rpcbind 111, an iSCSI target on 3260, Loki gRPC 9096). The obvious fix, `ufw enable`, would have broken the lab.
+
+**Root cause:** four things make a naive `ufw enable` unsafe on a CloudCore host:
+1. ufw's shipped `DEFAULT_FORWARD_POLICY` is `DROP`, and CloudCore routes guest traffic (NAT on `ccbr0`) and peer traffic (`cc0`, WireGuard) through the host.
+2. Guests reach host services on `192.168.100.1` (DNS 53, DHCP 67, repo 8090, Loki 3100, capture 8083, Sentinel 8900), including peer-placed guests arriving over `cc0`.
+3. The peer link itself needs 8082/tcp, the WireGuard port and mDNS 5353/udp from the LAN.
+4. Each host also runs other projects whose ports CloudCore can't know about.
+
+Ports that turned out not to need anything: LB listeners bind `127.0.0.1` (api/lb.py), NFS runs inside a guest, and libvirt's `virbr0` manages its own rules. Docker-published ports (here: ssl-cert-manager on 80/8000) bypass ufw entirely through Docker's own iptables rules.
+
+**Fix:** `setup-host-firewall.sh`:
+- **`--scan`** writes `/etc/cloudcore/host-firewall.inventory`: one line per port open right now, kept at scope `any` so nothing changes by default. Each line notes the owning process, plus the CloudCore role and a suggested narrower scope where known. CloudCore's own ports that aren't listening yet are added at their designed scope; Docker, libvirt and probable ephemeral UDP sockets appear only as comments.
+- **The operator edits it:** delete a line to close that port, or narrow `any` to `lan`, `bridge` (`ccbr0` + `cc0`), `ccbr0` or a CIDR.
+- **`--apply`** makes ufw match the file exactly (earlier rules from the script are removed first). It always adds routed allows for `ccbr0`/`cc0`, and lists what will close.
+- **Safety:** refuses if the operator's own SSH session wouldn't be allowed; arms an automatic `ufw disable` after 5 minutes unless `--confirm`; turns ufw straight back off if the post-checks fail (ufw active, `FORWARD ACCEPT` still present for `ccbr0`/`cc0`); `--disable` is the escape hatch.
+- CloudCore's port numbers are read from the host's own settings, so the same script works on either host.
+
+**Verified by:** plan mode on stourport (real listeners), plus scan → edit → plan on a scratch inventory: narrowed scopes produce interface- or CIDR-scoped rules, deleted lines are listed as closing, and malformed ports and scopes are rejected with a file:line error before anything changes. The SSH guard refuses a session from outside the LAN and passes one from inside it. Testing found and fixed four bugs in the script itself:
+- UDP 51820 (WireGuard) sits inside the kernel's ephemeral port range and was first filtered out as a client socket.
+- Validation inside process substitutions only exited a subshell, so bad lines were silently skipped.
+- Three `cmd | grep -q` / early-exit pipes turned into false failures under `pipefail`. One made the SSH guard refuse a legitimate LAN session. Another sat in the post-apply check and could have switched a working firewall straight back off.
+
+**Not yet run for real:** no `--scan`/`--apply` as root on either host yet.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2918,3 +2946,4 @@ Correction, same day: the host's ufw is **inactive** (`systemctl is-active ufw` 
 | v2.5 | 2026-09-28 | Paul Scott | llm-chat sandbox extensions (Stages 10-11 of `llm-chat-sandbox-extensions-Phased-Implementation.md`), picking up the Phase 4 doc's still-open out-of-scope items. F-157: Firecracker under `jailer` with a shared read-only rootfs + per-session overlay; found a fcrunner-owned golden image and a dead-VMM session hang. F-158: exact stdin-wait detection via `/proc/<pid>/syscall`; found Python 3.10's `time.sleep()` is `pselect6(0, …)`. |
 | v2.6 | 2026-09-28 | Paul Scott | Stage 12 of `llm-chat-sandbox-extensions-Phased-Implementation.md`: Bash/Node/C/C++/Go in Run/Ask, each Run in its own network-less jailed microVM on an isolated `fcrun0` bridge, with a FIFO queue, memory floor, separate compile phase and guest-side stdin detection. F-159: signal deaths surfaced as a bare `-1`, CPU overruns as anonymous `SIGKILL`, and a limits wrapper that failed open (caught locally before shipping). Measured: 6–8s per non-Python Run on an idle coordinator, dominated by microVM boot. |
 | v2.7 | 2026-09-28 | Paul Scott | Stage 13 of `llm-chat-sandbox-extensions-Phased-Implementation.md`, the last of the Phase 4 out-of-scope items: a local-capture client with per-student tokens, whose submissions are re-run on a coordinator and never trusted for results. F-160, including a silent mislabel from deploying guest code ahead of the API. LAN exposure of port 8083 still needs the new firewall script run with sudo. |
+| v2.8 | 2026-09-28 | Paul Scott | Direct request after F-160's correction showed ufw was never enabled: inventory the host and "get a script to run this without cutting everything else off... we also will need to run this on llwyn-y-groes". Then: "have the script scan for currently open ports and add those to the inventory list and i can remove any afterward". F-161: `api/setup-host-firewall.sh` (scan → edit → apply → confirm, auto-rollback, SSH guard). |
