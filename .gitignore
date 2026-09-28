@@ -15,6 +15,8 @@ provider/terraform-provider-cloudcore
 **/.terraform/
 **/terraform.tfstate
 **/terraform.tfstate.backup
+# Timestamped/manual backups written by tofu -backup and state rm
+**/terraform.tfstate.*
 
 # Ansible build artefacts
 ansible/collections/cloudcore/*.tar.gz
@@ -60,3 +62,14 @@ api/dns/
 
 # Ansible example-generated secrets (idempotent local state, not committed)
 ansible/examples/.state/
+
+# Secrets -- never committed (global security defaults)
+*.tfvars
+*.pem
+*.key
+vault_*.yml
+.env
+
+# Local-only artefacts: generated Word export and the API's run log
+haFullStack.docx
+api/server.log

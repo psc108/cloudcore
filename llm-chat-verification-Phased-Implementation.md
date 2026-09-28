@@ -39,7 +39,7 @@ is a different, non-interactive consumer and stays untouched.
 | 2 | Grounded fix loop | Done — verified live (real 3-round fix loop against a genuine `numpy` failure, correct round-limiting, single "ask again" invite only on the final block) |
 | PRIORITY | Coordinator placement-awareness | Code complete, verified as far as topology allows — 2026-09-18 |
 | 3 | Central learning corpus + student review page | Done — verified live end-to-end, 2026-09-18 |
-| 4 | Interactive sandbox | Designed — see `llm-chat-interactive-sandbox-Phased-Implementation.md`, not yet built |
+| 4 | Interactive sandbox | Done — Stages 1-9 verified live 2026-09-18 to 2026-09-22; see `llm-chat-interactive-sandbox-Phased-Implementation.md` |
 
 ---
 
@@ -678,8 +678,8 @@ since every interaction in the new interface stays anchored to actual
 student code, closing the one real gap Phase 1/2's grounding mechanism
 never covered: a free-form question with no code in it at all, which
 nothing in this document's own Phases 1-3 could ever verify. See that
-document for the full design and staged build (Stage 1: core Run/Ask
-loop; Stage 2: CodeMirror upgrade) — not yet built.
+document for the full design and staged build — all nine stages
+built and verified live, 2026-09-18 to 2026-09-22.
 
 <details>
 <summary>Original placeholder text (superseded by the document above, kept for history)</summary>

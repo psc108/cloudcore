@@ -53,6 +53,13 @@ untouched, as in every prior phase.
 | 1 | Core Run/Ask loop, plain textarea, chat webui removed | Done — verified live 2026-09-18 |
 | 2 | CodeMirror upgrade | Done — verified live 2026-09-18 |
 | 3 | True interactive execution (`input()` support) | Done — verified live 2026-09-18 |
+| 4 | Per-client rate limiting + a hard interrupt | Done — verified live 2026-09-21 |
+| 5 | Firecracker sandbox shell + network access (5A infra, 5B terminal, 5C LB) | Done — verified live 2026-09-21 |
+| 6 | Browser preview for anything run in the Terminal | Done — verified live 2026-09-22 |
+| 7 | Five student-experience improvements (+ F-112 Regenerate fix) | Done — verified live 2026-09-22 |
+| 8 | Separate Linux Help panel (+ follow-ups, F-113) | Done — verified live 2026-09-22 |
+| 9 | Run, fault, offer a fix, run again (+ F-115) | Done — verified live 2026-09-22 |
+| — | Post-Stage-9 follow-ups (F-135 to F-146) | Done — see below |
 
 ---
 
@@ -1320,6 +1327,30 @@ display-less CDP test automation (`xterm.js`'s own buffer sync is
 plausibly tied to a rendering loop a `--disable-gpu` headless instance
 doesn't drive promptly), not a product defect, and not something a
 real student's own visible browser tab would experience.
+
+---
+
+## Post-Stage-9 follow-ups (2026-09-24 to 2026-09-25)
+
+Work done on the same coordinator after Stage 9 closed. Each item is
+written up in full in `haFullStack-Findings-Log.md`; this list is here
+so this document stays the complete record of what the sandbox is.
+
+- **F-135** — promtail's dpkg conffile prompt silently aborted the whole
+  `packages:` install on rebuild, crash-looping `llama-server`.
+- **F-136 to F-141** — retrieval grounding for both panels: browsable
+  references (F-136), a human-approved corpus checked first (F-137), a
+  ~4.1GB Python/coding kiwix corpus (F-138), a search-term extraction
+  timeout on long pasted errors (F-139), and a third grounding tier
+  over CloudCore's own source code, chunked by logical unit
+  (F-140/F-141).
+- **F-142** — retry a stalled boot-time `apt-get update` that cached a
+  truncated index.
+- **F-143** — a configurable ask-queue (default off), showing queue
+  position instead of rejecting outright.
+- **F-144** — boolean Dashboard variables rendered as a dropdown.
+- **F-145/F-146** — a Sentinel Performance tab, and llama-server's RPC
+  crash loop reloading the model every cycle.
 
 ---
 
