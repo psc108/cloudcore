@@ -2774,6 +2774,29 @@ The corpus gains a `language` column (existing rows default to `python`; unknown
 - Idle-host cost per Run: 6.0–7.8s boot, 0.36–1.56s compile. Boot rises to 11.7–16.2s while llama-server is loading its model.
 - The corpus migration was verified on a copy of the live DB. Using it live needs an API restart.
 
+### F-160 — A local-capture client for the llm-chat corpus, re-verified server-side; found on the way: guest code deployed ahead of the API silently mislabelled a capture
+
+**Where:** new `api/llm_client_capture.py` (per-student tokens, submission routes, re-verification worker), `api/db.py` (`llm_client_tokens`, `llm_client_submissions`, `client_token_id` column), `api/server.py` (8083 port gate + worker start), `examples/llm-chat/files/verify_proxy.py` (`POST /sandbox/reverify`), new `scripts/llm-capture-client/`, new `api/setup-capture-firewall.sh`, and the Dashboard's LLM Examples page. Stage 13 of `llm-chat-sandbox-extensions-Phased-Implementation.md`.
+
+**Symptom:** the last open item on the Phase 4 doc's out-of-scope list: a student running a model on their own laptop had no way to feed the corpus. Separately, while Stage 12 was being verified, a real C Ask was captured into the corpus as `language = python`, with no error anywhere.
+
+**Root cause:** for the mislabel, the updated `verify_proxy.py` (which sends `language`) had been deployed to the coordinator while the CloudCore API was still running its old code. The old ingest route reads the fields it knows and ignores the rest, so `language` was dropped and the column default (`python`) applied. Nothing failed, so nothing surfaced it. Deploying the guest side before the host side of a new field is silent data loss, not a visible error.
+
+**Fix:**
+- **Tokens:** per-student, created in the Dashboard, shown once and stored only as SHA-256; revocation is a timestamp.
+- **Submissions** (on the existing 8083 listener, added to its port gate): prompt + code only. Every execution field is rejected by name, so a client can never believe its results were stored. There are size limits and 20/hour per token.
+- **Re-verification:** a background worker sends each submission to a running llm-chat coordinator's new `/sandbox/reverify`, which requires the shared API token because students can reach that port through the LB. The API then records the coordinator's own result as `source = local-client`. With no coordinator running, submissions wait `pending` and retry every minute for up to 24h.
+- **Client:** a single-file Python 3.9+ CLI with `submit`, `status`, and a `watch` proxy for any OpenAI-compatible local server. The token comes from the environment or a 0600 file, never argv, and plain HTTP to public addresses is refused.
+- **Mislabel:** the API was restarted and the one affected row corrected by hand. Lesson recorded: restart the API before, not after, rolling guest code that sends a new field.
+
+**Verified by:** 21 server-side checks on a copy of the live DB (token hashing, admin-only token routes, execution-field rejection, validation, 413/429, cross-student isolation, revoke, and the pending/verified/rejected/expired worker paths). Live on 2026-09-28:
+- `/sandbox/reverify` returns 401 without the token, both direct and through the LB; admin routes return 403 on port 8083.
+- The real CLI submitted C and Python files, which were re-run on the coordinator and came back `verified` with the coordinator's own output.
+- `watch` in front of the real local Ollama captured and verified both a streaming and a non-streaming answer, without altering either response.
+- The Go capture after the restart landed as `language = go`.
+
+Not yet verified: reaching 8083 from another LAN machine, which needs `sudo bash api/setup-capture-firewall.sh --lan-cidr <LAN>` first.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2894,3 +2917,4 @@ The corpus gains a `language` column (existing rows default to `python`; unknown
 | v2.4 | 2026-09-27 | Paul Scott | Direct report right after installing `iw` per F-156's own suggestion: SSID/signal/frequency all showed correctly, but the Speed/Duplex column stayed blank for the wireless row instead of showing its negotiated bitrate. Root cause: `_iw_link_info()`'s own "tx bitrate" parsing partitioned the line on its first colon to get the value ("866.7 MBit/s...") *then* tried to `re.match` that value against a pattern still requiring the literal "tx bitrate:" prefix — a string that no longer contained it, since the partition had already stripped it off — so the regex could never match. Fixed to match the numeric prefix directly against the already-extracted value. Verified directly against this host's own real, now-installed `iw` (`iw dev wlp2s0 link`), correctly extracting `866.7` from the real "tx bitrate: 866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" line, then end-to-end through a real `GET /v1/hardware` call — the last piece of F-156 that couldn't be verified when it shipped is now fully confirmed working. |
 | v2.5 | 2026-09-28 | Paul Scott | llm-chat sandbox extensions (Stages 10-11 of `llm-chat-sandbox-extensions-Phased-Implementation.md`), picking up the Phase 4 doc's still-open out-of-scope items. F-157: Firecracker under `jailer` with a shared read-only rootfs + per-session overlay; found a fcrunner-owned golden image and a dead-VMM session hang. F-158: exact stdin-wait detection via `/proc/<pid>/syscall`; found Python 3.10's `time.sleep()` is `pselect6(0, …)`. |
 | v2.6 | 2026-09-28 | Paul Scott | Stage 12 of `llm-chat-sandbox-extensions-Phased-Implementation.md`: Bash/Node/C/C++/Go in Run/Ask, each Run in its own network-less jailed microVM on an isolated `fcrun0` bridge, with a FIFO queue, memory floor, separate compile phase and guest-side stdin detection. F-159: signal deaths surfaced as a bare `-1`, CPU overruns as anonymous `SIGKILL`, and a limits wrapper that failed open (caught locally before shipping). Measured: 6–8s per non-Python Run on an idle coordinator, dominated by microVM boot. |
+| v2.7 | 2026-09-28 | Paul Scott | Stage 13 of `llm-chat-sandbox-extensions-Phased-Implementation.md`, the last of the Phase 4 out-of-scope items: a local-capture client with per-student tokens, whose submissions are re-run on a coordinator and never trusted for results. F-160, including a silent mislabel from deploying guest code ahead of the API. LAN exposure of port 8083 still needs the new firewall script run with sudo. |

@@ -30,8 +30,8 @@ as in every prior phase.
 |---|---|---|
 | 10 | Firecracker under `jailer` + a shared microVM launcher module | Done — verified live 2026-09-28 |
 | 11 | Exact input-wait detection via `/proc/<pid>/syscall` | Done — verified live 2026-09-28 (11.3 guest helper moves into Stage 12's rootfs rebuild) |
-| 12 | Bash, JavaScript (Node), C/C++, Go in Run/Ask — Firecracker per run | Done — verified live 2026-09-28 (corpus `language` column pending an API restart; see below) |
-| 13 | Local-capture client with per-student tokens and server-side re-verification | Not started |
+| 12 | Bash, JavaScript (Node), C/C++, Go in Run/Ask — Firecracker per run | Done — verified live 2026-09-28 |
+| 13 | Local-capture client with per-student tokens and server-side re-verification | Done — verified live 2026-09-28, except 13.4's LAN reachability (needs `sudo`, see below) |
 
 ---
 
@@ -364,7 +364,7 @@ and its runtime `sources.list` is back to main-only.
 | Stage 10 regression on this build | 24/24 checks + 8/8 failure matrix |
 | 12.4 Real model, through the LB | Ask with language C on code missing a `;`: the model's fix was compiled and run **as C** in a per-run VM (`15`, exit 0). It was right first time, so the "model's own code fails to compile → fix round" path was exercised with scripted compile failures (above), not by a real model answer |
 | `verify-proxy` restarted mid-Run | Startup sweep logged "removed 1 per-run microVM(s) orphaned"; no jail, VMM, TAP or cgroup left |
-| Corpus `language` column | Migration + route verified on a copy of the real DB (27 existing rows → `python`; `c`/`go` stored; unknown → `other`). **Not yet live**: needs the CloudCore API process restarted to load the new code |
+| Corpus `language` column | Migration + route verified on a copy of the real DB (27 existing rows → `python`; `c`/`go` stored; unknown → `other`), then live after the API restart: a real model Ask in Go was captured as `language = go`. The one C row captured *before* the restart had been stored as `python` and was corrected by hand (see F-160) |
 
 Measured cost per non-Python Run (task 12.6), idle coordinator:
 
@@ -474,6 +474,56 @@ ships. Newer versions would mean pulling from outside the apt mirror.
 | 13.6 | Review page: `local-client` filter, token label shown | — |
 
 ---
+
+### Built as designed, with one change
+
+The API does the re-verification call and writes the corpus row itself,
+rather than the coordinator POSTing its own capture as in the plan. The
+coordinator's `/sandbox/reverify` only returns the result. That keeps the
+link between a submission and its corpus row in one process, and the
+result still only ever comes from the coordinator.
+
+### Verified live, 2026-09-28
+
+Server side, on a copy of the real DB (21 checks, all pass):
+- Tokens: only the SHA-256 is stored, the list never returns secrets,
+  and create/revoke are admin-only.
+- The admin token can't submit.
+- Validation: execution fields are rejected by name (`exec_stdout`,
+  `passed`), missing fields or an unknown language → 400, oversize → 413.
+- The 20/hour limit returns 429.
+- Isolation: one student's token can't read another's submission, and a
+  revoked token → 401.
+- Worker: no coordinator → stays `pending` with the reason; coordinator
+  re-run → `verified` with the coordinator's result, called with the
+  shared token; coordinator 4xx → `rejected`; older than 24h → `expired`.
+
+Live, against the running coordinator and the restarted API:
+
+| Check | Result |
+|---|---|
+| `/sandbox/reverify` without, or with a wrong, token, direct and through the LB | 401 / 401 |
+| Admin token route on the capture port 8083 | 403 (port gate), even with the admin token |
+| `submit --wait`, C file | `verified`; re-run in a per-run microVM, the coordinator's own `row 1..3`, exit 0 |
+| `submit --wait`, Python file | `verified`; `45` |
+| `--dry-run` | Shows the payload, sends nothing |
+| Plain HTTP to a public address | Refused, exit 2 |
+| Bad token | Refused, exit 3 |
+| `watch` against the real local Ollama (`qwen2.5-coder:1.5b`), non-streaming and streaming | Both chat responses passed through intact (JSON; 27 SSE chunks to `[DONE]`); both answers captured and `verified` |
+| Dashboard | Capture Tokens card and source filter served by the restarted API. **Not checked visually in a browser** |
+
+The two test tokens were revoked afterwards and their four test rows set
+to `hidden`.
+
+**13.4, not yet done: LAN reachability.** ufw is active on the host, and
+I can't read or change its rules without `sudo`. A laptop on the LAN is
+most likely blocked by ufw's default deny today. Guests and peers reach
+8083 over `ccbr0`/WireGuard and are unaffected. To open it to the LAN
+only, run:
+`sudo bash api/setup-capture-firewall.sh --lan-cidr 192.168.1.0/24`.
+The script refuses non-private ranges and supports `--dry-run` and
+`--remove`. Then test from a second machine with
+`llm_capture_client.py submit ... --wait 120`.
 
 ## Methodology — unchanged from Phases 1-4
 

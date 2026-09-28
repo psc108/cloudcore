@@ -1356,9 +1356,6 @@ so this document stays the complete record of what the sandbox is.
 
 ## Explicitly out of scope — rolled up from Phases 1-4, not silently dropped again
 
-- **Non-Python code blocks.** The sandbox stays Python-only, for the
-  same reason `run_sandboxed()` itself is Python-only today. Future
-  work: per-language sandbox runners plus a language picker in the UI.
 - **Stronger isolation than same-VM `unshare`/`setrlimit`.** ~~Still
   deferred~~ — **superseded by Stage 5**: Firecracker microVMs are the
   stronger isolation this item asked for, chosen specifically because
@@ -1366,10 +1363,12 @@ so this document stays the complete record of what the sandbox is.
   inline chat verification) raised the bar past what same-VM
   `unshare`/`setrlimit` can honestly promise for a persistent,
   network-connected shell.
-- **A portable local-capture client** (a student running a model on
-  their own laptop, feeding the same central corpus). Still not
-  built — the `source` field Phase 3 already designed for exactly this
-  needs no further change here.
+- ~~**A portable local-capture client**~~ — **done, Stage 13** of
+  `llm-chat-sandbox-extensions-Phased-Implementation.md` (F-160):
+  `scripts/llm-capture-client/`, per-student tokens, and every submission
+  re-run on a coordinator (`source = local-client`).
+- ~~**Non-Python code blocks**~~ — **done, Stage 12** (F-159): Bash,
+  Node, C, C++ and Go, each Run in its own network-less microVM.
 - ~~A hard mid-generation interrupt for `/sandbox/ask`~~ — **done,
   Stage 4** (above).
 - ~~Server-side rate limiting~~ — **done, Stage 4** (above).
