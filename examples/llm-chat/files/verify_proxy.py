@@ -185,6 +185,33 @@ def _relay_debug(msg: str) -> None:
 # Linux Help must keep working exactly as before if it's ever missing.
 KIWIX_HOST = os.environ.get("KIWIX_HOST", "")
 KIWIX_PORT = int(os.environ.get("KIWIX_PORT", "8621"))
+# llm-chat-kiwix-expansion K3/K4: kiwix-serve runs with --urlRootLocation
+# at this prefix, so every link it generates (search hits, article links,
+# its own skin/toolbar) already points through verify-proxy's read-only
+# /kiwix/ passthrough below -- students can open what the model cited.
+KIWIX_URL_ROOT = "/kiwix"
+# Book ids (ZIM filename minus ".zim", which is what kiwix-serve's
+# books.name filter matches) each panel searches first, then the general
+# fallback books (Wikipedia) for any of the 2 slots left empty. Rendered
+# from examples/llm-chat/kiwix-zims.json. Empty = search everything, the
+# pre-K3 behaviour.
+KIWIX_BOOKS = {
+    "coding": [b for b in os.environ.get("KIWIX_BOOKS_CODING", "").split(",") if b],
+    "linux": [b for b in os.environ.get("KIWIX_BOOKS_LINUX", "").split(",") if b],
+}
+KIWIX_BOOKS_FALLBACK = [b for b in os.environ.get("KIWIX_BOOKS_FALLBACK", "").split(",") if b]
+_KIWIX_HITS = 2
+# How the two hit slots are filled. K5 benchmark on the full 59-ZIM
+# library (26 real queries, every hit judged by hand): fill ~47/52
+# relevant, combined ~45, split ~41 -- forcing a Wikipedia hit pulled in
+# nonsense like "load average" -> "Genetic load". Latency is not a factor
+# (all strategies: max 0.76s against the 3s budget).
+#   combined -- one search across every book (pre-K3 behaviour)
+#   fill     -- the panel's specialist books first, general books only
+#               for slots they leave empty
+#   split    -- one specialist hit plus one general hit, each backfilling
+#               the other when it has nothing
+KIWIX_MERGE = os.environ.get("KIWIX_MERGE", "fill")
 _KIWIX_TIMEOUT_S = 3
 _KIWIX_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -374,7 +401,74 @@ def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
         return "", []
 
 
-def _kiwix_search(search_pattern: str) -> tuple[str, list[dict]]:
+_KIWIX_PARA_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.S | re.I)
+
+
+def _kiwix_article_lead(link: str, limit: int = 400) -> str:
+    """The first substantial paragraph of a kiwix article, as plain text --
+    the stand-in snippet for hits kiwix-serve returns without one. Empty on
+    any failure; this is best-effort grounding, never a hard dependency."""
+    try:
+        url = f"http://{KIWIX_HOST}:{KIWIX_PORT}{link}"
+        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+            page = resp.read(512 * 1024).decode("utf-8", "replace")
+        for para in _KIWIX_PARA_RE.findall(page):
+            text = " ".join(html.unescape(_KIWIX_TAG_RE.sub("", para)).split())
+            if len(text) >= 80:
+                return text[:limit] + ("..." if len(text) > limit else "")
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
+def _kiwix_query(search_pattern: str, books: list[str], want: int) -> list[dict]:
+    """One kiwix-serve search, optionally restricted to `books`. Raises on
+    failure; the caller decides what that means. kiwix-serve rejects the
+    WHOLE request (HTTP 400, "No such book") if any listed book isn't
+    loaded, so a single ZIM that failed to register would otherwise
+    silently turn off every filtered search -- the caller falls back to an
+    unfiltered search on 400."""
+    # Headroom beyond `want`: some hits are dropped below (tag-listing pages).
+    params = [("pattern", search_pattern), ("format", "xml"), ("pageLength", str(want + 4))]
+    params += [("books.name", b) for b in books]
+    url = f"http://{KIWIX_HOST}:{KIWIX_PORT}{KIWIX_URL_ROOT}/search?{urllib.parse.urlencode(params)}"
+    with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+        body = resp.read()
+    hits = []
+    for item in ET.fromstring(body).findall(".//item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        if not title:
+            continue
+        # Stack Exchange ZIMs index their tag-listing pages too ("Highest
+        # Voted 'chmod' Questions", ".../questions/tagged/fdisk_page=20"):
+        # lists of question titles that teach nothing, yet they took 22 of
+        # the K5 benchmark's result slots.
+        if "/questions/tagged/" in link or title.startswith("Highest Voted '"):
+            continue
+        snippet = _KIWIX_TAG_RE.sub("", item.findtext("description") or "").strip()
+        if not snippet and link.startswith(KIWIX_URL_ROOT + "/content/"):
+            # kiwix-serve returns some hits with an EMPTY snippet -- found in
+            # K5 on Wikipedia's own "Big O notation", the best possible hit.
+            # These used to be skipped, silently dropping the most relevant
+            # reference; fetch the article's opening text instead.
+            snippet = _kiwix_article_lead(link)
+        if not snippet:
+            continue
+        book_title_el = item.find("book/title")
+        hits.append({
+            "source": (book_title_el.text or "").strip() if book_title_el is not None else "Reference",
+            "title": title,
+            "snippet": snippet,
+            # Only links that stay inside the /kiwix/ passthrough are kept.
+            "link": link if link.startswith(KIWIX_URL_ROOT + "/content/") else "",
+        })
+        if len(hits) >= want:
+            break
+    return hits
+
+
+def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]]:
     """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
     ManKier man pages + ArchWiki, all three loaded into one instance --
     see kiwix-cloud-init.yaml.tftpl) for real reference snippets
@@ -396,24 +490,34 @@ def _kiwix_search(search_pattern: str) -> tuple[str, list[dict]]:
     if not KIWIX_HOST or not search_pattern:
         return "", []
     try:
-        qs = urllib.parse.urlencode({"pattern": search_pattern, "format": "xml", "pageLength": 3})
-        url = f"http://{KIWIX_HOST}:{KIWIX_PORT}/search?{qs}"
-        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
-            body = resp.read()
-        root = ET.fromstring(body)
-        lines = []
-        references = []
-        for item in root.findall(".//item")[:2]:
-            title_el = item.find("title")
-            desc_el = item.find("description")
-            if title_el is None or desc_el is None or not (desc_el.text or "").strip():
-                continue
-            title = (title_el.text or "").strip()
-            snippet = _KIWIX_TAG_RE.sub("", desc_el.text or "").strip()
-            book_title_el = item.find("book/title")
-            source = (book_title_el.text or "").strip() if book_title_el is not None else "Reference"
-            lines.append(f'[{source}] "{title}": {snippet}')
-            references.append({"source": source, "title": title, "snippet": snippet})
+        # K3: the panel's specialist books first. In one combined search
+        # Wikipedia outranks them almost every time (K5 baseline: 1 of 20
+        # coding top-2 slots came from the Python docs/DevDocs), so the
+        # general books only fill slots the specialists leave empty.
+        specialist = KIWIX_BOOKS.get(panel, [])
+        try:
+            if KIWIX_MERGE == "combined" or not specialist:
+                references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
+            elif KIWIX_MERGE == "fill" or not KIWIX_BOOKS_FALLBACK:
+                references = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
+                if len(references) < _KIWIX_HITS and KIWIX_BOOKS_FALLBACK:
+                    references += _kiwix_query(search_pattern, KIWIX_BOOKS_FALLBACK,
+                                               _KIWIX_HITS - len(references))
+            else:  # split
+                spec = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
+                gen = _kiwix_query(search_pattern, KIWIX_BOOKS_FALLBACK, _KIWIX_HITS)
+                references = spec[:1] + gen[:1]
+                for extra in spec[1:] + gen[1:]:
+                    if len(references) >= _KIWIX_HITS:
+                        break
+                    references.append(extra)
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                raise
+            print(f"verify-proxy: kiwix rejected the book filter ({e.read()[:200]!r}); "
+                  f"searching all books instead", flush=True)
+            references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
+        lines = [f'[{r["source"]}] "{r["title"]}": {r["snippet"]}' for r in references]
         if not lines:
             return "", []
         return (("Reference material (for fact-checking only -- explain in your own "
@@ -2208,6 +2312,10 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .msg.model { background: #f6f6f6; }
 .msg .who { font-size: 0.75rem; color: #555; margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.03em; }
 .msg .content { white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; color: #1a1a1a; }
+.sources { margin-top: 0.6rem; padding-top: 0.4rem; border-top: 1px solid #ddd; white-space: normal; font-size: 0.8rem; }
+.sources-label { color: #555; margin-bottom: 0.2rem; }
+.sources a { display: block; color: #1a5fb4; text-decoration: none; margin: 0.1rem 0; }
+.sources a:hover { text-decoration: underline; }
 .msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
 @keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 #question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; }
@@ -2394,6 +2502,30 @@ function makeAskPanel(cfg) {
     regenBtn.disabled = !h.some(m => m.role === 'user');
   }
 
+  // K4 -- the kiwix pages behind an answer, as real links built with DOM
+  // calls (never innerHTML). Only paths inside the /kiwix/ read-only
+  // passthrough are accepted, so a malformed or hostile value can never
+  // become a javascript: or off-site link.
+  function renderSources(parentEl, sources) {
+    const safe = (sources || []).filter(s => typeof s.link === 'string' && s.link.startsWith('/kiwix/content/'));
+    if (!safe.length) return;
+    const box = document.createElement('div');
+    box.className = 'sources';
+    const label = document.createElement('div');
+    label.className = 'sources-label';
+    label.textContent = 'Sources checked:';
+    box.appendChild(label);
+    for (const s of safe) {
+      const a = document.createElement('a');
+      a.href = s.link;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = (s.title || 'Reference') + ' (' + (s.source || 'kiwix') + ')';
+      box.appendChild(a);
+    }
+    parentEl.appendChild(box);
+  }
+
   function renderTranscript() {
     const h = getHistory();
     transcriptEl.innerHTML = h.map(m => `
@@ -2409,6 +2541,7 @@ function makeAskPanel(cfg) {
         contentEl.textContent = h[i].content;
       } else {
         renderAssistantContent(contentEl, h[i].content);
+        renderSources(contentEl, h[i].sources);
       }
     });
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
@@ -2533,6 +2666,7 @@ function makeAskPanel(cfg) {
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
     let assistantText = '';
+    let answerSources = [];
     try {
       const resp = await fetch(cfg.endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2596,6 +2730,7 @@ function makeAskPanel(cfg) {
             if (payload === '[DONE]') { sawDone = true; continue; }
             try {
               const obj = JSON.parse(payload);
+              if (obj.sources) { answerSources = obj.sources; continue; }
               const delta = (obj.choices[0].delta || {}).content || '';
               if (delta) {
                 assistantText += delta;
@@ -2625,7 +2760,8 @@ function makeAskPanel(cfg) {
     }
 
     const h = getHistory();
-    h.push({role: 'assistant', content: assistantText || bubbleContent.textContent});
+    h.push({role: 'assistant', content: assistantText || bubbleContent.textContent,
+            sources: answerSources});
     saveHistory(h);
     // Re-render from the now-saved history -- turns the plain streamed
     // text just shown above into the same structured, button-equipped
@@ -3130,6 +3266,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._proxy_passthrough()
         elif path == "/llm-stats":
             self._serve_llm_stats()
+        elif path == KIWIX_URL_ROOT or path.startswith(KIWIX_URL_ROOT + "/"):
+            self._proxy_kiwix()
         elif path == "/sandbox/ask-status":
             self._handle_ask_status()
         elif path == "/sandbox/run-status":
@@ -3140,8 +3278,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._not_found()
 
     def do_HEAD(self):
-        if self._clean_path() == "/health":
+        path = self._clean_path()
+        if path == "/health":
             self._proxy_passthrough()
+        elif path == KIWIX_URL_ROOT or path.startswith(KIWIX_URL_ROOT + "/"):
+            self._proxy_kiwix()
         else:
             self._not_found()
 
@@ -3609,11 +3750,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if references:
                 grounding_source = "codebase"
         if not references:
-            grounding, references = _kiwix_search(search_terms)
+            grounding, references = _kiwix_search(search_terms, "coding" if include_code else "linux")
             if references:
                 grounding_source = "kiwix"
         messages = ([{"role": "system", "content": system_message}]
-                    + list(history) + [{"role": "user", "content": grounding + user_turn}])
+                    + [{"role": m["role"], "content": str(m.get("content") or "")}
+                       for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+                    + [{"role": "user", "content": grounding + user_turn}])
 
         conn, resp, last_err = self._open_upstream_completion(messages, max_tokens, endpoint_label)
         if resp is None:
@@ -4103,11 +4246,51 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             snapshot["deployment_name"] = DEPLOYMENT_NAME
             threading.Thread(target=_push_llm_stats_to_sentinel, args=(snapshot,), daemon=True).start()
 
+        # K4: the kiwix pages behind this answer, as a structured event the
+        # page renders as real links (never as model text).
+        sources = [{"title": r["title"], "source": r["source"], "link": r["link"]}
+                   for r in (references or []) if r.get("link")]
         try:
+            if sources:
+                self.wfile.write(b"data: " + json.dumps({"sources": sources}).encode() + b"\n\n")
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _proxy_kiwix(self):
+        """GET /kiwix/... -- read-only passthrough to kiwix-serve (which
+        runs with --urlRootLocation=/kiwix, so paths map 1:1): the pages
+        answers cite, plus kiwix's own library browser and search. GET and
+        HEAD only; nothing here can change kiwix's state."""
+        if not KIWIX_HOST:
+            self._not_found()
+            return
+        conn = http.client.HTTPConnection(KIWIX_HOST, KIWIX_PORT, timeout=15)
+        try:
+            conn.request(self.command, self.path,
+                         headers={"Accept-Encoding": self.headers.get("Accept-Encoding", "")})
+            resp = conn.getresponse()
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                if k.lower() in ("content-type", "content-length", "content-encoding", "cache-control",
+                                 "etag", "last-modified", "location", "content-range", "accept-ranges"):
+                    self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (OSError, http.client.HTTPException) as e:
+            print(f"verify-proxy: kiwix passthrough failed: {e!r}", flush=True)
+            try:
+                self.send_error(502, "reference library unavailable")
+            except OSError:
+                pass
+        finally:
+            conn.close()
 
     def _write_sse_delta(self, text: str, meta: dict):
         obj = {

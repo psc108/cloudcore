@@ -143,6 +143,18 @@ module "coordinator" {
 # question. Own independent placement (kiwix_peer_id), defaulting to
 # local same as the coordinator — see kiwix_peer_id's own comment for
 # why this isn't auto-inherited from coordinator_peer_id.
+# K2: refuse to build from a manifest that api/fetch-kiwix-zims.py hasn't
+# finished -- a missing sha256 would only fail minutes into the kiwix VM's
+# boot.
+resource "terraform_data" "kiwix_manifest_check" {
+  lifecycle {
+    precondition {
+      condition     = alltrue([for z in local.kiwix_zims : try(length(z.sha256) == 64, false)])
+      error_message = "kiwix manifest has entries without a verified sha256: ${join(", ", [for z in local.kiwix_zims : z.filename if !try(length(z.sha256) == 64, false)])}. Run: python3 api/fetch-kiwix-zims.py examples/llm-chat/${var.kiwix_zim_manifest}"
+    }
+  }
+}
+
 module "kiwix" {
   source = "../../modules/instance-group"
 

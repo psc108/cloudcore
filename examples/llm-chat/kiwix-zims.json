@@ -1,0 +1,908 @@
+{
+  "_comment": "llm-chat kiwix ZIM manifest (llm-chat-kiwix-expansion-Phased-Implementation.md). Fetched into the host artifact cache by api/fetch-kiwix-zims.py, which fills in sha256 from Kiwix's published checksum. 'panels' says which llm-chat panel searches each book.",
+  "zims": [
+    {
+      "name": "wikipedia_en_all_nopic",
+      "filename": "wikipedia_en_all_nopic_2026-06.zim",
+      "source_url": null,
+      "sha256": "441a56d9e05b2d98f8ae9acb7986a513ed47904d73852c92dc6b7d50baa122e5",
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "existing",
+      "title": "Wikipedia (text only)",
+      "book_name": "wikipedia_en_all",
+      "uuid": "c22094d0-6ad1-6360-36b7-dab953595143",
+      "fulltext": true,
+      "size_bytes": 52690706555,
+      "fallback": true
+    },
+    {
+      "name": "www.mankier.com_en_all",
+      "filename": "www.mankier.com_en_all_2026-07.zim",
+      "source_url": null,
+      "sha256": "4ee596a7a7aa1f9c645030f4f2ec3b40109cbc1dc9047a7fb25a12a9c69cc0e3",
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "existing",
+      "title": "ManKier - Linux man pages",
+      "book_name": "www.mankier.com_en_all",
+      "uuid": "e677db56-6710-6c54-71c0-21660d39ef20",
+      "fulltext": true,
+      "size_bytes": 190123452
+    },
+    {
+      "name": "archlinux_en_all_maxi",
+      "filename": "archlinux_en_all_maxi_2026-07.zim",
+      "source_url": null,
+      "sha256": "c3df551010a953d2c173af8d65a596a7ce434a7fa0771741bc800feeccad1942",
+      "panels": [
+        "linux"
+      ],
+      "tier": "existing",
+      "title": "ArchWiki",
+      "book_name": "archlinux_en_all",
+      "uuid": "431f20f7-58c7-87d4-8f68-eaa4462478bc",
+      "fulltext": true,
+      "size_bytes": 35601208
+    },
+    {
+      "name": "docs.python.org_en_all",
+      "filename": "docs.python.org_en_all_2026-08a.zim",
+      "source_url": null,
+      "sha256": "506cdfbd37d68b36a90943dea60f6a149d78eb5dd73999d62052d5dd2021b7bc",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "Python documentation",
+      "book_name": "docs.python.org_en_all",
+      "uuid": "33c0f07c-8444-cc9d-e114-8803e8af4a71",
+      "fulltext": true,
+      "size_bytes": 3959218562
+    },
+    {
+      "name": "peps.python_en_all",
+      "filename": "peps.python_en_all_2026-08.zim",
+      "source_url": null,
+      "sha256": "1940dfa5c2067625ce2d05bc978d54a1f4ff6b2ae1b6969acd994c3549cb3d41",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "Python PEPs",
+      "book_name": "peps.python_en_all",
+      "uuid": "bf23e927-bb8c-34b2-1015-8a2f17d776f2",
+      "fulltext": true,
+      "size_bytes": 9095163
+    },
+    {
+      "name": "devdocs_en_python",
+      "filename": "devdocs_en_python_2026-08.zim",
+      "source_url": null,
+      "sha256": "289e5d3e0e8c3d3470bf183e5c913be3be0b61a730ce52a247c23812799baa51",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs python",
+      "book_name": "devdocs_en_python",
+      "uuid": "3dde741a-2123-84b2-5c78-78bc63764376",
+      "fulltext": true,
+      "size_bytes": 4390070
+    },
+    {
+      "name": "devdocs_en_numpy",
+      "filename": "devdocs_en_numpy_2026-07.zim",
+      "source_url": null,
+      "sha256": "21b90bf9680d2e1b319e260487078accba5d7faccea443f4245208c53fcefbfa",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs numpy",
+      "book_name": "devdocs_en_numpy",
+      "uuid": "221b90b7-df60-c309-ec8f-046711625b4e",
+      "fulltext": true,
+      "size_bytes": 5248304
+    },
+    {
+      "name": "devdocs_en_pandas",
+      "filename": "devdocs_en_pandas_2026-07.zim",
+      "source_url": null,
+      "sha256": "605c74f9035d029318d6db627c7b81b76a513e57831e2108fda0942fcfc2a8a9",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs pandas",
+      "book_name": "devdocs_en_pandas",
+      "uuid": "429689ef-d1fc-b055-98e0-60922557acbd",
+      "fulltext": true,
+      "size_bytes": 4962410
+    },
+    {
+      "name": "devdocs_en_django",
+      "filename": "devdocs_en_django_2026-07.zim",
+      "source_url": null,
+      "sha256": "a1db7b72d56dd3d752b2b73d812736462ce7108a39cbf9ba9a22006e97b78f4c",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs django",
+      "book_name": "devdocs_en_django",
+      "uuid": "0fca3587-9159-14c1-3bb5-dfe849a06bfa",
+      "fulltext": true,
+      "size_bytes": 2163584
+    },
+    {
+      "name": "devdocs_en_flask",
+      "filename": "devdocs_en_flask_2026-07.zim",
+      "source_url": null,
+      "sha256": "249ee1e64ccb341055950f02d3810192a4de532eb0b636536f162e1f6482f6d7",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs flask",
+      "book_name": "devdocs_en_flask",
+      "uuid": "1daf6ebd-4c1a-0b72-cb19-1fbcd83fcdb6",
+      "fulltext": true,
+      "size_bytes": 616951
+    },
+    {
+      "name": "devdocs_en_fastapi",
+      "filename": "devdocs_en_fastapi_2026-04.zim",
+      "source_url": null,
+      "sha256": "3d863e2a7b5ec9c98c293f8befccf31f49e24c8a299fdc0013d89cbff39cf782",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs fastapi",
+      "book_name": "devdocs_en_fastapi",
+      "uuid": "2f96fce7-02cf-5b12-ddf4-548c581ef4c7",
+      "fulltext": true,
+      "size_bytes": 2437583
+    },
+    {
+      "name": "devdocs_en_matplotlib",
+      "filename": "devdocs_en_matplotlib_2026-07.zim",
+      "source_url": null,
+      "sha256": "ba77b461a491e4e8f62c9feec195fa86ea976fdc0444687f6ed0be2a5e10a973",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs matplotlib",
+      "book_name": "devdocs_en_matplotlib",
+      "uuid": "e5997940-f05e-fe5e-4080-f5870916e4ec",
+      "fulltext": true,
+      "size_bytes": 33432365
+    },
+    {
+      "name": "devdocs_en_scikit-learn",
+      "filename": "devdocs_en_scikit-learn_2026-04.zim",
+      "source_url": null,
+      "sha256": "e709638a3681d51cae9ebad01e09c16d343f5e617c46ec358b0c3ca9738cfafb",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs scikit_learn",
+      "book_name": "devdocs_en_scikit-learn",
+      "uuid": "6ecc2663-c37a-3ade-abb0-5c6ce533460a",
+      "fulltext": true,
+      "size_bytes": 56887663
+    },
+    {
+      "name": "devdocs_en_requests",
+      "filename": "devdocs_en_requests_2026-07.zim",
+      "source_url": null,
+      "sha256": "f393b589d0958e8de7cc7d39ce3fc2f907ab588e3f38d17fb5adcfdcd2f06a3a",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs requests",
+      "book_name": "devdocs_en_requests",
+      "uuid": "a216ebfa-709a-5b92-59b5-7367c9100d58",
+      "fulltext": true,
+      "size_bytes": 353119
+    },
+    {
+      "name": "devdocs_en_jinja",
+      "filename": "devdocs_en_jinja_2026-07.zim",
+      "source_url": null,
+      "sha256": "8b462baa3ec0529eb5908a1c2b6a06d683b62665f212aad20505a59a3b0d1100",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs jinja",
+      "book_name": "devdocs_en_jinja",
+      "uuid": "3cf48160-ea6c-8f51-5cc6-5af5c9da939b",
+      "fulltext": true,
+      "size_bytes": 447220
+    },
+    {
+      "name": "devdocs_en_click",
+      "filename": "devdocs_en_click_2026-04.zim",
+      "source_url": null,
+      "sha256": "53066c248be7719544f3adcef842dbc83da9a88791e6796ef265cce62479a8e5",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs click",
+      "book_name": "devdocs_en_click",
+      "uuid": "a8ed4ef1-5f60-ba9e-8e84-b408ef22df59",
+      "fulltext": true,
+      "size_bytes": 452741
+    },
+    {
+      "name": "devdocs_en_pygame",
+      "filename": "devdocs_en_pygame_2026-07.zim",
+      "source_url": null,
+      "sha256": "27c4e2b8ce94c620199b61f900363028350890a7bc9779c5c77f01b1040bef1e",
+      "panels": [
+        "coding"
+      ],
+      "tier": "existing",
+      "title": "DevDocs pygame",
+      "book_name": "devdocs_en_pygame",
+      "uuid": "f5cac0c6-1b59-1584-b7ae-088ddbef268c",
+      "fulltext": true,
+      "size_bytes": 554960
+    },
+    {
+      "name": "devdocs_en_go",
+      "filename": "devdocs_en_go_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_go_2026-07.zim",
+      "sha256": "e2acb42fa2dbc7c3936e3b9faf28aa5d08eb72f03ef0f0f3f6bac16d5f93ccca",
+      "size_bytes": 1631660,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "Go Docs",
+      "book_name": "devdocs_en_go",
+      "uuid": "029b788c-f2e3-052e-fc09-6a681ff6b4e2",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_c",
+      "filename": "devdocs_en_c_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_c_2026-07.zim",
+      "sha256": "e1e9f2d45c3d20fd56b4f103b4d4a2cc03c6e1e7ec0ec8ed042e1c6870d31dd6",
+      "size_bytes": 1278696,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "C Docs",
+      "book_name": "devdocs_en_c",
+      "uuid": "297081ce-c77b-194a-a342-7c92ee5b927e",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_cpp",
+      "filename": "devdocs_en_cpp_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_cpp_2026-07.zim",
+      "sha256": "3a2c0848a36b375a751d78f568fdb9767082b462099196306c3372d9e47d8a1d",
+      "size_bytes": 7256176,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "C++ Docs",
+      "book_name": "devdocs_en_cpp",
+      "uuid": "3e75bcf9-dbb6-6f75-6b1c-1b888f220f72",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_rust",
+      "filename": "devdocs_en_rust_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_rust_2026-07.zim",
+      "sha256": "c2663d53eb54f6d5e8cefa1e643a79c26638e6dc5c3478f0b1aaa90c927dabb6",
+      "size_bytes": 6176458,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "Rust Docs",
+      "book_name": "devdocs_en_rust",
+      "uuid": "d355d89f-39df-4de6-c2a0-66dff5af6733",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_gcc",
+      "filename": "devdocs_en_gcc_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_gcc_2026-08.zim",
+      "sha256": "f2fbbc931c87fb372350da35c2ae65d6e15dd557551f4f9edb1fa4f59dbb8401",
+      "size_bytes": 1660569,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "GCC Docs",
+      "book_name": "devdocs_en_gcc",
+      "uuid": "88af7402-9d0f-5ef7-741e-80731c7877a6",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_gnu-make",
+      "filename": "devdocs_en_gnu-make_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_gnu-make_2026-07.zim",
+      "sha256": "ebd3ddd650eb3831d73b81259786c4c687dd599d8fe7e623411955203f27079e",
+      "size_bytes": 613362,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "GNU Make Docs",
+      "book_name": "devdocs_en_gnu-make",
+      "uuid": "65fa91f8-2c2a-1fbd-4c65-f93f20f0ade9",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_cmake",
+      "filename": "devdocs_en_cmake_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_cmake_2026-08.zim",
+      "sha256": "74244f1581bc8f9cbf96e03a8712c2efa839ba782057d86c995cc9e6f5421b49",
+      "size_bytes": 2570785,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "CMake Docs",
+      "book_name": "devdocs_en_cmake",
+      "uuid": "00f3d5dc-c5c9-fbfb-96db-0e7ac320ab86",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_git",
+      "filename": "devdocs_en_git_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_git_2026-07.zim",
+      "sha256": "4800493c04a98e20e361b3b57b77851df5c96be7f93f55de013948bbf93a1233",
+      "size_bytes": 1577999,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "Git Docs",
+      "book_name": "devdocs_en_git",
+      "uuid": "3da50700-cc9e-7dee-6571-a4cc68ac3982",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_node",
+      "filename": "devdocs_en_node_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_node_2026-08.zim",
+      "sha256": "3060bd03ee436920b03b54de908de368a58e34d9e96534ebd85bda7120686921",
+      "size_bytes": 1416442,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "Node.js Docs",
+      "book_name": "devdocs_en_node",
+      "uuid": "586847ad-c37e-4315-7e13-c37fad53fc81",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_javascript",
+      "filename": "devdocs_en_javascript_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_javascript_2026-07.zim",
+      "sha256": "3e59c0d86aa86e21738b80092b4a32d192aaf15aef8584a32a24aaae492ea077",
+      "size_bytes": 2695170,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "JavaScript Docs",
+      "book_name": "devdocs_en_javascript",
+      "uuid": "a3203ad8-1331-e2ac-d83d-b496aec929fd",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_typescript",
+      "filename": "devdocs_en_typescript_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_typescript_2026-07.zim",
+      "sha256": "b038cf5cb0d44c9f64771407d61bf3d094a2d04a2f9f7e4f6bce2f6f25c0d052",
+      "size_bytes": 993940,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "TypeScript Docs",
+      "book_name": "devdocs_en_typescript",
+      "uuid": "2a852879-f854-867b-4f06-5b5692714dba",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_http",
+      "filename": "devdocs_en_http_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_http_2026-07.zim",
+      "sha256": "ca44c5d5eb541a6a506922ec7e5adbfe5359d159a26c767a010f97bf2c63d460",
+      "size_bytes": 1948922,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "HTTP Docs",
+      "book_name": "devdocs_en_http",
+      "uuid": "983bbf5d-ceb8-c4a5-1b17-90502783f6d5",
+      "fulltext": true
+    },
+    {
+      "name": "gobyexample.com_en_all",
+      "filename": "gobyexample.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/zimit/gobyexample.com_en_all_2026-08.zim",
+      "sha256": "608cdd69c54976becb172911916d44dfc3c64cfd3fc9da851f0e0e462ced4da7",
+      "size_bytes": 330336,
+      "panels": [
+        "coding"
+      ],
+      "tier": "1-language",
+      "title": "Go by example",
+      "book_name": "gobyexample.com_en_all",
+      "uuid": "ff2266a9-b8e6-d2e3-74d9-df96e99ee8b5",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_bash",
+      "filename": "devdocs_en_bash_2026-04.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_bash_2026-04.zim",
+      "sha256": "fe62a540d06126fe4facfb39b51a05d494d93caf59f123ffa90301ca7eb54938",
+      "size_bytes": 558428,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "1-language",
+      "title": "Bash Docs",
+      "book_name": "devdocs_en_bash",
+      "uuid": "c3e2c0ca-cbd7-bc02-c074-1eb710591173",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_docker",
+      "filename": "devdocs_en_docker_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_docker_2026-07.zim",
+      "sha256": "0f435fa0155d93fa8f11f42caf5e478e68e735690312aa5dfde9ec62e4c365be",
+      "size_bytes": 1782106,
+      "panels": [
+        "linux"
+      ],
+      "tier": "1-language",
+      "title": "Docker Docs",
+      "book_name": "devdocs_en_docker",
+      "uuid": "29af12e4-5661-7cb8-bd31-48bc1be9e847",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_kubernetes",
+      "filename": "devdocs_en_kubernetes_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_kubernetes_2026-07.zim",
+      "sha256": "a8b659d290b9e487c538e6c7db46accf886e7a28b403de119c5b4ad7d6f8433c",
+      "size_bytes": 584321,
+      "panels": [
+        "linux"
+      ],
+      "tier": "1-language",
+      "title": "Kubernetes Docs",
+      "book_name": "devdocs_en_kubernetes",
+      "uuid": "5465116d-bc36-cc51-3457-41adec5ed813",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_terraform",
+      "filename": "devdocs_en_terraform_2026-04.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_terraform_2026-04.zim",
+      "sha256": "1462e33fe7c42a45938cae8252fe56025f4705f573a0bf2688570c7e92531875",
+      "size_bytes": 3163523,
+      "panels": [
+        "linux"
+      ],
+      "tier": "1-language",
+      "title": "Terraform Docs",
+      "book_name": "devdocs_en_terraform",
+      "uuid": "e9569171-1fad-3dce-fbf7-312f8a6c7b75",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_ansible",
+      "filename": "devdocs_en_ansible_2026-04.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_ansible_2026-04.zim",
+      "sha256": "2389d4002665cceafed4fd64c9f7e874c681d111603674d3df2fc976ac82fca2",
+      "size_bytes": 30950002,
+      "panels": [
+        "linux"
+      ],
+      "tier": "1-language",
+      "title": "Ansible Docs",
+      "book_name": "devdocs_en_ansible",
+      "uuid": "d0c5426c-3eab-aa1d-8e64-69aa5f39b6ac",
+      "fulltext": true
+    },
+    {
+      "name": "devdocs_en_nginx",
+      "filename": "devdocs_en_nginx_2026-04.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/devdocs/devdocs_en_nginx_2026-04.zim",
+      "sha256": "790f3e83bf56cd4ba31cc095c531898f342996739d4a3c549236e1063135c162",
+      "size_bytes": 815785,
+      "panels": [
+        "linux"
+      ],
+      "tier": "1-language",
+      "title": "nginx Docs",
+      "book_name": "devdocs_en_nginx",
+      "uuid": "2829af7f-259a-e56b-bdf1-f24fc0c73965",
+      "fulltext": true
+    },
+    {
+      "name": "jeffe.cs.illinois.edu_en_all",
+      "filename": "jeffe.cs.illinois.edu_en_all_2026-09.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/zimit/jeffe.cs.illinois.edu_en_all_2026-09.zim",
+      "sha256": "f2c84cdb4723de39ab91d8f84806823a4b981020844f3ed4054ef66addf7a6bf",
+      "size_bytes": 516537412,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Algorithms",
+      "book_name": "jeffe.cs.illinois.edu_en_all",
+      "uuid": "06db7294-f399-140d-b401-e0f4550c6db0",
+      "fulltext": true
+    },
+    {
+      "name": "opendatastructures.org_en_all",
+      "filename": "opendatastructures.org_en_all_2026-05.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/zimit/opendatastructures.org_en_all_2026-05.zim",
+      "sha256": "c97a4766e65533de7a6cccfa5c4a4cf5d1d90d4d0fce03c38eeed32abb61ec44",
+      "size_bytes": 116368522,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Open Data Structures",
+      "book_name": "opendatastructures.org_en_all",
+      "uuid": "6511270e-ace5-cbd5-9cbd-344e0455faf6",
+      "fulltext": true
+    },
+    {
+      "name": "cs.stackexchange.com_en_all",
+      "filename": "cs.stackexchange.com_en_all_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/cs.stackexchange.com_en_all_2026-07.zim",
+      "sha256": "8b512ce95788a3d54b53c67984f83147a135ece055e38bd5b3d0d5df17b6a13a",
+      "size_bytes": 276371748,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Computer Science Q&A",
+      "book_name": "cs.stackexchange.com_en_all",
+      "uuid": "f2852c1c-83e8-9997-bb49-56a55ebb7c0d",
+      "fulltext": true
+    },
+    {
+      "name": "cstheory.stackexchange.com_en_all",
+      "filename": "cstheory.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/cstheory.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "22d210e7b4785114cf133049ce897d0ac1745c4c2714352d55725171f2023c83",
+      "size_bytes": 74275249,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Theoretical Computer Science",
+      "book_name": "cstheory.stackexchange.com_en_all",
+      "uuid": "63c87581-723f-38e5-7807-7ae0ffb63e6a",
+      "fulltext": true
+    },
+    {
+      "name": "softwareengineering.stackexchange.com_en_all",
+      "filename": "softwareengineering.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/softwareengineering.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "85e991529f022e029c2ce6cc1c209e556e09dac7d6f4ae979d46d310b9fd8e48",
+      "size_bytes": 479114302,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Software Engineering Q&A",
+      "book_name": "softwareengineering.stackexchange.com_en_all",
+      "uuid": "14fa3673-4bfb-10fb-9640-169f62f40af2",
+      "fulltext": true
+    },
+    {
+      "name": "codereview.stackexchange.com_en_all",
+      "filename": "codereview.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/codereview.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "af744306af16db1850f0dd507aaac6d6e0658f536838bd565e84c4a63171b1f2",
+      "size_bytes": 551497987,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Code Review Q&A",
+      "book_name": "codereview.stackexchange.com_en_all",
+      "uuid": "957061ad-84e4-12ca-387b-a9bcfcaa95ec",
+      "fulltext": true
+    },
+    {
+      "name": "networkengineering.stackexchange.com_en_all",
+      "filename": "networkengineering.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/networkengineering.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "934c835487b25f4c632faad7d5a1c74637b4698f761fe99ff19f08a8b921cb8f",
+      "size_bytes": 129967953,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Network Engineering Q&A",
+      "book_name": "networkengineering.stackexchange.com_en_all",
+      "uuid": "f1617ee4-a32a-a87d-1930-8e27d8f62862",
+      "fulltext": true
+    },
+    {
+      "name": "security.stackexchange.com_en_all",
+      "filename": "security.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/security.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "19098534b9dd6042c0b2b017861404cc4e9d4207a0c43ac1d6f34b0961c296e1",
+      "size_bytes": 439160380,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Information Security Q&A",
+      "book_name": "security.stackexchange.com_en_all",
+      "uuid": "b22e240a-3a80-5a38-ed1b-9e7415009e22",
+      "fulltext": true
+    },
+    {
+      "name": "devops.stackexchange.com_en_all",
+      "filename": "devops.stackexchange.com_en_all_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/devops.stackexchange.com_en_all_2026-07.zim",
+      "sha256": "a56402208234c084c49fa37417f9725e638b6a72d52093ad445557a05a880760",
+      "size_bytes": 34522015,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "DevOps Q&A",
+      "book_name": "devops.stackexchange.com_en_all",
+      "uuid": "32d41144-0b94-8709-7010-a2a4c770ab69",
+      "fulltext": true
+    },
+    {
+      "name": "langdev.stackexchange.com_en_all",
+      "filename": "langdev.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/langdev.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "b6498d55ab0b8d58a16f9119bf910881f5d1ec9a4fa64835ba6c2ab2ac09cd5d",
+      "size_bytes": 10935709,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Programming Language Design",
+      "book_name": "langdev.stackexchange.com_en_all",
+      "uuid": "8c48f957-e46a-f8f1-90cf-b1beb2c6d652",
+      "fulltext": true
+    },
+    {
+      "name": "cloudflare.com_en_learning-center",
+      "filename": "cloudflare.com_en_learning-center_2025-12.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/zimit/cloudflare.com_en_learning-center_2025-12.zim",
+      "sha256": "2e6e65c4f314e14cadeec808cad90bf6f22c3806b6eccf3bea294553e114ebf1",
+      "size_bytes": 190722667,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "CloudFlare Learning Center",
+      "book_name": "cloudflare.com_en_learning-center",
+      "uuid": "442f4847-b588-d801-6549-1552ab77cb48",
+      "fulltext": true
+    },
+    {
+      "name": "freecodecamp_en_all",
+      "filename": "freecodecamp_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/freecodecamp/freecodecamp_en_all_2026-08.zim",
+      "sha256": "f145e4620bebb3f3e99d438934e39a05cff1ffe15b8f7988134e071dc18bfecb",
+      "size_bytes": 7892996,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "FreeCodeCamp",
+      "book_name": "freecodecamp_en_all",
+      "uuid": "b237d3c6-4ce9-b57f-411a-3ccb8cc24367",
+      "fulltext": true
+    },
+    {
+      "name": "libretexts.org_en_eng",
+      "filename": "libretexts.org_en_eng_2025-01.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/libretexts/libretexts.org_en_eng_2025-01.zim",
+      "sha256": "3d4b25d03082172f4793625163b366a7d21655a5f8868d0758a9c3649ce9d5c2",
+      "size_bytes": 678394631,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "2-cs-architecture",
+      "title": "Engineering LibreTexts",
+      "book_name": "libretexts.org_en_eng",
+      "uuid": "59a2e805-9f92-6dd6-5fae-a23b0f276149",
+      "fulltext": true
+    },
+    {
+      "name": "unix.stackexchange.com_en_all",
+      "filename": "unix.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/unix.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "738326e81abe0f50edbaa3e4a002d0ca221e5dfb66e4954bb64e370756f602d3",
+      "size_bytes": 1312634563,
+      "panels": [
+        "linux"
+      ],
+      "tier": "3-systems-ops",
+      "title": "Unix & Linux Q&A",
+      "book_name": "unix.stackexchange.com_en_all",
+      "uuid": "cb454f5f-051d-bbd3-1595-827e1935d2e2",
+      "fulltext": true
+    },
+    {
+      "name": "serverfault.com_en_all",
+      "filename": "serverfault.com_en_all_2026-02.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/serverfault.com_en_all_2026-02.zim",
+      "sha256": "e7e40021c3bc03e23a83859a1a5d9f467043b8bc312566a8dea5599ddc375587",
+      "size_bytes": 1639953058,
+      "panels": [
+        "linux"
+      ],
+      "tier": "3-systems-ops",
+      "title": "Server Fault",
+      "book_name": "serverfault.com_en_all",
+      "uuid": "242d10e5-e4f6-1c2c-babe-777c11ba2f48",
+      "fulltext": true
+    },
+    {
+      "name": "superuser.com_en_all",
+      "filename": "superuser.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/superuser.com_en_all_2026-08.zim",
+      "sha256": "9bfddc8e569e0163ecc6facea4ec9dc347e6b2ace10e06745968559256b926d9",
+      "size_bytes": 4003118644,
+      "panels": [
+        "linux"
+      ],
+      "tier": "3-systems-ops",
+      "title": "Super User",
+      "book_name": "superuser.com_en_all",
+      "uuid": "f3a12006-7f2c-c3fa-7434-c1cadd4b3363",
+      "fulltext": true
+    },
+    {
+      "name": "askubuntu.com_en_all",
+      "filename": "askubuntu.com_en_all_2026-06.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/askubuntu.com_en_all_2026-06.zim",
+      "sha256": "845013492d494c9026b8df3199e9920eb4cfea6cffee2d0ec3c82f549db6e4f2",
+      "size_bytes": 2767308034,
+      "panels": [
+        "linux"
+      ],
+      "tier": "3-systems-ops",
+      "title": "Ask Ubuntu Q&A",
+      "book_name": "askubuntu.com_en_all",
+      "uuid": "cfb37851-8378-f886-3de8-0c038c8bb71b",
+      "fulltext": true
+    },
+    {
+      "name": "gentoo_en_all",
+      "filename": "gentoo_en_all_maxi_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/other/gentoo_en_all_maxi_2026-07.zim",
+      "sha256": "585a41c6c8afd82d58e868e5402759f9e2e1adcd417a61fe026c3025f37db8cb",
+      "size_bytes": 96314592,
+      "panels": [
+        "linux"
+      ],
+      "tier": "3-systems-ops",
+      "title": "Gentoo Wiki",
+      "book_name": "gentoo_en_all",
+      "uuid": "125c04b8-7dda-5733-a99d-3c603d1d0bb4",
+      "fulltext": true
+    },
+    {
+      "name": "alpinelinux_en_all",
+      "filename": "alpinelinux_en_all_maxi_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/other/alpinelinux_en_all_maxi_2026-07.zim",
+      "sha256": "2d191a9da8bfde47ae505164d076a187513070bf92298fe0eaabdfbaa981ddf1",
+      "size_bytes": 3097481,
+      "panels": [
+        "linux"
+      ],
+      "tier": "3-systems-ops",
+      "title": "Alpine Linux Wiki",
+      "book_name": "alpinelinux_en_all",
+      "uuid": "d8150207-a8f4-213d-e587-6298ab930cf8",
+      "fulltext": true
+    },
+    {
+      "name": "wikibooks_en_all",
+      "filename": "wikibooks_en_all_nopic_2026-04.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/wikibooks/wikibooks_en_all_nopic_2026-04.zim",
+      "sha256": "2f4a1dfbd07683377baef38fe76a31e194f41e8c57ba7dfb47a674d238e06b80",
+      "size_bytes": 3507893616,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "4-low-level",
+      "title": "Wikibooks",
+      "book_name": "wikibooks_en_all",
+      "uuid": "b3b62066-a9ef-2f6c-7ded-94245b7f4997",
+      "fulltext": true
+    },
+    {
+      "name": "reverseengineering.stackexchange.com_en_all",
+      "filename": "reverseengineering.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/reverseengineering.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "633527dd63d6fa67e886623a51fa27cfd56ed9870de00a09ed67a33e647be662",
+      "size_bytes": 114984420,
+      "panels": [
+        "coding"
+      ],
+      "tier": "4-low-level",
+      "title": "Reverse Engineering Q&A",
+      "book_name": "reverseengineering.stackexchange.com_en_all",
+      "uuid": "ec6a6a38-e862-f873-1467-fb84ffa2dc3a",
+      "fulltext": true
+    },
+    {
+      "name": "retrocomputing.stackexchange.com_en_all",
+      "filename": "retrocomputing.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/retrocomputing.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "46e9a8a47cc64941e7a6d06d4e2713729139a3cfeca7f73a7e7ec69383d2b83e",
+      "size_bytes": 123951836,
+      "panels": [
+        "coding"
+      ],
+      "tier": "4-low-level",
+      "title": "Retrocomputing Q&A",
+      "book_name": "retrocomputing.stackexchange.com_en_all",
+      "uuid": "8a011c86-f404-c24d-96a9-1f228c733d17",
+      "fulltext": true
+    },
+    {
+      "name": "electronics.stackexchange.com_en_all",
+      "filename": "electronics.stackexchange.com_en_all_2026-08.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/electronics.stackexchange.com_en_all_2026-08.zim",
+      "sha256": "5a23c08a3c1275128c247b0c67ec8ed03a953a504c6a23e2cd6a9ac5422b88c1",
+      "size_bytes": 4214186044,
+      "panels": [
+        "coding"
+      ],
+      "tier": "4-low-level",
+      "title": "Electronics Q&A",
+      "book_name": "electronics.stackexchange.com_en_all",
+      "uuid": "c7f8f834-1232-80ba-186b-a6677e2e4225",
+      "fulltext": true
+    }
+  ]
+}

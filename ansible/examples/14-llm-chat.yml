@@ -308,59 +308,12 @@
     kiwix_tools_version: "3.8.2"
     kiwix_tools_url: "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
     kiwix_tools_sha256: "b0ae98dd344aa0469a15ab42feff6d5aafb79541a82fb4e2647c74b073123815"
-    wikipedia_zim_filename: "wikipedia_en_all_nopic_2026-06.zim"
-    wikipedia_zim_url: "http://192.168.100.1:8090/jammy/artifacts/wikipedia_en_all_nopic_2026-06.zim"
-    # Confirmed by downloading the real file and re-hashing locally --
-    # not trusted blindly from any upstream-published value.
-    wikipedia_zim_sha256: "441a56d9e05b2d98f8ae9acb7986a513ed47904d73852c92dc6b7d50baa122e5"
-    mankier_zim_filename: "www.mankier.com_en_all_2026-07.zim"
-    mankier_zim_url: "http://192.168.100.1:8090/jammy/artifacts/www.mankier.com_en_all_2026-07.zim"
-    mankier_zim_sha256: "4ee596a7a7aa1f9c645030f4f2ec3b40109cbc1dc9047a7fb25a12a9c69cc0e3"
-    archwiki_zim_filename: "archlinux_en_all_maxi_2026-07.zim"
-    archwiki_zim_url: "http://192.168.100.1:8090/jammy/artifacts/archlinux_en_all_maxi_2026-07.zim"
-    archwiki_zim_sha256: "c3df551010a953d2c173af8d65a596a7ce434a7fa0771741bc800feeccad1942"
-    pydocs_zim_filename: "docs.python.org_en_all_2026-08a.zim"
-    pydocs_zim_url: "http://192.168.100.1:8090/jammy/artifacts/docs.python.org_en_all_2026-08a.zim"
-    pydocs_zim_sha256: "506cdfbd37d68b36a90943dea60f6a149d78eb5dd73999d62052d5dd2021b7bc"
-    pypeps_zim_filename: "peps.python_en_all_2026-08.zim"
-    pypeps_zim_url: "http://192.168.100.1:8090/jammy/artifacts/peps.python_en_all_2026-08.zim"
-    pypeps_zim_sha256: "1940dfa5c2067625ce2d05bc978d54a1f4ff6b2ae1b6969acd994c3549cb3d41"
-    devdocs_python_zim_filename: "devdocs_en_python_2026-08.zim"
-    devdocs_python_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_python_2026-08.zim"
-    devdocs_python_zim_sha256: "289e5d3e0e8c3d3470bf183e5c913be3be0b61a730ce52a247c23812799baa51"
-    devdocs_numpy_zim_filename: "devdocs_en_numpy_2026-07.zim"
-    devdocs_numpy_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_numpy_2026-07.zim"
-    devdocs_numpy_zim_sha256: "21b90bf9680d2e1b319e260487078accba5d7faccea443f4245208c53fcefbfa"
-    devdocs_pandas_zim_filename: "devdocs_en_pandas_2026-07.zim"
-    devdocs_pandas_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_pandas_2026-07.zim"
-    devdocs_pandas_zim_sha256: "605c74f9035d029318d6db627c7b81b76a513e57831e2108fda0942fcfc2a8a9"
-    devdocs_django_zim_filename: "devdocs_en_django_2026-07.zim"
-    devdocs_django_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_django_2026-07.zim"
-    devdocs_django_zim_sha256: "a1db7b72d56dd3d752b2b73d812736462ce7108a39cbf9ba9a22006e97b78f4c"
-    devdocs_flask_zim_filename: "devdocs_en_flask_2026-07.zim"
-    devdocs_flask_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_flask_2026-07.zim"
-    devdocs_flask_zim_sha256: "249ee1e64ccb341055950f02d3810192a4de532eb0b636536f162e1f6482f6d7"
-    devdocs_fastapi_zim_filename: "devdocs_en_fastapi_2026-04.zim"
-    devdocs_fastapi_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_fastapi_2026-04.zim"
-    devdocs_fastapi_zim_sha256: "3d863e2a7b5ec9c98c293f8befccf31f49e24c8a299fdc0013d89cbff39cf782"
-    devdocs_matplotlib_zim_filename: "devdocs_en_matplotlib_2026-07.zim"
-    devdocs_matplotlib_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_matplotlib_2026-07.zim"
-    devdocs_matplotlib_zim_sha256: "ba77b461a491e4e8f62c9feec195fa86ea976fdc0444687f6ed0be2a5e10a973"
-    devdocs_scikit_learn_zim_filename: "devdocs_en_scikit-learn_2026-04.zim"
-    devdocs_scikit_learn_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_scikit-learn_2026-04.zim"
-    devdocs_scikit_learn_zim_sha256: "e709638a3681d51cae9ebad01e09c16d343f5e617c46ec358b0c3ca9738cfafb"
-    devdocs_requests_zim_filename: "devdocs_en_requests_2026-07.zim"
-    devdocs_requests_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_requests_2026-07.zim"
-    devdocs_requests_zim_sha256: "f393b589d0958e8de7cc7d39ce3fc2f907ab588e3f38d17fb5adcfdcd2f06a3a"
-    devdocs_jinja_zim_filename: "devdocs_en_jinja_2026-07.zim"
-    devdocs_jinja_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_jinja_2026-07.zim"
-    devdocs_jinja_zim_sha256: "8b462baa3ec0529eb5908a1c2b6a06d683b62665f212aad20505a59a3b0d1100"
-    devdocs_click_zim_filename: "devdocs_en_click_2026-04.zim"
-    devdocs_click_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_click_2026-04.zim"
-    devdocs_click_zim_sha256: "53066c248be7719544f3adcef842dbc83da9a88791e6796ef265cce62479a8e5"
-    devdocs_pygame_zim_filename: "devdocs_en_pygame_2026-07.zim"
-    devdocs_pygame_zim_url: "http://192.168.100.1:8090/jammy/artifacts/devdocs_en_pygame_2026-07.zim"
-    devdocs_pygame_zim_sha256: "27c4e2b8ce94c620199b61f900363028350890a7bc9779c5c77f01b1040bef1e"
+    # The kiwix corpus comes from one manifest shared with the OpenTofu
+    # template (llm-chat-kiwix-expansion-Phased-Implementation.md, K2) --
+    # see examples/llm-chat/variables.tf's kiwix_zim_manifest for the
+    # format. Every listed file must already be in the host artifact
+    # cache: run api/fetch-kiwix-zims.py on it first.
+    kiwix_zim_manifest: "../../examples/llm-chat/kiwix-zims.json"
 
     # Own, independent peer-placement (not auto-inherited from
     # coordinator_peer_id -- nothing in this playbook auto-inherits
@@ -726,59 +679,41 @@
             cidr: 0.0.0.0/0
       register: kiwix_sg
 
+    - name: Load the kiwix ZIM manifest
+      ansible.builtin.set_fact:
+        kiwix_zims: "{{ (lookup('file', kiwix_zim_manifest) | from_json).zims }}"
+
+    - name: Refuse a manifest with unverified entries
+      ansible.builtin.assert:
+        that: "kiwix_zims | rejectattr('sha256', 'string') | list | length == 0"
+        fail_msg: "kiwix manifest has entries without a verified sha256 -- run: python3 api/fetch-kiwix-zims.py examples/llm-chat/kiwix-zims.json"
+
+    # Same derivations as examples/llm-chat/locals.tf: kiwix-serve names a
+    # book by its filename minus ".zim" (what its books.name search filter
+    # matches); fallback books are searched only for slots the panel's
+    # specialist books leave empty.
+    - name: Derive the kiwix download list and per-panel book lists
+      ansible.builtin.set_fact:
+        kiwix_zim_list: "{{ kiwix_zims | map(attribute='filename') | zip(kiwix_zims | map(attribute='sha256')) | map('join', ' ') | join('\n') }}"
+        kiwix_books_coding: >-
+          {{ kiwix_zims | selectattr('panels', 'contains', 'coding') | rejectattr('fallback', 'defined')
+             | map(attribute='filename') | map('regex_replace', '[.]zim$', '') | join(',') }}
+        kiwix_books_linux: >-
+          {{ kiwix_zims | selectattr('panels', 'contains', 'linux') | rejectattr('fallback', 'defined')
+             | map(attribute='filename') | map('regex_replace', '[.]zim$', '') | join(',') }}
+        kiwix_books_fallback: >-
+          {{ kiwix_zims | selectattr('fallback', 'defined') | selectattr('fallback')
+             | map(attribute='filename') | map('regex_replace', '[.]zim$', '') | join(',') }}
+
     - name: Render kiwix user_data
       ansible.builtin.set_fact:
-        kiwix_user_data: "{{ lookup('template', 'templates/llm-chat/kiwix-cloud-init.yml.j2', template_vars={'kiwix_port': kiwix_port,
+        kiwix_user_data: "{{ lookup('template', 'templates/llm-chat/kiwix-cloud-init.yml.j2',
+          template_vars={'kiwix_port': kiwix_port,
           'kiwix_tools_version': kiwix_tools_version,
           'kiwix_tools_url': kiwix_tools_url,
           'kiwix_tools_sha256': kiwix_tools_sha256,
-          'wikipedia_zim_filename': wikipedia_zim_filename,
-          'wikipedia_zim_url': wikipedia_zim_url,
-          'wikipedia_zim_sha256': wikipedia_zim_sha256,
-          'mankier_zim_filename': mankier_zim_filename,
-          'mankier_zim_url': mankier_zim_url,
-          'mankier_zim_sha256': mankier_zim_sha256,
-          'archwiki_zim_filename': archwiki_zim_filename,
-          'archwiki_zim_url': archwiki_zim_url,
-          'archwiki_zim_sha256': archwiki_zim_sha256,
-          'pydocs_zim_filename': pydocs_zim_filename, 'pydocs_zim_url': pydocs_zim_url, 'pydocs_zim_sha256': pydocs_zim_sha256,
-          'pypeps_zim_filename': pypeps_zim_filename, 'pypeps_zim_url': pypeps_zim_url, 'pypeps_zim_sha256': pypeps_zim_sha256,
-          'devdocs_python_zim_filename': devdocs_python_zim_filename,
-          'devdocs_python_zim_url': devdocs_python_zim_url,
-          'devdocs_python_zim_sha256': devdocs_python_zim_sha256,
-          'devdocs_numpy_zim_filename': devdocs_numpy_zim_filename,
-          'devdocs_numpy_zim_url': devdocs_numpy_zim_url,
-          'devdocs_numpy_zim_sha256': devdocs_numpy_zim_sha256,
-          'devdocs_pandas_zim_filename': devdocs_pandas_zim_filename,
-          'devdocs_pandas_zim_url': devdocs_pandas_zim_url,
-          'devdocs_pandas_zim_sha256': devdocs_pandas_zim_sha256,
-          'devdocs_django_zim_filename': devdocs_django_zim_filename,
-          'devdocs_django_zim_url': devdocs_django_zim_url,
-          'devdocs_django_zim_sha256': devdocs_django_zim_sha256,
-          'devdocs_flask_zim_filename': devdocs_flask_zim_filename,
-          'devdocs_flask_zim_url': devdocs_flask_zim_url,
-          'devdocs_flask_zim_sha256': devdocs_flask_zim_sha256,
-          'devdocs_fastapi_zim_filename': devdocs_fastapi_zim_filename,
-          'devdocs_fastapi_zim_url': devdocs_fastapi_zim_url,
-          'devdocs_fastapi_zim_sha256': devdocs_fastapi_zim_sha256,
-          'devdocs_matplotlib_zim_filename': devdocs_matplotlib_zim_filename,
-          'devdocs_matplotlib_zim_url': devdocs_matplotlib_zim_url,
-          'devdocs_matplotlib_zim_sha256': devdocs_matplotlib_zim_sha256,
-          'devdocs_scikit_learn_zim_filename': devdocs_scikit_learn_zim_filename,
-          'devdocs_scikit_learn_zim_url': devdocs_scikit_learn_zim_url,
-          'devdocs_scikit_learn_zim_sha256': devdocs_scikit_learn_zim_sha256,
-          'devdocs_requests_zim_filename': devdocs_requests_zim_filename,
-          'devdocs_requests_zim_url': devdocs_requests_zim_url,
-          'devdocs_requests_zim_sha256': devdocs_requests_zim_sha256,
-          'devdocs_jinja_zim_filename': devdocs_jinja_zim_filename,
-          'devdocs_jinja_zim_url': devdocs_jinja_zim_url,
-          'devdocs_jinja_zim_sha256': devdocs_jinja_zim_sha256,
-          'devdocs_click_zim_filename': devdocs_click_zim_filename,
-          'devdocs_click_zim_url': devdocs_click_zim_url,
-          'devdocs_click_zim_sha256': devdocs_click_zim_sha256,
-          'devdocs_pygame_zim_filename': devdocs_pygame_zim_filename,
-          'devdocs_pygame_zim_url': devdocs_pygame_zim_url,
-          'devdocs_pygame_zim_sha256': devdocs_pygame_zim_sha256,
+          'kiwix_zim_list': kiwix_zim_list,
+          'kiwix_zim_count': kiwix_zims | length,
           'promtail_config': promtail_config}) }}"
 
     - name: Create kiwix instance (retrieval-grounding backend, F-132)
@@ -896,6 +831,9 @@
           'relay_debug': relay_debug,
           'kiwix_host': kiwix_host,
           'kiwix_port': kiwix_port,
+          'kiwix_books_coding': kiwix_books_coding,
+          'kiwix_books_linux': kiwix_books_linux,
+          'kiwix_books_fallback': kiwix_books_fallback,
           'sentinel_host': sentinel_host,
           'sentinel_port': sentinel_port,
           'examples_api_base': examples_api_base,

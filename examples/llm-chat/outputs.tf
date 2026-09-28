@@ -19,6 +19,6 @@ output "worker_private_ips" {
 }
 
 output "kiwix_search_url" {
-  description = "Direct URL to the retrieval-grounding kiwix-serve instance's own /search endpoint (F-132) — the same one verify_proxy.py's own _kiwix_search() queries. Useful for manually confirming corpus coverage: append ?pattern=<query>&format=xml. Not reachable from a browser off this build's own network without SSH access to the instance."
-  value       = "http://${local.kiwix_host}:${var.kiwix_port}/search"
+  description = "Direct URL to the retrieval-grounding kiwix-serve instance's own /search endpoint (F-132) — the same one verify_proxy.py's own _kiwix_search() queries. Useful for manually confirming corpus coverage: append ?pattern=<query>&format=xml. Not reachable from a browser off this build's own network without SSH access to the instance; students reach the same library through the chat URL's /kiwix/ path instead (K4)."
+  value       = "http://${local.kiwix_host}:${var.kiwix_port}/kiwix/search"
 }
