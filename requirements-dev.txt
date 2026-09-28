@@ -1,0 +1,8 @@
+# Development and lint tooling (runtime deps live in requirements.txt).
+# F-166: ansible-lint wasn't installed on the dev host, so the llm-chat
+# playbook drifted to 13+ yaml failures unnoticed. Run before committing
+# any playbook change:
+#   ansible-lint ansible/examples/<playbook>.yml
+#   ruff check --select F,E9 <changed .py files>
+ansible-lint==26.9.0
+ruff==0.16.9

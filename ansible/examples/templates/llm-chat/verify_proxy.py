@@ -62,6 +62,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import termios
 import threading
@@ -673,8 +674,12 @@ _SANDBOX_SYSTEM_MESSAGE_DEFAULT = (
     "read and the like) -- if a script you wrote is waiting for "
     "input, you will be shown exactly what it has printed so far and "
     "asked what to provide; reply with ONLY a fenced ```stdin block "
-    "containing exactly the one line to send. This can happen a few "
-    "times per script, not unlimited, so keep prompts short and avoid "
+    "containing exactly the one line to send. Never reply with a "
+    "```stdin block on its own unless you have just been told a "
+    "running script is waiting for input; if asked to run code with "
+    "particular input, give the complete program in a fenced code "
+    "block and say which input to use. This can happen a few times "
+    "per script, not unlimited, so keep prompts short and avoid "
     "scripts that would need a long back-and-forth. This code sandbox "
     "runs Python, Bash, JavaScript (Node), C, C++ and Go, one-shot, "
     "with no network access and only each language's standard "
@@ -1875,7 +1880,8 @@ def _make_input_provider(messages: list, heartbeat, max_tokens, interrupt=None):
 
 def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
                           max_tokens: int | None = None, interrupt=None,
-                          language: str = "python") -> tuple[str, dict]:
+                          language: str = "python",
+                          initial_inputs: list[str] | None = None) -> tuple[str, dict]:
     """Runs the initial sandboxed execution and, if it fails, up to
     VERIFY_MAX_FIX_ROUNDS grounded fix attempts (Phase 2) -- each one
     grounded in the REAL traceback from the attempt before it, not
@@ -1910,8 +1916,16 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
     messages.append({"role": "assistant",
                      "content": f"```{LANGUAGES[language]['fence']}\n{code}\n```"})
 
-    result = execute(language, code, _make_input_provider(messages, heartbeat, max_tokens, interrupt),
-                     interrupt=interrupt)
+    provider = _make_input_provider(messages, heartbeat, max_tokens, interrupt)
+    if initial_inputs:
+        # Values already known before the run (F-164) are handed over
+        # first; the model is only consulted if the program asks for more.
+        queued = list(initial_inputs)
+        model_provider = provider
+
+        def provider(transcript_so_far, _q=queued, _m=model_provider):
+            return _q.pop(0) if _q else _m(transcript_so_far)
+    result = execute(language, code, provider, interrupt=interrupt)
     capture = {
         "language": language,
         "generated_code": code,
@@ -3615,6 +3629,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                        interrupt=interrupt_event, verify=verify, conn=conn,
                                        endpoint_label=endpoint_label, question_chars=len(user_turn),
                                        started_at=ask_started_at, question=question, language=language,
+                                       student_code=code,
                                        search_terms=search_terms, references=references,
                                        grounding_source=grounding_source,
                                        question_truncated_for_search=question_truncated_for_search)
@@ -3863,7 +3878,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                   search_terms: str = "", references: list | None = None,
                                   grounding_source: str = "none",
                                   question_truncated_for_search: bool = False,
-                                  language: str | None = None):
+                                  language: str | None = None, student_code: str = ""):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -4035,6 +4050,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                                         language=code_lang)
                 self._write_sse_delta(extra, last_chunk_meta)
                 capture_example(request_messages, capture, source=capture_source)
+            elif ENABLE_VERIFICATION and student_code and extract_stdin_value(full_text) is not None:
+                # F-164: asked to run the editor's code with some input, the
+                # model sometimes replies with ONLY a ```stdin block and no
+                # code, so nothing ran and the student saw a bare block. What
+                # they asked for is their own code run with that input, so do
+                # exactly that. Not captured to the corpus: it's the
+                # student's code, not a model claim (same as a plain Run).
+                extra, capture = verify_and_maybe_fix(
+                    request_messages, student_code, heartbeat=self._sse_heartbeat,
+                    max_tokens=request_max_tokens, interrupt=interrupt,
+                    language=language or "python",
+                    initial_inputs=[extract_stdin_value(full_text)])
+                self._write_sse_delta(
+                    "\n\n_Ran the code in your editor with the input above._" + extra, last_chunk_meta)
 
         # stop_reason == "disconnected" already returned above, before
         # this point -- unreachable here, so every remaining path
@@ -4229,6 +4258,21 @@ pre {{ background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: aut
 """
 
 
+class _QuietDisconnectServer(http.server.ThreadingHTTPServer):
+    """F-163: HAProxy's health check (and any browser that navigates away)
+    closes the connection before reading the whole response, and the
+    handler's next write then raises ConnectionResetError/BrokenPipeError.
+    socketserver's default handle_error prints a full traceback for that,
+    which filled the journal (and so Loki, which Sentinel reads) with
+    noise. A client that hung up needs no answer; every other error still
+    gets the full default traceback."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def main():
     # Fire-and-forget -- a slow/unreachable CloudCore API must never
     # delay this service actually binding and serving real traffic.
@@ -4245,7 +4289,7 @@ def main():
             print(f"verify-proxy: removed {swept} per-run microVM(s) orphaned by a previous run", flush=True)
     except ImportError:
         pass
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)
+    server = _QuietDisconnectServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)
     server.serve_forever()
 
 

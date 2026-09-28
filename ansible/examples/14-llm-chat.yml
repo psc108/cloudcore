@@ -417,31 +417,40 @@
     # had zero knowledge of at all — see examples/llm-chat/variables.tf's
     # own matching variable comment for the fuller reasoning.
     sandbox_system_message: >-
-      You are a lab coding assistant. Only discuss the code the student has provided in this conversation. If asked something
+      You are a lab coding assistant. Only discuss the code the
+      student has provided in this conversation. If asked something
       unrelated to that code or to this lab exercise, politely decline
       and redirect the student back to their code. Only describe what
       code actually does -- never claim a function, sort, or check
       exists unless it is genuinely present in the code you just wrote
       or were shown; if you are not certain something is correct, say
       so explicitly rather than stating it as fact. When suggesting a
-      fix, provide the complete corrected program in a single fenced code block tagged with its language, and keep your own explanation concise -- this
-      hardware generates slowly, so prefer a short, precise answer over
-      a long one where both would be equally correct. Code you write
-      runs in a real sandbox that supports interactive input (Python's input(), C's scanf, Bash's read and the like) --
-      if a script you wrote is waiting for input, you will be shown
-      exactly what it has printed so far and asked what to provide;
-      reply with ONLY a fenced ```stdin block containing exactly the
-      one line to send. This can happen a few times per script, not
-      unlimited, so keep prompts short and avoid scripts that would
-      need a long back-and-forth. This code sandbox runs Python, Bash, JavaScript (Node), C, C++ and Go, one-shot, with no network access and only each language's standard library. Separately, the page's own
-      Terminal panel gives a real persistent Linux shell with genuine
-      internet access (pip install, curl, cloning a repo) that is
-      otherwise fully isolated, plus ports __PREVIEW_PORTS_LIST__
-      reachable from
-      the browser for previewing a web app run there -- if asked about
-      installing packages, running something long-lived, or viewing a
-      web app's own output, say to use the Terminal (whose own panel
-      lists the exact ports), not this code sandbox.
+      fix, provide the complete corrected program in a single fenced
+      code block tagged with its language, and keep your own
+      explanation concise -- this hardware generates slowly, so prefer
+      a short, precise answer over a long one where both would be
+      equally correct. Code you write runs in a real sandbox that
+      supports interactive input (Python's input(), C's scanf, Bash's
+      read and the like) -- if a script you wrote is waiting for
+      input, you will be shown exactly what it has printed so far and
+      asked what to provide; reply with ONLY a fenced ```stdin block
+      containing exactly the one line to send. Never reply with a
+      ```stdin block on its own unless you have just been told a
+      running script is waiting for input; if asked to run code with
+      particular input, give the complete program in a fenced code
+      block and say which input to use. This can happen a few times
+      per script, not unlimited, so keep prompts short and avoid
+      scripts that would need a long back-and-forth. This code sandbox
+      runs Python, Bash, JavaScript (Node), C, C++ and Go, one-shot,
+      with no network access and only each language's standard
+      library. Separately, the page's own Terminal panel gives a real
+      persistent Linux shell with genuine internet access (pip
+      install, curl, cloning a repo) that is otherwise fully isolated,
+      plus ports __PREVIEW_PORTS_LIST__ reachable from the browser for
+      previewing a web app run there -- if asked about installing
+      packages, running something long-lived, or viewing a web app's
+      own output, say to use the Terminal (whose own panel lists the
+      exact ports), not this code sandbox.
 
     # Stage 8 — a second, genuinely separate system prompt for the new
     # Linux Help panel (verify_proxy.py's POST /sandbox/linux-ask). Not
@@ -643,14 +652,16 @@
 
     - name: Build the claude-debug users list (empty when disabled)
       ansible.builtin.set_fact:
-        claude_debug_users: "{{ enable_claude_debug_access | ternary([{'username': 'claude-debug', 'sudo': true, 'ssh_keys': [claude_debug_ssh_public_key]}], []) }}"
+        claude_debug_users: >-
+          {{ enable_claude_debug_access | ternary([{'username': 'claude-debug', 'sudo': true,
+          'ssh_keys': [claude_debug_ssh_public_key]}], []) }}
 
     - name: Render worker user_data (identical for every worker)
       ansible.builtin.set_fact:
-        worker_user_data: "{{ lookup('template', 'templates/llm-chat/worker-cloud-init.yml.j2', template_vars={
-          'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
+        worker_user_data: "{{ lookup('template', 'templates/llm-chat/worker-cloud-init.yml.j2',
+          template_vars={'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
           'rpc_port': rpc_port, 'threads': threads,
-          'promtail_config': promtail_config }) }}"
+          'promtail_config': promtail_config}) }}"
 
     - name: Create RPC worker instances (one per worker_peers entry, each on its own peer)
       cloudcore.cloudcore.instance:
@@ -717,8 +728,7 @@
 
     - name: Render kiwix user_data
       ansible.builtin.set_fact:
-        kiwix_user_data: "{{ lookup('template', 'templates/llm-chat/kiwix-cloud-init.yml.j2', template_vars={
-          'kiwix_port': kiwix_port,
+        kiwix_user_data: "{{ lookup('template', 'templates/llm-chat/kiwix-cloud-init.yml.j2', template_vars={'kiwix_port': kiwix_port,
           'kiwix_tools_version': kiwix_tools_version,
           'kiwix_tools_url': kiwix_tools_url,
           'kiwix_tools_sha256': kiwix_tools_sha256,
@@ -733,19 +743,43 @@
           'archwiki_zim_sha256': archwiki_zim_sha256,
           'pydocs_zim_filename': pydocs_zim_filename, 'pydocs_zim_url': pydocs_zim_url, 'pydocs_zim_sha256': pydocs_zim_sha256,
           'pypeps_zim_filename': pypeps_zim_filename, 'pypeps_zim_url': pypeps_zim_url, 'pypeps_zim_sha256': pypeps_zim_sha256,
-          'devdocs_python_zim_filename': devdocs_python_zim_filename, 'devdocs_python_zim_url': devdocs_python_zim_url, 'devdocs_python_zim_sha256': devdocs_python_zim_sha256,
-          'devdocs_numpy_zim_filename': devdocs_numpy_zim_filename, 'devdocs_numpy_zim_url': devdocs_numpy_zim_url, 'devdocs_numpy_zim_sha256': devdocs_numpy_zim_sha256,
-          'devdocs_pandas_zim_filename': devdocs_pandas_zim_filename, 'devdocs_pandas_zim_url': devdocs_pandas_zim_url, 'devdocs_pandas_zim_sha256': devdocs_pandas_zim_sha256,
-          'devdocs_django_zim_filename': devdocs_django_zim_filename, 'devdocs_django_zim_url': devdocs_django_zim_url, 'devdocs_django_zim_sha256': devdocs_django_zim_sha256,
-          'devdocs_flask_zim_filename': devdocs_flask_zim_filename, 'devdocs_flask_zim_url': devdocs_flask_zim_url, 'devdocs_flask_zim_sha256': devdocs_flask_zim_sha256,
-          'devdocs_fastapi_zim_filename': devdocs_fastapi_zim_filename, 'devdocs_fastapi_zim_url': devdocs_fastapi_zim_url, 'devdocs_fastapi_zim_sha256': devdocs_fastapi_zim_sha256,
-          'devdocs_matplotlib_zim_filename': devdocs_matplotlib_zim_filename, 'devdocs_matplotlib_zim_url': devdocs_matplotlib_zim_url, 'devdocs_matplotlib_zim_sha256': devdocs_matplotlib_zim_sha256,
-          'devdocs_scikit_learn_zim_filename': devdocs_scikit_learn_zim_filename, 'devdocs_scikit_learn_zim_url': devdocs_scikit_learn_zim_url, 'devdocs_scikit_learn_zim_sha256': devdocs_scikit_learn_zim_sha256,
-          'devdocs_requests_zim_filename': devdocs_requests_zim_filename, 'devdocs_requests_zim_url': devdocs_requests_zim_url, 'devdocs_requests_zim_sha256': devdocs_requests_zim_sha256,
-          'devdocs_jinja_zim_filename': devdocs_jinja_zim_filename, 'devdocs_jinja_zim_url': devdocs_jinja_zim_url, 'devdocs_jinja_zim_sha256': devdocs_jinja_zim_sha256,
-          'devdocs_click_zim_filename': devdocs_click_zim_filename, 'devdocs_click_zim_url': devdocs_click_zim_url, 'devdocs_click_zim_sha256': devdocs_click_zim_sha256,
-          'devdocs_pygame_zim_filename': devdocs_pygame_zim_filename, 'devdocs_pygame_zim_url': devdocs_pygame_zim_url, 'devdocs_pygame_zim_sha256': devdocs_pygame_zim_sha256,
-          'promtail_config': promtail_config }) }}"
+          'devdocs_python_zim_filename': devdocs_python_zim_filename,
+          'devdocs_python_zim_url': devdocs_python_zim_url,
+          'devdocs_python_zim_sha256': devdocs_python_zim_sha256,
+          'devdocs_numpy_zim_filename': devdocs_numpy_zim_filename,
+          'devdocs_numpy_zim_url': devdocs_numpy_zim_url,
+          'devdocs_numpy_zim_sha256': devdocs_numpy_zim_sha256,
+          'devdocs_pandas_zim_filename': devdocs_pandas_zim_filename,
+          'devdocs_pandas_zim_url': devdocs_pandas_zim_url,
+          'devdocs_pandas_zim_sha256': devdocs_pandas_zim_sha256,
+          'devdocs_django_zim_filename': devdocs_django_zim_filename,
+          'devdocs_django_zim_url': devdocs_django_zim_url,
+          'devdocs_django_zim_sha256': devdocs_django_zim_sha256,
+          'devdocs_flask_zim_filename': devdocs_flask_zim_filename,
+          'devdocs_flask_zim_url': devdocs_flask_zim_url,
+          'devdocs_flask_zim_sha256': devdocs_flask_zim_sha256,
+          'devdocs_fastapi_zim_filename': devdocs_fastapi_zim_filename,
+          'devdocs_fastapi_zim_url': devdocs_fastapi_zim_url,
+          'devdocs_fastapi_zim_sha256': devdocs_fastapi_zim_sha256,
+          'devdocs_matplotlib_zim_filename': devdocs_matplotlib_zim_filename,
+          'devdocs_matplotlib_zim_url': devdocs_matplotlib_zim_url,
+          'devdocs_matplotlib_zim_sha256': devdocs_matplotlib_zim_sha256,
+          'devdocs_scikit_learn_zim_filename': devdocs_scikit_learn_zim_filename,
+          'devdocs_scikit_learn_zim_url': devdocs_scikit_learn_zim_url,
+          'devdocs_scikit_learn_zim_sha256': devdocs_scikit_learn_zim_sha256,
+          'devdocs_requests_zim_filename': devdocs_requests_zim_filename,
+          'devdocs_requests_zim_url': devdocs_requests_zim_url,
+          'devdocs_requests_zim_sha256': devdocs_requests_zim_sha256,
+          'devdocs_jinja_zim_filename': devdocs_jinja_zim_filename,
+          'devdocs_jinja_zim_url': devdocs_jinja_zim_url,
+          'devdocs_jinja_zim_sha256': devdocs_jinja_zim_sha256,
+          'devdocs_click_zim_filename': devdocs_click_zim_filename,
+          'devdocs_click_zim_url': devdocs_click_zim_url,
+          'devdocs_click_zim_sha256': devdocs_click_zim_sha256,
+          'devdocs_pygame_zim_filename': devdocs_pygame_zim_filename,
+          'devdocs_pygame_zim_url': devdocs_pygame_zim_url,
+          'devdocs_pygame_zim_sha256': devdocs_pygame_zim_sha256,
+          'promtail_config': promtail_config}) }}"
 
     - name: Create kiwix instance (retrieval-grounding backend, F-132)
       # vpc_id/subnet_id/security_group_ids/peer_id fall back to this
@@ -846,8 +880,8 @@
 
     - name: Render coordinator user_data
       ansible.builtin.set_fact:
-        coordinator_user_data: "{{ lookup('template', 'templates/llm-chat/coordinator-cloud-init.yml.j2', template_vars={
-          'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
+        coordinator_user_data: "{{ lookup('template', 'templates/llm-chat/coordinator-cloud-init.yml.j2',
+          template_vars={'llama_archive_name': llama_archive_name, 'llama_sha256': llama_sha256,
           'model_filename': model_filename, 'model_sha256': model_sha256,
           'http_port': http_port, 'context_size': context_size, 'threads': threads,
           'llama_rpc_flags': llama_rpc_flags, 'rpc_servers': rpc_servers, 'promtail_config': promtail_config,
@@ -908,7 +942,7 @@
           'codemirror_shell_mode_js': codemirror_shell_mode_js,
           'xterm_core_js': xterm_core_js,
           'xterm_core_css': xterm_core_css,
-          'xterm_fit_addon_js': xterm_fit_addon_js }) }}"
+          'xterm_fit_addon_js': xterm_fit_addon_js}) }}"
 
     - name: Create coordinator instance
       # vpc_id/subnet_id/security_group_ids/peer_id fall back to this

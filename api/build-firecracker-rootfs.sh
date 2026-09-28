@@ -461,6 +461,30 @@ WantedBy=multi-user.target
 EOS
 systemctl enable refresh-apt-index.service
 
+# F-165: the refresh above deliberately does not gate ssh, so a student who
+# ran apt install in the first few seconds of a session got Unable to
+# locate package for packages that exist. These wrappers sit in
+# /usr/local/bin, ahead of /usr/bin on both the login PATH and sudo's
+# secure_path, and wait (bounded) for the refresh to finish before running
+# the real apt. Per-run microVMs mask the unit, so there it is never
+# activating and the wrapper passes straight through. (No double quotes or
+# backticks in this comment: it sits inside the outer ssh string.)
+for tool in apt apt-get; do
+cat > /usr/local/bin/\$tool <<\"EOS\"
+#!/bin/sh
+real=/usr/bin/\$(basename \"\$0\")
+if [ \"\$(systemctl is-active refresh-apt-index.service 2>/dev/null)\" = activating ]; then
+  echo \"Waiting for this new session's package index refresh to finish (first ~30s after start)...\" >&2
+  i=0
+  while [ \"\$(systemctl is-active refresh-apt-index.service 2>/dev/null)\" = activating ] && [ \$i -lt 90 ]; do
+    sleep 1; i=\$((i + 1))
+  done
+fi
+exec \"\$real\" \"\$@\"
+EOS
+chmod 755 /usr/local/bin/\$tool
+done
+
 # Stage 10 (llm-chat-sandbox-extensions-Phased-Implementation.md): this
 # image is now attached READ-ONLY and shared by every session (hard-
 # linked into each jailer chroot by examples/llm-chat/files/microvm.py),
