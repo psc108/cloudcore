@@ -2858,7 +2858,9 @@ Requests queued behind a transfer hit apt's timeout; once the 5-slot backlog fil
 
 On the new server, 404 probes, `304 Not Modified`, HEAD, directory listings, suffix ranges and path-traversal refusal are all unchanged. The new suite passes 8/8 on the fixed server and fails 6/8 on the old one: exactly the blocking and range cases, while the 404/304 and traversal checks pass on both.
 
-**Deployment:** it takes effect when the `cloudcore-repo` service restarts (`sudo systemctl restart cloudcore-repo`), on this host and on any peer that runs its own copy.
+**Live on stourport, 2026-09-28, after `sudo systemctl restart cloudcore-repo`:** a small `Packages.gz` request was served in 0.001s while the real 50GB ZIM streamed to the same client, and the completion log recorded `done "GET /jammy/apt-repo/Packages.gz ..." 33782 bytes in 0.0s (1 other transfer(s) active)`. The same check run *from Llwyn-y-Groes* (whose `192.168.100.1` reaches stourport's repo over the WireGuard tunnel, logged as source `10.99.101.1`) got HTTP 200 in 0.004s mid-ZIM. Peer-placed guests go through the same fixed server.
+
+Operational note from the restart: systemd warned that the unit file had changed on disk. Its content matched what was loaded (only the file had been rewritten), and a restart runs the current script either way, so this was harmless. `sudo systemctl daemon-reload` clears it.
 
 ### F-163 — verify-proxy logs a full traceback every time HAProxy's health check hangs up before reading the response
 
