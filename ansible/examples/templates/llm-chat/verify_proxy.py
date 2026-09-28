@@ -350,6 +350,26 @@ def _local_corpus_search(search_terms: str) -> tuple[str, list[dict]]:
         return "", []
 
 
+# llm-chat-kiwix-expansion (F-167): the codebase tier is only consulted
+# for questions about the lab/platform itself. Checked first and
+# unconditionally, it answered generic questions from CloudCore's own
+# source whenever a keyword overlapped -- found live: "What does the load
+# average in uptime actually mean?" was grounded in api/host_stats.py
+# (it calls os.getloadavg()), kiwix's Super User / Server Fault answers
+# were never consulted, and the model described "the provided code
+# snippet" to a student who had provided none. Matched as whole words or
+# phrases against the student's own question, case-insensitively.
+_PLATFORM_TERMS_RE = re.compile(
+    r"\b(cloudcore|llm[- ]chat|sentinel|verify[-_]proxy|coordinator|kiwix|firecracker|"
+    r"micro-?vms?|sandbox|this lab|the lab|this platform|the platform|dashboard|"
+    r"lab (?:template|environment|instance|build)s?|opentofu template|hafullstack|"
+    r"terminal panel|linux help panel|preview ports?)\b", re.I)
+
+
+def _is_platform_question(question: str) -> bool:
+    return bool(_PLATFORM_TERMS_RE.search(question or ""))
+
+
 def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
     """A third grounding tier, direct follow-up ("can we include this
     repo's codebase... in the ask the model and linux help"): checked
@@ -392,8 +412,12 @@ def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
             references.append({"source": "CloudCore source", "title": title, "snippet": snippet})
         if not lines:
             return "", []
-        block = ("Reference material (for fact-checking only -- explain in your own "
-                 "words, and note plainly if this doesn't fully answer the question):\n"
+        # Said outright, because the model otherwise reads a code snippet in
+        # its prompt as code the student wrote (F-167).
+        block = ("Source code from the CloudCore platform this lab runs on -- NOT the "
+                 "student's own code; use it only to explain how the platform itself "
+                 "works, in your own words, and note plainly if it doesn't fully answer "
+                 "the question:\n"
                  + "\n".join(lines) + "\n\n")
         return block, references
     except Exception as e:
@@ -3745,7 +3769,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # not a second opinion run alongside it.
         grounding, references = _local_corpus_search(search_terms)
         grounding_source = "local_corpus" if references else "none"
-        if not references:
+        if not references and _is_platform_question(question):
             grounding, references = _codebase_search(search_terms)
             if references:
                 grounding_source = "codebase"
