@@ -2921,6 +2921,55 @@ The first attempt's failure (waiting, then still `Unable to locate`) was seen li
 
 **Verified by:** `ansible-lint` passes at the `production` profile (the strictest) with 0 failures and 0 warnings, and `ansible-playbook --syntax-check` passes. A walk of the fully parsed playbook before and after, normalising only Jinja whitespace, found no semantic differences.
 
+### F-167 — The codebase grounding tier pre-empted kiwix for generic questions, and the model then called CloudCore's source "the provided code snippet"
+
+**Where:** `examples/llm-chat/files/verify_proxy.py`: `_is_platform_question()`, `_codebase_search()`'s prompt block, and the tier order in `_do_handle_ask`. Found during `llm-chat-kiwix-expansion-Phased-Implementation.md`.
+
+**Symptom:** a live Linux Help question, "What does the load average in uptime actually mean?", came back with no sources, and the answer discussed "the provided code snippet… `os.getloadavg()`" to a student who had provided no code. The grounding record showed `grounding_source: codebase`, with references `api/host_stats.py` and `api/hw_info.py`.
+
+**Root cause:** F-140 put CloudCore's own source code ahead of kiwix, on the reasoning that a codebase hit is "narrower and more specific". That held while kiwix was only Wikipedia and man pages, but the tier ran on *any* keyword overlap. "load average" appears in `host_stats.py`, so the codebase won and the new library's Super User and Server Fault answers were never consulted. Its prompt block was also labelled like any other reference, so the model read a code snippet in its prompt as code the student wrote.
+
+**Fix:** the codebase tier now runs only when the student's own question names the lab or platform (CloudCore, llm-chat, sandbox, coordinator, Sentinel, kiwix, Firecracker, "this lab", Terminal panel, preview ports and so on, matched as whole words). Its snippets are introduced as "Source code from the CloudCore platform this lab runs on -- NOT the student's own code". The approved-answer corpus still comes first; everything else goes to kiwix.
+
+**Verified by:** 8 gate cases, all correct (including F-140's own motivating question about coordinator flavours, which still reaches the codebase tier). Live on 2026-09-28, the same load-average question was re-asked after deployment: it was grounded from kiwix, the answer no longer mentions code, and the sources event carried two Unix & Linux Q&A threads, both opening through the LB (200).
+
+### F-168 — kiwix search: filters match filenames, one bad book fails the whole search, empty-snippet hits were silently dropped, and Wikipedia crowded out the specialists
+
+**Where:** `examples/llm-chat/files/verify_proxy.py` (`_kiwix_query`, `_kiwix_search`, `_kiwix_article_lead`), `examples/llm-chat/locals.tf` (book lists), `examples/llm-chat/kiwix-zims.json`. Stages K3 and K5 of `llm-chat-kiwix-expansion-Phased-Implementation.md`.
+
+**Symptom:** four separate problems, all found by testing against the real `kiwix-serve` 3.8.2 binary:
+1. The per-book search filter rejected `books.name=wikipedia_en_all`, the ZIM's own `Name` metadata, with HTTP 400 "No such book".
+2. A single unknown name in a multi-book filter made kiwix-serve reject the **entire** search.
+3. In the 17-ZIM baseline, a search for "big O notation" never returned Wikipedia's "Big O notation" article, even though kiwix-serve found it.
+4. Across 10 coding queries on the old corpus, the Python docs and 12 DevDocs sets filled 1 of 20 result slots; Wikipedia filled almost all the rest.
+
+**Root cause:**
+1. kiwix-serve identifies a book by its **filename minus `.zim`** (the same name as in its `/content/<name>/` URLs), not the ZIM's internal Name: `wikipedia_en_all_nopic_2026-06` works, and so does a date-less alias where the stem ends in a plain date.
+2. The 400 is all-or-nothing: if one listed ZIM failed to register on the VM, every filtered search, and so all grounding, would silently stop.
+3. kiwix-serve returns some hits with an empty snippet, and `_kiwix_search` has always skipped those, so it was silently dropping some of the most relevant references. This predates this work.
+4. In one combined search, Wikipedia's rich articles outrank short reference entries, so a small specialist corpus gets crowded out.
+
+**Fix:**
+- Book ids come from the filename, and are derived from the manifest in both OpenTofu and Ansible.
+- A 400 falls back to an unfiltered search and says so in the log.
+- Empty-snippet hits keep their place, with the article's lead paragraph fetched as the snippet.
+- Stack Exchange tag-listing pages ("Highest Voted 'chmod' Questions", `/questions/tagged/…`) are skipped; they had taken 22 benchmark slots.
+- The merge strategy was chosen by benchmark: the panel's specialist books first, Wikipedia only for empty slots (`fill`).
+
+**Verified by:** a benchmark on the full 59-ZIM library, 26 real queries with every hit judged by hand: `fill` ~47/52 relevant, `combined` ~45, `split` ~41. `split` forces one Wikipedia hit, which pulled in nonsense like "load average" → "Genetic load". Live on the coordinator: 46 coding and 28 Linux books with `fill`; x86 stack frame → Wikibooks *X86 Disassembly/Functions and Stack Frames*; Rust lifetimes → Rust docs; Big O → Wikipedia *Big O notation*. Locally, an unknown book triggered the fallback and was logged.
+
+### F-169 — On a freshly booted kiwix VM the first search took 7.8s, past the 3s grounding cutoff; boot-time index warm-up
+
+**Where:** `examples/llm-chat/files/kiwix-cloud-init.yaml.tftpl` (and the Ansible mirror): a warm-up step after `kiwix-serve` starts.
+
+**Symptom:** the first searches against the newly provisioned 59-ZIM library took 1.2–2.0s through verify-proxy. With the page cache dropped to simulate a fresh boot, the first search took **7.8s**, more than twice verify-proxy's 3s kiwix timeout. On a freshly booted VM, the first student's question would silently get no grounding at all.
+
+**Root cause:** kiwix-serve memory-maps each ZIM's Xapian full-text index, and the first query against a cold index reads large parts of it from disk. With 73GB of ZIMs that cost is well beyond the per-query budget; once the pages are cached (the VM has ~15GB of page cache), queries take about 0.15s.
+
+**Fix:** after `kiwix-serve` starts, cloud-init runs ten broad searches across every book (linux, memory, process, network, file, error, function, server, kernel, python), taking about 14s, so the index pages are cached before the first real question.
+
+**Verified by:** a live test on the kiwix VM (2026-09-28), with the page cache dropped each time. Without the warm-up, five real queries took `7.78 0.12 0.31 0.34 0.19` s; with the warm-up first, `0.18 0.07 0.20 0.27 0.13` s. Warm steady state measured through verify-proxy: median 0.14–0.15s, max 0.27s, including queries never seen before.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3046,3 +3095,4 @@ The first attempt's failure (waiting, then still `Unable to locate`) was seen li
 | v2.9 | 2026-09-28 | Paul Scott | Direct question: "we've hit a fair few issues during this session. have we converted those issues to F- bugs and updated the knowledgebase?" An audit found F-157 to F-161 covered the fixed bugs, but five observations had never been logged. F-162 (repo timeouts during cloud-init, twice), F-163 (health-check traceback noise), F-164 (model answered with only a stdin block), F-165 (Terminal apt race at boot), F-166 (ansible-lint debt). All five are open; causes not investigated are stated as such. |
 | v3.0 | 2026-09-28 | Paul Scott | Direct request: "i think f-162 needs a good look at, that sort of thing will almost certainly come back to bite later so we should be thoroughly prepared for it." F-162 root-caused from the repo's own access log (single-threaded server; a 50GB ZIM transfer blocked the coordinator's apt for ~7 min in both builds), reproduced old vs new, and fixed (threaded, Range support, completion logging), with a regression suite. Resolved pending a `cloudcore-repo` restart. |
 | v3.1 | 2026-09-28 | Paul Scott | Direct request: "lets get the small fixes fixed first please." F-163 to F-166 resolved and verified live on a fresh llm-chat build, which also finished cloud-init cleanly: the end-to-end confirmation for F-162. F-165's first fix failed under a deliberately forced race (the wrapper waited on the refresh script's own apt call; no D-Bus for non-root users) and was redone. F-164's prompt change alone did not stop the model; the code fallback is what fixes it. |
+| v3.2 | 2026-09-28 | Paul Scott | Direct request: "as much kiwix education material in programming and system architecture ... as well as python, go, c, c++, rust and assembler". `llm-chat-kiwix-expansion-Phased-Implementation.md`: 42 new ZIMs (59 total, 73GB) behind one manifest, per-panel search, clickable sources through `/kiwix/`. F-167 (the codebase tier pre-empted kiwix and confused the model), F-168 (kiwix search semantics and the benchmark-chosen merge), F-169 (a cold index took 7.8s; warm-up at boot). Stack Overflow deferred until measured; the kiwix VM has 23GB free, so it needs its own volume. |

@@ -50,11 +50,42 @@ this is ~80GB including the OS.
 
 | # | Stage | Status |
 |---|---|---|
-| K1 | Download and checksum every ZIM into the host artifact cache | Not started |
-| K2 | Replace the per-ZIM variables (3 each) with one ZIM manifest, each entry tagged with the panels that search it; TF + Ansible | Not started |
-| K3 | Per-panel search: coding searches language + CS + low-level books, Linux Help searches systems + man pages + wikis; Wikipedia in both | Not started |
-| K4 | Clickable citations: each reference links to the real kiwix page, proxied through verify-proxy (content paths only) | Not started |
-| K5 | Measure search latency and hit relevance before/after, on real questions; decide on Stack Overflow from the numbers | Not started |
+| K1 | Download and checksum every ZIM into the host artifact cache | Done — 42 new, 59 total (73GB), all verified against Kiwix's published sha256 |
+| K2 | Replace the per-ZIM variables (3 each) with one ZIM manifest, each entry tagged with the panels that search it; TF + Ansible | Done — verified live (59 of 59 registered) |
+| K3 | Per-panel search: coding searches language + CS + low-level books, Linux Help searches systems + man pages + wikis; Wikipedia in both | Done — `fill`: specialists first, Wikipedia for empty slots (chosen by K5) |
+| K4 | Clickable citations: each reference links to the real kiwix page, proxied through verify-proxy (content paths only) | Done — verified live through the LB |
+| K5 | Measure search latency and hit relevance before/after, on real questions; decide on Stack Overflow from the numbers | Done — see results below; Stack Overflow decision pending |
+
+## Results (2026-09-28)
+
+**Latency (K5).** Baseline, 17 ZIMs, one combined search: median 0.05–0.09s, max
+0.37s. Full library, 59 ZIMs, `fill`: locally median 0.05s coding / 0.15s Linux,
+max 0.27s; live through verify-proxy, median 0.14–0.15s, max 0.27s once warm.
+A cold index took 7.8s for its first query, so the kiwix VM now warms its
+indexes at boot (F-169). Latency leaves plenty of room for Stack Overflow.
+
+**Relevance (K5)**, 26 real queries, every hit judged by hand:
+
+| Strategy | Coding (32 slots) | Linux (20 slots) |
+|---|---|---|
+| combined | ~26 | ~19 |
+| **fill** (chosen) | **~28** | **~19** |
+| split | ~27 | ~14 |
+
+After also skipping Stack Exchange tag pages and recovering empty-snippet hits
+(F-168), `fill` gives, for example: x86 stack frame → Wikibooks *X86
+Disassembly/Functions and Stack Frames* + NASM Q&A; Rust lifetimes → Rust
+docs; Big O → Software Engineering Q&A + Wikipedia *Big O notation*. Still only
+fair: Rust borrow-checker and segfault land on tangential Q&A threads, a
+content limit (no Rust Book in the catalog).
+
+**Found on the way:** F-167 (the codebase tier pre-empted kiwix for generic
+questions), F-168 (kiwix search semantics; empty-snippet hits were silently
+dropped; tag pages), F-169 (cold-index latency).
+
+**Stack Overflow:** latency is not the constraint; disk is. The kiwix VM
+(100GB) has 23GB free after the 73GB library, so the 107GB archive needs its
+own attached volume.
 
 Methodology unchanged: build and verify live, log findings as F-NNN,
 tear down after.
