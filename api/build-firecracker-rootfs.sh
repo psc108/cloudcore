@@ -434,7 +434,9 @@ cat > /usr/local/bin/refresh-apt-index.sh <<\"EOS\"
 for i in \$(seq 1 10); do
   rm -f /etc/resolv.conf
   echo \"nameserver 8.8.8.8\" > /etc/resolv.conf
-  apt-get update -qq && exit 0
+  # /usr/bin explicitly: the F-165 apt wrapper in /usr/local/bin waits
+  # for THIS script, so going through it would wait on itself.
+  /usr/bin/apt-get update -qq && exit 0
   sleep 2
 done
 # Best-effort, same reasoning as fetch-mmds-key.sh's own explicit
@@ -466,17 +468,19 @@ systemctl enable refresh-apt-index.service
 # locate package for packages that exist. These wrappers sit in
 # /usr/local/bin, ahead of /usr/bin on both the login PATH and sudo's
 # secure_path, and wait (bounded) for the refresh to finish before running
-# the real apt. Per-run microVMs mask the unit, so there it is never
-# activating and the wrapper passes straight through. (No double quotes or
+# the real apt. Per-run microVMs mask the unit, so the refresh never runs
+# there and the wrapper passes straight through. (No double quotes or
 # backticks in this comment: it sits inside the outer ssh string.)
 for tool in apt apt-get; do
 cat > /usr/local/bin/\$tool <<\"EOS\"
 #!/bin/sh
 real=/usr/bin/\$(basename \"\$0\")
-if [ \"\$(systemctl is-active refresh-apt-index.service 2>/dev/null)\" = activating ]; then
+# pgrep, not systemctl: this image has no D-Bus, so systemctl fails for a
+# non-root user and a plain (non-sudo) apt would never wait.
+if pgrep -f /usr/local/bin/refresh-apt-index.sh >/dev/null 2>&1; then
   echo \"Waiting for this new session's package index refresh to finish (first ~30s after start)...\" >&2
   i=0
-  while [ \"\$(systemctl is-active refresh-apt-index.service 2>/dev/null)\" = activating ] && [ \$i -lt 90 ]; do
+  while pgrep -f /usr/local/bin/refresh-apt-index.sh >/dev/null 2>&1 && [ \$i -lt 90 ]; do
     sleep 1; i=\$((i + 1))
   done
 fi
