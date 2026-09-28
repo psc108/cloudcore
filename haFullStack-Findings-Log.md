@@ -2825,6 +2825,66 @@ Ports that turned out not to need anything: LB listeners bind `127.0.0.1` (api/l
 
 **Not yet run for real:** no `--scan`/`--apply` as root on either host yet.
 
+### F-162 — The host package repo (192.168.100.1:8090) timed out during cloud-init on two llm-chat builds in a row; F-142's retry recovered both
+
+**Where:** `examples/llm-chat/files/coordinator-cloud-init.yaml.tftpl` (`packages:` phase, then F-142's retry loop in `runcmd`); the host-level repo served by `cloudcore-repo.service`.
+
+**Symptom:** both llm-chat builds on 2026-09-28 (around 08:53 and 09:40) finished cloud-init with `status: error`: `package_update_upgrade_install` failed on dnsmasq, python3-paramiko, libgomp1 and promtail, and `apt-get update` logged `Could not connect to 192.168.100.1:8090 ... connection timed out`. Every service came up anyway, because F-142's `runcmd` retry reinstalled the packages a few minutes later.
+
+**Root cause:** not investigated. Two back-to-back occurrences suggest it isn't a one-off, but whether the repo process stalls, the bridge isn't ready that early in a guest's boot, or the host is simply saturated by the build itself (both builds were starting a 14B model download at the same time) is unknown.
+
+**Fix:** none yet beyond F-142's retry, which masks it. Next step: log timestamps from `cloudcore-repo.service` alongside the guest's first `apt-get update` on the next build.
+
+**Verified by:** observed in both builds' `/var/log/cloud-init-output.log` and `cloud-init status --long`; recovery confirmed by `dpkg -l` showing all four packages installed and every service active.
+
+### F-163 — verify-proxy logs a full traceback every time HAProxy's health check hangs up before reading the response
+
+**Where:** `examples/llm-chat/files/verify_proxy.py`, `_proxy_passthrough()` (GET `/health`).
+
+**Symptom:** `journalctl -u verify-proxy` shows periodic `ConnectionResetError: [Errno 104] Connection reset by peer` tracebacks from `socketserver`, originating in `_proxy_passthrough`'s `self.wfile.write(resp_body)` and coming from `192.168.100.1` (the LB on the host). Nothing is broken, but the noise lands in the journal and so in Loki, which Sentinel's log intelligence reads.
+
+**Root cause:** HAProxy's `httpchk` closes the connection once it has the status line, and the handler's write of the body then hits a reset socket. The exception isn't caught, so `socketserver` prints the whole traceback.
+
+**Fix:** not done yet. Catch `BrokenPipeError`/`ConnectionResetError` around the passthrough write and drop them silently; a client that hung up needs no response.
+
+**Verified by:** seen live on the Stage 12 coordinator on 2026-09-28 (two tracebacks at 09:47–09:48, both from the LB's address); cause read from the traceback.
+
+### F-164 — Asked to run the code in the editor, the model answered with only a ```stdin block, so nothing was executed
+
+**Where:** the sandbox Ask path (`verify_proxy.py` `_handle_ask` / `SANDBOX_SYSTEM_MESSAGE`); Stage 3's stdin convention.
+
+**Symptom:** an Ask with code in the editor (an 8s busy loop, then `input()`) and the question "Please run this exactly as written and check that it prints 49 when given 7" got back exactly ```` ```stdin\n7\n``` ```` and nothing else. The reply had no code block, so verification never ran and the student saw a bare stdin block with no result.
+
+**Root cause:** most likely the system prompt's Stage 3 wording ("reply with ONLY a fenced ```stdin block") is being applied on the *first* turn, when it's only meant for the mid-run input hand-off. A question that mentions an input value seems to pull the model into that mode. This is one observation with Qwen2.5-Coder-14B, not a reproduced pattern.
+
+**Fix:** not done yet. Options: scope the stdin instruction explicitly to "only when you are told the script is waiting for input", or have the Ask path treat a first-turn reply with no code but a stdin block as a request to run the student's own code with that input.
+
+**Verified by:** seen once live on 2026-09-28 through the LB (the full SSE stream contained only the stdin block). The rephrased Ask ("Write a script that...") then worked end to end, with exact detection.
+
+### F-165 — In a new sandbox Terminal, `apt install` fails for the first few seconds because the boot-time index refresh hasn't finished
+
+**Where:** the Firecracker guest's `refresh-apt-index.service` (`api/build-firecracker-rootfs.sh`), which deliberately does not gate `ssh.service`.
+
+**Symptom:** a Stage 10 test ran `sudo apt-get install -y bc` right after the session connected and it failed; the same command succeeded once `refresh-apt-index` had finished. A student who types `apt install` immediately gets "Unable to locate package" for a package that exists.
+
+**Root cause:** by design since Stage 5, the refresh runs after boot without blocking SSH, so the Terminal is usable sooner. With an empty package index at start, apt fails until the refresh completes (a few seconds on a quiet coordinator).
+
+**Fix:** not done yet. Options: a small `apt` wrapper in the guest that waits for `refresh-apt-index.service` to finish (bounded) before calling the real apt, or a one-line notice in the Terminal banner.
+
+**Verified by:** reproduced in the Stage 10 live check on 2026-09-28 (failure first, then success after waiting for the unit); pre-existing behaviour, not caused by the Stage 10 changes.
+
+### F-166 — `ansible-lint` fails on the llm-chat playbook (13 yaml formatting errors), against the project rule that it must pass
+
+**Where:** `ansible/examples/14-llm-chat.yml`.
+
+**Symptom:** `ansible-lint 14-llm-chat.yml` reports `13 failure(s), 3 warning(s)`, all `yaml` formatting rules; the last profile met is `min`.
+
+**Root cause:** pre-existing lint debt, identical before and after the Stage 10–13 changes (checked by linting the stashed and unstashed versions). It was never caught because `ansible-lint` isn't installed on the dev host.
+
+**Fix:** not done yet. Fix the 13 formatting issues and add `ansible-lint` to the dev requirements so it runs with every playbook change.
+
+**Verified by:** `ansible-lint` 25.x, run from a scratch venv on 2026-09-28, with the same count on both versions.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2947,3 +3007,4 @@ Ports that turned out not to need anything: LB listeners bind `127.0.0.1` (api/l
 | v2.6 | 2026-09-28 | Paul Scott | Stage 12 of `llm-chat-sandbox-extensions-Phased-Implementation.md`: Bash/Node/C/C++/Go in Run/Ask, each Run in its own network-less jailed microVM on an isolated `fcrun0` bridge, with a FIFO queue, memory floor, separate compile phase and guest-side stdin detection. F-159: signal deaths surfaced as a bare `-1`, CPU overruns as anonymous `SIGKILL`, and a limits wrapper that failed open (caught locally before shipping). Measured: 6–8s per non-Python Run on an idle coordinator, dominated by microVM boot. |
 | v2.7 | 2026-09-28 | Paul Scott | Stage 13 of `llm-chat-sandbox-extensions-Phased-Implementation.md`, the last of the Phase 4 out-of-scope items: a local-capture client with per-student tokens, whose submissions are re-run on a coordinator and never trusted for results. F-160, including a silent mislabel from deploying guest code ahead of the API. LAN exposure of port 8083 still needs the new firewall script run with sudo. |
 | v2.8 | 2026-09-28 | Paul Scott | Direct request after F-160's correction showed ufw was never enabled: inventory the host and "get a script to run this without cutting everything else off... we also will need to run this on llwyn-y-groes". Then: "have the script scan for currently open ports and add those to the inventory list and i can remove any afterward". F-161: `api/setup-host-firewall.sh` (scan → edit → apply → confirm, auto-rollback, SSH guard). |
+| v2.9 | 2026-09-28 | Paul Scott | Direct question: "we've hit a fair few issues during this session. have we converted those issues to F- bugs and updated the knowledgebase?" An audit found F-157 to F-161 covered the fixed bugs, but five observations had never been logged. F-162 (repo timeouts during cloud-init, twice), F-163 (health-check traceback noise), F-164 (model answered with only a stdin block), F-165 (Terminal apt race at boot), F-166 (ansible-lint debt). All five are open; causes not investigated are stated as such. |
