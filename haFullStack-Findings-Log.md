@@ -2860,55 +2860,66 @@ On the new server, 404 probes, `304 Not Modified`, HEAD, directory listings, suf
 
 **Live on stourport, 2026-09-28, after `sudo systemctl restart cloudcore-repo`:** a small `Packages.gz` request was served in 0.001s while the real 50GB ZIM streamed to the same client, and the completion log recorded `done "GET /jammy/apt-repo/Packages.gz ..." 33782 bytes in 0.0s (1 other transfer(s) active)`. The same check run *from Llwyn-y-Groes* (whose `192.168.100.1` reaches stourport's repo over the WireGuard tunnel, logged as source `10.99.101.1`) got HTTP 200 in 0.004s mid-ZIM. Peer-placed guests go through the same fixed server. Llwyn-y-Groes also runs its own `cloudcore-repo` for its bridge (192.168.101.1). It was already on the fixed commit but had never been restarted, so it was still running the old code. After `sudo systemctl restart cloudcore-repo` there, it logged `done "GET /jammy/apt-repo/Packages.gz ..." 218515 bytes in 0.0s` (only the new code writes that line). Both hosts are now fixed. Lesson: after pulling server-side code, restart the service as well; `git pull` alone changes nothing that's already running.
 
+**End-to-end, 2026-09-28:** the next llm-chat build (a fresh coordinator, kiwix VM and peer worker) finished cloud-init with `errors: []` and **zero** apt fetch failures, the first clean build of the day. The only remaining notices are the pre-existing, non-fatal schema warning and the deprecated `apt_preserve_sources_list` key, hence `degraded done`. The repo's completion log shows the case that used to fail now working: the coordinator's `Packages.gz` (0.0s) and promtail (0.9s) were served with `others=1`, i.e. while the kiwix VM's ZIM was still streaming.
+
 Operational note from the restart: systemd warned that the unit file had changed on disk. Its content matched what was loaded (only the file had been rewritten), and a restart runs the current script either way, so this was harmless. `sudo systemctl daemon-reload` clears it.
 
-### F-163 — verify-proxy logs a full traceback every time HAProxy's health check hangs up before reading the response
+### F-163 — RESOLVED: verify-proxy logged a full traceback every time HAProxy's health check hung up before reading the response
 
-**Where:** `examples/llm-chat/files/verify_proxy.py`, `_proxy_passthrough()` (GET `/health`).
+**Where:** `examples/llm-chat/files/verify_proxy.py` (`_QuietDisconnectServer`, used by `main()`) and its Ansible mirror.
 
-**Symptom:** `journalctl -u verify-proxy` shows periodic `ConnectionResetError: [Errno 104] Connection reset by peer` tracebacks from `socketserver`, originating in `_proxy_passthrough`'s `self.wfile.write(resp_body)` and coming from `192.168.100.1` (the LB on the host). Nothing is broken, but the noise lands in the journal and so in Loki, which Sentinel's log intelligence reads.
+**Symptom:** `journalctl -u verify-proxy` showed periodic `ConnectionResetError: [Errno 104] Connection reset by peer` tracebacks from `socketserver`, raised in `_proxy_passthrough`'s `self.wfile.write(resp_body)` and coming from the LB on `192.168.100.1`: two in two minutes on the Stage 12 coordinator. Nothing was broken, but the noise landed in the journal and so in Loki, which Sentinel's log intelligence reads.
 
-**Root cause:** HAProxy's `httpchk` closes the connection once it has the status line, and the handler's write of the body then hits a reset socket. The exception isn't caught, so `socketserver` prints the whole traceback.
+**Root cause:** HAProxy's `httpchk` closes the connection once it has the status line, so the handler's write of the body hits a reset socket. The exception wasn't caught, so `socketserver`'s default `handle_error` printed the whole traceback.
 
-**Fix:** not done yet. Catch `BrokenPipeError`/`ConnectionResetError` around the passthrough write and drop them silently; a client that hung up needs no response.
+**Fix:** the server class overrides `handle_error` to drop `ConnectionResetError` and `BrokenPipeError` (a client that hung up needs no answer); every other exception still gets the full default traceback. It's done at the server rather than in `_proxy_passthrough`, so every handler path is covered.
 
-**Verified by:** seen live on the Stage 12 coordinator on 2026-09-28 (two tracebacks at 09:47–09:48, both from the LB's address); cause read from the traceback.
+**Verified by:** a local behavioural test: with the stock `ThreadingHTTPServer`, both a reset and a real bug print tracebacks; with the patched server, the reset is silent and the real bug still prints. Live on a fresh llm-chat coordinator (2026-09-28): zero tracebacks and zero `ConnectionResetError` in verify-proxy's journal over ~20 minutes of LB health checks.
 
-### F-164 — Asked to run the code in the editor, the model answered with only a ```stdin block, so nothing was executed
+### F-164 — RESOLVED: asked to run the code in the editor, the model answered with only a ```stdin block, so nothing was executed
 
-**Where:** the sandbox Ask path (`verify_proxy.py` `_handle_ask` / `SANDBOX_SYSTEM_MESSAGE`); Stage 3's stdin convention.
+**Where:** `examples/llm-chat/files/verify_proxy.py` (`_relay_and_verify_stream` fallback, `verify_and_maybe_fix(initial_inputs=...)`), the sandbox system prompt (verify_proxy default, `variables.tf`, the Ansible playbook).
 
-**Symptom:** an Ask with code in the editor (an 8s busy loop, then `input()`) and the question "Please run this exactly as written and check that it prints 49 when given 7" got back exactly ```` ```stdin\n7\n``` ```` and nothing else. The reply had no code block, so verification never ran and the student saw a bare stdin block with no result.
+**Symptom:** an Ask with code in the editor (a busy loop, then `input()`) and the question "Please run this exactly as written and check that it prints 49 when given 7" got back exactly ```` ```stdin\n7\n``` ````. The reply had no code block, so verification never ran and the student saw a bare stdin block with no result.
 
-**Root cause:** most likely the system prompt's Stage 3 wording ("reply with ONLY a fenced ```stdin block") is being applied on the *first* turn, when it's only meant for the mid-run input hand-off. A question that mentions an input value seems to pull the model into that mode. This is one observation with Qwen2.5-Coder-14B, not a reproduced pattern.
+**Root cause:** the system prompt's Stage 3 instruction to reply "with ONLY a fenced ```stdin block" is meant for the mid-run input hand-off, but Qwen2.5-Coder-14B applies it to a *first* reply when the question mentions an input value. It did the same again on the second attempt, *after* the prompt was changed (below), so wording alone does not stop it.
 
-**Fix:** not done yet. Options: scope the stdin instruction explicitly to "only when you are told the script is waiting for input", or have the Ask path treat a first-turn reply with no code but a stdin block as a request to run the student's own code with that input.
+**Fix:**
+1. The prompt now says never to send a stdin block on its own unless just told a running script is waiting for input.
+2. The fix that actually works: when a reply has no runnable code but does have a stdin block, and the student has code in the editor, the student's code is run with that value queued as its first input (`initial_inputs`). The model is consulted only if the program asks for more. The block is labelled "Ran the code in your editor with the input above". It isn't captured to the corpus, because it's the student's code rather than a model claim, the same as a plain Run.
 
-**Verified by:** seen once live on 2026-09-28 through the LB (the full SSE stream contained only the stdin block). The rephrased Ask ("Write a script that...") then worked end to end, with exact detection.
+**Verified by:** a local test of input queueing (the queued value first, the model only for the second input, unchanged behaviour without `initial_inputs`). Live on 2026-09-28, the identical Ask through the LB got the same stdin-only reply from the model, and the fallback ran the editor's code: `>>> INPUT PROVIDED (exact): '7'`, output `49`, exit 0.
 
-### F-165 — In a new sandbox Terminal, `apt install` fails for the first few seconds because the boot-time index refresh hasn't finished
+### F-165 — RESOLVED (second attempt): in a new sandbox Terminal, apt failed for the first few seconds because the boot-time index refresh hadn't finished
 
-**Where:** the Firecracker guest's `refresh-apt-index.service` (`api/build-firecracker-rootfs.sh`), which deliberately does not gate `ssh.service`.
+**Where:** `api/build-firecracker-rootfs.sh`: `/usr/local/bin/apt` and `/usr/local/bin/apt-get` wrappers, plus `refresh-apt-index.sh`. Rootfs `82ba6770…`.
 
-**Symptom:** a Stage 10 test ran `sudo apt-get install -y bc` right after the session connected and it failed; the same command succeeded once `refresh-apt-index` had finished. A student who types `apt install` immediately gets "Unable to locate package" for a package that exists.
+**Symptom:** `sudo apt-get install -y bc` typed right after a Terminal connected failed with `Unable to locate package bc`; the same command succeeded a few seconds later. By design since Stage 5, the refresh runs after boot without blocking SSH.
 
-**Root cause:** by design since Stage 5, the refresh runs after boot without blocking SSH, so the Terminal is usable sooner. With an empty package index at start, apt fails until the refresh completes (a few seconds on a quiet coordinator).
+**Root cause:** at boot the package index is empty until `refresh-apt-index.service` finishes. The **first fix attempt failed**, which only showed up because the test forced the race rather than hoping to hit it:
+1. The wrapper waited while the unit was "activating", but the refresh script itself called plain `apt-get`. With `/usr/local/bin` first on the service's PATH, that went through the wrapper, which then waited on *itself* for 90s. The student's wrapper gave up at about the same time, before the refresh had even started.
+2. `systemctl is-active` fails for a non-root user in this image ("Failed to connect to bus": there's no D-Bus), so apt without sudo would never have waited.
 
-**Fix:** not done yet. Options: a small `apt` wrapper in the guest that waits for `refresh-apt-index.service` to finish (bounded) before calling the real apt, or a one-line notice in the Terminal banner.
+**Fix:** the wrappers sit in `/usr/local/bin` (ahead of `/usr/bin` on both the login PATH and sudo's `secure_path`) and wait, up to 90s, while `pgrep -f /usr/local/bin/refresh-apt-index.sh` finds the refresh running. That works for any user without D-Bus. The refresh script calls `/usr/bin/apt-get` explicitly, so it never goes through the wrapper. Per-run microVMs mask the unit, so the wrapper passes straight through there.
 
-**Verified by:** reproduced in the Stage 10 live check on 2026-09-28 (failure first, then success after waiting for the unit); pre-existing behaviour, not caused by the Stage 10 changes.
+**Verified by:** a forced race in a live Terminal session (2026-09-28), emptying `/var/lib/apt/lists` and restarting the refresh before each step:
+- The real `/usr/bin/apt-get` (the control) failed with `Unable to locate package bc`, exit 100, reproducing the bug.
+- `sudo apt-get install bc` through the wrapper printed the waiting notice, then `Setting up bc`, and `40+2` gave `42`.
+- `apt policy bc` without sudo waited, then showed `Candidate: 1.07.1-3build1`.
 
-### F-166 — `ansible-lint` fails on the llm-chat playbook (13 yaml formatting errors), against the project rule that it must pass
+The first attempt's failure (waiting, then still `Unable to locate`) was seen live before the fix. The rootfs was swapped onto the running coordinator (SHA checked, root:root 0644, atomic rename) for this test.
 
-**Where:** `ansible/examples/14-llm-chat.yml`.
+### F-166 — RESOLVED: `ansible-lint` failed on the llm-chat playbook, against the project rule that it must pass
 
-**Symptom:** `ansible-lint 14-llm-chat.yml` reports `13 failure(s), 3 warning(s)`, all `yaml` formatting rules; the last profile met is `min`.
+**Where:** `ansible/examples/14-llm-chat.yml`; new `requirements-dev.txt`.
 
-**Root cause:** pre-existing lint debt, identical before and after the Stage 10–13 changes (checked by linting the stashed and unstashed versions). It was never caught because `ansible-lint` isn't installed on the dev host.
+**Symptom:** `ansible-lint 14-llm-chat.yml` reported 13 failures before this session's work and 15 after, all `yaml[line-length]`, plus 3 `jinja[spacing]` warnings. The last profile met was `min`.
 
-**Fix:** not done yet. Fix the 13 formatting issues and add `ansible-lint` to the dev requirements so it runs with every playbook change.
+**Root cause:** formatting debt that went unnoticed because `ansible-lint` wasn't installed on the dev host. Two of the long lines were introduced this session by in-place edits to the folded `sandbox_system_message` text.
 
-**Verified by:** `ansible-lint` 25.x, run from a scratch venv on 2026-09-28, with the same count on both versions.
+**Fix:** the folded prompt text was rewrapped (a folded `>-` scalar joins lines with spaces, so the value is unchanged); the multi-key `template_vars` lines were split one key per line; the long `claude_debug_users` ternary moved to a folded scalar; and the Jinja dict braces were tightened. `requirements-dev.txt` now pins `ansible-lint==26.9.0` and `ruff==0.16.9`, with the commands to run before committing.
+
+**Verified by:** `ansible-lint` passes at the `production` profile (the strictest) with 0 failures and 0 warnings, and `ansible-playbook --syntax-check` passes. A walk of the fully parsed playbook before and after, normalising only Jinja whitespace, found no semantic differences.
 
 ## Document History
 
@@ -3034,3 +3045,4 @@ Operational note from the restart: systemd warned that the unit file had changed
 | v2.8 | 2026-09-28 | Paul Scott | Direct request after F-160's correction showed ufw was never enabled: inventory the host and "get a script to run this without cutting everything else off... we also will need to run this on llwyn-y-groes". Then: "have the script scan for currently open ports and add those to the inventory list and i can remove any afterward". F-161: `api/setup-host-firewall.sh` (scan → edit → apply → confirm, auto-rollback, SSH guard). |
 | v2.9 | 2026-09-28 | Paul Scott | Direct question: "we've hit a fair few issues during this session. have we converted those issues to F- bugs and updated the knowledgebase?" An audit found F-157 to F-161 covered the fixed bugs, but five observations had never been logged. F-162 (repo timeouts during cloud-init, twice), F-163 (health-check traceback noise), F-164 (model answered with only a stdin block), F-165 (Terminal apt race at boot), F-166 (ansible-lint debt). All five are open; causes not investigated are stated as such. |
 | v3.0 | 2026-09-28 | Paul Scott | Direct request: "i think f-162 needs a good look at, that sort of thing will almost certainly come back to bite later so we should be thoroughly prepared for it." F-162 root-caused from the repo's own access log (single-threaded server; a 50GB ZIM transfer blocked the coordinator's apt for ~7 min in both builds), reproduced old vs new, and fixed (threaded, Range support, completion logging), with a regression suite. Resolved pending a `cloudcore-repo` restart. |
+| v3.1 | 2026-09-28 | Paul Scott | Direct request: "lets get the small fixes fixed first please." F-163 to F-166 resolved and verified live on a fresh llm-chat build, which also finished cloud-init cleanly: the end-to-end confirmation for F-162. F-165's first fix failed under a deliberately forced race (the wrapper waited on the refresh script's own apt call; no D-Bus for non-root users) and was redone. F-164's prompt change alone did not stop the model; the code fallback is what fixes it. |
