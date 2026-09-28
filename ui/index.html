@@ -7010,13 +7010,13 @@ async function loadLlmExamples() {
     const data = await api('GET', '/v1/llm-chat/examples');
     _llmExItems = data.items || [];
     if (!_llmExItems.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No examples captured yet — they appear here once a student\'s chat session produces a fenced Python code block that gets sandboxed-executed.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No examples captured yet — they appear here once a student\'s chat session produces a fenced code block that gets sandboxed-executed.</td></tr>';
       return;
     }
     tbody.innerHTML = _llmExItems.map((item, idx) => `
       <tr>
         <td class="mono">${fmtDate(item.created_at)}</td>
-        <td>${_esc(item.model_filename)}</td>
+        <td><span class="mono">${_esc(item.language || 'python')}</span> · ${_esc(item.model_filename)}</td>
         <td>${_llmExPassBadge(item.passed)}</td>
         <td>${item.fix_explanation ? _llmExPassBadge(item.fix_passed) : '—'}</td>
         <td>${badge(item.status)}</td>

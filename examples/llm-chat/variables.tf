@@ -250,7 +250,7 @@ variable "webui_system_message" {
 variable "sandbox_system_message" {
   description = "System prompt for the interactive sandbox's Ask panel — should keep the model on the student's own submitted code and decline off-topic requests, since nothing else in this deployment grounds a free-form answer. Stage 3: also explains the ```stdin fenced-block convention the model uses to supply input() values to a real, live, mid-execution-paused sandboxed process (verify_proxy.py's own run_sandboxed_interactive()/extract_stdin_value()) — superseded the earlier \"never use input()\" wording once the sandbox grew real interactive support. Stage 5 update: absorbed two lessons the general webui's own webui_system_message had already learned but this prompt never did — that one is vestigial (nothing reaches llama-server's own webui any more), so its wording just sat unused instead of actually helping. First, its explicit anti-hallucination instruction (born from a real stress-test failure this project found — a response with wrong percentile math and a described-but-never-called sorted()). Second, this prompt previously had zero awareness the Terminal panel (a real shell with real internet access, plus browser-reachable preview ports) exists at all — asked whether it can install a package or serve a web page, the model had no grounding for the true answer either way. Also added a short concision nudge, since this platform's own measured generation speed (~1 token/sec on modest hardware) makes an unnecessarily long answer a real, felt cost, not just a style preference."
   type        = string
-  default     = "You are a lab coding assistant. Only discuss the Python code the student has provided in this conversation. If asked something unrelated to that code or to this lab exercise, politely decline and redirect the student back to their code. Only describe what code actually does -- never claim a function, sort, or check exists unless it is genuinely present in the code you just wrote or were shown; if you are not certain something is correct, say so explicitly rather than stating it as fact. When suggesting a fix, provide the complete corrected script in a single fenced python code block, and keep your own explanation concise -- this hardware generates slowly, so prefer a short, precise answer over a long one where both would be equally correct. Code you write runs in a real sandbox that supports interactive input() calls -- if a script you wrote is waiting for input, you will be shown exactly what it has printed so far and asked what to provide; reply with ONLY a fenced ```stdin block containing exactly the one line to send. This can happen a few times per script, not unlimited, so keep prompts short and avoid scripts that would need a long back-and-forth. This code sandbox is Python-only, one-shot, and has no network access. Separately, the page's own Terminal panel gives a real persistent Linux shell with genuine internet access (pip install, curl, cloning a repo) that is otherwise fully isolated, plus ports __PREVIEW_PORTS_LIST__ reachable from the browser for previewing a web app run there -- if asked about installing packages, running something long-lived, or viewing a web app's own output, say to use the Terminal (whose own panel lists the exact ports), not this code sandbox."
+  default     = "You are a lab coding assistant. Only discuss the code the student has provided in this conversation. If asked something unrelated to that code or to this lab exercise, politely decline and redirect the student back to their code. Only describe what code actually does -- never claim a function, sort, or check exists unless it is genuinely present in the code you just wrote or were shown; if you are not certain something is correct, say so explicitly rather than stating it as fact. When suggesting a fix, provide the complete corrected program in a single fenced code block tagged with its language, and keep your own explanation concise -- this hardware generates slowly, so prefer a short, precise answer over a long one where both would be equally correct. Code you write runs in a real sandbox that supports interactive input (Python's input(), C's scanf, Bash's read and the like) -- if a script you wrote is waiting for input, you will be shown exactly what it has printed so far and asked what to provide; reply with ONLY a fenced ```stdin block containing exactly the one line to send. This can happen a few times per script, not unlimited, so keep prompts short and avoid scripts that would need a long back-and-forth. This code sandbox runs Python, Bash, JavaScript (Node), C, C++ and Go, one-shot, with no network access and only each language's standard library. Separately, the page's own Terminal panel gives a real persistent Linux shell with genuine internet access (pip install, curl, cloning a repo) that is otherwise fully isolated, plus ports __PREVIEW_PORTS_LIST__ reachable from the browser for previewing a web app run there -- if asked about installing packages, running something long-lived, or viewing a web app's own output, say to use the Terminal (whose own panel lists the exact ports), not this code sandbox."
 }
 
 # Stage 8 — a second, genuinely separate system prompt for the new
@@ -586,7 +586,7 @@ variable "firecracker_rootfs_name" {
 variable "firecracker_rootfs_sha256" {
   description = "SHA-256 of firecracker_rootfs_name — printed by api/build-firecracker-rootfs.sh itself after each build; update this value by hand whenever that script is re-run."
   type        = string
-  default     = "93d4bd9d827e80bead449a254ea1766c7c8d000cdaa0f5bea44264a3cdc7bd04"
+  default     = "4396aea09703ba497cc88e4e3ea863c5e6f915353ac8acf019c2ecf9ee7e043c"
 }
 
 # Deliberately outside both the platform's own real bridge range
@@ -674,6 +674,49 @@ variable "terminal_unresponsive_seconds" {
 # each incoming connection to whichever student's own currently-open
 # terminal session it came from — see that file's own PREVIEW_PORTS
 # handling for the full mechanism.
+# --- Stage 12: per-run microVMs for non-Python Run/Ask -----------------------
+variable "run_subnet_cidr" {
+  description = "Subnet for Stage 12's per-run microVMs (bridge fcrun0). Deliberately separate from sandbox_subnet_cidr: fcrun0 has no NAT and drops all forwarded traffic, so model-generated Bash/Node/C/C++/Go code runs with no network at all, while the Terminal keeps its internet access. Must not overlap sandbox_subnet_cidr, cidr_block or the host bridge."
+  type        = string
+  default     = "10.201.0.0/24"
+}
+
+variable "run_vm_max_concurrent" {
+  description = "How many per-run microVMs (Stage 12 non-Python Run/Ask) may exist at once; further Runs queue FIFO with a visible position. Default 1 because llama-server already holds most of the coordinator's RAM -- raise only on a larger coordinator_flavor."
+  type        = number
+  default     = 1
+}
+
+variable "run_vm_mem_mib" {
+  description = "Guest RAM for a per-run microVM (Bash, Node, C, C++). The VMM's own cgroup memory.max is this plus 128MB."
+  type        = number
+  default     = 256
+}
+
+variable "run_vm_mem_mib_go" {
+  description = "Guest RAM for a Go per-run microVM -- the Go compiler needs noticeably more than the other languages."
+  type        = number
+  default     = 512
+}
+
+variable "run_vm_min_host_mem_mb" {
+  description = "A per-run microVM only boots if the coordinator's MemAvailable is at least this plus the VM's own RAM; otherwise the student gets an honest 'under memory pressure' message instead of risking an OOM kill of llama-server."
+  type        = number
+  default     = 400
+}
+
+variable "run_compile_timeout_seconds" {
+  description = "Wall-clock limit for the compile step (C, C++, Go) inside a per-run microVM. Separate from verify_timeout_seconds, which limits the program's own run."
+  type        = number
+  default     = 60
+}
+
+variable "run_queue_wait_seconds" {
+  description = "How long a Run waits in the per-run microVM queue before giving up with 'every sandbox stayed busy'."
+  type        = number
+  default     = 120
+}
+
 variable "preview_ports" {
   description = "Fixed pool of high ports reachable from the browser, reverse-proxied into whichever microVM a student's own terminal session is currently using — lets a student run and view a web app (Flask, a static file server, etc.) they wrote in the sandbox terminal."
   type        = list(number)

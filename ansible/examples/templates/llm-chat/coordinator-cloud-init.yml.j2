@@ -128,6 +128,23 @@ write_files:
     encoding: b64
     content: "{{ codemirror_python_mode_js | b64encode }}"
 
+  # Stage 12 -- editor modes for the non-Python languages.
+  - path: /opt/llama.cpp/vendor/codemirror-mode-javascript.min.js
+    encoding: b64
+    content: "{{ codemirror_js_mode_js | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror-mode-clike.min.js
+    encoding: b64
+    content: "{{ codemirror_clike_mode_js | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror-mode-go.min.js
+    encoding: b64
+    content: "{{ codemirror_go_mode_js | b64encode }}"
+
+  - path: /opt/llama.cpp/vendor/codemirror-mode-shell.min.js
+    encoding: b64
+    content: "{{ codemirror_shell_mode_js | b64encode }}"
+
   # Stage 5B — xterm.js, same base64 convention as CodeMirror above
   # (also already vendored for the Dashboard's own admin Terminal
   # feature — reused as-is here, not a second pin).
@@ -284,6 +301,13 @@ write_files:
       Environment=RATE_LIMIT_RUN_PER_MINUTE={{ rate_limit_run_per_minute }}
       Environment=RATE_LIMIT_ASK_PER_10MIN={{ rate_limit_ask_per_10min }}
       Environment=ASK_QUEUE_ENABLED={{ ask_queue_enabled | lower }}
+      Environment=RUN_SUBNET_CIDR={{ run_subnet_cidr }}
+      Environment=RUN_VM_MAX_CONCURRENT={{ run_vm_max_concurrent }}
+      Environment=RUN_VM_MEM_MIB={{ run_vm_mem_mib }}
+      Environment=RUN_VM_MEM_MIB_GO={{ run_vm_mem_mib_go }}
+      Environment=RUN_VM_MIN_HOST_MEM_MB={{ run_vm_min_host_mem_mb }}
+      Environment=RUN_COMPILE_TIMEOUT_SECONDS={{ run_compile_timeout_seconds }}
+      Environment=RUN_QUEUE_WAIT_SECONDS={{ run_queue_wait_seconds }}
       ExecStart=/usr/bin/python3 /opt/llama.cpp/verify_proxy.py
       Restart=on-failure
       RestartSec=5
@@ -562,6 +586,28 @@ runcmd:
       echo "except-interface=lo"
     } > /etc/dnsmasq.d/fcbr0.conf
     systemctl enable --now dnsmasq
+
+  # Stage 12 -- a second, fully isolated bridge for the per-run microVMs
+  # that execute model-generated Bash/Node/C/C++/Go (verify_proxy.py's
+  # run_in_microvm). Unlike fcbr0 above: no NAT, no DHCP/DNS, nothing
+  # forwarded in either direction, and nothing from it accepted by the
+  # coordinator itself except replies to the coordinator's OWN SSH into
+  # each guest. Matched on the interface, not the source address, so a
+  # guest can't step around it by spoofing its IP; inserted (-I) so these
+  # take precedence over every rule above.
+  - |
+    RUNBR=fcrun0
+    RUNNET="{{ run_subnet_cidr }}"
+    RUNGW="$(python3 -c "import ipaddress; n=ipaddress.ip_network('$RUNNET'); print(list(n.hosts())[0])")"
+    ip link add "$RUNBR" type bridge 2>/dev/null || true
+    ip addr add "$RUNGW/$(echo "$RUNNET" | cut -d/ -f2)" dev "$RUNBR" 2>/dev/null || true
+    ip link set "$RUNBR" up
+    sysctl -qw "net.ipv6.conf.$RUNBR.disable_ipv6=1"
+    iptables -C FORWARD -i "$RUNBR" -j DROP 2>/dev/null || iptables -I FORWARD 1 -i "$RUNBR" -j DROP
+    iptables -C FORWARD -o "$RUNBR" -j DROP 2>/dev/null || iptables -I FORWARD 1 -o "$RUNBR" -j DROP
+    iptables -C INPUT -i "$RUNBR" -j DROP 2>/dev/null || iptables -I INPUT 1 -i "$RUNBR" -j DROP
+    iptables -C INPUT -i "$RUNBR" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
+      || iptables -I INPUT 1 -i "$RUNBR" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
   - systemctl daemon-reload
   # See worker-cloud-init.yml.j2's own comment on Restart=on-failure —

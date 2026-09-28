@@ -137,7 +137,8 @@ class MicroVM:
 
     def __init__(self, owner: str, pool: IpPool, bridge: str,
                  vcpu_count: int = 1, mem_size_mib: int = 256,
-                 scratch_mib: int = 1024, boot_timeout_s: int = 20):
+                 scratch_mib: int = 1024, boot_timeout_s: int = 20,
+                 extra_boot_args: str = ""):
         self.owner = owner
         self.pool = pool
         self.bridge = bridge
@@ -145,6 +146,7 @@ class MicroVM:
         self.mem_size_mib = mem_size_mib
         self.scratch_mib = scratch_mib
         self.boot_timeout_s = boot_timeout_s
+        self.extra_boot_args = extra_boot_args
 
         short = uuid.uuid4().hex[:12]
         self.session_id = f"{owner}-{short}"
@@ -257,7 +259,8 @@ class MicroVM:
         # root drive; init= hands PID 1 to the overlay step first.
         boot_args = (f"console=ttyS0 reboot=k panic=1 pci=off "
                      f"init=/sbin/overlay-init "
-                     f"ip={self.ip}::{self.pool.gateway}:{self.pool.netmask}::eth0:off:{self.pool.gateway}")
+                     f"ip={self.ip}::{self.pool.gateway}:{self.pool.netmask}::eth0:off:{self.pool.gateway}"
+                     + (f" {self.extra_boot_args}" if self.extra_boot_args else ""))
         self._api("PUT", "/boot-source", {
             "kernel_image_path": _IN_JAIL_KERNEL,
             "boot_args": boot_args,

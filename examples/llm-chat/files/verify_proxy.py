@@ -655,7 +655,7 @@ DEPLOYMENT_NAME = os.environ.get("DEPLOYMENT_NAME", "")
 # back to a sensible built-in default so this file also runs correctly
 # outside cloud-init (e.g. this module's own local tests).
 _SANDBOX_SYSTEM_MESSAGE_DEFAULT = (
-    "You are a lab coding assistant. Only discuss the Python code the "
+    "You are a lab coding assistant. Only discuss the code the "
     "student has provided in this conversation. If asked something "
     "unrelated to that code or to this lab exercise, politely decline "
     "and redirect the student back to their code. Only describe what "
@@ -663,26 +663,28 @@ _SANDBOX_SYSTEM_MESSAGE_DEFAULT = (
     "exists unless it is genuinely present in the code you just wrote "
     "or were shown; if you are not certain something is correct, say "
     "so explicitly rather than stating it as fact. When suggesting a "
-    "fix, provide the complete corrected script in a single fenced "
-    "python code block, and keep your own explanation concise -- this "
-    "hardware generates slowly, so prefer a short, precise answer over "
-    "a long one where both would be equally correct. Code you write "
-    "runs in a real sandbox that supports interactive input() calls -- "
-    "if a script you wrote is waiting for input, you will be shown "
-    "exactly what it has printed so far and asked what to provide; "
-    "reply with ONLY a fenced ```stdin block containing exactly the "
-    "one line to send. This can happen a few times per script, not "
-    "unlimited, so keep prompts short and avoid scripts that would "
-    "need a long back-and-forth. This code sandbox is Python-only, "
-    "one-shot, and has no network access. Separately, the page's own "
-    "Terminal panel gives a real persistent Linux shell with genuine "
-    "internet access (pip install, curl, cloning a repo) that is "
-    "otherwise fully isolated, plus ports __PREVIEW_PORTS_LIST__ "
-    "reachable from "
-    "the browser for previewing a web app run there -- if asked about "
-    "installing packages, running something long-lived, or viewing a "
-    "web app's own output, say to use the Terminal (whose own panel "
-    "lists the exact ports), not this code sandbox."
+    "fix, provide the complete corrected program in a single fenced "
+    "code block tagged with its language, and keep your own "
+    "explanation concise -- this hardware generates slowly, so prefer "
+    "a short, precise answer over a long one where both would be "
+    "equally correct. Code you write runs in a real sandbox that "
+    "supports interactive input (Python's input(), C's scanf, Bash's "
+    "read and the like) -- if a script you wrote is waiting for "
+    "input, you will be shown exactly what it has printed so far and "
+    "asked what to provide; reply with ONLY a fenced ```stdin block "
+    "containing exactly the one line to send. This can happen a few "
+    "times per script, not unlimited, so keep prompts short and avoid "
+    "scripts that would need a long back-and-forth. This code sandbox "
+    "runs Python, Bash, JavaScript (Node), C, C++ and Go, one-shot, "
+    "with no network access and only each language's standard "
+    "library. Separately, the page's own Terminal panel gives a real "
+    "persistent Linux shell with genuine internet access (pip "
+    "install, curl, cloning a repo) that is otherwise fully isolated, "
+    "plus ports __PREVIEW_PORTS_LIST__ reachable from the browser for "
+    "previewing a web app run there -- if asked about installing "
+    "packages, running something long-lived, or viewing a web app's "
+    "own output, say to use the Terminal (whose own panel lists the "
+    "exact ports), not this code sandbox."
 )
 _SANDBOX_SYSTEM_MESSAGE_PATH = os.environ.get(
     "SANDBOX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/sandbox-system-message.txt")
@@ -786,6 +788,11 @@ VENDOR_CONTENT_TYPES = {
     "codemirror-theme-dracula.min.css": "text/css",
     "codemirror-addon-matchbrackets.min.js": "text/javascript",
     "codemirror-mode-python.min.js": "text/javascript",
+    # Stage 12 -- editor modes for the other Run/Ask languages.
+    "codemirror-mode-javascript.min.js": "text/javascript",
+    "codemirror-mode-clike.min.js": "text/javascript",
+    "codemirror-mode-go.min.js": "text/javascript",
+    "codemirror-mode-shell.min.js": "text/javascript",
     # Stage 5B -- already vendored for the Dashboard's own admin Terminal
     # feature (ui/vendor/, ui/src/js/11-terminal.js) -- reused as-is
     # rather than fetching/pinning a second copy.
@@ -805,8 +812,32 @@ HEARTBEAT_INTERVAL_S = 20
 # blow up the response; still a wide enough window to see real output.
 MAX_OUTPUT_CHARS = 8000
 
-CODE_BLOCK_RE = re.compile(r"```(python|py)?[ \t]*\n(.*?)```", re.DOTALL)
+# Any fence tag, not just python/py (Stage 12) -- extract_code() decides
+# which tags name a runnable language; anything else (```stdin, ```text,
+# ```output) is skipped exactly as a non-python tag always was.
+CODE_BLOCK_RE = re.compile(r"```([A-Za-z0-9_+#.-]*)[ \t]*\n(.*?)```", re.DOTALL)
 _PY_HINTS = ("def ", "import ", "print(", "class ", "for ", "if __name__")
+
+# Stage 12 -- every language Run/Ask can execute. Python keeps its own
+# coordinator-side unshare runner (run_sandboxed*); every other language
+# runs in a fresh, network-less Firecracker microVM per Run
+# (run_in_microvm). `compile` runs first, with its own timeout, and a
+# non-zero exit there is reported as a compile failure, not a run.
+LANGUAGES = {
+    "python": {"label": "Python", "fence": "python", "aliases": ("python", "py", "python3")},
+    "bash": {"label": "Bash", "fence": "bash", "aliases": ("bash", "sh", "shell"),
+             "file": "main.sh", "compile": None, "run": "bash main.sh"},
+    "javascript": {"label": "JavaScript (Node)", "fence": "javascript",
+                   "aliases": ("javascript", "js", "node", "nodejs"),
+                   "file": "main.js", "compile": None, "run": "node main.js"},
+    "c": {"label": "C", "fence": "c", "aliases": ("c",),
+          "file": "main.c", "compile": "gcc -O0 -Wall -o main main.c -lm", "run": "./main"},
+    "cpp": {"label": "C++", "fence": "cpp", "aliases": ("cpp", "c++", "cxx", "cc"),
+            "file": "main.cpp", "compile": "g++ -O0 -Wall -std=c++17 -o main main.cpp", "run": "./main"},
+    "go": {"label": "Go", "fence": "go", "aliases": ("go", "golang"),
+           "file": "main.go", "compile": "go build -o main main.go", "run": "./main"},
+}
+_LANG_BY_ALIAS = {alias: key for key, spec in LANGUAGES.items() for alias in spec["aliases"]}
 
 # Stage 3 -- true interactive execution (run_sandboxed_interactive()).
 # No new stdin channel to the browser at all: the MODEL drives an
@@ -934,15 +965,22 @@ def _queue_position_locked(ip: str) -> int | None:
     return ips.index(ip) + 1 if ip in ips else None
 
 
-def extract_python_code(text: str) -> str | None:
-    """First fenced code block that's explicitly tagged python/py, or
-    (untagged fences only) looks like Python by a cheap keyword check.
-    Returns None if nothing worth running was found."""
-    for lang, code in CODE_BLOCK_RE.findall(text):
-        if lang in ("python", "py"):
-            return code
-        if not lang and any(h in code for h in _PY_HINTS):
-            return code
+def extract_code(text: str, default_language: str = "python") -> tuple[str, str] | None:
+    """(language, code) for the first fenced block tagged with a
+    supported language. An untagged block counts as `default_language`
+    -- the student's selected language -- except that for Python it
+    still has to look like Python (the original cheap keyword check),
+    so a stray untagged snippet of prose isn't executed. Returns None if
+    nothing worth running was found."""
+    for tag, code in CODE_BLOCK_RE.findall(text):
+        lang = _LANG_BY_ALIAS.get(tag.lower())
+        if lang:
+            return lang, code
+        if not tag:
+            if default_language != "python":
+                return default_language, code
+            if any(h in code for h in _PY_HINTS):
+                return "python", code
     return None
 
 
@@ -1297,14 +1335,380 @@ def run_sandboxed_interactive(code: str, provide_input, interrupt=None) -> dict:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# --- Stage 12: non-Python execution in a per-run Firecracker microVM ------
+#
+# Each Run/Ask verification in Bash, Node, C, C++ or Go boots its own
+# jailed microVM (microvm.py -- same launcher as the Terminal), on a
+# separate bridge with NO route anywhere: fcrun0 has no NAT and its
+# FORWARD/INPUT rules drop everything except return traffic for the
+# coordinator's own SSH into the guest (see coordinator cloud-init). So
+# model-generated code keeps the same network-less guarantee the Python
+# runner's unshare --net gives it.
+#
+# The coordinator is small and llama-server already holds most of its
+# RAM, so booting is gated twice: a FIFO queue capped at
+# RUN_VM_MAX_CONCURRENT (default 1), and a MemAvailable floor checked just
+# before boot -- an honest "under memory pressure" beats an OOM kill of
+# llama-server.
+RUN_BRIDGE = "fcrun0"
+RUN_SUBNET_CIDR = os.environ.get("RUN_SUBNET_CIDR", "10.201.0.0/24")
+RUN_VM_MAX_CONCURRENT = int(os.environ.get("RUN_VM_MAX_CONCURRENT", "1"))
+RUN_VM_MEM_MIB = int(os.environ.get("RUN_VM_MEM_MIB", "256"))
+# Go's compiler is the heaviest thing any of these languages does.
+RUN_VM_MEM_MIB_GO = int(os.environ.get("RUN_VM_MEM_MIB_GO", "512"))
+RUN_VM_MIN_HOST_MEM_MB = int(os.environ.get("RUN_VM_MIN_HOST_MEM_MB", "400"))
+RUN_COMPILE_TIMEOUT_S = int(os.environ.get("RUN_COMPILE_TIMEOUT_SECONDS", "60"))
+RUN_QUEUE_WAIT_S = int(os.environ.get("RUN_QUEUE_WAIT_SECONDS", "120"))
+RUN_BOOT_TIMEOUT_S = 20
+# Per-run VMs have no network at all, so the Terminal's boot-time apt
+# index refresh would only burn the single vCPU retrying for nothing.
+_RUN_VM_BOOT_ARGS = "systemd.mask=refresh-apt-index.service"
+_RUN_DIR = "/home/student/run"
+_RUN_PIDFILE = f"{_RUN_DIR}/.pid"
+_RUN_OUTPUT_HARD_CAP = MAX_OUTPUT_CHARS * 4
+
+
+class _RunQueue:
+    """FIFO admission for per-run microVMs. `position()` lets the browser
+    show "waiting for a free sandbox (position N)" while its own Run is
+    queued, keyed by a ticket the browser generated itself."""
+
+    def __init__(self, capacity: int):
+        self.capacity = max(1, capacity)
+        self.cond = threading.Condition()
+        self.waiting: list[str] = []
+        self.running: set[str] = set()
+
+    def acquire(self, ticket: str, timeout: float, interrupt=None) -> bool:
+        deadline = time.monotonic() + timeout
+        with self.cond:
+            self.waiting.append(ticket)
+            try:
+                while not (self.waiting[0] == ticket and len(self.running) < self.capacity):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or (interrupt is not None and interrupt.is_set()):
+                        return False
+                    self.cond.wait(min(remaining, 0.5))
+                self.running.add(ticket)
+                return True
+            finally:
+                self.waiting.remove(ticket)
+                self.cond.notify_all()
+
+    def release(self, ticket: str) -> None:
+        with self.cond:
+            self.running.discard(ticket)
+            self.cond.notify_all()
+
+    def position(self, ticket: str) -> dict:
+        with self.cond:
+            if ticket in self.running:
+                return {"state": "running"}
+            if ticket in self.waiting:
+                return {"state": "queued", "position": self.waiting.index(ticket) + 1}
+            return {"state": "unknown"}
+
+
+_run_queue = _RunQueue(RUN_VM_MAX_CONCURRENT)
+_run_pool = None
+_run_pool_lock = threading.Lock()
+
+
+def _get_run_pool():
+    """microvm.py (and paramiko under it) is imported lazily, on the first
+    non-Python run, so the Python-only path keeps working exactly as
+    before even where those aren't installed."""
+    global _run_pool
+    from microvm import IpPool
+    with _run_pool_lock:
+        if _run_pool is None:
+            _run_pool = IpPool(RUN_SUBNET_CIDR)
+        return _run_pool
+
+
+def _mem_available_mb() -> int:
+    with open("/proc/meminfo") as f:
+        for line in f:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    return 0
+
+
+def _empty_run_result(language: str) -> dict:
+    return {"transcript": "", "stdout": "", "stderr": "", "exit_code": None,
+            "timed_out": False, "interrupted": False, "exchanges": 0, "detections": [],
+            "phase": "run", "language": language, "timings": {}}
+
+
+def _ssh_exec(client, cmd: str, timeout: float) -> tuple[int, str, str, bool]:
+    """Runs `cmd` in the guest with stdin closed; returns (exit_code,
+    stdout, stderr, timed_out). Used for the compile step and the
+    stdin-wait probe; never for the student program itself."""
+    chan = client.get_transport().open_session()
+    chan.exec_command(cmd)
+    chan.shutdown_write()
+    out, err = [], []
+    deadline = time.monotonic() + timeout
+    while True:
+        while chan.recv_ready():
+            out.append(chan.recv(65536))
+        while chan.recv_stderr_ready():
+            err.append(chan.recv_stderr(65536))
+        if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
+            break
+        if time.monotonic() > deadline:
+            chan.close()
+            return (-1, b"".join(out).decode(errors="replace"),
+                    b"".join(err).decode(errors="replace"), True)
+        time.sleep(0.05)
+    rc = chan.recv_exit_status()
+    chan.close()
+    return rc, b"".join(out).decode(errors="replace"), b"".join(err).decode(errors="replace"), False
+
+
+def run_in_microvm(language: str, code: str, provide_input=None, interrupt=None,
+                   ticket: str | None = None) -> dict:
+    """Stage 12's counterpart to run_sandboxed()/run_sandboxed_interactive()
+    for every non-Python language: boot a fresh jailed microVM, copy the
+    source in, compile if the language needs it, run, tear the whole VM
+    down. Same result shape as run_sandboxed_interactive() (so the
+    formatters and fix loop don't care which ran it), plus `phase`
+    ("compile" or "run"), `language` and `timings`.
+
+    With `provide_input` None this is a plain Run: stdin is closed and
+    the wall-clock limit is VERIFY_TIMEOUT_S, same as run_sandboxed().
+    Otherwise it's interactive exactly like run_sandboxed_interactive():
+    the guest-side /usr/local/bin/stdin-wait-check (the same rules as
+    _stdin_wait_state()) decides when the program is waiting, falling
+    back to the INTERACTIVE_QUIET_S heuristic when it can't tell."""
+    from microvm import BootError, MicroVM
+
+    spec = LANGUAGES[language]
+    result = _empty_run_result(language)
+    ticket = ticket or uuid.uuid4().hex
+    t_queue = time.monotonic()
+    if not _run_queue.acquire(ticket, RUN_QUEUE_WAIT_S, interrupt):
+        result["interrupted"] = interrupt is not None and interrupt.is_set()
+        result["stderr"] = ("[Stopped while waiting for a free sandbox]" if result["interrupted"] else
+                            f"[Every sandbox stayed busy for {RUN_QUEUE_WAIT_S}s -- try again shortly]")
+        return result
+    result["timings"]["queued_s"] = round(time.monotonic() - t_queue, 2)
+
+    mem_mib = RUN_VM_MEM_MIB_GO if language == "go" else RUN_VM_MEM_MIB
+    vm = client = None
+    try:
+        avail = _mem_available_mb()
+        if avail < RUN_VM_MIN_HOST_MEM_MB + mem_mib:
+            result["stderr"] = (f"[Not started: the coordinator is under memory pressure "
+                                f"({avail}MB available, {RUN_VM_MIN_HOST_MEM_MB + mem_mib}MB needed). "
+                                f"Try again once the current answer finishes.]")
+            return result
+
+        vm = MicroVM("run", _get_run_pool(), RUN_BRIDGE, vcpu_count=1,
+                     mem_size_mib=mem_mib, scratch_mib=1024,
+                     boot_timeout_s=RUN_BOOT_TIMEOUT_S, extra_boot_args=_RUN_VM_BOOT_ARGS)
+        t0 = time.monotonic()
+        try:
+            vm.boot()
+            client = vm.ssh_client()
+        except (BootError, OSError) as e:
+            result["stderr"] = f"[Sandbox failed to start: {e}]"
+            return result
+        result["timings"]["boot_s"] = round(time.monotonic() - t0, 2)
+
+        client.exec_command(f"mkdir -p {_RUN_DIR}")[1].channel.recv_exit_status()
+        sftp = client.open_sftp()
+        with sftp.file(f"{_RUN_DIR}/{spec['file']}", "w") as f:
+            f.write(code)
+        sftp.close()
+
+        if spec["compile"]:
+            t0 = time.monotonic()
+            rc, out, err, timed_out = _ssh_exec(
+                client, f"cd {_RUN_DIR} && {spec['compile']}", RUN_COMPILE_TIMEOUT_S)
+            result["timings"]["compile_s"] = round(time.monotonic() - t0, 2)
+            if rc != 0:
+                result["phase"] = "compile"
+                result["exit_code"] = rc
+                result["timed_out"] = timed_out
+                text = (out + err).strip()
+                if timed_out:
+                    text += f"\n[Compilation killed: exceeded {RUN_COMPILE_TIMEOUT_S}s]"
+                result["stderr"] = text[:MAX_OUTPUT_CHARS]
+                result["transcript"] = result["stderr"]
+                return result
+
+        # ulimit -t: the same CPU-seconds cap run_sandboxed() applies with
+        # RLIMIT_CPU. -u keeps a fork bomb from making the guest too busy
+        # to answer our own SSH. The program runs as a CHILD of this shell,
+        # not exec'd over it: sshd reports a signal death as a signal,
+        # which paramiko surfaces only as exit status -1 (found live: a C
+        # segfault showed "exit code -1" and nothing else), so the shell
+        # names the signal itself. .pid holds the shell's PID;
+        # stdin-wait-check walks its descendants, so it still finds the
+        # program.
+        run_cmd = (
+            # Hard CPU limit 1s above the soft one: at the soft limit the
+            # kernel sends SIGXCPU (named below as a CPU-time overrun); with
+            # both equal, as plain `ulimit -t` sets them, it goes straight
+            # to an anonymous SIGKILL. Soft first: lowering the hard limit
+            # below a still-unlimited soft one fails with EINVAL.
+            # `|| exit 125`: if ANY limit fails to apply the program must not
+            # run at all (found locally: a failed ulimit chain followed by
+            # `;` ran the program with no CPU limit).
+            f"cd {_RUN_DIR} && ulimit -S -t {VERIFY_TIMEOUT_S} && ulimit -H -t {VERIFY_TIMEOUT_S + 1} && "
+            f"ulimit -u 128 -f 10240 && echo $$ > {_RUN_PIDFILE} || "
+            f"{{ echo '[sandbox limits could not be applied -- not run]' >&2; exit 125; }}; "
+            f"{spec['run']}; rc=$?; "
+            f"if [ $rc -gt 128 ]; then sig=$(kill -l $((rc-128))); "
+            f"msg=\"[program killed by signal SIG$sig\"; "
+            f"[ \"$sig\" = XCPU ] && msg=\"$msg: exceeded the {VERIFY_TIMEOUT_S}s CPU-time limit\"; "
+            f"echo \"$msg]\" >&2; fi; exit $rc")
+        chan = client.get_transport().open_session()
+        chan.exec_command(run_cmd)
+        if provide_input is None:
+            chan.shutdown_write()
+
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        transcript: list[str] = []
+        total = 0
+        t0 = time.monotonic()
+        last_output_at = t0
+        last_probe = 0.0
+        wall_limit = (VERIFY_TIMEOUT_S + 5) if provide_input is None else INTERACTIVE_MAX_WALL_S
+
+        while True:
+            if interrupt is not None and interrupt.is_set():
+                result["interrupted"] = True
+                break
+            if time.monotonic() - t0 > wall_limit:
+                result["timed_out"] = True
+                break
+            got = False
+            while chan.recv_ready():
+                text = chan.recv(65536).decode(errors="replace")
+                stdout_parts.append(text); transcript.append(text); total += len(text); got = True
+            while chan.recv_stderr_ready():
+                text = chan.recv_stderr(65536).decode(errors="replace")
+                stderr_parts.append(text); transcript.append(text); total += len(text); got = True
+            if total > _RUN_OUTPUT_HARD_CAP:
+                transcript.append("\n[Output limit reached -- program stopped]\n")
+                break
+            if got:
+                last_output_at = time.monotonic()
+                continue
+            if chan.exit_status_ready():
+                break
+            if provide_input is not None and time.monotonic() - last_probe >= 0.5:
+                last_probe = time.monotonic()
+                _, probe, _, _ = _ssh_exec(
+                    client, f"sudo -n /usr/local/bin/stdin-wait-check {_RUN_PIDFILE}", 5)
+                state = probe.strip()
+                if state == "waiting":
+                    detection = "exact"
+                elif state == "unknown" and time.monotonic() - last_output_at >= INTERACTIVE_QUIET_S:
+                    detection = "heuristic"
+                else:
+                    detection = None
+                if detection is not None:
+                    if result["exchanges"] >= INTERACTIVE_MAX_EXCHANGES:
+                        result["timed_out"] = True
+                        break
+                    value = provide_input("".join(transcript))
+                    if value is None:
+                        break
+                    result["exchanges"] += 1
+                    result["detections"].append(detection)
+                    transcript.append(f"\n>>> INPUT PROVIDED ({detection}): {value!r}\n")
+                    try:
+                        chan.sendall((value + "\n").encode())
+                    except OSError:
+                        break
+                    last_output_at = time.monotonic()
+                continue
+            time.sleep(0.05)
+
+        result["timings"]["run_s"] = round(time.monotonic() - t0, 2)
+        if chan.exit_status_ready():
+            # Final drain: a last chunk can arrive together with the exit.
+            while chan.recv_ready():
+                text = chan.recv(65536).decode(errors="replace")
+                stdout_parts.append(text); transcript.append(text)
+            while chan.recv_stderr_ready():
+                text = chan.recv_stderr(65536).decode(errors="replace")
+                stderr_parts.append(text); transcript.append(text)
+            # -1: killed by a signal (ulimit -t sends SIGXCPU/SIGKILL).
+            result["exit_code"] = chan.recv_exit_status()
+        if result["interrupted"]:
+            transcript.append("\n[Stopped at your request]\n")
+        elif result["timed_out"]:
+            msg = (f"\n[Execution killed: exceeded {VERIFY_TIMEOUT_S}s]\n" if provide_input is None else
+                   f"\n[Interactive session ended: exceeded its {INTERACTIVE_MAX_EXCHANGES}-exchange / "
+                   f"{INTERACTIVE_MAX_WALL_S}s budget]\n")
+            transcript.append(msg)
+            stderr_parts.append(msg)
+        result["stdout"] = "".join(stdout_parts)[:MAX_OUTPUT_CHARS]
+        result["stderr"] = "".join(stderr_parts)[:MAX_OUTPUT_CHARS]
+        result["transcript"] = "".join(transcript)[:MAX_OUTPUT_CHARS]
+        return result
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        if vm is not None:
+            vm.teardown()
+        _run_queue.release(ticket)
+
+
+def execute(language: str, code: str, provide_input=None, interrupt=None,
+            ticket: str | None = None) -> dict:
+    """The one entry point Run/Ask use: Python on the coordinator's own
+    unshare runner (unchanged), everything else in a per-run microVM."""
+    if language == "python":
+        if provide_input is None:
+            r = run_sandboxed(code)
+            r.setdefault("transcript", (r["stdout"] + r["stderr"]))
+        else:
+            r = run_sandboxed_interactive(code, provide_input, interrupt=interrupt)
+        r.setdefault("phase", "run")
+        r["language"] = "python"
+        return r
+    return run_in_microvm(language, code, provide_input, interrupt, ticket)
+
+
+def _lang_suffix(result: dict) -> str:
+    lang = result.get("language")
+    return f" as {LANGUAGES[lang]['label']}" if lang and lang != "python" else ""
+
+
+def _compile_failure_block(result: dict, final: bool) -> str | None:
+    """Stage 12: a compile failure is its own, first-class result -- the
+    program never ran, so there is no stdout/exit code of a run to show,
+    only the compiler's own verbatim output."""
+    if result.get("phase") != "compile":
+        return None
+    lines = [f"\n\n---\n### ACTUALLY COMPILED{_lang_suffix(result)} -- compilation failed (not model output)\n",
+             "**compiler output:**\n```\n" + (result["stderr"].rstrip() or "(none)") + "\n```\n",
+             f"**compiler exit code:** {result['exit_code']}\n"]
+    if final:
+        lines.append("\n_This code did not compile. You can ask for another attempt in your next message._\n")
+    return "".join(lines)
+
+
 def format_verification_block(result: dict, final: bool = True) -> str:
     """`final` controls only the trailing "ask again" invite -- an
     intermediate round in the Phase 2 fix loop is followed automatically
     by another attempt, so inviting the student to ask again there
     would be misleading; only the actual last block in a chain passes
     final=True."""
+    compile_block = _compile_failure_block(result, final)
+    if compile_block:
+        return compile_block
     passed = (not result["timed_out"]) and result["exit_code"] == 0
-    lines = ["\n\n---\n### ACTUALLY EXECUTED (not model output)\n"]
+    lines = [f"\n\n---\n### ACTUALLY EXECUTED{_lang_suffix(result)} (not model output)\n"]
     if result["stdout"].strip():
         lines.append("**stdout:**\n```\n" + result["stdout"].rstrip() + "\n```\n")
     if result["stderr"].strip():
@@ -1324,8 +1728,11 @@ def format_interactive_verification_block(result: dict, final: bool = True) -> s
     order they actually happened) instead of two separate buffers,
     since order is exactly what makes an interactive session honest
     and readable rather than confusing."""
+    compile_block = _compile_failure_block(result, final)
+    if compile_block:
+        return compile_block
     passed = (not result["timed_out"]) and result["exit_code"] == 0
-    lines = ["\n\n---\n### ACTUALLY EXECUTED, interactively (not model output)\n"]
+    lines = [f"\n\n---\n### ACTUALLY EXECUTED, interactively{_lang_suffix(result)} (not model output)\n"]
     if result["transcript"].strip():
         lines.append("**session transcript:**\n```\n" + result["transcript"].rstrip() + "\n```\n")
     lines.append(f"**exit code:** {result['exit_code']}, **inputs provided:** {result['exchanges']}\n")
@@ -1436,7 +1843,7 @@ def _make_input_provider(messages: list, heartbeat, max_tokens, interrupt=None):
     each call asks the model, grounded in the REAL transcript so far
     (not a summary), what to supply -- via the same small ```stdin
     fenced-block convention extract_stdin_value() parses, the
-    interactive counterpart to extract_python_code(). Returns None
+    interactive counterpart to extract_code(). Returns None
     (stop the session) if the model's reply doesn't contain one -- the
     model choosing not to continue, same shape the fix loop already
     uses for "no runnable code block found" -- and also if `interrupt`
@@ -1466,7 +1873,8 @@ def _make_input_provider(messages: list, heartbeat, max_tokens, interrupt=None):
 
 
 def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
-                          max_tokens: int | None = None, interrupt=None) -> tuple[str, dict]:
+                          max_tokens: int | None = None, interrupt=None,
+                          language: str = "python") -> tuple[str, dict]:
     """Runs the initial sandboxed execution and, if it fails, up to
     VERIFY_MAX_FIX_ROUNDS grounded fix attempts (Phase 2) -- each one
     grounded in the REAL traceback from the attempt before it, not
@@ -1498,11 +1906,13 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
     a student's own POST /sandbox/interrupt stops this at its next
     real check point rather than only between whole turns."""
     messages = list(original_messages)
-    messages.append({"role": "assistant", "content": f"```python\n{code}\n```"})
+    messages.append({"role": "assistant",
+                     "content": f"```{LANGUAGES[language]['fence']}\n{code}\n```"})
 
-    result = run_sandboxed_interactive(
-        code, _make_input_provider(messages, heartbeat, max_tokens, interrupt), interrupt=interrupt)
+    result = execute(language, code, _make_input_provider(messages, heartbeat, max_tokens, interrupt),
+                     interrupt=interrupt)
     capture = {
+        "language": language,
         "generated_code": code,
         "exec_stdout": result["stdout"], "exec_stderr": result["stderr"],
         "exec_exit_code": result["exit_code"],
@@ -1519,11 +1929,14 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
             break
 
         is_last_round = round_num == VERIFY_MAX_FIX_ROUNDS
+        what = ("failed to compile with the following real compiler output"
+                if result.get("phase") == "compile" else
+                "was executed and failed with the following real output")
         fix_prompt = (
-            "This code was executed and failed with the following real "
-            f"output:\n\n```\n{(result['stderr'] or result['transcript'] or result['stdout']).strip()}\n```\n\n"
+            f"This code {what}:\n\n```\n{(result['stderr'] or result['transcript'] or result['stdout']).strip()}\n```\n\n"
             "Explain exactly what is wrong, quoting the failing line, then "
-            "provide a corrected version of the complete script."
+            f"provide a corrected version of the complete program in a single "
+            f"fenced ```{LANGUAGES[language]['fence']} block."
         )
         messages.append({"role": "user", "content": fix_prompt})
 
@@ -1541,7 +1954,8 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
         blocks.append(f"\n\n---\n### Fix attempt {round_num} of {VERIFY_MAX_FIX_ROUNDS}\n\n{fix_text}")
         capture["fix_explanation"] = fix_text
 
-        new_code = extract_python_code(fix_text)
+        extracted = extract_code(fix_text, language)
+        new_code = extracted[1] if extracted else None
         if not new_code:
             blocks.append(
                 "\n\n_No runnable code block found in this fix attempt._\n"
@@ -1550,8 +1964,9 @@ def verify_and_maybe_fix(original_messages: list, code: str, heartbeat=None,
             )
             break
 
-        result = run_sandboxed_interactive(
-            new_code, _make_input_provider(messages, heartbeat, max_tokens, interrupt), interrupt=interrupt)
+        language = extracted[0]
+        result = execute(language, new_code, _make_input_provider(messages, heartbeat, max_tokens, interrupt),
+                         interrupt=interrupt)
         passed = not result["timed_out"] and result["exit_code"] == 0
         blocks.append(format_interactive_verification_block(result, final=(passed or is_last_round)))
         code = new_code
@@ -1735,6 +2150,10 @@ SANDBOX_PAGE_HTML = """<!doctype html>
 <link rel="stylesheet" href="/vendor/xterm.min.css">
 <script src="/vendor/codemirror.min.js"></script>
 <script src="/vendor/codemirror-mode-python.min.js"></script>
+<script src="/vendor/codemirror-mode-javascript.min.js"></script>
+<script src="/vendor/codemirror-mode-clike.min.js"></script>
+<script src="/vendor/codemirror-mode-go.min.js"></script>
+<script src="/vendor/codemirror-mode-shell.min.js"></script>
 <script src="/vendor/codemirror-addon-matchbrackets.min.js"></script>
 <script src="/vendor/xterm.min.js"></script>
 <script src="/vendor/xterm-addon-fit.min.js"></script>
@@ -1790,12 +2209,20 @@ footer a { color: #2a5db0; }
 </style></head>
 <body>
 <h1>Sandbox</h1>
-<p class="sub">Write real Python, run it for real, and ask the model about it -- every response you get back is grounded in an actual execution, not just the model's own word for it.</p>
+<p class="sub">Write real code (Python, Bash, JavaScript, C, C++ or Go), run it for real, and ask the model about it -- every response you get back is grounded in an actual execution, not just the model's own word for it.</p>
 
 <div class="panel">
   <h2>Your code</h2>
   <div id="codeHost"></div>
   <div class="row">
+    <select id="langSel" onchange="setLanguage(this.value)" title="Language used by Run and by Ask the model">
+      <option value="python">Python</option>
+      <option value="bash">Bash</option>
+      <option value="javascript">JavaScript (Node)</option>
+      <option value="c">C</option>
+      <option value="cpp">C++</option>
+      <option value="go">Go</option>
+    </select>
     <button id="runBtn" class="primary" onclick="runCode()">Run</button>
     <button onclick="clearAll()">Clear session</button>
     <button id="sendToTermBtn" onclick="sendCodeToTerminal()" disabled title="Start a terminal below first">Send to Terminal</button>
@@ -1866,6 +2293,26 @@ const cm = CodeMirror(document.getElementById('codeHost'), {
   indentUnit: 4, tabSize: 4, viewportMargin: Infinity,
 });
 cm.on('change', saveCode);
+
+// Stage 12 -- the selected language drives the editor's highlighting,
+// what Run executes, and what Ask tells the model to write. Remembered
+// per browser only; a blocked localStorage just means Python each time.
+const LANG_KEY = 'sandboxLang';
+const LANG_MODES = {python: 'python', bash: 'shell', javascript: 'javascript',
+                    c: 'text/x-csrc', cpp: 'text/x-c++src', go: 'go'};
+function currentLang() { return document.getElementById('langSel').value; }
+function setLanguage(lang) {
+  if (!LANG_MODES[lang]) lang = 'python';
+  document.getElementById('langSel').value = lang;
+  cm.setOption('mode', LANG_MODES[lang]);
+  cm.setOption('indentUnit', lang === 'go' ? 8 : 4);
+  try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+}
+(function () {
+  let saved = null;
+  try { saved = localStorage.getItem(LANG_KEY); } catch (e) {}
+  setLanguage(saved || 'python');
+})();
 
 function saveCode() { localStorage.setItem(CODE_KEY, cm.getValue()); }
 
@@ -2181,7 +2628,7 @@ const codeAsk = makeAskPanel({
   transcriptId: 'transcript', questionId: 'question', askBtnId: 'askBtn',
   stopBtnId: 'stopBtn', regenBtnId: 'regenBtn', statusId: 'askStatus',
   codeBlockLabel: 'Use this code',
-  buildBody: () => ({code: cm.getValue()}),
+  buildBody: () => ({code: cm.getValue(), language: currentLang()}),
   onCodeBlock: (part) => {
     cm.setValue(part);
     const rs = document.getElementById('runStatus');
@@ -2236,12 +2683,26 @@ async function runCode() {
   const out = document.getElementById('runResult');
   if (!cm.getValue().trim()) return;
   btn.disabled = true;
-  status.textContent = 'Running...';
+  const lang = currentLang();
+  status.textContent = lang === 'python' ? 'Running...' : 'Starting a fresh sandbox...';
   out.innerHTML = '';
+  // Non-Python Runs boot their own microVM and may queue behind someone
+  // else's -- poll our own ticket's position while the request blocks.
+  const ticket = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+  let poll = null;
+  if (lang !== 'python') {
+    poll = setInterval(async () => {
+      try {
+        const s = await (await fetch('/sandbox/run-status?ticket=' + encodeURIComponent(ticket))).json();
+        if (s.state === 'queued') status.textContent = `Waiting for a free sandbox (position ${s.position})...`;
+        else if (s.state === 'running') status.textContent = 'Booting a sandbox and running...';
+      } catch (e) {}
+    }, 1000);
+  }
   try {
     const resp = await fetch('/sandbox/run', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code: cm.getValue()}),
+      body: JSON.stringify({code: cm.getValue(), language: lang, ticket}),
     });
     if (resp.status === 429) {
       // Rate-limit/concurrency responses are plain text, not JSON --
@@ -2256,6 +2717,13 @@ async function runCode() {
     const passed = !data.timed_out && data.exit_code === 0;
     status.textContent = '';
     const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+    if (data.phase === 'compile') {
+      out.innerHTML = `<div class="result fail">
+        <h4>compiler output</h4><pre>${esc(data.stderr || '(none)')}</pre>
+        <p class="exitline">compilation failed (exit code ${data.exit_code}${data.timed_out ? ', timed out' : ''}) -- the program did not run</p>
+      </div>`;
+      return;
+    }
     out.innerHTML = `<div class="result ${passed ? 'pass' : 'fail'}">
       ${data.stdout.trim() ? `<h4>stdout</h4><pre>${esc(data.stdout)}</pre>` : ''}
       ${data.stderr.trim() ? `<h4>stderr</h4><pre>${esc(data.stderr)}</pre>` : ''}
@@ -2264,6 +2732,7 @@ async function runCode() {
   } catch (e) {
     status.textContent = 'Request failed: ' + e.message;
   } finally {
+    if (poll) clearInterval(poll);
     btn.disabled = false;
   }
 }
@@ -2648,6 +3117,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._serve_llm_stats()
         elif path == "/sandbox/ask-status":
             self._handle_ask_status()
+        elif path == "/sandbox/run-status":
+            self._handle_run_status()
         elif path.startswith("/vendor/"):
             self._serve_vendor_file(path[len("/vendor/"):])
         else:
@@ -2839,8 +3310,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_sandbox_run(self):
         """Plain Run -- executes the student's own current buffer as-is,
-        synchronously, through the exact same run_sandboxed() Phases 1-2
-        already proved live. Bounded to a few seconds by
+        synchronously: Python through the exact same run_sandboxed()
+        Phases 1-2 already proved live, any other language in a per-run
+        microVM (Stage 12). Bounded to a few seconds by
         VERIFY_TIMEOUT_SECONDS, so a plain JSON response is enough; no
         SSE/streaming needed for this action. Not captured -- this is
         the student's own code, not a model claim, so there's nothing
@@ -2854,6 +3326,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         req_json = self._read_json_body()
         code = req_json.get("code") or ""
+        language = req_json.get("language") or "python"
+        # The browser's own ticket, so it can poll /sandbox/run-status for
+        # its queue position while this request blocks (Stage 12).
+        ticket = str(req_json.get("ticket") or "")[:64] or None
+        if language not in LANGUAGES:
+            out = json.dumps({"error": f"unsupported language: {language}"}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
         if not code.strip():
             out = json.dumps({"error": "code is required"}).encode()
             self.send_response(400)
@@ -2863,10 +3347,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(out)
             return
 
-        result = run_sandboxed(code)
+        result = execute(language, code, ticket=ticket)
         out = json.dumps(result).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def _handle_run_status(self):
+        """GET /sandbox/run-status?ticket=<id> -- where the caller's own
+        in-flight non-Python Run is in the per-run microVM queue. Instant,
+        no side effects; polled by the Run button while it waits."""
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        ticket = (query.get("ticket") or [""])[0][:64]
+        out = json.dumps(_run_queue.position(ticket) if ticket else {"state": "unknown"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
@@ -3000,6 +3498,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         question = (req_json.get("question") or "").strip()
         history = req_json.get("history") or []
         max_tokens = req_json.get("max_tokens")
+        # Stage 12: the student's selected editor language. Anything
+        # unrecognised falls back to Python, the original behaviour.
+        language = req_json.get("language") if include_code else None
+        if language not in LANGUAGES:
+            language = "python"
+        if include_code:
+            spec = LANGUAGES[language]
+            system_message = (
+                f"{system_message}\n\nThe student's selected language is {spec['label']}. "
+                f"Write any code in {spec['label']} unless they explicitly ask for another "
+                f"language, as one complete program in a fenced ```{spec['fence']} block"
+                + (" with a main function" if language in ("c", "cpp") else "")
+                + (" in package main" if language == "go" else "")
+                + (" for Node.js, with no browser-only APIs" if language == "javascript" else "")
+                + ".")
 
         if not question:
             self.send_response(400)
@@ -3008,7 +3521,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"question is required")
             return
 
-        user_turn = (f"Here is my current code:\n```python\n{code}\n```\n\n{question}"
+        user_turn = (f"Here is my current code:\n```{LANGUAGES[language]['fence']}\n{code}\n```\n\n{question}"
                      if code else question)
         # Grounding stays strictly additive to the model's own input
         # (question_chars/history below stay based on the clean
@@ -3064,7 +3577,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._relay_and_verify_stream(resp, messages, max_tokens, capture_source=capture_source,
                                        interrupt=interrupt_event, verify=verify, conn=conn,
                                        endpoint_label=endpoint_label, question_chars=len(user_turn),
-                                       started_at=ask_started_at, question=question,
+                                       started_at=ask_started_at, question=question, language=language,
                                        search_terms=search_terms, references=references,
                                        grounding_source=grounding_source,
                                        question_truncated_for_search=question_truncated_for_search)
@@ -3312,7 +3825,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                   question_chars: int = 0, started_at=None, question: str = "",
                                   search_terms: str = "", references: list | None = None,
                                   grounding_source: str = "none",
-                                  question_truncated_for_search: bool = False):
+                                  question_truncated_for_search: bool = False,
+                                  language: str | None = None):
         self.send_response(resp.status)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -3476,10 +3990,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # and therefore no capture_example() call either -- that
             # corpus hard-requires real code/exec grounding data this
             # panel deliberately never produces.
-            code = extract_python_code(full_text) if ENABLE_VERIFICATION else None
-            if code:
+            extracted = extract_code(full_text, language or "python") if ENABLE_VERIFICATION else None
+            if extracted:
+                code_lang, code = extracted
                 extra, capture = verify_and_maybe_fix(request_messages, code, heartbeat=self._sse_heartbeat,
-                                                        max_tokens=request_max_tokens, interrupt=interrupt)
+                                                        max_tokens=request_max_tokens, interrupt=interrupt,
+                                                        language=code_lang)
                 self._write_sse_delta(extra, last_chunk_meta)
                 capture_example(request_messages, capture, source=capture_source)
 
@@ -3629,7 +4145,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             passed_badge = '<span class="pass">PASSED</span>' if it.get("passed") else '<span class="fail">FAILED</span>'
             parts = [
                 f'<div class="card">',
-                f'<div class="meta">{esc(it.get("model_filename",""))} &middot; {esc(it.get("created_at",""))} &middot; {passed_badge}</div>',
+                f'<div class="meta">{esc(LANGUAGES.get(it.get("language") or "python", {}).get("label", it.get("language") or "python"))} &middot; '
+                f'{esc(it.get("model_filename",""))} &middot; {esc(it.get("created_at",""))} &middot; {passed_badge}</div>',
                 _block("Prompt", it.get("prompt", "")),
                 _block("Generated code", it.get("generated_code", "")),
                 _block("Actually executed -- stdout", it.get("exec_stdout", "")),
@@ -3679,6 +4196,18 @@ def main():
     # Fire-and-forget -- a slow/unreachable CloudCore API must never
     # delay this service actually binding and serving real traffic.
     threading.Thread(target=register_llm_deployment, daemon=True).start()
+    # Stage 12: per-run microVMs live outside this service's cgroup
+    # (jailer moves them), so a restart mid-Run leaves them running.
+    # Nothing of ours can be live yet, so everything tagged "run" is an
+    # orphan. Skipped where microvm.py's dependencies aren't installed --
+    # the Python-only path never needs them.
+    try:
+        from microvm import sweep_orphans
+        swept = sweep_orphans("run")
+        if swept:
+            print(f"verify-proxy: removed {swept} per-run microVM(s) orphaned by a previous run", flush=True)
+    except ImportError:
+        pass
     server = http.server.ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)
     server.serve_forever()
 

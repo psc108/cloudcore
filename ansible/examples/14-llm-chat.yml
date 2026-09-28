@@ -417,26 +417,23 @@
     # had zero knowledge of at all — see examples/llm-chat/variables.tf's
     # own matching variable comment for the fuller reasoning.
     sandbox_system_message: >-
-      You are a lab coding assistant. Only discuss the Python code the
-      student has provided in this conversation. If asked something
+      You are a lab coding assistant. Only discuss the code the student has provided in this conversation. If asked something
       unrelated to that code or to this lab exercise, politely decline
       and redirect the student back to their code. Only describe what
       code actually does -- never claim a function, sort, or check
       exists unless it is genuinely present in the code you just wrote
       or were shown; if you are not certain something is correct, say
       so explicitly rather than stating it as fact. When suggesting a
-      fix, provide the complete corrected script in a single fenced
-      python code block, and keep your own explanation concise -- this
+      fix, provide the complete corrected program in a single fenced code block tagged with its language, and keep your own explanation concise -- this
       hardware generates slowly, so prefer a short, precise answer over
       a long one where both would be equally correct. Code you write
-      runs in a real sandbox that supports interactive input() calls --
+      runs in a real sandbox that supports interactive input (Python's input(), C's scanf, Bash's read and the like) --
       if a script you wrote is waiting for input, you will be shown
       exactly what it has printed so far and asked what to provide;
       reply with ONLY a fenced ```stdin block containing exactly the
       one line to send. This can happen a few times per script, not
       unlimited, so keep prompts short and avoid scripts that would
-      need a long back-and-forth. This code sandbox is Python-only,
-      one-shot, and has no network access. Separately, the page's own
+      need a long back-and-forth. This code sandbox runs Python, Bash, JavaScript (Node), C, C++ and Go, one-shot, with no network access and only each language's standard library. Separately, the page's own
       Terminal panel gives a real persistent Linux shell with genuine
       internet access (pip install, curl, cloning a repo) that is
       otherwise fully isolated, plus ports __PREVIEW_PORTS_LIST__
@@ -526,7 +523,7 @@
     # Rebuilt by api/build-firecracker-rootfs.sh — update these two by
     # hand whenever that script is re-run.
     firecracker_rootfs_name: firecracker-rootfs-jammy.ext4.gz
-    firecracker_rootfs_sha256: 93d4bd9d827e80bead449a254ea1766c7c8d000cdaa0f5bea44264a3cdc7bd04
+    firecracker_rootfs_sha256: 4396aea09703ba497cc88e4e3ea863c5e6f915353ac8acf019c2ecf9ee7e043c
     # Deliberately outside both the platform's own real bridge range
     # (192.168.x.0/24) and this example's own fictional declared VPC CIDR
     # (10.91.0.0/16 default) — no overlap with either.
@@ -551,6 +548,15 @@
     # dead shell still counts as activity. See
     # examples/llm-chat/variables.tf's own matching variable comment.
     terminal_unresponsive_seconds: 30
+    # Stage 12 -- per-run microVMs for non-Python Run/Ask; see
+    # examples/llm-chat/variables.tf for what each one does.
+    run_subnet_cidr: "10.201.0.0/24"
+    run_vm_max_concurrent: 1
+    run_vm_mem_mib: 256
+    run_vm_mem_mib_go: 512
+    run_vm_min_host_mem_mb: 400
+    run_compile_timeout_seconds: 60
+    run_queue_wait_seconds: 120
 
     # Fixed pool of high ports reverse-proxied into whichever microVM a
     # student's own terminal session is currently using — see
@@ -825,6 +831,10 @@
         codemirror_theme_css: "{{ lookup('file', '../../ui/vendor/codemirror-theme-dracula.min.css') }}"
         codemirror_matchbrackets_js: "{{ lookup('file', '../../ui/vendor/codemirror-addon-matchbrackets.min.js') }}"
         codemirror_python_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-python.min.js') }}"
+        codemirror_js_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-javascript.min.js') }}"
+        codemirror_clike_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-clike.min.js') }}"
+        codemirror_go_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-go.min.js') }}"
+        codemirror_shell_mode_js: "{{ lookup('file', '../../ui/vendor/codemirror-mode-shell.min.js') }}"
 
     - name: Load xterm.js assets (Stage 5B — sandbox terminal)
       # Already vendored for the Dashboard's own admin Terminal feature
@@ -877,6 +887,13 @@
           'terminal_max_concurrent_sessions': terminal_max_concurrent_sessions,
           'terminal_boot_timeout_seconds': terminal_boot_timeout_seconds,
           'terminal_unresponsive_seconds': terminal_unresponsive_seconds,
+          'run_subnet_cidr': run_subnet_cidr,
+          'run_vm_max_concurrent': run_vm_max_concurrent,
+          'run_vm_mem_mib': run_vm_mem_mib,
+          'run_vm_mem_mib_go': run_vm_mem_mib_go,
+          'run_vm_min_host_mem_mb': run_vm_min_host_mem_mb,
+          'run_compile_timeout_seconds': run_compile_timeout_seconds,
+          'run_queue_wait_seconds': run_queue_wait_seconds,
           'preview_ports': preview_ports | map('string') | join(','),
           'websockets_wheel_name': websockets_wheel_name,
           'websockets_wheel_sha256': websockets_wheel_sha256,
@@ -885,6 +902,10 @@
           'codemirror_theme_css': codemirror_theme_css,
           'codemirror_matchbrackets_js': codemirror_matchbrackets_js,
           'codemirror_python_mode_js': codemirror_python_mode_js,
+          'codemirror_js_mode_js': codemirror_js_mode_js,
+          'codemirror_clike_mode_js': codemirror_clike_mode_js,
+          'codemirror_go_mode_js': codemirror_go_mode_js,
+          'codemirror_shell_mode_js': codemirror_shell_mode_js,
           'xterm_core_js': xterm_core_js,
           'xterm_core_css': xterm_core_css,
           'xterm_fit_addon_js': xterm_fit_addon_js }) }}"

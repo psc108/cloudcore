@@ -98,11 +98,12 @@ done
 echo "=== Building the golden rootfs on the throwaway instance ==="
 # Kept deliberately minimal: sshd + a login shell + coreutils + curl/wget
 # (the student's own network access is the whole point of this feature) +
-# a handful of everyday CLI tools. No compiler toolchain, no package
-# manager reachability assumed at runtime (there is no apt mirror inside
-# the sandbox subnet) — anything a student wants beyond this base they
-# fetch themselves, over their own real internet access, same as any
-# ordinary machine.
+# a handful of everyday CLI tools, plus (Stage 12) the Node, C/C++ and Go
+# toolchains the per-run microVMs compile and run model-generated code
+# with. No package manager reachability assumed at runtime (there is no
+# apt mirror inside the sandbox subnet) — anything a student wants beyond
+# this base they fetch themselves, over their own real internet access,
+# same as any ordinary machine.
 ssh "${SSH_OPTS[@]}" "ubuntu@$INSTANCE_IP" "
   set -e
   sudo DEBIAN_FRONTEND=noninteractive apt-get update
@@ -176,6 +177,122 @@ apt-get install -y --no-install-recommends \
 # gains nothing an ordinary account inside the same guest did not
 # already have. Never gets them anywhere the guest itself cannot go.
 apt-get install -y --no-install-recommends sudo bash-completion
+
+# Stage 12 (llm-chat-sandbox-extensions-Phased-Implementation.md): the
+# toolchains verify_proxy.py's per-run microVMs use for Bash, Node, C/C++
+# and Go. nodejs is in jammy's universe component, so universe is enabled
+# for this install only and removed again afterwards: the Terminal's own
+# runtime package index stays main-only, which is exactly what the Linux
+# Help system prompt tells the model.
+cp /etc/apt/sources.list /etc/apt/sources.list.main-only
+sed -i \"s/ main\$/ main universe/\" /etc/apt/sources.list
+apt-get update
+apt-get install -y --no-install-recommends nodejs gcc g++ libc6-dev golang-go
+mv /etc/apt/sources.list.main-only /etc/apt/sources.list
+
+# Stage 11/12: the guest-side counterpart of verify_proxy.py's own
+# _stdin_wait_state(). Run as root (via sudo) over SSH by the per-run
+# executor with the path of a file holding the program's root PID;
+# prints waiting / busy / unknown / gone. Same rules as the host-side
+# version: a task blocked in read(0) on the program's own stdin means
+# waiting (unless bytes we already sent are still unread), a running or
+# timer-sleeping task means busy, anything else is unknown. x86_64
+# syscall numbers. Written with no dollar signs, double quotes or
+# backslashes so it survives this script's nested quoting untouched.
+cat > /usr/local/bin/stdin-wait-check <<\"EOS\"
+#!/usr/bin/python3
+import array, fcntl, os, sys, termios
+
+READ, POLL, SELECT, NANOSLEEP, CLOCK_NANOSLEEP, PSELECT6, PPOLL = 0, 7, 23, 35, 230, 270, 271
+
+
+def descendants(root):
+    children = {}
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        try:
+            stat = open('/proc/' + entry + '/stat').read()
+        except OSError:
+            continue
+        ppid = int(stat[stat.rfind(')') + 2:].split()[1])
+        children.setdefault(ppid, []).append(int(entry))
+    found, stack = [], [root]
+    while stack:
+        pid = stack.pop()
+        found.append(pid)
+        stack.extend(children.get(pid, []))
+    return found
+
+
+def unread(pid):
+    try:
+        fd = os.open('/proc/' + str(pid) + '/fd/0', os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return 0
+    try:
+        buf = array.array('i', [0])
+        fcntl.ioctl(fd, termios.FIONREAD, buf, True)
+        return buf[0]
+    except OSError:
+        return 0
+    finally:
+        os.close(fd)
+
+
+def state(root):
+    try:
+        target = os.readlink('/proc/' + str(root) + '/fd/0')
+    except OSError:
+        return 'gone'
+    busy = False
+    for pid in descendants(root):
+        try:
+            tids = os.listdir('/proc/' + str(pid) + '/task')
+        except OSError:
+            continue
+        for tid in tids:
+            base = '/proc/' + str(pid) + '/task/' + tid
+            try:
+                stat = open(base + '/stat').read()
+                sc = open(base + '/syscall').read().split()
+            except OSError:
+                continue
+            st = stat[stat.rfind(')') + 2:].split()[0]
+            if st == 'R' or not sc or sc[0] == 'running':
+                busy = True
+                continue
+            try:
+                nr = int(sc[0])
+            except ValueError:
+                continue
+            if nr == READ and len(sc) > 1 and int(sc[1], 16) == 0:
+                try:
+                    same = os.readlink('/proc/' + str(pid) + '/fd/0') == target
+                except OSError:
+                    same = False
+                if same:
+                    if unread(pid) > 0:
+                        busy = True
+                    else:
+                        return 'waiting'
+            elif nr in (NANOSLEEP, CLOCK_NANOSLEEP):
+                busy = True
+            elif nr in (SELECT, PSELECT6) and len(sc) > 1 and int(sc[1], 16) == 0:
+                busy = True
+            elif nr in (POLL, PPOLL) and len(sc) > 2 and int(sc[2], 16) == 0:
+                busy = True
+    return 'busy' if busy else 'unknown'
+
+
+try:
+    root_pid = int(open(sys.argv[1]).read().split()[0])
+except (OSError, IndexError, ValueError):
+    print('gone')
+else:
+    print(state(root_pid))
+EOS
+chmod 755 /usr/local/bin/stdin-wait-check
 useradd -m -s /bin/bash student
 usermod -aG sudo student
 echo \"student ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/90-student
@@ -386,7 +503,9 @@ BUILDEOF
   # -d populates the filesystem straight from the directory in one shot —
   # the same technique Firecracker's own getting-started guide uses for
   # its demo image, avoids a separate mount/copy/unmount dance.
-  ROOTFS_SIZE_MB=768
+  # 2048, up from 768 for Stage 12's toolchains (Go alone is ~400MB).
+  # Costs disk once: the image is shared read-only by every session.
+  ROOTFS_SIZE_MB=2048
   sudo truncate -s \"\${ROOTFS_SIZE_MB}M\" /tmp/firecracker-rootfs-jammy.ext4
   sudo mkfs.ext4 -q -d \"\$ROOTFS_DIR\" -F /tmp/firecracker-rootfs-jammy.ext4
   sudo e2fsck -fy /tmp/firecracker-rootfs-jammy.ext4 || true

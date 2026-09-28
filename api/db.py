@@ -474,7 +474,8 @@ CREATE TABLE IF NOT EXISTS llm_verification_examples (
     fix_exec_stderr  TEXT NOT NULL DEFAULT '',
     fix_passed       INTEGER,
     status           TEXT NOT NULL DEFAULT 'pending',
-    created_at       TEXT NOT NULL
+    created_at       TEXT NOT NULL,
+    language         TEXT NOT NULL DEFAULT 'python'
 );
 
 -- The LLM Performance page's "live deployments" section — separate
@@ -612,6 +613,13 @@ def _migrate_columns() -> None:
         _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN tokens_per_second REAL")
         _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN coordinator_stats TEXT NOT NULL DEFAULT '{}'")
         _conn.execute("ALTER TABLE llm_ingestions ADD COLUMN worker_stats TEXT NOT NULL DEFAULT '[]'")
+
+    # llm-chat Stage 12: examples can now be Bash/Node/C/C++/Go, not just
+    # Python. Every row captured before this was Python, so that's the
+    # correct default for existing rows too.
+    ex_cols = {row[1] for row in _conn.execute("PRAGMA table_info(llm_verification_examples)").fetchall()}
+    if ex_cols and "language" not in ex_cols:
+        _conn.execute("ALTER TABLE llm_verification_examples ADD COLUMN language TEXT NOT NULL DEFAULT 'python'")
     _conn.commit()
 
 

@@ -215,6 +215,10 @@ locals {
   codemirror_theme_css        = file("${path.module}/../../ui/vendor/codemirror-theme-dracula.min.css")
   codemirror_matchbrackets_js = file("${path.module}/../../ui/vendor/codemirror-addon-matchbrackets.min.js")
   codemirror_python_mode_js   = file("${path.module}/../../ui/vendor/codemirror-mode-python.min.js")
+  codemirror_js_mode_js       = file("${path.module}/../../ui/vendor/codemirror-mode-javascript.min.js")
+  codemirror_clike_mode_js    = file("${path.module}/../../ui/vendor/codemirror-mode-clike.min.js")
+  codemirror_go_mode_js       = file("${path.module}/../../ui/vendor/codemirror-mode-go.min.js")
+  codemirror_shell_mode_js    = file("${path.module}/../../ui/vendor/codemirror-mode-shell.min.js")
 
   # Stage 5B — already vendored for the Dashboard's own admin Terminal
   # feature (ui/src/js/11-terminal.js) — reused as-is, same re-embedding
@@ -264,6 +268,13 @@ locals {
     sandbox_subnet_cidr              = var.sandbox_subnet_cidr
     sandbox_terminal_source          = local.sandbox_terminal_source
     microvm_source                   = local.microvm_source
+    run_subnet_cidr                  = var.run_subnet_cidr
+    run_vm_max_concurrent            = var.run_vm_max_concurrent
+    run_vm_mem_mib                   = var.run_vm_mem_mib
+    run_vm_mem_mib_go                = var.run_vm_mem_mib_go
+    run_vm_min_host_mem_mb           = var.run_vm_min_host_mem_mb
+    run_compile_timeout_seconds      = var.run_compile_timeout_seconds
+    run_queue_wait_seconds           = var.run_queue_wait_seconds
     terminal_port                    = var.terminal_port
     terminal_idle_timeout_minutes    = var.terminal_idle_timeout_minutes
     terminal_max_session_minutes     = var.terminal_max_session_minutes
@@ -278,6 +289,10 @@ locals {
     codemirror_theme_css             = local.codemirror_theme_css
     codemirror_matchbrackets_js      = local.codemirror_matchbrackets_js
     codemirror_python_mode_js        = local.codemirror_python_mode_js
+    codemirror_js_mode_js            = local.codemirror_js_mode_js
+    codemirror_clike_mode_js         = local.codemirror_clike_mode_js
+    codemirror_go_mode_js            = local.codemirror_go_mode_js
+    codemirror_shell_mode_js         = local.codemirror_shell_mode_js
     xterm_core_js                    = local.xterm_core_js
     xterm_core_css                   = local.xterm_core_css
     xterm_fit_addon_js               = local.xterm_fit_addon_js

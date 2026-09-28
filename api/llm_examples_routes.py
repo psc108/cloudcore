@@ -58,6 +58,19 @@ def _ingest_auth() -> bool:
     return auth == f"Bearer {API_TOKEN}"
 
 
+# llm-chat Stage 12's own language keys (verify_proxy.py's LANGUAGES).
+# Anything else is stored as "other" rather than trusted verbatim --
+# this route is reachable from guests.
+KNOWN_LANGUAGES = {"python", "bash", "javascript", "c", "cpp", "go"}
+
+
+def _clean_language(value) -> str:
+    if not value:
+        return "python"
+    value = str(value).strip().lower()
+    return value if value in KNOWN_LANGUAGES else "other"
+
+
 @examples_bp.post("/v1/llm-chat/examples")
 def ingest_example():
     if not _ingest_auth():
@@ -82,6 +95,7 @@ def ingest_example():
         fix_exec_stdout=body.get("fix_exec_stdout") or "",
         fix_exec_stderr=body.get("fix_exec_stderr") or "",
         fix_passed=body.get("fix_passed"),
+        language=_clean_language(body.get("language")),
     )
     return jsonify({"id": example_id}), 201
 
