@@ -1,0 +1,408 @@
+"""
+microvm.py -- one jailed Firecracker microVM, shared by every llm-chat
+service that boots one (Stage 10 of llm-chat-sandbox-extensions-Phased-
+Implementation.md). sandbox_terminal.py uses it for Terminal sessions;
+verify_proxy.py uses it for per-run non-Python execution (Stage 12).
+
+Two things changed from the Stage 5 launcher this replaces:
+
+1. The VMM runs under jailer, not directly as root. jailer chroots it to
+   CHROOT_BASE/firecracker/<id>/root, drops it to the unprivileged
+   fcrunner uid/gid, and puts it in its own cgroup v2 group with a hard
+   memory and CPU ceiling. The guest-to-host boundary (KVM + the
+   bridge's iptables policy) is unchanged; this adds a host-side layer
+   in case the VMM process itself is ever compromised.
+
+2. The golden rootfs is attached read-only and shared by every session
+   (hard-linked into each chroot, never copied), with a small sparse
+   per-session scratch drive as the only writable disk. The guest's
+   /sbin/overlay-init (baked into the rootfs by
+   api/build-firecracker-rootfs.sh) overlays the two before handing
+   off to systemd. This replaces a full 768MB copy per session, which
+   is what makes a microVM per Run (Stage 12) affordable at all.
+
+The golden rootfs and kernel must be root-owned and not writable by
+fcrunner: a jailed VMM reaches them through hard links, i.e. the same
+inode, so if fcrunner owned them a compromised VMM could rewrite the
+shared golden image for every later session.
+
+The caller must run as root: it creates TAP devices and runs jailer.
+"""
+from __future__ import annotations
+
+import ipaddress
+import json
+import os
+import pwd
+import shutil
+import signal
+import socket
+import subprocess
+import threading
+import time
+import uuid
+from http.client import HTTPConnection
+
+import paramiko
+
+FC_BIN = "/opt/firecracker/firecracker"
+JAILER_BIN = "/opt/firecracker/jailer"
+KERNEL_PATH = "/opt/firecracker/vmlinux"
+GOLDEN_ROOTFS = "/opt/firecracker/golden-rootfs.ext4"
+JAIL_USER = "fcrunner"
+CHROOT_BASE = "/srv/jailer"
+# Private SSH keys live here, deliberately OUTSIDE any chroot, so the
+# jailed VMM (running as fcrunner) can never read the key that logs into
+# its own guest.
+KEY_DIR = os.path.join(CHROOT_BASE, "sessions")
+# jailer places each microVM's cgroup under this parent. It must not be
+# a cgroup the calling service itself lives in (cgroup v2's
+# no-internal-processes rule), so it hangs off the root.
+CGROUP_PARENT = "fcsandbox"
+CGROUP_ROOT = "/sys/fs/cgroup"
+
+# Memory the VMM process needs on top of guest RAM (device emulation,
+# its own heap). Sized with headroom: exceeding memory.max OOM-kills
+# the whole VMM, which is the failure we want for a runaway, not for a
+# normal guest.
+VMM_OVERHEAD_MIB = 128
+
+# Paths as the jailed VMM sees them, relative to its chroot.
+_IN_JAIL_KERNEL = "/vmlinux"
+_IN_JAIL_ROOTFS = "/rootfs.ext4"
+_IN_JAIL_SCRATCH = "/scratch.ext4"
+_IN_JAIL_API_SOCK = "/run/firecracker.socket"
+
+
+class BootError(Exception):
+    pass
+
+
+class IpPool:
+    """Thread-safe allocator over one bridge subnet. The first 8 and last
+    4 host addresses are held back (gateway, dnsmasq and future
+    fixed-address uses), same as the Stage 5 pool this replaces."""
+
+    def __init__(self, cidr: str):
+        net = ipaddress.ip_network(cidr)
+        hosts = [str(ip) for ip in net.hosts()]
+        self.gateway = hosts[0]
+        self.prefixlen = net.prefixlen
+        self.netmask = str(net.netmask)
+        self._pool = hosts[8:-4]
+        self._in_use: set[str] = set()
+        self._lock = threading.Lock()
+
+    def alloc(self) -> str | None:
+        with self._lock:
+            for ip in self._pool:
+                if ip not in self._in_use:
+                    self._in_use.add(ip)
+                    return ip
+        return None
+
+    def release(self, ip: str | None) -> None:
+        if ip is None:
+            return
+        with self._lock:
+            self._in_use.discard(ip)
+
+
+def _jail_ids() -> tuple[int, int]:
+    pw = pwd.getpwnam(JAIL_USER)
+    return pw.pw_uid, pw.pw_gid
+
+
+def _link_or_copy(src: str, dst: str) -> None:
+    """Hard link when src and dst share a filesystem (the normal case on
+    a single-disk coordinator), otherwise a real copy with a warning --
+    correct either way, just slower."""
+    try:
+        os.link(src, dst)
+    except OSError as e:
+        print(f"microvm: hard link {src} -> {dst} failed ({e}); copying instead", flush=True)
+        shutil.copyfile(src, dst)
+        os.chmod(dst, 0o644)
+
+
+class MicroVM:
+    """One jailed Firecracker microVM: a fresh TAP on `bridge`, the shared
+    read-only golden rootfs plus a fresh scratch drive, a fresh ephemeral
+    SSH keypair delivered via MMDS, and the jailed VMM process. Nothing is
+    shared with or reused by any other session.
+
+    `owner` is a short tag ("term", "run") prefixed onto the jail id and
+    the TAP name, so each service's startup sweep (sweep_orphans) only
+    ever touches its own leftovers, never another service's live VMs."""
+
+    def __init__(self, owner: str, pool: IpPool, bridge: str,
+                 vcpu_count: int = 1, mem_size_mib: int = 256,
+                 scratch_mib: int = 1024, boot_timeout_s: int = 20):
+        self.owner = owner
+        self.pool = pool
+        self.bridge = bridge
+        self.vcpu_count = vcpu_count
+        self.mem_size_mib = mem_size_mib
+        self.scratch_mib = scratch_mib
+        self.boot_timeout_s = boot_timeout_s
+
+        short = uuid.uuid4().hex[:12]
+        self.session_id = f"{owner}-{short}"
+        # IFNAMSIZ is 16 including the NUL: "fc" + owner[:4] + "-" + 8 hex fits.
+        self.tap_name = f"fc{owner[:4]}-{short[:8]}"
+        self.ip: str | None = None
+
+        self.jail_dir = os.path.join(CHROOT_BASE, "firecracker", self.session_id)
+        self.chroot = os.path.join(self.jail_dir, "root")
+        self.api_sock = self.chroot + _IN_JAIL_API_SOCK
+        self.key_dir = os.path.join(KEY_DIR, self.session_id)
+        self.private_key_path = os.path.join(self.key_dir, "id_ed25519")
+        self.log_path = os.path.join(self.key_dir, "firecracker.log")
+        self.cgroup_dir = os.path.join(CGROUP_ROOT, CGROUP_PARENT, self.session_id)
+        self.public_key_text = ""
+        self.proc: subprocess.Popen | None = None
+        self._log_fh = None
+
+    # -- Firecracker API --------------------------------------------------
+
+    def _api(self, method: str, path: str, body: dict | None = None):
+        conn = HTTPConnection("localhost", timeout=5)
+        conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.sock.connect(self.api_sock)
+        data = json.dumps(body).encode() if body is not None else None
+        conn.request(method, path, body=data, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        raw = resp.read()
+        conn.close()
+        if resp.status >= 300:
+            raise BootError(f"Firecracker API {method} {path} -> {resp.status}: {raw!r}")
+        return raw
+
+    def _log_tail(self, n: int = 5) -> str:
+        try:
+            with open(self.log_path, errors="replace") as f:
+                lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+            return " | ".join(lines[-n:])
+        except OSError:
+            return ""
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def _prepare_chroot(self, uid: int, gid: int) -> None:
+        os.makedirs(self.chroot, mode=0o755, exist_ok=True)
+        _link_or_copy(KERNEL_PATH, self.chroot + _IN_JAIL_KERNEL)
+        _link_or_copy(GOLDEN_ROOTFS, self.chroot + _IN_JAIL_ROOTFS)
+
+        # Sparse: only blocks the guest actually writes cost real disk.
+        scratch = self.chroot + _IN_JAIL_SCRATCH
+        with open(scratch, "wb") as f:
+            f.truncate(self.scratch_mib * 1024 * 1024)
+        subprocess.run(["mkfs.ext4", "-q", "-F", scratch], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        os.chown(scratch, uid, gid)
+        os.chmod(scratch, 0o600)
+
+    def boot(self) -> None:
+        uid, gid = _jail_ids()
+        os.makedirs(self.key_dir, mode=0o700, exist_ok=True)
+
+        self.ip = self.pool.alloc()
+        if self.ip is None:
+            raise BootError("No sandbox IP available (concurrent session limit reached)")
+
+        self._prepare_chroot(uid, gid)
+
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
+                        "-f", self.private_key_path], check=True)
+        with open(self.private_key_path + ".pub") as f:
+            self.public_key_text = f.read().strip()
+        os.chmod(self.private_key_path, 0o600)
+
+        # Owned by the jail user: the VMM opens /dev/net/tun and attaches
+        # to this TAP after jailer has already dropped root, so a
+        # root-owned TAP would fail with EPERM at /network-interfaces.
+        subprocess.run(["ip", "tuntap", "add", self.tap_name, "mode", "tap",
+                        "user", str(uid), "group", str(gid)], check=True)
+        subprocess.run(["ip", "link", "set", self.tap_name, "master", self.bridge], check=True)
+        subprocess.run(["ip", "link", "set", self.tap_name, "up"], check=True)
+
+        mem_max = (self.mem_size_mib + VMM_OVERHEAD_MIB) * 1024 * 1024
+        cpu_max = f"{self.vcpu_count * 100000} 100000"
+        self._log_fh = open(self.log_path, "ab")
+        self.proc = subprocess.Popen(
+            [JAILER_BIN,
+             "--id", self.session_id,
+             "--exec-file", FC_BIN,
+             "--uid", str(uid), "--gid", str(gid),
+             "--chroot-base-dir", CHROOT_BASE,
+             "--cgroup-version", "2",
+             "--parent-cgroup", CGROUP_PARENT,
+             "--cgroup", f"memory.max={mem_max}",
+             "--cgroup", f"cpu.max={cpu_max}",
+             "--resource-limit", "no-file=1024",
+             "--", "--api-sock", _IN_JAIL_API_SOCK],
+            stdin=subprocess.DEVNULL, stdout=self._log_fh, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+        deadline = time.monotonic() + 5
+        while not os.path.exists(self.api_sock):
+            if self.proc.poll() is not None:
+                raise BootError(f"jailer exited with {self.proc.returncode}: {self._log_tail()}")
+            if time.monotonic() > deadline:
+                raise BootError(f"Firecracker API socket never appeared: {self._log_tail()}")
+            time.sleep(0.05)
+
+        # Firecracker appends "root=/dev/vda ro" itself for a read-only
+        # root drive; init= hands PID 1 to the overlay step first.
+        boot_args = (f"console=ttyS0 reboot=k panic=1 pci=off "
+                     f"init=/sbin/overlay-init "
+                     f"ip={self.ip}::{self.pool.gateway}:{self.pool.netmask}::eth0:off:{self.pool.gateway}")
+        self._api("PUT", "/boot-source", {
+            "kernel_image_path": _IN_JAIL_KERNEL,
+            "boot_args": boot_args,
+        })
+        self._api("PUT", "/drives/rootfs", {
+            "drive_id": "rootfs",
+            "path_on_host": _IN_JAIL_ROOTFS,
+            "is_root_device": True,
+            "is_read_only": True,
+        })
+        self._api("PUT", "/drives/scratch", {
+            "drive_id": "scratch",
+            "path_on_host": _IN_JAIL_SCRATCH,
+            "is_root_device": False,
+            "is_read_only": False,
+        })
+        self._api("PUT", "/network-interfaces/eth0", {
+            "iface_id": "eth0",
+            "guest_mac": "AA:FC:00:00:00:01",
+            "host_dev_name": self.tap_name,
+        })
+        self._api("PUT", "/machine-config", {
+            "vcpu_count": self.vcpu_count,
+            "mem_size_mib": self.mem_size_mib,
+        })
+        # MMDS V1 carries only the PUBLIC half of this session's key; the
+        # private half never leaves KEY_DIR.
+        self._api("PUT", "/mmds/config", {
+            "version": "V1",
+            "network_interfaces": ["eth0"],
+        })
+        self._api("PUT", "/mmds", {
+            "latest": {"meta-data": {"public-key": self.public_key_text}}
+        })
+        self._api("PUT", "/actions", {"action_type": "InstanceStart"})
+
+        self._wait_for_ssh()
+
+    def _wait_for_ssh(self) -> None:
+        deadline = time.monotonic() + self.boot_timeout_s
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                raise BootError(f"Firecracker process exited during boot: {self._log_tail()}")
+            try:
+                with socket.create_connection((self.ip, 22), timeout=0.5):
+                    return
+            except OSError:
+                time.sleep(0.2)
+        raise BootError(f"Guest did not become SSH-reachable within {self.boot_timeout_s}s")
+
+    def alive(self) -> bool:
+        """False once the VMM has exited for any reason. Also reaps it,
+        so a crashed VMM doesn't linger as a zombie until teardown."""
+        return self.proc is not None and self.proc.poll() is None
+
+    def ssh_client(self) -> paramiko.SSHClient:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            hostname=self.ip, port=22, username="student",
+            key_filename=self.private_key_path,
+            timeout=10, banner_timeout=10,
+        )
+        return client
+
+    def teardown(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            try:
+                self.proc.send_signal(signal.SIGTERM)
+                self.proc.wait(timeout=3)
+            except (subprocess.TimeoutExpired, OSError):
+                try:
+                    self.proc.kill()
+                    self.proc.wait(timeout=3)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+        if self._log_fh is not None:
+            try:
+                self._log_fh.close()
+            except OSError:
+                pass
+        _remove_jail(self.session_id, self.tap_name)
+        shutil.rmtree(self.key_dir, ignore_errors=True)
+        self.pool.release(self.ip)
+
+
+def _remove_jail(session_id: str, tap_name: str | None) -> None:
+    """Best-effort removal of everything one microVM leaves on the host:
+    any process still in its cgroup, the cgroup itself, the chroot tree,
+    and its TAP. Safe to call on a half-built or already-removed jail."""
+    cg = os.path.join(CGROUP_ROOT, CGROUP_PARENT, session_id)
+    if os.path.isdir(cg):
+        try:
+            with open(os.path.join(cg, "cgroup.procs")) as f:
+                for line in f:
+                    try:
+                        os.kill(int(line), signal.SIGKILL)
+                    except (ValueError, ProcessLookupError):
+                        pass
+        except OSError:
+            pass
+        # rmdir only succeeds once the killed processes have actually
+        # left the cgroup, which is asynchronous.
+        for _ in range(20):
+            try:
+                os.rmdir(cg)
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                time.sleep(0.1)
+    shutil.rmtree(os.path.join(CHROOT_BASE, "firecracker", session_id), ignore_errors=True)
+    if tap_name:
+        subprocess.run(["ip", "link", "del", tap_name],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def sweep_orphans(owner: str) -> int:
+    """Removes every jail, key dir and TAP left behind by `owner`'s
+    previous process. jailer moves each VMM out of the calling service's
+    own cgroup, so systemd stopping or restarting the service does NOT
+    kill its microVMs. Called once at service start, before any new
+    session exists, so everything tagged with `owner` is by definition
+    orphaned. Returns how many jails were removed."""
+    prefix = f"{owner}-"
+    removed = 0
+    jails = os.path.join(CHROOT_BASE, "firecracker")
+    cg_parent = os.path.join(CGROUP_ROOT, CGROUP_PARENT)
+    ids: set[str] = set()
+    for base in (jails, cg_parent, KEY_DIR):
+        try:
+            ids.update(n for n in os.listdir(base) if n.startswith(prefix))
+        except FileNotFoundError:
+            pass
+    for sid in ids:
+        _remove_jail(sid, None)
+        shutil.rmtree(os.path.join(KEY_DIR, sid), ignore_errors=True)
+        removed += 1
+
+    tap_prefix = f"fc{owner[:4]}-"
+    try:
+        for name in os.listdir("/sys/class/net"):
+            if name.startswith(tap_prefix):
+                subprocess.run(["ip", "link", "del", name],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        pass
+    return removed

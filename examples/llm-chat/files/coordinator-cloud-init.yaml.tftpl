@@ -78,6 +78,12 @@ write_files:
     content: |
       ${indent(6, sandbox_terminal_source)}
 
+  # Stage 10 -- the jailed Firecracker launcher, shared by
+  # sandbox_terminal.py and (Stage 12) verify_proxy.py.
+  - path: /opt/llama.cpp/microvm.py
+    content: |
+      ${indent(6, microvm_source)}
+
   # Phase 4 — the sandbox's own system prompt (verify_proxy.py's
   # SANDBOX_SYSTEM_MESSAGE_FILE), plain text rather than an
   # Environment= line — see that constant's own comment for why.
@@ -295,14 +301,10 @@ write_files:
 
   # Runs as root deliberately, same class of justification as verify-
   # proxy.service above: creating a TAP device and attaching it to
-  # fcbr0 needs CAP_NET_ADMIN, and firecracker itself needs access to
-  # /dev/kvm. Not run through jailer in this first pass — see
-  # sandbox_terminal.py's own module docstring for why that's a
-  # deliberate, explicitly-flagged simplification rather than a silent
-  # gap (jailer hardens the VMM process on the host side; it does not
-  # change the actual guest-to-host isolation boundary this feature's
-  # security model rests on, which is the KVM guest kernel plus the
-  # iptables egress policy above, both already live-verified in Stage A).
+  # fcbr0 needs CAP_NET_ADMIN, and jailer itself must start as root to
+  # chroot, create device nodes and set cgroups. The VMM does NOT run
+  # as root: jailer drops it to fcrunner inside its own chroot and
+  # cgroup (Stage 10 -- see microvm.py's module docstring).
   - path: /etc/systemd/system/sandbox-terminal.service
     content: |
       [Unit]
@@ -449,7 +451,12 @@ runcmd:
     echo '${firecracker_rootfs_sha256}  /tmp/${firecracker_rootfs_name}' | sha256sum -c -
   - gunzip -c /tmp/${firecracker_rootfs_name} > /opt/firecracker/golden-rootfs.ext4
   - rm -f /tmp/${firecracker_rootfs_name}
-  - chown fcrunner:fcrunner /opt/firecracker/golden-rootfs.ext4 /opt/firecracker/vmlinux
+  # Root-owned and read-only to everyone else, NOT fcrunner-owned: each
+  # jailed VMM reaches these through a hard link (same inode), so if
+  # fcrunner owned them a compromised VMM could rewrite the shared
+  # golden image for every later session (Stage 10).
+  - chown root:root /opt/firecracker/golden-rootfs.ext4 /opt/firecracker/vmlinux
+  - chmod 0644 /opt/firecracker/golden-rootfs.ext4 /opt/firecracker/vmlinux
 
   # Vendored websockets (see packages: above for why apt's jammy build
   # can't be used) -- a plain wheel is a zip archive; extracted via

@@ -19,35 +19,24 @@ Protocol (text frames), unchanged from api/terminal.py:
                        {"type":"warning","data":"<message>"}
                        {"type":"unresponsive","data":"<message>"}
 
-Deliberately NOT run through jailer (chroot + uid/gid drop + cgroups)
-in this first pass -- firecracker runs directly as root here, same as
-Stage A's own live-verified smoke test. jailer is a HOST-side hardening
-layer on top of the VMM process itself; it does not change the actual
-guest-to-host isolation boundary this feature's whole security model
-rests on (that's the KVM guest-kernel boundary plus the iptables
-egress policy set up in cloud-init, both already live-verified in
-Stage A). Flagged explicitly as a named follow-up, not a silent gap.
+The microVM itself (jailer, chroot, cgroup limits, read-only shared
+rootfs + per-session scratch drive) lives in microvm.py, shared with
+verify_proxy.py's per-run execution -- see that module's docstring.
 """
 from __future__ import annotations
 
 import asyncio
 import functools
-import ipaddress
 import json
 import os
 import select
-import shutil
-import signal
-import socket
-import subprocess
 import threading
 import time
-import uuid
-from http.client import HTTPConnection
 
-import paramiko
 import websockets
 import websockets.legacy.server
+
+from microvm import BootError, IpPool, MicroVM, sweep_orphans
 
 # verify_proxy.py's own LB-facing convention, not loopback: HAProxy runs
 # on the CloudCore host itself and reaches this service over the bridge
@@ -60,11 +49,10 @@ import websockets.legacy.server
 WS_HOST = "0.0.0.0"
 WS_PORT = int(os.environ.get("TERMINAL_PORT", "8622"))
 
-FC_BIN = "/opt/firecracker/firecracker"
-KERNEL_PATH = "/opt/firecracker/vmlinux"
-GOLDEN_ROOTFS = "/opt/firecracker/golden-rootfs.ext4"
-SESSION_DIR = "/srv/jailer/sessions"
 FCBR = "fcbr0"
+# Tags this service's jails/TAPs so its startup sweep never touches
+# verify_proxy.py's own per-run microVMs.
+VM_OWNER = "term"
 
 SANDBOX_SUBNET = os.environ.get("SANDBOX_SUBNET_CIDR", "10.200.0.0/24")
 _COLS_DEFAULT = 220
@@ -92,6 +80,11 @@ TERMINAL_BOOT_TIMEOUT_S = int(os.environ.get("TERMINAL_BOOT_TIMEOUT_SECONDS", "2
 TERMINAL_UNRESPONSIVE_S = int(os.environ.get("TERMINAL_UNRESPONSIVE_SECONDS", "30"))
 VCPU_COUNT = 1
 MEM_SIZE_MIB = 256
+# Sparse, so this is a ceiling on what one session can write (apt
+# installs, pip packages, the student's own files), not disk reserved
+# up front. Sized above the ~400MB of free space the old 768MB
+# per-session rootfs copy used to leave.
+SCRATCH_MIB = int(os.environ.get("TERMINAL_SCRATCH_MIB", "2048"))
 
 # Per direct request: a browser-reachable way to see the output of a web
 # app a student wrote and ran in their own sandbox terminal. Fixed pool
@@ -127,25 +120,7 @@ _client_active: dict[str, int] = {}
 # never creates that situation in practice.
 _client_vm: dict[str, "MicroVM"] = {}
 
-_ip_lock = threading.Lock()
-_ip_pool = [str(ip) for ip in ipaddress.ip_network(SANDBOX_SUBNET).hosts()][8:-4]
-_ip_in_use: set[str] = set()
-
-
-def _alloc_ip() -> str | None:
-    with _ip_lock:
-        for ip in _ip_pool:
-            if ip not in _ip_in_use:
-                _ip_in_use.add(ip)
-                return ip
-    return None
-
-
-def _release_ip(ip: str | None):
-    if ip is None:
-        return
-    with _ip_lock:
-        _ip_in_use.discard(ip)
+_ip_pool = IpPool(SANDBOX_SUBNET)
 
 
 def _client_ip(websocket) -> str:
@@ -161,169 +136,12 @@ def _client_ip(websocket) -> str:
     return websocket.remote_address[0]
 
 
-class BootError(Exception):
-    pass
-
-
-class MicroVM:
-    """One Firecracker-backed session: a fresh TAP device, a fresh copy
-    of the golden rootfs, a fresh ephemeral SSH keypair delivered via
-    MMDS, and the firecracker process itself. Nothing here is shared
-    across sessions or reused between them."""
-
-    def __init__(self):
-        self.session_id = uuid.uuid4().hex[:12]
-        self.ip: str | None = None
-        self.tap_name = f"fc-tap-{self.session_id[:8]}"
-        self.session_dir = os.path.join(SESSION_DIR, self.session_id)
-        self.rootfs_path = os.path.join(self.session_dir, "rootfs.ext4")
-        self.api_sock = os.path.join(self.session_dir, "api.sock")
-        self.private_key_path = os.path.join(self.session_dir, "id_ed25519")
-        self.public_key_text = ""
-        self.proc: subprocess.Popen | None = None
-
-    def _api(self, method: str, path: str, body: dict | None = None):
-        conn = HTTPConnection("localhost", timeout=5)
-        conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        conn.sock.connect(self.api_sock)
-        data = json.dumps(body).encode() if body is not None else None
-        conn.request(method, path, body=data, headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        raw = resp.read()
-        conn.close()
-        if resp.status >= 300:
-            raise BootError(f"Firecracker API {method} {path} -> {resp.status}: {raw!r}")
-        return raw
-
-    def boot(self):
-        os.makedirs(self.session_dir, mode=0o700, exist_ok=True)
-
-        self.ip = _alloc_ip()
-        if self.ip is None:
-            raise BootError("No sandbox IP available (concurrent session limit reached)")
-
-        # A fresh copy per session -- the golden image is never itself
-        # written to, so two sessions can never see or corrupt each
-        # other's state. Reflink/CoW isn't available on ext4, so this
-        # is a real, unavoidable 768MB copy -- bounded by
-        # TERMINAL_BOOT_TIMEOUT_S same as everything else in boot().
-        shutil.copyfile(GOLDEN_ROOTFS, self.rootfs_path)
-
-        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
-                         "-f", self.private_key_path], check=True)
-        with open(self.private_key_path + ".pub") as f:
-            self.public_key_text = f.read().strip()
-        os.chmod(self.private_key_path, 0o600)
-
-        subprocess.run(["ip", "tuntap", "add", self.tap_name, "mode", "tap"], check=True)
-        subprocess.run(["ip", "link", "set", self.tap_name, "master", FCBR], check=True)
-        subprocess.run(["ip", "link", "set", self.tap_name, "up"], check=True)
-
-        if os.path.exists(self.api_sock):
-            os.remove(self.api_sock)
-        self.proc = subprocess.Popen(
-            [FC_BIN, "--api-sock", self.api_sock],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
-        # The API socket takes a moment to appear after the process
-        # starts -- poll for it rather than a blind sleep.
-        deadline = time.monotonic() + 5
-        while not os.path.exists(self.api_sock):
-            if time.monotonic() > deadline:
-                raise BootError("Firecracker API socket never appeared")
-            time.sleep(0.05)
-
-        gw = str(list(ipaddress.ip_network(SANDBOX_SUBNET).hosts())[0])
-        prefixlen = ipaddress.ip_network(SANDBOX_SUBNET).prefixlen
-        mask = str(ipaddress.ip_network(f"0.0.0.0/{prefixlen}").netmask)
-        # dns0-ip=$gw -- the coordinator's own dnsmasq -- lets the
-        # kernel's own IP-Config write a working /etc/resolv.conf at
-        # boot, same as confirmed live in the Stage A smoke test.
-        boot_args = (f"console=ttyS0 reboot=k panic=1 pci=off "
-                     f"ip={self.ip}::{gw}:{mask}::eth0:off:{gw}")
-        self._api("PUT", "/boot-source", {
-            "kernel_image_path": KERNEL_PATH,
-            "boot_args": boot_args,
-        })
-        self._api("PUT", "/drives/rootfs", {
-            "drive_id": "rootfs",
-            "path_on_host": self.rootfs_path,
-            "is_root_device": True,
-            "is_read_only": False,
-        })
-        self._api("PUT", "/network-interfaces/eth0", {
-            "iface_id": "eth0",
-            "guest_mac": "AA:FC:00:00:00:01",
-            "host_dev_name": self.tap_name,
-        })
-        self._api("PUT", "/machine-config", {
-            "vcpu_count": VCPU_COUNT,
-            "mem_size_mib": MEM_SIZE_MIB,
-        })
-        # MMDS -- the actual per-session credential delivery. V1 (no
-        # session-token dance), matching fetch-mmds-key.sh's own guest-
-        # side V1 GET. The private key is generated above and never
-        # written anywhere but this session's own directory -- only
-        # the PUBLIC half goes into MMDS.
-        self._api("PUT", "/mmds/config", {
-            "version": "V1",
-            "network_interfaces": ["eth0"],
-        })
-        self._api("PUT", "/mmds", {
-            "latest": {"meta-data": {"public-key": self.public_key_text}}
-        })
-        self._api("PUT", "/actions", {"action_type": "InstanceStart"})
-
-        self._wait_for_ssh()
-
-    def _wait_for_ssh(self):
-        deadline = time.monotonic() + TERMINAL_BOOT_TIMEOUT_S
-        while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
-                raise BootError("Firecracker process exited during boot")
-            try:
-                with socket.create_connection((self.ip, 22), timeout=0.5):
-                    return
-            except OSError:
-                time.sleep(0.2)
-        raise BootError(f"Guest did not become SSH-reachable within {TERMINAL_BOOT_TIMEOUT_S}s")
-
-    def ssh_connect(self) -> tuple[paramiko.SSHClient, paramiko.Channel]:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            hostname=self.ip, port=22, username="student",
-            key_filename=self.private_key_path,
-            timeout=10, banner_timeout=10,
-        )
-        transport = client.get_transport()
-        channel = transport.open_session()
-        channel.get_pty(term="xterm-256color", width=_COLS_DEFAULT, height=_ROWS_DEFAULT)
-        channel.invoke_shell()
-        return client, channel
-
-    def teardown(self):
-        if self.proc is not None and self.proc.poll() is None:
-            try:
-                self.proc.send_signal(signal.SIGTERM)
-                self.proc.wait(timeout=3)
-            except Exception:
-                try:
-                    self.proc.kill()
-                except Exception:
-                    pass
-        try:
-            subprocess.run(["ip", "link", "del", self.tap_name],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-        try:
-            shutil.rmtree(self.session_dir, ignore_errors=True)
-        except Exception:
-            pass
-        _release_ip(self.ip)
+def _ssh_shell(vm: MicroVM):
+    client = vm.ssh_client()
+    channel = client.get_transport().open_session()
+    channel.get_pty(term="xterm-256color", width=_COLS_DEFAULT, height=_ROWS_DEFAULT)
+    channel.invoke_shell()
+    return client, channel
 
 
 async def _terminal_handler(websocket):
@@ -342,7 +160,9 @@ async def _terminal_handler(websocket):
             return
         _client_active[ip] = active + 1
 
-    vm = MicroVM()
+    vm = MicroVM(VM_OWNER, _ip_pool, FCBR, vcpu_count=VCPU_COUNT,
+                 mem_size_mib=MEM_SIZE_MIB, scratch_mib=SCRATCH_MIB,
+                 boot_timeout_s=TERMINAL_BOOT_TIMEOUT_S)
     loop = asyncio.get_event_loop()
     client = channel = None
     try:
@@ -354,7 +174,7 @@ async def _terminal_handler(websocket):
             return
 
         try:
-            client, channel = await loop.run_in_executor(None, vm.ssh_connect)
+            client, channel = await loop.run_in_executor(None, _ssh_shell, vm)
         except Exception as e:
             await send({"type": "error", "data": f"Could not connect to sandbox: {e}"})
             return
@@ -416,6 +236,13 @@ async def _terminal_handler(websocket):
         try:
             while not stop_event.is_set():
                 now = time.monotonic()
+                # SSH over TCP to a guest whose VMM has died never errors --
+                # there's nothing left to send a RST -- so without this the
+                # session would hang until the idle timeout (found live by
+                # Stage 10's kill -9 failure test).
+                if not vm.alive():
+                    await send({"type": "error", "data": "\r\n\r\nThe sandbox VM stopped unexpectedly -- reconnect to start a fresh one.\r\n"})
+                    break
                 if now - session_start > TERMINAL_MAX_SESSION_S:
                     await send({"type": "error", "data": "\r\n\r\nSession time limit reached -- reconnect to start a fresh one.\r\n"})
                     break
@@ -607,7 +434,9 @@ async def _preview_conn_handler(port: int, reader: asyncio.StreamReader, writer:
 
 
 async def _main():
-    os.makedirs(SESSION_DIR, mode=0o700, exist_ok=True)
+    swept = sweep_orphans(VM_OWNER)
+    if swept:
+        print(f"Removed {swept} microVM(s) orphaned by a previous run", flush=True)
     preview_servers = [
         await asyncio.start_server(functools.partial(_preview_conn_handler, port), WS_HOST, port)
         for port in PREVIEW_PORTS

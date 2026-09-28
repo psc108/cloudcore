@@ -344,6 +344,32 @@ WantedBy=multi-user.target
 EOS
 systemctl enable refresh-apt-index.service
 
+# Stage 10 (llm-chat-sandbox-extensions-Phased-Implementation.md): this
+# image is now attached READ-ONLY and shared by every session (hard-
+# linked into each jailer chroot by examples/llm-chat/files/microvm.py),
+# with a fresh per-session scratch drive as /dev/vdb. overlay-init runs
+# as PID 1 (init=/sbin/overlay-init on the kernel command line), lays a
+# writable overlayfs over the read-only root using the scratch drive,
+# pivots into it and hands off to systemd. Every write a session makes
+# lands on its own scratch drive; the golden image is never modified.
+# /overlay and /rom must exist in the image itself -- the root is
+# read-only by the time this runs, so they can't be created at boot.
+mkdir -p /overlay /rom
+cat > /sbin/overlay-init <<\"EOS\"
+#!/bin/sh
+set -e
+# devtmpfs may or may not already be mounted by the kernel
+# (CONFIG_DEVTMPFS_MOUNT) -- /dev/vdb is needed either way.
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t ext4 -o noatime /dev/vdb /overlay
+mkdir -p /overlay/upper /overlay/work
+mount -t overlay overlay \
+  -o noatime,lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work /mnt
+pivot_root /mnt /mnt/rom
+exec /sbin/init \"\$@\"
+EOS
+chmod 755 /sbin/overlay-init
+
 apt-get clean
 rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 BUILDEOF
