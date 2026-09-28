@@ -2825,17 +2825,40 @@ Ports that turned out not to need anything: LB listeners bind `127.0.0.1` (api/l
 
 **Not yet run for real:** no `--scan`/`--apply` as root on either host yet.
 
-### F-162 — The host package repo (192.168.100.1:8090) timed out during cloud-init on two llm-chat builds in a row; F-142's retry recovered both
+### F-162 — RESOLVED: the host package repo was single-threaded, so one guest streaming the 50GB Wikipedia ZIM blocked every other guest for ~7 minutes; it also couldn't resume a download
 
-**Where:** `examples/llm-chat/files/coordinator-cloud-init.yaml.tftpl` (`packages:` phase, then F-142's retry loop in `runcmd`); the host-level repo served by `cloudcore-repo.service`.
+**Where:** `api/serve-package-repo.py` (the `cloudcore-repo` system service on 192.168.100.1:8090), which every template's cloud-init downloads its packages and artifacts from. Seen in `examples/llm-chat`.
 
-**Symptom:** both llm-chat builds on 2026-09-28 (around 08:53 and 09:40) finished cloud-init with `status: error`: `package_update_upgrade_install` failed on dnsmasq, python3-paramiko, libgomp1 and promtail, and `apt-get update` logged `Could not connect to 192.168.100.1:8090 ... connection timed out`. Every service came up anyway, because F-142's `runcmd` retry reinstalled the packages a few minutes later.
+**Symptom:** both llm-chat builds on 2026-09-28 finished cloud-init with `status: error`: the coordinator's `packages:` phase failed on dnsmasq, python3-paramiko, libgomp1 and promtail, with `Could not connect to 192.168.100.1:8090 ... connection timed out`. Services still came up, because F-142's `runcmd` retry reinstalled the packages minutes later. F-142's own truncated-index failure is very likely the same underlying problem.
 
-**Root cause:** not investigated. Two back-to-back occurrences suggest it isn't a one-off, but whether the repo process stalls, the bridge isn't ready that early in a guest's boot, or the host is simply saturated by the build itself (both builds were starting a 14B model download at the same time) is unknown.
+**Root cause:** the server was the stdlib's `http.server.HTTPServer`, which handles one request at a time with a listen queue of 5. Its access log proves it, once you know two things: guests log in UTC while the host journal is BST (+1h), and this server logs a line when a response *starts*, so a gap means nobody else was served.
+- **Build 1:** the kiwix VM started the 50.25GB `wikipedia_en_all_nopic` ZIM at 09:53:44 (local). The server then logged **nothing for 6m57s**, until 10:00:41. The coordinator's apt failed at 09:58:32, inside that gap.
+- **Build 2:** the ZIM started at 10:36:07, then nothing for 6m39s. The coordinator failed at about 10:40.
+- The 8.57GB model causes its own ~3-minute gap in both builds.
 
-**Fix:** none yet beyond F-142's retry, which masks it. Next step: log timestamps from `cloudcore-repo.service` alongside the guest's first `apt-get update` on the next build.
+Requests queued behind a transfer hit apt's timeout; once the 5-slot backlog filled, new connections were dropped outright ("connection timed out"). A second defect in the same server: `SimpleHTTPRequestHandler` ignores HTTP `Range`, so every cloud-init `curl -C -` resume after a stall fails with curl exit 33 ("server doesn't support byte ranges"), and a big download cannot recover from a stall.
 
-**Verified by:** observed in both builds' `/var/log/cloud-init-output.log` and `cloud-init status --long`; recovery confirmed by `dpkg -l` showing all four packages installed and every service active.
+**Fix:**
+- The server is now `ThreadingHTTPServer` (daemon threads, listen backlog 128).
+- It supports single-range `Range` requests: 206 with `Content-Range`, a suffix range, and 416 with the real size, so resuming an already-complete file succeeds. Unhandled cases fall back to the unchanged stdlib behaviour. `Accept-Ranges: bytes` is advertised.
+- It logs a **completion** line for every transfer: `done "GET <path>" <bytes> bytes in <s>s (<n> other transfer(s) active)`.
+- `REPO_BIND_ADDR`/`REPO_PORT`/`REPO_DIR` overrides allow testing on a scratch port.
+- New regression suite: `tests/suites/test_package_repo.py`, registered in `tests/run_tests.py`. It needs no API or VM.
+
+**How to recognise it next time:** `journalctl -u cloudcore-repo --since "<build start, local time>" | grep 'done "'`. Look for long transfers with other transfers queued alongside, and remember the host journal is local time while guests log UTC. `curl -s -o /dev/null -w '%{http_code} %{time_total}\n' http://192.168.100.1:8090/jammy/apt-repo/Packages.gz` during a build should come back in well under a second.
+
+**Verified by:** a side-by-side reproduction, old (git HEAD) and new code on scratch ports with identical data.
+
+| Test | Old server | New server |
+|---|---|---|
+| Small request during a large download | curl exit 28, HTTP `000` after 20s — the build failure reproduced | 200 in 0.0s |
+| 20 simultaneous small requests | 0/20 | 20/20, slowest 0.1s |
+| `curl -C -` on a 100MB partial | exit 33 | resumes to a byte-identical 1.5GB file |
+| Resume of an already-complete file | — | exit 0 |
+
+On the new server, 404 probes, `304 Not Modified`, HEAD, directory listings, suffix ranges and path-traversal refusal are all unchanged. The new suite passes 8/8 on the fixed server and fails 6/8 on the old one: exactly the blocking and range cases, while the 404/304 and traversal checks pass on both.
+
+**Deployment:** it takes effect when the `cloudcore-repo` service restarts (`sudo systemctl restart cloudcore-repo`), on this host and on any peer that runs its own copy.
 
 ### F-163 — verify-proxy logs a full traceback every time HAProxy's health check hangs up before reading the response
 
@@ -3008,3 +3031,4 @@ Ports that turned out not to need anything: LB listeners bind `127.0.0.1` (api/l
 | v2.7 | 2026-09-28 | Paul Scott | Stage 13 of `llm-chat-sandbox-extensions-Phased-Implementation.md`, the last of the Phase 4 out-of-scope items: a local-capture client with per-student tokens, whose submissions are re-run on a coordinator and never trusted for results. F-160, including a silent mislabel from deploying guest code ahead of the API. LAN exposure of port 8083 still needs the new firewall script run with sudo. |
 | v2.8 | 2026-09-28 | Paul Scott | Direct request after F-160's correction showed ufw was never enabled: inventory the host and "get a script to run this without cutting everything else off... we also will need to run this on llwyn-y-groes". Then: "have the script scan for currently open ports and add those to the inventory list and i can remove any afterward". F-161: `api/setup-host-firewall.sh` (scan → edit → apply → confirm, auto-rollback, SSH guard). |
 | v2.9 | 2026-09-28 | Paul Scott | Direct question: "we've hit a fair few issues during this session. have we converted those issues to F- bugs and updated the knowledgebase?" An audit found F-157 to F-161 covered the fixed bugs, but five observations had never been logged. F-162 (repo timeouts during cloud-init, twice), F-163 (health-check traceback noise), F-164 (model answered with only a stdin block), F-165 (Terminal apt race at boot), F-166 (ansible-lint debt). All five are open; causes not investigated are stated as such. |
+| v3.0 | 2026-09-28 | Paul Scott | Direct request: "i think f-162 needs a good look at, that sort of thing will almost certainly come back to bite later so we should be thoroughly prepared for it." F-162 root-caused from the repo's own access log (single-threaded server; a 50GB ZIM transfer blocked the coordinator's apt for ~7 min in both builds), reproduced old vs new, and fixed (threaded, Range support, completion logging), with a regression suite. Resolved pending a `cloudcore-repo` restart. |

@@ -47,6 +47,7 @@ from tests.suites.test_images         import TestImages
 from tests.suites.test_ssh_key        import TestSSHKey
 from tests.suites.test_help           import TestHelp
 from tests.suites.test_vm             import TestVM
+from tests.suites.test_package_repo   import TestPackageRepo
 
 SUITES = [
     TestAuth,
@@ -60,6 +61,7 @@ SUITES = [
     TestSSHKey,
     TestHelp,
     TestVM,
+    TestPackageRepo,
 ]
 
 # ---------------------------------------------------------------------------
