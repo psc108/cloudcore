@@ -31,7 +31,7 @@ as in every prior phase.
 | 10 | Firecracker under `jailer` + a shared microVM launcher module | Done — verified live 2026-09-28 |
 | 11 | Exact input-wait detection via `/proc/<pid>/syscall` | Done — verified live 2026-09-28 (11.3 guest helper moves into Stage 12's rootfs rebuild) |
 | 12 | Bash, JavaScript (Node), C/C++, Go in Run/Ask — Firecracker per run | Done — verified live 2026-09-28 |
-| 13 | Local-capture client with per-student tokens and server-side re-verification | Done — verified live 2026-09-28, except 13.4's LAN reachability (needs `sudo`, see below) |
+| 13 | Local-capture client with per-student tokens and server-side re-verification | Done — verified live 2026-09-28; submit from a second LAN machine not yet tried (see 13.4 note) |
 
 ---
 
@@ -515,15 +515,20 @@ Live, against the running coordinator and the restarted API:
 The two test tokens were revoked afterwards and their four test rows set
 to `hidden`.
 
-**13.4, not yet done: LAN reachability.** ufw is active on the host, and
-I can't read or change its rules without `sudo`. A laptop on the LAN is
-most likely blocked by ufw's default deny today. Guests and peers reach
-8083 over `ccbr0`/WireGuard and are unaffected. To open it to the LAN
-only, run:
-`sudo bash api/setup-capture-firewall.sh --lan-cidr 192.168.1.0/24`.
-The script refuses non-private ranges and supports `--dry-run` and
-`--remove`. Then test from a second machine with
-`llm_capture_client.py submit ... --wait 120`.
+**13.4 — corrected after running it: ufw is not enabled on this host.**
+I had read `systemctl is-active ufw` (active) as "the firewall is on". It
+only means the unit ran at boot. `ufw status` says `inactive`, so
+`api/setup-capture-firewall.sh --lan-cidr 192.168.1.0/24` (run
+2026-09-28) stored its rule but enforces nothing. Port 8083 was, and
+is, reachable from every network the host is on, not just the lab LAN.
+So LAN laptops need no change to use the client. The listener's own
+protection is the port gate (only the capture/registration routes;
+everything else 403) plus per-route token auth. Its remaining weakness
+is plain HTTP. Enabling ufw would default-deny *all* incoming traffic
+(peer listener, WireGuard, LB ports, possibly SSH), so it is a separate,
+deliberate host-hardening change and is not done here. The script now
+warns when ufw is inactive. A submit from a second LAN machine is still
+untested.
 
 ## Methodology — unchanged from Phases 1-4
 

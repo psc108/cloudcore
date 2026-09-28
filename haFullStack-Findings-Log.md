@@ -2795,7 +2795,7 @@ The corpus gains a `language` column (existing rows default to `python`; unknown
 - `watch` in front of the real local Ollama captured and verified both a streaming and a non-streaming answer, without altering either response.
 - The Go capture after the restart landed as `language = go`.
 
-Not yet verified: reaching 8083 from another LAN machine, which needs `sudo bash api/setup-capture-firewall.sh --lan-cidr <LAN>` first.
+Correction, same day: the host's ufw is **inactive** (`systemctl is-active ufw` reports only that the unit ran at boot; `ufw status` is what counts). The LAN rule the new script added is stored but not enforced, and port 8083 is reachable from every network the host is on. Its protection is the port gate plus token auth, over plain HTTP. Enabling ufw is a separate host-hardening decision (default-deny would hit the peer listener, WireGuard and LB ports), not part of this stage. The script now warns when ufw is inactive. A submit from a second LAN machine is still untested.
 
 ## Document History
 
