@@ -2684,6 +2684,57 @@ An "admin login across peers" idea was raised first and explicitly set aside aft
 
 **Verified, and one piece honestly flagged as not:** `ethtool -i` output, the wireless-detection check, and the wired duplex read were all confirmed directly against this real host's own two physical interfaces (`e1000e`/`iwlwifi`, real firmware version strings, real PCI bus addresses, real full-duplex wired link) and end-to-end through a real `GET /v1/hardware` call. `_iw_link_info()`'s own actual parsing of `iw`'s output could not be verified the same way — `iw` isn't installed on this host — so that one function is implementation-only for now, written to `iw`'s well-established, standard output format and gated to fail silently (empty result, not a crash or wrong value) on anything unexpected; noted openly rather than claimed tested.
 
+### F-157 — Firecracker now runs under `jailer` with a shared read-only rootfs; found on the way: fcrunner-owned golden image, and a dead VMM hung the Terminal session instead of ending it
+
+**Where:** new `examples/llm-chat/files/microvm.py` (jailed launcher, shared by `sandbox_terminal.py` and Stage 12's per-run VMs), `sandbox_terminal.py`, `coordinator-cloud-init.yaml.tftpl`, `api/build-firecracker-rootfs.sh` (new `/sbin/overlay-init`), and the Ansible mirrors. Stage 10 of `llm-chat-sandbox-extensions-Phased-Implementation.md`.
+
+**Symptom:** the Firecracker VMM ran directly as root, the last security-relevant item on the Phase 4 doc's "Explicitly out of scope" list. Building the jailed version surfaced three more problems:
+1. The golden rootfs and kernel were `chown fcrunner` in the Stage 5 cloud-init.
+2. In the failure matrix, `kill -9` on a VMM left the student's Terminal WebSocket open and silent, with the VMM a zombie, until the 15-minute idle timeout.
+3. `systemctl restart sandbox-terminal` no longer killed running microVMs.
+
+**Root cause:**
+1. The ownership was harmless while the VMM ran as root. But a jailed VMM running as `fcrunner` reaches those files through hard links (the same inode), so a compromised VMM could have rewritten the shared golden image for every later session.
+2. SSH over TCP to a guest that no longer exists never errors, because nothing is left to send a RST. Nothing else in the session loop checked the VMM itself. This predates Stage 10: an unjailed VMM crash behaved identically.
+3. jailer moves each VMM into its own cgroup, outside the service's, so systemd's stop/restart no longer reaches it. This was expected in the design.
+
+**Fix:** each VMM starts through `jailer` (chroot under `/srv/jailer/firecracker/<id>/root`, uid/gid dropped to `fcrunner`, cgroup v2 `memory.max` = guest RAM + 128MB and `cpu.max` = its vCPUs, under a dedicated `/sys/fs/cgroup/fcsandbox` parent). The golden rootfs is attached **read-only** and hard-linked into every chroot, with a sparse per-session ext4 scratch drive; the guest's new `/sbin/overlay-init` lays an overlayfs over the two and pivots before systemd starts. This replaces a full 768MB copy per session. Then, for each problem above:
+- The golden rootfs and kernel are now `root:root 0644`. TAPs are created `user fcrunner`, because the VMM opens them after dropping root.
+- `MicroVM.alive()` (which also reaps the process) is checked on every pass of the session loop. The student now gets "The sandbox VM stopped unexpectedly" within one poll, and everything is torn down.
+- Jail ids and TAP names are tagged by owner (`term-`/`run-`), and each service runs `sweep_orphans()` at startup, removing only its own leftovers.
+
+**Verified by:** a fresh llm-chat build on 2026-09-28, with real Terminal sessions:
+- The VMM runs as `fcrunner` in its own mount namespace, seeing only `dev firecracker rootfs.ext4 run scratch.ext4 vmlinux`; `memory.max` is 402653184.
+- One session's writes are invisible to another, and the golden image's SHA is unchanged across sessions.
+- In the guest, `/sys/block/vda/ro` is 1 and `dd of=/dev/vda` writes 0 bytes; `apt-get install` works on the overlay.
+- A 600MB allocation in a 256MB guest OOMs only inside the guest (host `MemAvailable` 1267 → 1255MB).
+- The Terminal and a preview port both work through the real LB.
+- After `kill -9`, an error frame arrives and nothing is left behind.
+- After a restart with 2 sessions open, "Removed 3 microVM(s) orphaned by a previous run" is logged and nothing is left behind.
+
+### F-158 — Interactive stdin detection is now exact for blocking reads instead of a 3-second silence guess; found on the way: Python 3.10's `time.sleep()` is `pselect6(0, …)`
+
+**Where:** `examples/llm-chat/files/verify_proxy.py` (`_descendant_pids()`, `_pipe_unread()`, `_stdin_wait_state()`, wired into `run_sandboxed_interactive()`) and its Ansible mirror. Stage 11 of `llm-chat-sandbox-extensions-Phased-Implementation.md`.
+
+**Symptom:** Stage 3's documented limitation: any script silent for `INTERACTIVE_QUIET_S` (3s) was treated as waiting for input, so a slow computation got handed stdin it never asked for. After the first version of the fix, a `time.sleep(8)` script *still* got handed input at 3.06s on the coordinator, even though the same case passed on the dev host.
+
+**Root cause:** silence alone can't tell a blocked `read()` apart from computing. For the second symptom, jammy's Python 3.10 implements `time.sleep()` as `pselect6(0, NULL, NULL, NULL, …)`, not `clock_nanosleep` (read directly from `/proc/<pid>/syscall`: `270 0x0 …`). That fell into the "ambiguous wait" bucket and so back to the heuristic.
+
+**Fix:** verify-proxy runs as root, so on every 0.5s poll it reads `/proc/<pid>/task/*/{stat,syscall}` for the whole sandboxed tree:
+- A task blocked in `read(0)`, where `/proc/<pid>/fd/0` is our own stdin pipe, means **waiting**: hand input over immediately.
+- A running task, or one sleeping on a pure timer (`nanosleep`/`clock_nanosleep`, or `select`/`pselect6`/`poll`/`ppoll` with zero fds), means **busy**: never hand input over, however long it's silent.
+- Anything else (epoll/futex, e.g. an event-loop runtime reading stdin) falls back to the heuristic.
+
+A `FIONREAD` check stops a task that hasn't yet consumed our last write from counting as waiting again. Each exchange is tagged `exact` or `heuristic` in the transcript marker, which is captured to the Phase 3 corpus.
+
+**Verified by:** the real `unshare` sandbox on the coordinator, 2026-09-28:
+- Plain `input()` was handed over at 0.57s (`exact`).
+- 8s of silent busy-loop, then `input()`, was handed over at 8.23s, not 3s (`exact`).
+- `time.sleep(8)`, then `input()`, was handed over at 8.13s (`exact`, after the `pselect6` fix).
+- Two sequential `input()`s were both `exact` and produced the right sum.
+
+Eight local cases also pass: `input()`, busy loop, sleep, stdin from `/dev/null`, bash `read`, fd 0 redirected elsewhere, `input()` under a wrapper shell, and the unread-bytes guard.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -2802,3 +2853,4 @@ An "admin login across peers" idea was raised first and explicitly set aside aft
 | v2.2 | 2026-09-26 | Paul Scott | Direct report immediately after F-155 shipped: "why do we see: No populated memory slots reported." — the user had already run `setup-hwinfo.sh` and installed the real grant, so this was a genuine parsing bug, not a missing-privilege message working as designed. Root cause: every real `dmidecode` record is prefixed with its own "Handle 0x.., DMI type N, M bytes" line, so the literal string "Memory Device" is always the *second* line of a block, never the first — `_dimm_info()`'s original check only inspected line 0, silently skipping every genuine populated DIMM slot on any real host (this bug could never have shown a false positive, only ever this exact false-negative). Fixed to check all of a block's lines for that header, not just the first; confirmed live against this host's own real `dmidecode` output afterward — both actual DIMMs (2x 16GB DDR4-2133, `CT16G4S24AM.M16FE`) now correctly reported end to end through a real HTTP call. |
 | v2.3 | 2026-09-27 | Paul Scott | Direct follow-up: "can we query the network h/w better than this?" — the wireless row's own Link Speed column was always blank with nothing explaining why. F-156: added `ethtool -i` (driver, driver version, firmware version, bus address — confirmed live to need no privilege, unlike plain `ethtool` for speed/duplex, which does need root here) and sysfs `duplex` for every physical interface, plus best-effort wireless link detail (SSID/frequency/signal/real negotiated bitrate) via `iw` when that package is present, with a clear inline hint when it isn't rather than a blank cell with no explanation. Verified directly against this host's real two NICs (`e1000e` wired, `iwlwifi` wireless — real firmware version strings, real PCI bus addresses, real full-duplex reading) end-to-end through a real `GET /v1/hardware` call; the `iw`-based parsing itself is implementation-only and disclosed as such, since `iw` isn't installed on this host to verify against. |
 | v2.4 | 2026-09-27 | Paul Scott | Direct report right after installing `iw` per F-156's own suggestion: SSID/signal/frequency all showed correctly, but the Speed/Duplex column stayed blank for the wireless row instead of showing its negotiated bitrate. Root cause: `_iw_link_info()`'s own "tx bitrate" parsing partitioned the line on its first colon to get the value ("866.7 MBit/s...") *then* tried to `re.match` that value against a pattern still requiring the literal "tx bitrate:" prefix — a string that no longer contained it, since the partition had already stripped it off — so the regex could never match. Fixed to match the numeric prefix directly against the already-extracted value. Verified directly against this host's own real, now-installed `iw` (`iw dev wlp2s0 link`), correctly extracting `866.7` from the real "tx bitrate: 866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2" line, then end-to-end through a real `GET /v1/hardware` call — the last piece of F-156 that couldn't be verified when it shipped is now fully confirmed working. |
+| v2.5 | 2026-09-28 | Paul Scott | llm-chat sandbox extensions (Stages 10-11 of `llm-chat-sandbox-extensions-Phased-Implementation.md`), picking up the Phase 4 doc's still-open out-of-scope items. F-157: Firecracker under `jailer` with a shared read-only rootfs + per-session overlay; found a fcrunner-owned golden image and a dead-VMM session hang. F-158: exact stdin-wait detection via `/proc/<pid>/syscall`; found Python 3.10's `time.sleep()` is `pselect6(0, …)`. |

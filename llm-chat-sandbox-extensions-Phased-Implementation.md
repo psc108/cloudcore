@@ -1,6 +1,6 @@
 # llm-chat — Sandbox Extensions: Phased Implementation
 
-Paul Scott | Drafted 2026-09-28 — awaiting sign-off
+Paul Scott | Plan approved 2026-09-28
 
 ---
 
@@ -28,8 +28,8 @@ as in every prior phase.
 
 | # | Stage | Status |
 |---|---|---|
-| 10 | Firecracker under `jailer` + a shared microVM launcher module | Not started |
-| 11 | Exact input-wait detection via `/proc/<pid>/syscall` | Not started |
+| 10 | Firecracker under `jailer` + a shared microVM launcher module | Done — verified live 2026-09-28 |
+| 11 | Exact input-wait detection via `/proc/<pid>/syscall` | Done — verified live 2026-09-28 (11.3 guest helper moves into Stage 12's rootfs rebuild) |
 | 12 | Bash, JavaScript (Node), C/C++, Go in Run/Ask — Firecracker per run | Not started |
 | 13 | Local-capture client with per-student tokens and server-side re-verification | Not started |
 
@@ -135,6 +135,58 @@ client's non-Python code needs the multi-language runner to exist.
 | `kill -9` the VMM mid-session | The WS client gets an error frame; teardown still removes TAP, chroot and cgroup |
 | Restart `sandbox-terminal.service` with sessions open | No orphaned chroots/cgroups/TAPs remain after restart (add a startup sweep if they do) |
 
+### Verified live, 2026-09-28
+
+Against a fresh llm-chat build (coordinator `standard.large`, one RPC
+worker on the paired peer), running the rebuilt rootfs
+(`93d4bd9d…`), using real Terminal sessions opened through
+`sandbox_terminal.py`'s own WebSocket port and inspected from the host.
+
+| Check | Result |
+|---|---|
+| Golden rootfs + kernel ownership | `root:root 0644` |
+| VMM user | `fcrunner` for both concurrent sessions |
+| VMM root | Sees only its jail: `dev firecracker firecracker.pid rootfs.ext4 run scratch.ext4 vmlinux`; own mount namespace |
+| cgroup | `/fcsandbox/term-<id>`, `memory.max` = 402653184 (256MB guest + 128MB overhead) |
+| Overlay isolation | Session A's write to `/etc` invisible to session B; `/` is overlay, `/rom` is `ro` |
+| Golden image | Unwritable from the guest; SHA-256 identical before and after |
+| `apt-get install` in guest | Works (onto the scratch drive) |
+| Teardown | No VMM, chroot, cgroup, TAP or key dir left after close |
+| 10.5: Terminal + preview through the real LB | Connected via `:8620/terminal`; a `python3 -m http.server 41001` in the guest served through the LB's `:41001` |
+
+Failure-mode matrix:
+
+| Test | Expected | Actual |
+|---|---|---|
+| Guest allocates 600MB (256MB guest) | Guest-side OOM only | VMM survived, session still usable, host `MemAvailable` 1267MB → 1255MB |
+| `kill -9` the VMM mid-session | Error frame + full cleanup | **Failed first time**: session hung (see below). After the fix: error frame within one poll, nothing left behind |
+| Restart `sandbox-terminal.service` with 2 sessions open | No orphans | `sweep_orphans()` logged "Removed 3 microVM(s) orphaned by a previous run"; nothing left; new session works |
+
+**Found live, fixed (F-157):**
+- **A dead VMM hung the session instead of ending it.** SSH over TCP
+  to a guest whose VMM has died never errors, because nothing is left
+  to send a RST. The session would have sat there until the 15-minute
+  idle timeout. This predates Stage 10 (an unjailed VMM crash behaved
+  the same way); the new failure matrix is what exposed it.
+  `MicroVM.alive()` is now checked on every pass of the session loop.
+- **Orphans survive a service restart.** jailer moves each VMM into
+  its own cgroup, outside the service's, so systemd no longer kills
+  them on stop/restart. This was expected in the design, and
+  `sweep_orphans()` handles it.
+- **The golden rootfs and kernel were `fcrunner`-owned** (from the
+  Stage 5 cloud-init). Once the VMM runs as `fcrunner` behind a hard
+  link, that would have let a compromised VMM rewrite the shared
+  golden image for every later session. Found by reading the code
+  before building; now `root:root 0644`.
+
+Not covered: the Stage 8 "stuck terminal" recovery path was not
+re-exercised separately; its code is unchanged. Its original trigger,
+a student partitioning or formatting the running root, no longer
+reaches the root disk: `/sys/block/vda/ro` is `1` in the guest, and
+`sudo dd of=/dev/vda` copies 0 bytes (checked live). A student can
+still wreck their own session by formatting `/dev/vdb`, the scratch
+drive under their overlay, so the recovery path still matters.
+
 ---
 
 ## Stage 11 — Exact input-wait detection
@@ -184,6 +236,32 @@ redirected elsewhere" gap.
 | 11.2 | Wire it into `run_sandboxed_interactive()`; keep `INTERACTIVE_QUIET_S` only for the `unknown` case | A script that computes silently for 10s and then calls `input()` is **not** handed input during the 10s, and is handed input within ~0.5s once it blocks |
 | 11.3 | Guest helper `stdin-wait-check` in the rootfs build | Same four cases, run inside a microVM |
 | 11.4 | Update the Phase 4 doc's out-of-scope entry: resolved for blocking-read runtimes, heuristic remains for event-loop runtimes | — |
+
+### Verified live, 2026-09-28
+
+`run_sandboxed_interactive()` against the real `unshare` sandbox on the
+coordinator (task 11.2):
+
+| Case | Old heuristic | Actual now |
+|---|---|---|
+| Plain `input()` | ~3s | Handed over at 0.57s, `exact` |
+| 8s silent busy-loop, then `input()` | Wrong input at 3s | Handed over at 8.23s, `exact` |
+| `time.sleep(8)`, then `input()` | Wrong input at 3s | **Failed first time** (3.06s, `heuristic`); after the fix 8.13s, `exact` |
+| Two sequential `input()`s | 2 × ~3s | Both `exact`, correct sum |
+
+End to end, through the LB and the real model: an Ask of "write a
+script that reads a number with `input()` and prints its square"
+produced a script. The sandbox recorded `>>> INPUT PROVIDED (exact): '4'`
+and printed `The square of 4 is 16.` (exit 0).
+
+**Found live, fixed (F-158):** jammy's Python 3.10 implements
+`time.sleep()` as `pselect6(0, …)`, not `clock_nanosleep` (the dev host's
+3.12 uses the latter, so it passed locally). Zero-fd
+`select`/`pselect6`/`poll`/`ppoll` now count as timer sleeps.
+
+**Deferred to Stage 12 (11.3):** the guest-side `stdin-wait-check`
+helper only matters for per-run microVMs. It ships in Stage 12's rootfs
+rebuild instead of forcing a separate rebuild now.
 
 ---
 

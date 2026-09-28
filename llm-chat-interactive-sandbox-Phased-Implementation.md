@@ -1382,17 +1382,13 @@ so this document stays the complete record of what the sandbox is.
   **done, Stage 5**: built additively — the model-driven Ask flow is
   untouched, the terminal is a new, separate capability sitting
   alongside it, not a replacement.
-- **Perfect "is it actually waiting for input" detection** (Stage 3).
-  The quiet-period heuristic is real but imperfect — a script merely
-  computing something slowly looks identical to one genuinely waiting
-  on stdin. Documented as a known limitation, not solved by this
-  stage.
-- **`jailer`-based host-side hardening for the Firecracker VMM process**
-  (Stage 5B). Firecracker currently runs directly as root — genuine
-  guest-to-host isolation is unaffected (that's the KVM guest kernel
-  boundary + Stage A's own iptables policy, both live-verified), but
-  `jailer`'s own chroot/uid-drop/cgroups would add a further layer of
-  protection against a hypothetical VMM-process-level compromise.
-  Deliberately deferred rather than debugged blind alongside the rest
-  of Stage 5B's own real, novel bugs — flagged as the next likely
-  hardening step, not silently dropped.
+- ~~**Perfect "is it actually waiting for input" detection**~~ (Stage 3)
+  — **resolved for blocking reads, Stage 11** of
+  `llm-chat-sandbox-extensions-Phased-Implementation.md` (F-158): exact
+  detection via `/proc/<pid>/syscall`. The quiet-period heuristic
+  remains only for runtimes that read stdin through an event loop.
+- ~~**`jailer`-based host-side hardening for the Firecracker VMM process**~~
+  (Stage 5B) — **done, Stage 10** of
+  `llm-chat-sandbox-extensions-Phased-Implementation.md` (F-157): the VMM
+  is chrooted, runs as `fcrunner`, and is cgroup-limited, with a shared
+  read-only rootfs.
