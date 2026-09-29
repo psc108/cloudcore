@@ -54,7 +54,9 @@ this is ~80GB including the OS.
 | K2 | Replace the per-ZIM variables (3 each) with one ZIM manifest, each entry tagged with the panels that search it; TF + Ansible | Done — verified live (59 of 59 registered) |
 | K3 | Per-panel search: coding searches language + CS + low-level books, Linux Help searches systems + man pages + wikis; Wikipedia in both | Done — `fill`: specialists first, Wikipedia for empty slots (chosen by K5) |
 | K4 | Clickable citations: each reference links to the real kiwix page, proxied through verify-proxy (content paths only) | Done — verified live through the LB |
-| K5 | Measure search latency and hit relevance before/after, on real questions; decide on Stack Overflow from the numbers | Done — see results below; Stack Overflow decision pending |
+| K5 | Measure search latency and hit relevance before/after, on real questions; decide on Stack Overflow from the numbers | Done — see results below |
+| K6 | Serve the library from the host over read-only NFS instead of copying it into the VM | Done — verified live (2 min boot, 1.7GB disk) |
+| K7 | Stack Overflow (107GB): download, decide its place by benchmark, verify live | Done — reserved slot; verified live |
 
 ## Results (2026-09-28)
 
@@ -83,9 +85,25 @@ content limit (no Rust Book in the catalog).
 questions), F-168 (kiwix search semantics; empty-snippet hits were silently
 dropped; tag pages), F-169 (cold-index latency).
 
-**Stack Overflow:** latency is not the constraint; disk is. The kiwix VM
-(100GB) has 23GB free after the 73GB library, so the 107GB archive needs its
-own attached volume.
+**Stack Overflow (K6/K7, 2026-09-29).** Disk ruled out a second copy, so the
+kiwix VM now reads the host's artifact cache over a read-only NFS export
+(F-170): ready 2 minutes after apply instead of ~20, 1.7GB of VM disk instead
+of 75GB. Downloaded in ~20 minutes with aria2c across 7 Kiwix mirrors
+(~108MB/s) and verified against Kiwix's published sha256.
+
+Where it sits was decided by measurement (F-172):
+
+| Placement | Result |
+|---|---|
+| First tier | 25/32 coding slots; displaced LibreTexts, Wikibooks and the Rust docs; median latency 5–10× |
+| Fallback | Never used: weak curated hits filled both slots, even for error messages |
+| **Reserved slot (chosen)** | Slot 1 = best curated, slot 2 = Stack Overflow: exact threads for every error message tested, textbooks kept |
+
+Live over NFS: cold, never-seen queries took up to 3.1s, so the mount was
+tuned, the boot warm-up now covers error-message vocabulary, and the kiwix
+search budget went from 3s to 8s. End to end: an `UnboundLocalError` Ask was
+answered correctly, the fix was verified in the sandbox, and it cited the
+Python docs' *Execution model* plus the exact Stack Overflow thread.
 
 Methodology unchanged: build and verify live, log findings as F-NNN,
 tear down after.

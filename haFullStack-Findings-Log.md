@@ -2970,6 +2970,57 @@ The first attempt's failure (waiting, then still `Unable to locate`) was seen li
 
 **Verified by:** a live test on the kiwix VM (2026-09-28), with the page cache dropped each time. Without the warm-up, five real queries took `7.78 0.12 0.31 0.34 0.19` s; with the warm-up first, `0.18 0.07 0.20 0.27 0.13` s. Warm steady state measured through verify-proxy: median 0.14–0.15s, max 0.27s, including queries never seen before.
 
+### F-170 — The kiwix VM copied every ZIM onto its own disk; Stack Overflow could not fit twice, so the library is now read in place over read-only NFS
+
+**Where:** new `api/setup-artifact-nfs.sh` (host, run once with sudo), `examples/llm-chat/files/kiwix-cloud-init.yaml.tftpl` (mount instead of download) and the Ansible mirror; `examples/llm-chat/locals.tf` (download list becomes "filename size"). Stage K6 of `llm-chat-kiwix-expansion-Phased-Implementation.md`.
+
+**Symptom:** each llm-chat build downloaded the whole kiwix library from the host's HTTP repo onto the kiwix VM's disk: 73GB and ~20 minutes of boot for 59 ZIMs. Adding Stack Overflow (107GB) was impossible: stourport had 121GB free with an environment up, and the archive needs to exist twice, once in the artifact cache and once in the VM.
+
+**Root cause:** the design copied a large, static, read-only dataset into every VM that used it. An attached volume would not have helped, since the volume's data lives on the same host disk.
+
+**Fix:** the host exports the artifact directory the HTTP repo already serves, over NFS. `setup-artifact-nfs.sh` installs `nfs-kernel-server`, creates a read-only bind mount at the fixed path `/srv/cloudcore-artifacts` (so templates don't depend on where the checkout lives; it differs on Llwyn-y-Groes), and exports it read-only to the lab bridge only. Clients map to the directory's owner (`all_squash,anonuid`), because the repo sits under a 0750 home that `nobody` can't traverse; the export is read-only and the files are already public over HTTP, so this grants nothing new. The kiwix VM mounts it (nfs4, ro, fstab), checks each file's size against the manifest instead of re-hashing 180GB per boot (the fetcher verified every file against Kiwix's published sha256 on the host), refuses a partial library, and `kiwix-serve` `RequiresMountsFor` the mount. `nfs-common` was added to the guest package repo.
+
+**Verified by:** a live build on 2026-09-29. The kiwix VM was ready **2 minutes** after apply (was ~20), using **1.7GB** of its disk (was 75GB), with 60 of 60 ZIMs registered including Stack Overflow; writes to the mount fail ("Read-only file system"). On the host, the bind mount is `ro`, the export covers exactly `192.168.100.0/24` with read-only options, and a write probe is refused.
+
+### F-171 — Rebuilding the package repo to add one package would have wiped it, and silently rebuilt the Firecracker rootfs too
+
+**Where:** `api/build-package-repo.sh`.
+
+**Symptom:** adding `nfs-common` to the guest repo looked like a one-line job: `build-package-repo.sh jammy nfs-common`. Two behaviours made that dangerous. The live repo held 113 packages (a narrower set than the script's default list, which lacks `libgomp1` that llm-chat needs), and a rootfs builder VM appeared that nobody had asked for.
+
+**Root cause:**
+1. The script **replaces** the repo: `rm -f apt-repo/*.deb`, then copies in only what it just built. Run with one package, it would have left a repo holding only that package and broken every lab template.
+2. It calls `build-firecracker-rootfs.sh` as one of its steps. That produces a byte-different image (new SHA), and llm-chat's pinned checksum would then fail at the coordinator's next boot.
+
+**Fix:** the safe way to add a package is to rebuild with the repo's *current* set plus the new one, taken from its own `Packages.gz`, after backing up `apt-repo/`. The new rootfs SHA must then be pinned in `variables.tf` and the Ansible playbook. Both were done here.
+
+**Verified by:** before 113 packages, after 117; none missing, and the only additions are `nfs-common` and its dependencies (`keyutils`, `libnfsidmap1`, `rpcbind`). The rootfs SHA was updated to `82eda27c…` and matched the file.
+
+### F-172 — Stack Overflow in the grounding library: first-tier it crowded out the textbooks, as a fallback it was never used, and over NFS its cold index blew the 3s search budget
+
+**Where:** `examples/llm-chat/files/verify_proxy.py` (`KIWIX_BOOKS_RESERVED`, `_kiwix_fallback`, `_KIWIX_TIMEOUT_S`), `examples/llm-chat/kiwix-zims.json` (`"reserved": true`), `kiwix-cloud-init.yaml.tftpl` (mount options, warm-up). Stage K7 of `llm-chat-kiwix-expansion-Phased-Implementation.md`.
+
+**Symptom:** measured against the 59-ZIM library with the same benchmark plus six real error messages:
+1. As a **first-tier** source, Stack Overflow took 25 of 32 coding slots and displaced the authoritative sources. Virtual memory lost its LibreTexts chapters to a Windows 32-bit thread, and calling conventions lost Wikibooks' *X86 Assembly*. Relevance dropped slightly and median latency rose 5–10×.
+2. As a **fallback**, it was never used at all, because weak curated hits filled both slots. That happened exactly on the error messages students paste: `UnboundLocalError` got "Remove duplicates from a Pandas DataFrame".
+3. Searched together with Wikipedia, Stack Overflow's ~100 tag-listing pages for one tag filled *every* result for "nginx reverse proxy", so nothing usable came back.
+4. Live over NFS, three never-seen error queries hit the 3s kiwix timeout and silently lost their grounding.
+
+**Root cause:** Stack Overflow is enormous and relevant to almost everything, so wherever it competes directly it wins on volume rather than quality. Its index is also by far the largest, and cold reads over NFS each cost a network round trip.
+
+**Fix:**
+- **A reserved slot:** slot 1 is the panel's best curated hit, slot 2 is Stack Overflow's best hit, searched in parallel. If Stack Overflow has nothing usable, the slot backfills from curated hit 2, then Wikipedia.
+- **Fallback books are searched one at a time**, with more candidates per search (12), so tag-page floods can't empty the results.
+- **NFS mount tuned** for static read-only data (`nconnect=4,actimeo=3600,nocto`).
+- **Boot warm-up** adds common error-message vocabulary.
+- **kiwix timeout raised from 3s to 8s** (`KIWIX_TIMEOUT_SECONDS`): an Ask spends 1–3 minutes generating, so a few seconds of search is trivial next to losing the grounding. Sentinel lookups keep their own 3s budget.
+
+**Verified by:**
+- **Local benchmark, reserved slot:** every error message gets its exact thread (`NoneType … not subscriptable`, `undefined reference to main`, `cannot borrow as mutable`, `all goroutines are asleep`, `UnboundLocalError`), while concept queries keep Wikibooks, LibreTexts and the Rust docs in slot 1. Latency: median 0.35s / 0.51s, max ~1.5s, none over 3s.
+- **Live cold latency** (VM cache dropped): worst query 3.12s → 1.81s after the mount tuning and warm-up.
+- **Live searches through verify-proxy:** all six error queries returned the exact Stack Overflow thread plus a curated source; none dropped (max 4.4s).
+- **A real Ask, end to end:** a script raising `UnboundLocalError` was answered correctly, the fix was verified in the sandbox, and the sources were the Python docs *Execution model* and the exact Stack Overflow thread. Both open through the LB.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3096,3 +3147,4 @@ The first attempt's failure (waiting, then still `Unable to locate`) was seen li
 | v3.0 | 2026-09-28 | Paul Scott | Direct request: "i think f-162 needs a good look at, that sort of thing will almost certainly come back to bite later so we should be thoroughly prepared for it." F-162 root-caused from the repo's own access log (single-threaded server; a 50GB ZIM transfer blocked the coordinator's apt for ~7 min in both builds), reproduced old vs new, and fixed (threaded, Range support, completion logging), with a regression suite. Resolved pending a `cloudcore-repo` restart. |
 | v3.1 | 2026-09-28 | Paul Scott | Direct request: "lets get the small fixes fixed first please." F-163 to F-166 resolved and verified live on a fresh llm-chat build, which also finished cloud-init cleanly: the end-to-end confirmation for F-162. F-165's first fix failed under a deliberately forced race (the wrapper waited on the refresh script's own apt call; no D-Bus for non-root users) and was redone. F-164's prompt change alone did not stop the model; the code fallback is what fixes it. |
 | v3.2 | 2026-09-28 | Paul Scott | Direct request: "as much kiwix education material in programming and system architecture ... as well as python, go, c, c++, rust and assembler". `llm-chat-kiwix-expansion-Phased-Implementation.md`: 42 new ZIMs (59 total, 73GB) behind one manifest, per-panel search, clickable sources through `/kiwix/`. F-167 (the codebase tier pre-empted kiwix and confused the model), F-168 (kiwix search semantics and the benchmark-chosen merge), F-169 (a cold index took 7.8s; warm-up at boot). Stack Overflow deferred until measured; the kiwix VM has 23GB free, so it needs its own volume. |
+| v3.3 | 2026-09-29 | Paul Scott | Direct request: "lets get the stack overflow dealt with please", then "we already use nfs for the repo's. can we add it to that and serve from there?" (the repo turned out to be HTTP, but the idea stood: export the same directory). F-170: the kiwix library is read in place over a read-only NFS export (VM ready in 2 min, not 20; 1.7GB of disk, not 75GB). F-171: the package-repo rebuild replaces the whole repo and also rebuilds the rootfs. F-172: Stack Overflow gets a reserved slot beside the curated sources; NFS cold-read latency tuned and the kiwix search budget raised to 8s. |
