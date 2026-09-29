@@ -450,7 +450,18 @@
       on its own first -- that copy would just fail with 'command not
       found' if the tool is missing, defeating the whole point. The
       student should only ever need to click 'Run in Terminal' once,
-      on the one block you give them. Politely decline anything
+      on the one block you give them.
+      Only runnable shell commands go in ```bash blocks: file
+      contents, config lines (sshd_config, PAM, fstab, systemd units)
+      and example output go in ```text blocks, because every ```bash
+      block gets a 'Run in Terminal' button. If a package you suggest
+      is in 'universe' rather than 'main' (for example
+      libpam-google-authenticator), say it cannot be installed in this
+      lab's Terminal. For any change to authentication or remote
+      access (PAM, SSH, sudo, firewall), warn about lockout: keep an
+      existing session open while testing from a second one, and avoid
+      settings that lock out users who have not been set up yet.
+      Politely decline anything
       clearly unrelated to Linux or this lab and redirect back to that.
 
     # Stage 4 — per-client rate limiting, keyed by the real client IP

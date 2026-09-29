@@ -288,7 +288,10 @@ _SEARCH_TERMS_SYSTEM = (
     "question, suitable for a full-text search engine. Respond with "
     "ONLY the keywords, space-separated, no punctuation, no "
     "explanation. Prefer precise technical terms (protocol names, "
-    "command names, CPU/kernel terminology) over generic words."
+    "command names, CPU/kernel terminology) over generic words. "
+    "Spell out abbreviations the way documentation words them (MFA -> "
+    "two-factor authentication) and name the mechanism involved (PAM, "
+    "sshd, systemd) when the question implies one."
 )
 
 
@@ -442,7 +445,10 @@ def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
         return "", []
 
 
-_KIWIX_PARA_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.S | re.I)
+# `<p` followed by whitespace or `>` only (F-174): a bare `<p[^>]*>` also
+# matched SVG `<path ...>` (Stack Overflow's logo), so the "lead paragraph"
+# began at the logo and swept up the site navigation.
+_KIWIX_PARA_RE = re.compile(r"<p(?:\s[^>]*)?>(.*?)</p>", re.S | re.I)
 
 
 def _kiwix_article_lead(link: str, limit: int = 400) -> str:
@@ -490,6 +496,11 @@ def _kiwix_query(search_pattern: str, books: list[str], want: int) -> list[dict]
         if "/questions/tagged/" in link or title.startswith("Highest Voted '"):
             continue
         snippet = _KIWIX_TAG_RE.sub("", item.findtext("description") or "").strip()
+        # Near-empty counts as empty (F-174): Stack Exchange hits came back
+        # as "...a" and "...", which slipped past a plain emptiness check and
+        # reached the model as references with no content at all.
+        if sum(c.isalnum() for c in snippet) < 20:
+            snippet = ""
         if not snippet and link.startswith(KIWIX_URL_ROOT + "/content/"):
             # kiwix-serve returns some hits with an EMPTY snippet -- found in
             # K5 on Wikipedia's own "Big O notation", the best possible hit.
@@ -532,6 +543,50 @@ def _kiwix_fallback(search_pattern: str, want: int) -> list[dict]:
     return picked
 
 
+_KIWIX_RELAX_TRIES = 4
+
+
+def _kiwix_references(search_pattern: str, panel: str) -> list[dict]:
+    """One merged search for `panel` (the strategy is KIWIX_MERGE). Raises
+    on failure; _kiwix_search() owns the never-raise contract."""
+    # K3: the panel's specialist books first. In one combined search
+    # Wikipedia outranks them almost every time (K5 baseline: 1 of 20
+    # coding top-2 slots came from the Python docs/DevDocs), so the
+    # general books only fill slots the specialists leave empty.
+    specialist = KIWIX_BOOKS.get(panel, [])
+    try:
+        if KIWIX_MERGE == "combined" or not specialist:
+            references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
+        elif KIWIX_MERGE == "fill" or not KIWIX_BOOKS_FALLBACK:
+            if KIWIX_BOOKS_RESERVED:
+                # Both searches at once: the slower of the two, not the sum.
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    f_spec = pool.submit(_kiwix_query, search_pattern, specialist, _KIWIX_HITS)
+                    f_res = pool.submit(_kiwix_query, search_pattern, KIWIX_BOOKS_RESERVED, 1)
+                    spec_hits, res_hits = f_spec.result(), f_res.result()
+                references = spec_hits[:1] + res_hits[:1] + spec_hits[1:]
+                references = references[:_KIWIX_HITS]
+            else:
+                references = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
+            if len(references) < _KIWIX_HITS and KIWIX_BOOKS_FALLBACK:
+                references += _kiwix_fallback(search_pattern, _KIWIX_HITS - len(references))
+        else:  # split
+            spec = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
+            gen = _kiwix_query(search_pattern, KIWIX_BOOKS_FALLBACK, _KIWIX_HITS)
+            references = spec[:1] + gen[:1]
+            for extra in spec[1:] + gen[1:]:
+                if len(references) >= _KIWIX_HITS:
+                    break
+                references.append(extra)
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+        print(f"verify-proxy: kiwix rejected the book filter ({e.read()[:200]!r}); "
+              f"searching all books instead", flush=True)
+        references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
+    return references
+
+
 def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]]:
     """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
     ManKier man pages + ArchWiki, all three loaded into one instance --
@@ -554,41 +609,19 @@ def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]
     if not KIWIX_HOST or not search_pattern:
         return "", []
     try:
-        # K3: the panel's specialist books first. In one combined search
-        # Wikipedia outranks them almost every time (K5 baseline: 1 of 20
-        # coding top-2 slots came from the Python docs/DevDocs), so the
-        # general books only fill slots the specialists leave empty.
-        specialist = KIWIX_BOOKS.get(panel, [])
-        try:
-            if KIWIX_MERGE == "combined" or not specialist:
-                references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
-            elif KIWIX_MERGE == "fill" or not KIWIX_BOOKS_FALLBACK:
-                if KIWIX_BOOKS_RESERVED:
-                    # Both searches at once: the slower of the two, not the sum.
-                    with ThreadPoolExecutor(max_workers=2) as pool:
-                        f_spec = pool.submit(_kiwix_query, search_pattern, specialist, _KIWIX_HITS)
-                        f_res = pool.submit(_kiwix_query, search_pattern, KIWIX_BOOKS_RESERVED, 1)
-                        spec_hits, res_hits = f_spec.result(), f_res.result()
-                    references = spec_hits[:1] + res_hits[:1] + spec_hits[1:]
-                    references = references[:_KIWIX_HITS]
-                else:
-                    references = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
-                if len(references) < _KIWIX_HITS and KIWIX_BOOKS_FALLBACK:
-                    references += _kiwix_fallback(search_pattern, _KIWIX_HITS - len(references))
-            else:  # split
-                spec = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
-                gen = _kiwix_query(search_pattern, KIWIX_BOOKS_FALLBACK, _KIWIX_HITS)
-                references = spec[:1] + gen[:1]
-                for extra in spec[1:] + gen[1:]:
-                    if len(references) >= _KIWIX_HITS:
-                        break
-                    references.append(extra)
-        except urllib.error.HTTPError as e:
-            if e.code != 400:
-                raise
-            print(f"verify-proxy: kiwix rejected the book filter ({e.read()[:200]!r}); "
-                  f"searching all books instead", flush=True)
-            references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
+        # kiwix-serve matches ALL terms, so a long keyword list can find
+        # nothing (F-174: "MFA PAM two-factor authentication Linux login
+        # process" -> 0 hits, the first five words -> 2 good ones). The
+        # model lists the most specific terms first, so drop from the end.
+        words = search_pattern.split()
+        references = _kiwix_references(search_pattern, panel)
+        tries = 0
+        while not references and len(words) > 2 and tries < _KIWIX_RELAX_TRIES:
+            words, tries = words[:-1], tries + 1
+            references = _kiwix_references(" ".join(words), panel)
+        if tries and references:
+            print(f"verify-proxy: kiwix found nothing for {search_pattern!r}; "
+                  f"relaxed to {' '.join(words)!r}", flush=True)
         lines = [f'[{r["source"]}] "{r["title"]}": {r["snippet"]}' for r in references]
         if not lines:
             return "", []
@@ -941,7 +974,18 @@ _LINUX_SYSTEM_MESSAGE_DEFAULT = (
     "on its own first -- that copy would just fail with 'command not "
     "found' if the tool is missing, defeating the whole point. The "
     "student should only ever need to click 'Run in Terminal' once, "
-    "on the one block you give them. Politely decline anything "
+    "on the one block you give them. "
+    "Only runnable shell commands go in ```bash blocks: file "
+    "contents, config lines (sshd_config, PAM, fstab, systemd units) "
+    "and example output go in ```text blocks, because every ```bash "
+    "block gets a 'Run in Terminal' button. If a package you suggest "
+    "is in 'universe' rather than 'main' (for example "
+    "libpam-google-authenticator), say it cannot be installed in this "
+    "lab's Terminal. For any change to authentication or remote "
+    "access (PAM, SSH, sudo, firewall), warn about lockout: keep an "
+    "existing session open while testing from a second one, and avoid "
+    "settings that lock out users who have not been set up yet. "
+    "Politely decline anything "
     "clearly unrelated to Linux or this lab and redirect back to that."
 )
 _LINUX_SYSTEM_MESSAGE_PATH = os.environ.get(
@@ -2542,26 +2586,36 @@ function makeAskPanel(cfg) {
   // follows), just structured instead of one flat blob. Only applied
   // to the model's own messages -- a student's own submitted question
   // has nothing to act on.
+  //
+  // cfg.runnableTags (F-174): when set, only fences with one of those
+  // language tags get the panel's action; any other block (a config
+  // file, PAM lines, example output) gets Copy instead -- otherwise
+  // "Run in Terminal" on an sshd_config line types it into bash, it
+  // fails, and the automatic diagnose turn chases a non-command.
   function renderAssistantContent(el, text) {
     el.innerHTML = '';
-    const parts = text.split(/```[a-zA-Z0-9_+-]*\\n?([\\s\\S]*?)```/);
-    parts.forEach((part, i) => {
-      if (i % 2 === 0) {
-        if (part) el.appendChild(document.createTextNode(part));
-        return;
-      }
+    // split() with two groups yields [text, tag, code, text, tag, code, ..., text].
+    const parts = text.split(/```([a-zA-Z0-9_+-]*)\\n?([\\s\\S]*?)```/);
+    for (let i = 0; i < parts.length; i += 3) {
+      if (parts[i]) el.appendChild(document.createTextNode(parts[i]));
+      if (i + 2 >= parts.length) break;
+      const tag = parts[i + 1].toLowerCase();
+      const code = parts[i + 2];
+      const actionable = !cfg.runnableTags
+        || (cfg.runnableTags.includes(tag) && !looksLikeConfigLine(code));
       const wrap = document.createElement('div');
       wrap.className = 'code-block';
       const pre = document.createElement('pre');
-      pre.textContent = part;
+      pre.textContent = code;
       const btn = document.createElement('button');
       btn.className = 'use-code-btn';
-      btn.textContent = cfg.codeBlockLabel;
-      btn.onclick = () => cfg.onCodeBlock(part, statusEl);
+      btn.textContent = actionable ? cfg.codeBlockLabel : 'Copy';
+      btn.onclick = actionable ? () => cfg.onCodeBlock(code, statusEl)
+                               : () => copyCodeBlock(code, btn);
       wrap.appendChild(pre);
       wrap.appendChild(btn);
       el.appendChild(wrap);
-    });
+    }
   }
 
   // Regenerate is only meaningful once at least one question has been
@@ -2869,6 +2923,8 @@ const linuxAsk = makeAskPanel({
   transcriptId: 'linuxTranscript', questionId: 'linuxQuestion', askBtnId: 'linuxAskBtn',
   stopBtnId: 'linuxStopBtn', regenBtnId: 'linuxRegenBtn', statusId: 'linuxAskStatus',
   codeBlockLabel: 'Run in Terminal',
+  // Untagged stays runnable: small models often omit the tag on real commands.
+  runnableTags: ['', 'bash', 'sh', 'shell', 'console', 'zsh'],
   buildBody: () => ({}),
   onCodeBlock: (part, statusEl) => runCommandInTerminal(part, statusEl),
 });
@@ -3133,6 +3189,44 @@ function sendCodeToTerminal() {
 // own answers can plausibly include a heredoc example of their own
 // using a plain "EOF"-style name, which a fixed delimiter could
 // collide with.
+// The prompt asks for config in ```text fences, but the model still
+// tags PAM and sshd_config lines as bash often enough (F-174), so the
+// first real line is checked too: a PAM rule, or a capitalised
+// "Directive value" (shell commands are lowercase), is not a command.
+function looksLikeConfigLine(code) {
+  const first = code.split('\\n').map(l => l.trim()).find(l => l && !l.startsWith('#')) || '';
+  return /^(auth|account|password|session|@include)\\s+\\S/.test(first)
+      || /^[A-Z][A-Za-z0-9]+\\s+\\S/.test(first);
+}
+
+// The page is usually served over plain HTTP through the LB, where
+// navigator.clipboard doesn't exist (secure contexts only), hence the
+// execCommand fallback.
+function copyCodeBlock(text, btn) {
+  const shown = (label) => {
+    btn.textContent = label;
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  };
+  const legacy = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    shown(ok ? 'Copied' : 'Select and copy manually');
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => shown('Copied'), legacy);
+  } else {
+    legacy();
+  }
+}
+
 function runCommandInTerminal(code, statusEl) {
   if (!code.trim()) return;
   if (!termState || termState.ws.readyState !== WebSocket.OPEN) {

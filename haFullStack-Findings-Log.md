@@ -3045,6 +3045,44 @@ Superseded files are kept for `retention_days` (14), and never deleted while a k
   - a 30-day-old superseded file was kept while a kiwix VM ran and deleted once none did.
 - **Live, 2026-09-29:** the schedule "Weekly: kiwix ZIM update check (Sun 03:00 UTC)" (`0 3 * * 0`, first fire 2026-10-04) ran via Run Now inside the API process against the live catalog (1300 releases, 60 ZIMs): `0 updated, 0 skipped, 0 failed`, manifest unchanged. `git push` works non-interactively from the checkout.
 
+### F-174 — A Linux Help answer on adding MFA was ungrounded, put "Run in Terminal" on config lines, and suggested an uninstallable package with no lockout warning
+
+**Where:** `examples/llm-chat/files/verify_proxy.py`: `renderAssistantContent()`/`copyCodeBlock()` (page), `_kiwix_query()` and `_KIWIX_PARA_RE` (snippets), `_kiwix_search()`/`_kiwix_references()` (term relaxation), and `_SEARCH_TERMS_SYSTEM`; the Linux Help system prompt in all three copies (`verify_proxy.py` default, `variables.tf` `linux_system_message`, `ansible/examples/14-llm-chat.yml`); the Ansible mirror of `verify_proxy.py`.
+
+**Symptom:** asked "how could we add mfa to the linux login process?", the Linux Help panel gave a confident Google Authenticator walkthrough that was unsafe as written:
+- `auth required pam_google_authenticator.so` at the top of `/etc/pam.d/sshd` without `nullok`, which locks out every user who hasn't enrolled;
+- no mention that SSH public-key logins skip PAM `auth` entirely (`AuthenticationMethods publickey,keyboard-interactive`);
+- the deprecated `ChallengeResponseAuthentication yes`, which the stock `KbdInteractiveAuthentication no` and `sshd_config.d/` would override, since sshd takes the first value;
+- `PasswordAuthentication yes` recommended;
+- no "keep a session open" warning;
+- SSH only, despite the question asking about login in general.
+
+It also didn't say that `libpam-google-authenticator` is in **universe**, so it can't be installed in the lab Terminal, which only indexes main. Every config snippet (PAM lines, `sshd_config` directives) had a "Run in Terminal" button. Its grounding log showed two irrelevant references (an Ansible/Duo thread and a GitLab/AWS MFA thread) with snippets of `"...a"` and `"..."`.
+
+**Root cause:** five separate defects.
+1. **Page:** `renderAssistantContent()` added the panel's action to every fenced block, whatever the language tag. The model fenced config lines as `bash`, and the prompt never told it not to.
+2. **Snippets:** `_kiwix_query()` only recovered *empty* snippets (F-168). Stack Exchange hits came back as `"...a"`, slipped past the check, and reached the model as references with no content.
+3. **Lead paragraph:** the `_KIWIX_PARA_RE` pattern `<p[^>]*>` also matches SVG `<path …>`. On Stack Overflow pages the "lead paragraph" therefore started at the site logo and swept up the navigation ("Home Questions Tags Users About … Viewed 368 times").
+4. **Search terms:** "MFA" matched unrelated MFA threads. Reference text says "two-factor authentication" and "PAM".
+5. **Too many terms:** kiwix-serve matches all terms, and the term extractor sometimes returns 7+ words. "MFA PAM two-factor authentication Linux login process" found **nothing**, while its first five or six words found good threads.
+
+**Fix:**
+- **Buttons:** the Linux Help panel only puts "Run in Terminal" on `bash`/`sh`/`shell`/`console`/`zsh` or untagged fences. Other blocks get **Copy**, with an `execCommand` fallback because the page is plain HTTP and `navigator.clipboard` needs a secure context. The coding panel is unchanged.
+- **Linux Help prompt:** config/file contents go in `text` blocks; say when a package is in universe; for any change to authentication or remote access, warn about lockout (keep a session open, don't lock out users who aren't set up yet).
+- **Snippets:** a snippet with fewer than 20 alphanumeric characters counts as empty, so the lead paragraph is fetched instead. `_KIWIX_PARA_RE` now matches only real `<p>` tags.
+- **Search terms:** the extractor spells out abbreviations (MFA → two-factor authentication) and names the mechanism involved (PAM, sshd, systemd).
+- **Relaxation:** when a search returns nothing, it retries with the last term dropped, down to 2 words and at most 4 retries, each ~0.1–0.4s. The relaxation is logged.
+
+**Still open:** the model's own sysadmin knowledge. Even when grounded it can place a PAM line badly or omit `nullok`/`AuthenticationMethods`. The references help, but a 14B model at ~1 token/s can't be relied on for security-critical configuration. Linux Help answers remain unverified, as the panel already says.
+
+**Verified by:** re-asking the same question live on 2026-09-29.
+- **With the prompt, snippet and search-term fixes:** the model flagged the universe package, put the PAM line in a `text` block and warned about lockout. But the search terms came back as 7 words and kiwix found nothing, which is how the relaxation was found.
+- **With the relaxation:** the search relaxed to 6 terms and grounded on a Super User thread ("Google authenticator MFA codes aren't working in Linux") and a Server Fault thread ("sshd: How to enable PAM authentication for specific users"), both with real question-text snippets.
+- **The same run also showed the prompt isn't enough on its own:** config lines were back in `bash` fences, with no universe note and no lockout warning. It also suggested `password required pam_unix.so ... md5 max=8`, which would weaken password hashing. Hence the page-side guard, `looksLikeConfigLine()`: a shell-tagged block whose first real line is a PAM rule or a capitalised `Directive value` gets Copy, not Run.
+- **Local checks against the live library:** Stack Overflow snippets now start at the question text, not the navigation; a nonsense query still returns nothing in 0.1s; the coding panel's `UnboundLocalError` still gets the Python docs plus the exact Stack Overflow thread.
+- **Page:** a Node test of `renderAssistantContent` showed Linux Help giving Copy to `text`/`ini` blocks and Run to `bash`/untagged ones, with the coding panel unchanged. `looksLikeConfigLine` got 15 of 15 cases right (PAM, `@include` and `sshd_config` lines are config; `sudo …`, `passwd alice`, `VAR=1 ./run.sh`, `export …` and `cd … && ls` are commands). The page's JavaScript passes `node --check`, and the deployed page serves the new functions.
+- **Prompt:** all three copies of the Linux Help prompt (Python, OpenTofu, Ansible) were compared and are identical.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3173,3 +3211,4 @@ Superseded files are kept for `retention_days` (14), and never deleted while a k
 | v3.2 | 2026-09-28 | Paul Scott | Direct request: "as much kiwix education material in programming and system architecture ... as well as python, go, c, c++, rust and assembler". `llm-chat-kiwix-expansion-Phased-Implementation.md`: 42 new ZIMs (59 total, 73GB) behind one manifest, per-panel search, clickable sources through `/kiwix/`. F-167 (the codebase tier pre-empted kiwix and confused the model), F-168 (kiwix search semantics and the benchmark-chosen merge), F-169 (a cold index took 7.8s; warm-up at boot). Stack Overflow deferred until measured; the kiwix VM has 23GB free, so it needs its own volume. |
 | v3.3 | 2026-09-29 | Paul Scott | Direct request: "lets get the stack overflow dealt with please", then "we already use nfs for the repo's. can we add it to that and serve from there?" (the repo turned out to be HTTP, but the idea stood: export the same directory). F-170: the kiwix library is read in place over a read-only NFS export (VM ready in 2 min, not 20; 1.7GB of disk, not 75GB). F-171: the package-repo rebuild replaces the whole repo and also rebuilds the rootfs. F-172: Stack Overflow gets a reserved slot beside the curated sources; NFS cold-read latency tuned and the kiwix search budget raised to 8s. |
 | v3.4 | 2026-09-29 | Paul Scott | Direct request: "on a weekly basis check the size of the download. if the have increaed in a meaningful way we update them"; git handling: "Commit and push". F-173: new scheduler kind `kiwix_update` (weekly, ≥5% or ≥200MB growth, sha256-verified, disk reserve, 14-day retention of superseded files, manifest-only commit + push); the first cut would have left the manifest's size stale without libzim. |
+| v3.5 | 2026-09-29 | Paul Scott | Direct request: review of a Linux Help answer to "how could we add mfa to the linux login process?", then "yes, please" to the fixes. F-174: Run in Terminal only on shell fences (Copy otherwise); prompt covers config fences, universe packages and lockout warnings; near-empty snippets recovered; the lead-paragraph regex no longer matches `<path>`; abbreviations expanded in search terms; zero-hit searches relaxed term by term. |
