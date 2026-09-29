@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import array
 import collections
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hmac
 import html
@@ -200,6 +201,13 @@ KIWIX_BOOKS = {
     "linux": [b for b in os.environ.get("KIWIX_BOOKS_LINUX", "").split(",") if b],
 }
 KIWIX_BOOKS_FALLBACK = [b for b in os.environ.get("KIWIX_BOOKS_FALLBACK", "").split(",") if b]
+# Books that get a reserved slot of their own (Stack Overflow): slot 1 stays
+# the panel's best curated hit, slot 2 is the reserved book's best hit. As
+# a first-tier source Stack Overflow took 25 of 32 coding slots and pushed
+# out the textbooks; as a fallback it was never used, because weak curated
+# hits filled both slots -- exactly on the error messages students paste,
+# where it has the exact thread (K7 benchmark).
+KIWIX_BOOKS_RESERVED = [b for b in os.environ.get("KIWIX_BOOKS_RESERVED", "").split(",") if b]
 _KIWIX_HITS = 2
 # How the two hit slots are filled. K5 benchmark on the full 59-ZIM
 # library (26 real queries, every hit judged by hand): fill ~47/52
@@ -452,8 +460,10 @@ def _kiwix_query(search_pattern: str, books: list[str], want: int) -> list[dict]
     loaded, so a single ZIM that failed to register would otherwise
     silently turn off every filtered search -- the caller falls back to an
     unfiltered search on 400."""
-    # Headroom beyond `want`: some hits are dropped below (tag-listing pages).
-    params = [("pattern", search_pattern), ("format", "xml"), ("pageLength", str(want + 4))]
+    # Generous headroom beyond `want`: tag-listing pages are dropped below,
+    # and a big Stack Exchange archive can return nothing BUT those for a
+    # popular tag (Stack Overflow: ~100 for "nginx-reverse-proxy").
+    params = [("pattern", search_pattern), ("format", "xml"), ("pageLength", str(want + 10))]
     params += [("books.name", b) for b in books]
     url = f"http://{KIWIX_HOST}:{KIWIX_PORT}{KIWIX_URL_ROOT}/search?{urllib.parse.urlencode(params)}"
     with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
@@ -492,6 +502,27 @@ def _kiwix_query(search_pattern: str, books: list[str], want: int) -> list[dict]
     return hits
 
 
+def _kiwix_fallback(search_pattern: str, want: int) -> list[dict]:
+    """Fill `want` slots from the general fallback books (Wikipedia, Stack
+    Overflow), searched ONE BOOK AT A TIME and taken alternately. Searched
+    together, Stack Overflow's tag-listing pages alone filled every result
+    for "nginx reverse proxy" and Wikipedia's good hit never surfaced."""
+    per_book = []
+    for book in KIWIX_BOOKS_FALLBACK:
+        try:
+            per_book.append(_kiwix_query(search_pattern, [book], want))
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                raise
+            print(f"verify-proxy: fallback book {book} not loaded; skipping", flush=True)
+    picked = []
+    for rank in range(want):
+        for hits in per_book:
+            if rank < len(hits) and len(picked) < want:
+                picked.append(hits[rank])
+    return picked
+
+
 def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]]:
     """Query the retrieval-grounding kiwix-serve instance (Wikipedia +
     ManKier man pages + ArchWiki, all three loaded into one instance --
@@ -523,10 +554,18 @@ def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]
             if KIWIX_MERGE == "combined" or not specialist:
                 references = _kiwix_query(search_pattern, [], _KIWIX_HITS)
             elif KIWIX_MERGE == "fill" or not KIWIX_BOOKS_FALLBACK:
-                references = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
+                if KIWIX_BOOKS_RESERVED:
+                    # Both searches at once: the slower of the two, not the sum.
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        f_spec = pool.submit(_kiwix_query, search_pattern, specialist, _KIWIX_HITS)
+                        f_res = pool.submit(_kiwix_query, search_pattern, KIWIX_BOOKS_RESERVED, 1)
+                        spec_hits, res_hits = f_spec.result(), f_res.result()
+                    references = spec_hits[:1] + res_hits[:1] + spec_hits[1:]
+                    references = references[:_KIWIX_HITS]
+                else:
+                    references = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
                 if len(references) < _KIWIX_HITS and KIWIX_BOOKS_FALLBACK:
-                    references += _kiwix_query(search_pattern, KIWIX_BOOKS_FALLBACK,
-                                               _KIWIX_HITS - len(references))
+                    references += _kiwix_fallback(search_pattern, _KIWIX_HITS - len(references))
             else:  # split
                 spec = _kiwix_query(search_pattern, specialist, _KIWIX_HITS)
                 gen = _kiwix_query(search_pattern, KIWIX_BOOKS_FALLBACK, _KIWIX_HITS)

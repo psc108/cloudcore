@@ -903,6 +903,23 @@
       "book_name": "electronics.stackexchange.com_en_all",
       "uuid": "c7f8f834-1232-80ba-186b-a6677e2e4225",
       "fulltext": true
+    },
+    {
+      "name": "stackoverflow.com_en_all",
+      "filename": "stackoverflow.com_en_all_2026-07.zim",
+      "source_url": "https://lb.download.kiwix.org/zim/stack_exchange/stackoverflow.com_en_all_2026-07.zim",
+      "sha256": "2878fd0bbc4d0d7a05249bc04f45b71f183c09929a843308b923190f1d15436f",
+      "size_bytes": 114855633696,
+      "panels": [
+        "coding",
+        "linux"
+      ],
+      "tier": "5-stackoverflow",
+      "title": "Stack Overflow",
+      "book_name": "stackoverflow.com_en_all",
+      "uuid": "e846e4de-1951-b5bd-05f3-9a2592943394",
+      "fulltext": true,
+      "reserved": true
     }
   ]
 }

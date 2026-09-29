@@ -64,8 +64,10 @@ locals {
   # kiwix corpus comes from one manifest, not three variables per ZIM.
   kiwix_manifest = jsondecode(file("${path.module}/${var.kiwix_zim_manifest}"))
   kiwix_zims     = local.kiwix_manifest.zims
-  # "filename sha256" per line -- what the kiwix VM downloads and verifies.
-  kiwix_zim_list = join("\n", [for z in local.kiwix_zims : "${z.filename} ${coalesce(try(z.sha256, null), "MISSING")}"])
+  # "filename size_bytes" per line -- what the kiwix VM checks and registers
+  # from the host's read-only NFS export (K6; content was sha256-verified
+  # on the host by api/fetch-kiwix-zims.py).
+  kiwix_zim_list = join("\n", [for z in local.kiwix_zims : "${z.filename} ${try(z.size_bytes, 0)}"])
   # Book ids each llm-chat panel searches, passed by verify_proxy.py as
   # kiwix-serve's books.name filter. kiwix-serve names a book by its
   # FILENAME minus ".zim" (the same name as in its /content/<name>/ URLs),
@@ -74,9 +76,12 @@ locals {
   # works. Fallback books (Wikipedia) are searched only for slots the
   # specialist books leave empty -- in one combined search they outrank
   # everything else (K5 baseline).
-  kiwix_books_coding   = join(",", [for z in local.kiwix_zims : trimsuffix(z.filename, ".zim") if contains(z.panels, "coding") && !try(z.fallback, false)])
-  kiwix_books_linux    = join(",", [for z in local.kiwix_zims : trimsuffix(z.filename, ".zim") if contains(z.panels, "linux") && !try(z.fallback, false)])
+  kiwix_books_coding   = join(",", [for z in local.kiwix_zims : trimsuffix(z.filename, ".zim") if contains(z.panels, "coding") && !try(z.fallback, false) && !try(z.reserved, false)])
+  kiwix_books_linux    = join(",", [for z in local.kiwix_zims : trimsuffix(z.filename, ".zim") if contains(z.panels, "linux") && !try(z.fallback, false) && !try(z.reserved, false)])
   kiwix_books_fallback = join(",", [for z in local.kiwix_zims : trimsuffix(z.filename, ".zim") if try(z.fallback, false)])
+  # Reserved-slot books (Stack Overflow): always offered one of the two
+  # slots, alongside the panel's best curated hit (K7).
+  kiwix_books_reserved = join(",", [for z in local.kiwix_zims : trimsuffix(z.filename, ".zim") if try(z.reserved, false)])
 
   kiwix_user_data = templatefile("${path.module}/files/kiwix-cloud-init.yaml.tftpl", {
     kiwix_port          = var.kiwix_port
@@ -221,6 +226,7 @@ locals {
     kiwix_books_coding               = local.kiwix_books_coding
     kiwix_books_linux                = local.kiwix_books_linux
     kiwix_books_fallback             = local.kiwix_books_fallback
+    kiwix_books_reserved             = local.kiwix_books_reserved
     sentinel_host                    = var.sentinel_host
     sentinel_port                    = var.sentinel_port
     examples_api_base                = local.examples_api_base

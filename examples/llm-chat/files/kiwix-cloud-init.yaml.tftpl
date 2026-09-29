@@ -29,6 +29,7 @@ packages:
   - curl
   - ca-certificates
   - promtail
+  - nfs-common
 
 write_files:
   - path: /etc/promtail/config.yml
@@ -36,7 +37,7 @@ write_files:
       ${indent(6, promtail_config)}
 
   # K2 (llm-chat-kiwix-expansion-Phased-Implementation.md): one line per
-  # ZIM, "filename sha256", rendered from examples/llm-chat/kiwix-zims.json.
+  # ZIM, "filename size_bytes", rendered from examples/llm-chat/kiwix-zims.json.
   - path: /opt/kiwix/zims.txt
     content: |
       ${indent(6, kiwix_zim_list)}
@@ -48,6 +49,9 @@ write_files:
     content: |
       [Unit]
       Description=kiwix-serve — llm-chat retrieval-grounding backend (library of ${kiwix_zim_count} ZIMs)
+      # The ZIMs live on the host's NFS export (K6); never serve without it.
+      RequiresMountsFor=/opt/kiwix/data
+      After=remote-fs.target
 
       [Service]
       Type=simple
@@ -102,23 +106,33 @@ runcmd:
   - [ chmod, "755", /opt/kiwix/kiwix-serve, /opt/kiwix/kiwix-manage ]
   - [ rm, -rf, "/tmp/kiwix-tools_linux-x86_64-${kiwix_tools_version}", /tmp/kiwix-tools.tar.gz ]
 
-  # Every ZIM in the manifest: resumable download from the host artifact
-  # cache (the repo answers Range requests since F-162), checksum
-  # verified, then registered in the library kiwix-serve serves. A bad
-  # checksum stops the loop -- serving a corrupt archive would be worse
-  # than serving none. Same stall-tolerant curl options as before.
+  # K6: the ZIMs are read in place from the host's artifact cache over a
+  # read-only NFS export (api/setup-artifact-nfs.sh) instead of being
+  # copied here -- 180GB with Stack Overflow, which cannot fit a second
+  # time on the host's disk, and ~20 minutes of boot even without it.
+  # Each file is checked against the manifest's size rather than re-hashed
+  # (180GB over NFS on every boot); api/fetch-kiwix-zims.py verified each
+  # one against Kiwix's published sha256 on the host. A missing or
+  # wrong-sized file stops here: serving part of the library silently
+  # would hide the problem.
+  # A peer-placed kiwix VM needs its peer's bridge range added to the
+  # export (setup-artifact-nfs.sh --allow).
   - |
     set -e
+    grep -q ' /opt/kiwix/data ' /etc/fstab || \
+      echo '192.168.100.1:/srv/cloudcore-artifacts /opt/kiwix/data nfs4 ro,vers=4.2,_netdev,nofail 0 0' >> /etc/fstab
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      mountpoint -q /opt/kiwix/data || mount /opt/kiwix/data || true
+      mountpoint -q /opt/kiwix/data && break
+      echo "NFS mount of the artifact cache attempt $attempt failed, retrying..." >&2
+      sleep 5
+    done
+    mountpoint -q /opt/kiwix/data
     rm -f /opt/kiwix/library.xml
-    while read -r fn sha; do
+    while read -r fn size; do
       [ -n "$fn" ] || continue
-      for attempt in 1 2 3 4 5 6 7 8 9 10; do
-        curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
-          -C - -o "/opt/kiwix/data/$fn" "http://192.168.100.1:8090/jammy/artifacts/$fn" && break
-        echo "$fn download attempt $attempt stalled/failed, retrying..." >&2
-        sleep 5
-      done
-      echo "$sha  /opt/kiwix/data/$fn" | sha256sum -c -
+      actual=$(stat -c %s "/opt/kiwix/data/$fn")
+      [ "$actual" = "$size" ] || { echo "$fn: size $actual, manifest says $size" >&2; exit 1; }
       /opt/kiwix/kiwix-manage /opt/kiwix/library.xml add "/opt/kiwix/data/$fn"
     done < /opt/kiwix/zims.txt
     echo "kiwix library: $(grep -c '<book ' /opt/kiwix/library.xml) of ${kiwix_zim_count} ZIMs registered" >&2
