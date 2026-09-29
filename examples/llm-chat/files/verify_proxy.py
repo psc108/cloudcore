@@ -220,7 +220,16 @@ _KIWIX_HITS = 2
 #   split    -- one specialist hit plus one general hit, each backfilling
 #               the other when it has nothing
 KIWIX_MERGE = os.environ.get("KIWIX_MERGE", "fill")
-_KIWIX_TIMEOUT_S = 3
+# Per kiwix request. Raised from 3s (K7): with the library read over the
+# host's read-only NFS export, a never-before-seen query against Stack
+# Overflow's index took up to 3.1s cold (1.8s after mount tuning + warm-up),
+# and a timeout silently drops the grounding. An ask spends 1-3 minutes
+# generating, so a few more seconds here costs nothing by comparison.
+_KIWIX_TIMEOUT_S = int(os.environ.get("KIWIX_TIMEOUT_SECONDS", "8"))
+# Sentinel lookups (approved-answer corpus, codebase index) keep the
+# original short budget: they are local and fast, and previously just
+# shared the kiwix constant.
+_SENTINEL_LOOKUP_TIMEOUT_S = 3
 _KIWIX_TAG_RE = re.compile(r"<[^>]+>")
 
 # Direct follow-up, after confirming grounding actually worked on a real
@@ -337,11 +346,11 @@ def _local_corpus_search(search_terms: str) -> tuple[str, list[dict]]:
     try:
         qs = urllib.parse.urlencode({"q": search_terms})
         url = f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/grounding-log/match?{qs}"
-        # Same short, hard timeout as _kiwix_search()'s own -- this call
+        # Short, hard timeout -- this call
         # is synchronous, on the critical path of every ask (unlike the
         # backgrounded push below), so a slow Sentinel must never
         # meaningfully delay an answer over an optional local-corpus hit.
-        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(url, timeout=_SENTINEL_LOOKUP_TIMEOUT_S) as resp:
             match = json.loads(resp.read())
         if not match:
             return "", []
@@ -401,7 +410,7 @@ def _codebase_search(search_terms: str) -> tuple[str, list[dict]]:
     try:
         qs = urllib.parse.urlencode({"q": search_terms})
         url = f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/codebase-search?{qs}"
-        with urllib.request.urlopen(url, timeout=_KIWIX_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(url, timeout=_SENTINEL_LOOKUP_TIMEOUT_S) as resp:
             hits = json.loads(resp.read())
         lines = []
         references = []

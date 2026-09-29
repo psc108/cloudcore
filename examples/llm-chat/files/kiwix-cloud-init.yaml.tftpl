@@ -117,10 +117,13 @@ runcmd:
   # would hide the problem.
   # A peer-placed kiwix VM needs its peer's bridge range added to the
   # export (setup-artifact-nfs.sh --allow).
+  # Mount options for static, read-only data (K7, measured live): nconnect=4
+  # for parallel reads, actimeo=3600 + nocto because the files never change
+  # underneath us -- together ~40% off cold search latency.
   - |
     set -e
     grep -q ' /opt/kiwix/data ' /etc/fstab || \
-      echo '192.168.100.1:/srv/cloudcore-artifacts /opt/kiwix/data nfs4 ro,vers=4.2,_netdev,nofail 0 0' >> /etc/fstab
+      echo '192.168.100.1:/srv/cloudcore-artifacts /opt/kiwix/data nfs4 ro,vers=4.2,nconnect=4,actimeo=3600,nocto,_netdev,nofail 0 0' >> /etc/fstab
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       mountpoint -q /opt/kiwix/data || mount /opt/kiwix/data || true
       mountpoint -q /opt/kiwix/data && break
@@ -152,7 +155,13 @@ runcmd:
       curl -fs -o /dev/null "http://127.0.0.1:${kiwix_port}/kiwix/" && break
       sleep 2
     done
-    for q in linux memory process network file error function server kernel python; do
+    # General terms, then the vocabulary of error messages students paste
+    # (K7): Stack Overflow's index is by far the largest, and these pull
+    # its heaviest posting lists into cache. ~4 minutes; kiwix-serve is
+    # already answering (just more slowly) while it runs.
+    for q in linux memory process network file error function server kernel python \
+             exception undefined cannot failed permission denied not+found null \
+             segmentation module import syntax type index key value attribute reference timeout; do
       curl -fs -o /dev/null --max-time 60 "http://127.0.0.1:${kiwix_port}/kiwix/search?pattern=$q&pageLength=5" || true
     done
     echo "kiwix: search indexes warmed" >&2
