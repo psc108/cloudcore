@@ -633,6 +633,93 @@ def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]
         return "", []
 
 
+# Linux Help answer notices (F-175) -- structured warnings sent after the
+# answer as their own SSE event, rendered by the page under the answer and
+# never fed back to the model. The model is small and Linux Help answers are
+# not executed or checked, so every answer carries a general caution; two
+# kinds of answer get a specific one on top.
+_TERMINAL_PACKAGES_URL = os.environ.get(
+    "TERMINAL_PACKAGES_URL",
+    "http://archive.ubuntu.com/ubuntu/dists/jammy/main/binary-amd64/Packages.xz")
+# The Terminal's runtime index is jammy main only (build-firecracker-rootfs.sh
+# enables universe just long enough to install the toolchains below).
+_TERMINAL_PREINSTALLED_UNIVERSE = frozenset({"nodejs"})
+_terminal_packages: frozenset | None = None
+
+
+def _load_terminal_packages() -> None:
+    """Fetch jammy main's package names once, in the background. The
+    release pocket never changes, so one fetch per service start is
+    enough. On failure the package check is simply skipped -- no notice
+    is better than a wrong one."""
+    global _terminal_packages
+    import lzma
+    try:
+        with urllib.request.urlopen(_TERMINAL_PACKAGES_URL, timeout=60) as resp:
+            text = lzma.decompress(resp.read()).decode("utf-8", "replace")
+        _terminal_packages = frozenset(
+            line[9:].strip() for line in text.splitlines() if line.startswith("Package: "))
+        print(f"verify-proxy: loaded {len(_terminal_packages)} Terminal package names", flush=True)
+    except (OSError, lzma.LZMAError, ValueError) as e:
+        print(f"verify-proxy: Terminal package index unavailable, skipping that notice: {e!r}",
+              flush=True)
+
+
+_APT_INSTALL_RE = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\s+([^\n;&|`)]*)")
+_APT_PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
+_CODE_SPAN_RE = re.compile(r"```[^\n]*\n(.*?)```|`([^`\n]+)`", re.S)
+
+_NOTICE_GENERAL = (
+    "This answer comes from a small local model and has not been run or checked. "
+    "Treat it as a starting point: check it against the sources below and the man "
+    "pages before using it on a real system.")
+_NOTICE_AREAS = [
+    (re.compile(r"/etc/pam\.d|\bpam_\w+\.so\b|sshd_config|/etc/sudoers|\bvisudo\b|/etc/shadow"
+                r"|\bAuthenticationMethods\b|\bPermitRootLogin\b"),
+     "login and authentication"),
+    # Changing forms only: listing rules (iptables -L, ufw status) is harmless.
+    (re.compile(r"\bip6?tables\s+(?:-t\s+\w+\s+)?-[AIDFPXNR]\b"
+                r"|\bufw\s+(?:enable|disable|allow|deny|reject|limit|delete|default|reset)\b"
+                r"|\bnft\s+(?:add|delete|flush|insert|replace|create)\b"
+                r"|\bfirewall-cmd\s+.*--(?:add|remove|set|permanent)"),
+     "the firewall"),
+    # Likewise fdisk -l / parted print only read the partition table.
+    (re.compile(r"/etc/fstab|update-grub|grub-install|/etc/default/grub|\bmkfs(?:\.\w+)?\b"
+                r"|\bfdisk\s+/dev|\bparted\b.*\b(?:mklabel|mkpart|rm|resizepart)\b|\bdd\s+if="),
+     "disks or boot"),
+]
+
+
+def _answer_notices(answer: str) -> list[dict]:
+    notices = [{"level": "info", "text": _NOTICE_GENERAL}]
+    pkgs = _terminal_packages
+    if pkgs is not None:
+        missing = []
+        # Code only: prose ("install it with apt install and then ...") is not a command.
+        code = "\n".join(c for pair in _CODE_SPAN_RE.findall(answer) for c in pair if c)
+        for m in _APT_INSTALL_RE.finditer(code):
+            for tok in m.group(1).split():
+                if tok.startswith("-"):
+                    continue
+                name = tok.split("=", 1)[0].split(":", 1)[0]
+                if (_APT_PKG_RE.match(name) and name not in pkgs
+                        and name not in _TERMINAL_PREINSTALLED_UNIVERSE and name not in missing):
+                    missing.append(name)
+        if missing:
+            notices.append({"level": "warn", "text": (
+                f"Can't be tried in this lab: {', '.join(missing)} "
+                f"{'is' if len(missing) == 1 else 'are'} not in the Terminal's package "
+                "index (Ubuntu 22.04 main), so installing will fail there. Those steps "
+                "are unproven here -- test them on a machine you can afford to break.")})
+    areas = [label for rx, label in _NOTICE_AREAS if rx.search(answer)]
+    if areas:
+        notices.append({"level": "warn", "text": (
+            f"This answer changes {' and '.join(areas)}. A mistake here can lock you out "
+            "or lose data: keep a root session open and test from a second one, have "
+            "console access or a backup first, and read each change before applying it.")})
+    return notices
+
+
 def _push_grounding_to_sentinel(entry: dict) -> None:
     """Best-effort POST of one grounding-log entry to Sentinel's own
     /api/grounding-log -- same shape as api/scheduler.py's own
@@ -2432,6 +2519,9 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .sources-label { color: #555; margin-bottom: 0.2rem; }
 .sources a { display: block; color: #1a5fb4; text-decoration: none; margin: 0.1rem 0; }
 .sources a:hover { text-decoration: underline; }
+.notice { margin-top: 0.5rem; padding: 0.35rem 0.55rem; border-radius: 4px; white-space: normal; font-size: 0.8rem; }
+.notice.info { background: #eef1f5; border-left: 3px solid #8a94a6; color: #333; }
+.notice.warn { background: #fff4e0; border-left: 3px solid #d98e04; color: #4a3300; }
 .msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
 @keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 #question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; }
@@ -2632,6 +2722,18 @@ function makeAskPanel(cfg) {
   // calls (never innerHTML). Only paths inside the /kiwix/ read-only
   // passthrough are accepted, so a malformed or hostile value can never
   // become a javascript: or off-site link.
+  // F-175: cautions verify-proxy attaches to Linux Help answers, sent as
+  // structured data (never model text) and set with textContent.
+  function renderNotices(parentEl, notices) {
+    for (const n of (notices || [])) {
+      if (!n || typeof n.text !== 'string') continue;
+      const box = document.createElement('div');
+      box.className = 'notice ' + (n.level === 'warn' ? 'warn' : 'info');
+      box.textContent = n.text;
+      parentEl.appendChild(box);
+    }
+  }
+
   function renderSources(parentEl, sources) {
     const safe = (sources || []).filter(s => typeof s.link === 'string' && s.link.startsWith('/kiwix/content/'));
     if (!safe.length) return;
@@ -2667,6 +2769,7 @@ function makeAskPanel(cfg) {
         contentEl.textContent = h[i].content;
       } else {
         renderAssistantContent(contentEl, h[i].content);
+        renderNotices(contentEl, h[i].notices);
         renderSources(contentEl, h[i].sources);
       }
     });
@@ -2793,6 +2896,7 @@ function makeAskPanel(cfg) {
 
     let assistantText = '';
     let answerSources = [];
+    let answerNotices = [];
     try {
       const resp = await fetch(cfg.endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2857,6 +2961,7 @@ function makeAskPanel(cfg) {
             try {
               const obj = JSON.parse(payload);
               if (obj.sources) { answerSources = obj.sources; continue; }
+              if (obj.notices) { answerNotices = obj.notices; continue; }
               const delta = (obj.choices[0].delta || {}).content || '';
               if (delta) {
                 assistantText += delta;
@@ -2887,7 +2992,7 @@ function makeAskPanel(cfg) {
 
     const h = getHistory();
     h.push({role: 'assistant', content: assistantText || bubbleContent.textContent,
-            sources: answerSources});
+            sources: answerSources, notices: answerNotices});
     saveHistory(h);
     // Re-render from the now-saved history -- turns the plain streamed
     // text just shown above into the same structured, button-equipped
@@ -4419,6 +4524,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             if sources:
                 self.wfile.write(b"data: " + json.dumps({"sources": sources}).encode() + b"\n\n")
+            if endpoint_label == "/sandbox/linux-ask":
+                notices = _answer_notices(full_text)
+                self.wfile.write(b"data: " + json.dumps({"notices": notices}).encode() + b"\n\n")
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -4626,6 +4734,7 @@ def main():
     # Fire-and-forget -- a slow/unreachable CloudCore API must never
     # delay this service actually binding and serving real traffic.
     threading.Thread(target=register_llm_deployment, daemon=True).start()
+    threading.Thread(target=_load_terminal_packages, daemon=True).start()
     # Stage 12: per-run microVMs live outside this service's cgroup
     # (jailer moves them), so a restart mid-Run leaves them running.
     # Nothing of ours can be live yet, so everything tagged "run" is an

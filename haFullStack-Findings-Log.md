@@ -3083,6 +3083,28 @@ It also didn't say that `libpam-google-authenticator` is in **universe**, so it 
 - **Page:** a Node test of `renderAssistantContent` showed Linux Help giving Copy to `text`/`ini` blocks and Run to `bash`/untagged ones, with the coding panel unchanged. `looksLikeConfigLine` got 15 of 15 cases right (PAM, `@include` and `sshd_config` lines are config; `sudo …`, `passwd alice`, `VAR=1 ./run.sh`, `export …` and `cd … && ls` are commands). The page's JavaScript passes `node --check`, and the deployed page serves the new functions.
 - **Prompt:** all three copies of the Linux Help prompt (Python, OpenTofu, Ansible) were compared and are identical.
 
+### F-175 — Linux Help answers carried no warning that they are unverified, even when they touch login/firewall/disk config or need packages the lab can't install
+
+**Where:** `examples/llm-chat/files/verify_proxy.py`: `_answer_notices()`, `_load_terminal_packages()` (started from `main()`), the `notices` SSE event after the answer, and the page's `renderNotices()` plus `.notice` styles; the Ansible mirror.
+
+**Symptom:** F-174 showed that even with good grounding and prompt rules, the Linux Help model (Qwen2.5-Coder-14B at ~1 token/s) follows safety instructions inconsistently. Across three answers to the same MFA question, it sometimes omitted the lockout warning and the note that the package can't be installed in the lab. Once it suggested weakening password hashing to MD5. Nothing on the page told the student that Linux Help answers, unlike the coding panel's, are never run or checked, or that some steps can't be tried in the lab Terminal at all.
+
+**Root cause:** the only caution was a static line in the panel's description. Any per-answer warning depended on the model choosing to include one.
+
+**Fix:** direct request: "lets warn users but generally. the model is small ... if we can't use the terminal/shell to install some items to prove working theories then we'll have to warn users." verify-proxy now attaches notices to every Linux Help answer. They are sent as a structured `notices` event after the answer, stored with it in the page history and rendered below it with `textContent`. They never go into the model's text or its conversation context, because the server rebuilds history from role and content only.
+- **Always (info):** the answer comes from a small local model and hasn't been run or checked; check it against the sources and man pages before using it on a real system.
+- **Can't be tried here (warn):** `apt`/`apt-get install` package names in the answer's code (fenced or inline, never prose) that aren't in the Terminal's index (jammy main, fetched once at startup from the Ubuntu archive; 6,090 names, 0.6s). `nodejs`, from universe but preinstalled, is exempt. If the index can't be fetched, this check is skipped rather than guessed.
+- **Risky change (warn):** the answer touches login/authentication (PAM, `sshd_config`, sudoers, shadow), the firewall (changing forms of iptables/ufw/nft/firewall-cmd only, so `iptables -L` and `ufw status` don't trigger it) or disks/boot (fstab, grub, mkfs, `fdisk /dev…`, `parted` edits, `dd if=`; not `fdisk -l`). It warns about lockout and data loss.
+
+The coding panel is unchanged: its code is really executed and verified.
+
+**Verified by:**
+- **Live on 2026-09-29:** "Briefly: how do I install fail2ban and use ufw to allow only SSH?" was answered with `apt-get install -y fail2ban` and `ufw allow ssh` / `ufw enable`. The model mentioned neither the universe package nor any lockout risk. After the sources event came a `notices` event with all three: the general caution, "Can't be tried in this lab: fail2ban is not in the Terminal's package index", and "This answer changes the firewall".
+- **On the coordinator:** 6,090 package names loaded at service start.
+- **Locally against the real index:** all three of the day's MFA answers got the general caution plus the libpam-google-authenticator and login/authentication warnings.
+- **No false alarms:** nothing extra for `ls -la`, the `command -v fdisk || apt-get install -y fdisk; fdisk -l` idiom, `iptables -L`, `htop`+`nodejs`, or prose saying "install it with apt install and then configure it". A multi-package line (`--no-install-recommends fail2ban=0.11.2-6 libpam-u2f:amd64 curl`) flagged exactly fail2ban and libpam-u2f.
+- **Page:** a Node test of `renderNotices` gives info and warn boxes set via `textContent` (markup renders as text) and skips malformed entries. The page's JavaScript passes `node --check`, and the deployed page serves `renderNotices`.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3212,3 +3234,4 @@ It also didn't say that `libpam-google-authenticator` is in **universe**, so it 
 | v3.3 | 2026-09-29 | Paul Scott | Direct request: "lets get the stack overflow dealt with please", then "we already use nfs for the repo's. can we add it to that and serve from there?" (the repo turned out to be HTTP, but the idea stood: export the same directory). F-170: the kiwix library is read in place over a read-only NFS export (VM ready in 2 min, not 20; 1.7GB of disk, not 75GB). F-171: the package-repo rebuild replaces the whole repo and also rebuilds the rootfs. F-172: Stack Overflow gets a reserved slot beside the curated sources; NFS cold-read latency tuned and the kiwix search budget raised to 8s. |
 | v3.4 | 2026-09-29 | Paul Scott | Direct request: "on a weekly basis check the size of the download. if the have increaed in a meaningful way we update them"; git handling: "Commit and push". F-173: new scheduler kind `kiwix_update` (weekly, ≥5% or ≥200MB growth, sha256-verified, disk reserve, 14-day retention of superseded files, manifest-only commit + push); the first cut would have left the manifest's size stale without libzim. |
 | v3.5 | 2026-09-29 | Paul Scott | Direct request: review of a Linux Help answer to "how could we add mfa to the linux login process?", then "yes, please" to the fixes. F-174: Run in Terminal only on shell fences (Copy otherwise); prompt covers config fences, universe packages and lockout warnings; near-empty snippets recovered; the lead-paragraph regex no longer matches `<path>`; abbreviations expanded in search terms; zero-hit searches relaxed term by term. |
+| v3.6 | 2026-09-29 | Paul Scott | Direct request: "lets warn users but generally. the model is small and we are no where near perfect in using it yet". F-175: every Linux Help answer carries a structured caution; extra warnings when it needs packages outside the Terminal's index (jammy main) or changes login, firewall or disk/boot configuration. |
