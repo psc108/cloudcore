@@ -1569,7 +1569,23 @@
           <select id="sched-kind" onchange="_schedOnKindChange()">
             <option value="build">Generic Build</option>
             <option value="llm_ingest">7B LLM Sentinel Ingest</option>
+            <option value="kiwix_update">Kiwix ZIM update check</option>
           </select>
+        </div>
+      </div>
+
+      <div id="sched-kiwix-fields" style="display:none">
+        <p style="font-size:13px;color:var(--text-muted);margin:4px 0 10px">
+          Checks Kiwix's catalog for newer releases of every ZIM in the llm-chat manifest. A release that grew by at least the percentage <em>or</em> the size below is downloaded, verified against Kiwix's sha256, and the manifest commit is pushed. Skipped (and reported) when disk is short. Running kiwix VMs pick it up on their next build.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>Min growth (%)</label><input id="sched-kw-pct" type="number" min="0" step="0.5" value="5"></div>
+          <div class="field"><label>Min growth (MB)</label><input id="sched-kw-mb" type="number" min="0" value="200"></div>
+          <div class="field"><label>Keep free (GB)</label><input id="sched-kw-reserve" type="number" min="0" value="20"></div>
+          <div class="field"><label>Git</label>
+            <select id="sched-kw-git"><option value="push">Commit and push</option><option value="commit">Commit only</option><option value="none">Don't commit</option></select>
+          </div>
+          <div class="field"><label><input id="sched-kw-dry" type="checkbox"> Dry run (report only)</label></div>
         </div>
       </div>
 
@@ -6535,7 +6551,7 @@ async function loadScheduler() {
       tbody.innerHTML = data.items.map(s => `
         <tr>
           <td><strong>${_esc(s.name)}</strong></td>
-          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
+          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
           <td class="mono">${s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—'}</td>
           <td>${s.last_run_at ? new Date(s.last_run_at).toLocaleString() + ' ' + badge(s.last_status || 'pending') : '—'}</td>
           <td>${s.enabled ? '✅' : '⏸️'}</td>
@@ -6556,6 +6572,7 @@ function _schedOnKindChange() {
   const kind = document.getElementById('sched-kind').value;
   document.getElementById('sched-build-fields').style.display = kind === 'build' ? '' : 'none';
   document.getElementById('sched-llm-fields').style.display = kind === 'llm_ingest' ? '' : 'none';
+  document.getElementById('sched-kiwix-fields').style.display = kind === 'kiwix_update' ? '' : 'none';
   if (kind === 'llm_ingest') _schedLoadPeerPicker();
 }
 
@@ -6719,6 +6736,14 @@ async function schedCreate() {
       }
     }
     payload.var_overrides = var_overrides;
+  } else if (kind === 'kiwix_update') {
+    payload.var_overrides = {
+      min_growth_pct: parseFloat(document.getElementById('sched-kw-pct').value || '5'),
+      min_growth_mb: parseInt(document.getElementById('sched-kw-mb').value || '200', 10),
+      reserve_gb: parseInt(document.getElementById('sched-kw-reserve').value || '20', 10),
+      git: document.getElementById('sched-kw-git').value,
+      dry_run: document.getElementById('sched-kw-dry').checked,
+    };
   } else {
     const checked = Array.from(document.querySelectorAll('.sched-peer-cb:checked')).map(cb => cb.value);
     if (!checked.length) {

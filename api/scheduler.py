@@ -1,5 +1,6 @@
 """Scheduler — recurring/one-off resource-creation builds, plus the
-7B distributed-LLM Sentinel-ingestion job kind.
+7B distributed-LLM Sentinel-ingestion job kind and the weekly kiwix ZIM
+update check (kiwix_update, api/kiwix_updates.py).
 
 Background-loop shape mirrors Sentinel's own watcher.py poll loop (the
 closest existing precedent in either repo for "wake up periodically
@@ -69,7 +70,7 @@ def get_schedule(schedule_id: str) -> dict | None:
 def create_schedule(*, name: str, kind: str, engine: str, template: str,
                      var_overrides: dict, recurrence: dict,
                      created_by: str = "ui") -> dict:
-    if kind not in ("build", "llm_ingest"):
+    if kind not in ("build", "llm_ingest", "kiwix_update"):
         raise ValueError(f"unknown schedule kind: {kind!r}")
 
     recurrence_type, run_at, cron_expr = _resolve_recurrence(recurrence)
@@ -276,6 +277,10 @@ def _run_schedule(schedule_id: str) -> None:
             status, summary, log = _run_build_schedule(schedule)
         elif schedule["kind"] == "llm_ingest":
             status, summary, log = _run_llm_ingest_schedule(schedule, run_id)
+        elif schedule["kind"] == "kiwix_update":
+            # Weekly ZIM refresh: api/kiwix_updates.py's own docstring has the rules.
+            import kiwix_updates
+            status, summary, log = kiwix_updates.run(schedule.get("var_overrides") or {})
         else:
             status, summary, log = "failed", f"unknown kind {schedule['kind']!r}", []
     except Exception as e:

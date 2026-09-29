@@ -3021,6 +3021,30 @@ The first attempt's failure (waiting, then still `Unable to locate`) was seen li
 - **Live searches through verify-proxy:** all six error queries returned the exact Stack Overflow thread plus a curated source; none dropped (max 4.4s).
 - **A real Ask, end to end:** a script raising `UnboundLocalError` was answered correctly, the fix was verified in the sandbox, and the sources were the Python docs *Execution model* and the exact Stack Overflow thread. Both open through the LB.
 
+### F-173 — The ZIM library had no update path; the first cut of the weekly updater would have left the manifest's size stale and failed the next kiwix boot
+
+**Where:** new `api/kiwix_updates.py`; `api/scheduler.py` and `api/scheduler_routes.py` (new schedule kind `kiwix_update`); Dashboard scheduler form (`ui/src/html/body.html`, `ui/src/js/28-scheduler.js`). Stage K8 of `llm-chat-kiwix-expansion-Phased-Implementation.md`.
+
+**Symptom:** Kiwix republishes most ZIMs monthly or quarterly, but the 60-ZIM library was pinned by filename and sha256 in `kiwix-zims.json` and only changed by hand. While the updater was being tested, a synthetic update of `devdocs_en_go` left the manifest at 815830 bytes while the new file was 1631660. The kiwix VM checks each file's size against the manifest at boot and refuses a partial library, so the next llm-chat build would have come up with no grounding.
+
+**Root cause:** there was no update path. In the first cut of the updater, the new size depended on `fetch-kiwix-zims.py`'s `record_metadata()`, which only records size, Name and UUID when `libzim` is importable. The API runs under the system `python3`, which doesn't have it, so the update silently kept the old release's size and ids.
+
+**Fix:** a CloudCore scheduler kind, `kiwix_update`. It reads the live Kiwix OPDS catalog and finds, for each manifest entry, the newest release of the same book/flavour. A release counts as meaningful if it grew by at least `min_growth_pct` (5%) **or** `min_growth_mb` (200MB). Qualifying releases are handled like this:
+- skipped if free disk would drop below the new size plus `reserve_gb` (20GB);
+- downloaded (aria2c across mirrors for anything over 1GB) and verified against Kiwix's published sha256;
+- written into the manifest;
+- the manifest alone is committed (pathspec commit, so other staged work is untouched; skipped during a merge/rebase) and pushed, as agreed ("Commit and push").
+
+Superseded files are kept for `retention_days` (14), and never deleted while a kiwix VM is running, because the VM reads them in place over NFS (F-170). The updater now sets `size_bytes` from the file on disk itself and drops the old release's `book_name`/`uuid`/`fulltext`, so a missing `libzim` cannot leave the entry describing another file.
+
+**Verified by:**
+- **Sandbox** (scratch manifest, artifact directory and git repo with a local bare origin):
+  - a Go entry aged to half its size was updated: download, sha256 check, manifest points at the new file, and the manifest size equals the file size;
+  - the job's commit contained only the manifest, pushed to origin, while an unrelated staged file stayed staged;
+  - C with 0% growth was skipped on threshold, and Rust was skipped on disk space with `reserve_gb=100000`;
+  - a 30-day-old superseded file was kept while a kiwix VM ran and deleted once none did.
+- **Live, 2026-09-29:** the schedule "Weekly: kiwix ZIM update check (Sun 03:00 UTC)" (`0 3 * * 0`, first fire 2026-10-04) ran via Run Now inside the API process against the live catalog (1300 releases, 60 ZIMs): `0 updated, 0 skipped, 0 failed`, manifest unchanged. `git push` works non-interactively from the checkout.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3148,3 +3172,4 @@ The first attempt's failure (waiting, then still `Unable to locate`) was seen li
 | v3.1 | 2026-09-28 | Paul Scott | Direct request: "lets get the small fixes fixed first please." F-163 to F-166 resolved and verified live on a fresh llm-chat build, which also finished cloud-init cleanly: the end-to-end confirmation for F-162. F-165's first fix failed under a deliberately forced race (the wrapper waited on the refresh script's own apt call; no D-Bus for non-root users) and was redone. F-164's prompt change alone did not stop the model; the code fallback is what fixes it. |
 | v3.2 | 2026-09-28 | Paul Scott | Direct request: "as much kiwix education material in programming and system architecture ... as well as python, go, c, c++, rust and assembler". `llm-chat-kiwix-expansion-Phased-Implementation.md`: 42 new ZIMs (59 total, 73GB) behind one manifest, per-panel search, clickable sources through `/kiwix/`. F-167 (the codebase tier pre-empted kiwix and confused the model), F-168 (kiwix search semantics and the benchmark-chosen merge), F-169 (a cold index took 7.8s; warm-up at boot). Stack Overflow deferred until measured; the kiwix VM has 23GB free, so it needs its own volume. |
 | v3.3 | 2026-09-29 | Paul Scott | Direct request: "lets get the stack overflow dealt with please", then "we already use nfs for the repo's. can we add it to that and serve from there?" (the repo turned out to be HTTP, but the idea stood: export the same directory). F-170: the kiwix library is read in place over a read-only NFS export (VM ready in 2 min, not 20; 1.7GB of disk, not 75GB). F-171: the package-repo rebuild replaces the whole repo and also rebuilds the rootfs. F-172: Stack Overflow gets a reserved slot beside the curated sources; NFS cold-read latency tuned and the kiwix search budget raised to 8s. |
+| v3.4 | 2026-09-29 | Paul Scott | Direct request: "on a weekly basis check the size of the download. if the have increaed in a meaningful way we update them"; git handling: "Commit and push". F-173: new scheduler kind `kiwix_update` (weekly, ≥5% or ≥200MB growth, sha256-verified, disk reserve, 14-day retention of superseded files, manifest-only commit + push); the first cut would have left the manifest's size stale without libzim. |

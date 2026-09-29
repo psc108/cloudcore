@@ -57,6 +57,7 @@ this is ~80GB including the OS.
 | K5 | Measure search latency and hit relevance before/after, on real questions; decide on Stack Overflow from the numbers | Done — see results below |
 | K6 | Serve the library from the host over read-only NFS instead of copying it into the VM | Done — verified live (2 min boot, 1.7GB disk) |
 | K7 | Stack Overflow (107GB): download, decide its place by benchmark, verify live | Done — reserved slot; verified live |
+| K8 | Weekly update check: fetch newer ZIM releases that grew meaningfully, verify, update and push the manifest | Done — scheduler kind `kiwix_update`, Sun 03:00 UTC (F-173) |
 
 ## Results (2026-09-28)
 
@@ -104,6 +105,16 @@ tuned, the boot warm-up now covers error-message vocabulary, and the kiwix
 search budget went from 3s to 8s. End to end: an `UnboundLocalError` Ask was
 answered correctly, the fix was verified in the sandbox, and it cited the
 Python docs' *Execution model* plus the exact Stack Overflow thread.
+
+**Keeping it current (K8, 2026-09-29).** A CloudCore schedule, "Weekly:
+kiwix ZIM update check" (Sundays 03:00 UTC), compares every manifest entry
+with the live Kiwix catalog. A newer release is taken if it grew by ≥5% or
+≥200MB. It must leave 20GB free, and it is sha256-verified before the
+manifest changes. The manifest alone is then committed and pushed. Replaced
+files stay for 14 days and are never removed while a kiwix VM is running.
+Running builds keep their files, and the next build picks up the new ones.
+Thresholds, reserve and git mode are set per schedule in the Dashboard
+(F-173).
 
 Methodology unchanged: build and verify live, log findings as F-NNN,
 tear down after.

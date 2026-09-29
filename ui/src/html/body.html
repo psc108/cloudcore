@@ -792,7 +792,23 @@
           <select id="sched-kind" onchange="_schedOnKindChange()">
             <option value="build">Generic Build</option>
             <option value="llm_ingest">7B LLM Sentinel Ingest</option>
+            <option value="kiwix_update">Kiwix ZIM update check</option>
           </select>
+        </div>
+      </div>
+
+      <div id="sched-kiwix-fields" style="display:none">
+        <p style="font-size:13px;color:var(--text-muted);margin:4px 0 10px">
+          Checks Kiwix's catalog for newer releases of every ZIM in the llm-chat manifest. A release that grew by at least the percentage <em>or</em> the size below is downloaded, verified against Kiwix's sha256, and the manifest commit is pushed. Skipped (and reported) when disk is short. Running kiwix VMs pick it up on their next build.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>Min growth (%)</label><input id="sched-kw-pct" type="number" min="0" step="0.5" value="5"></div>
+          <div class="field"><label>Min growth (MB)</label><input id="sched-kw-mb" type="number" min="0" value="200"></div>
+          <div class="field"><label>Keep free (GB)</label><input id="sched-kw-reserve" type="number" min="0" value="20"></div>
+          <div class="field"><label>Git</label>
+            <select id="sched-kw-git"><option value="push">Commit and push</option><option value="commit">Commit only</option><option value="none">Don't commit</option></select>
+          </div>
+          <div class="field"><label><input id="sched-kw-dry" type="checkbox"> Dry run (report only)</label></div>
         </div>
       </div>
 

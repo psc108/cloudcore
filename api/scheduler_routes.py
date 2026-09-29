@@ -61,9 +61,9 @@ def create_schedule():
     kind = body.get("kind")
     if not name:
         return jsonify({"status": 400, "title": "Bad Request", "detail": "name is required"}), 400
-    if kind not in ("build", "llm_ingest"):
+    if kind not in ("build", "llm_ingest", "kiwix_update"):
         return jsonify({"status": 400, "title": "Bad Request",
-                         "detail": "kind must be 'build' or 'llm_ingest'"}), 400
+                         "detail": "kind must be 'build', 'llm_ingest' or 'kiwix_update'"}), 400
     recurrence = body.get("recurrence")
     if not recurrence or "mode" not in recurrence:
         return jsonify({"status": 400, "title": "Bad Request",
@@ -77,6 +77,9 @@ def create_schedule():
                              "detail": "var_overrides.worker_peer_pool (a non-empty list) is required for kind='llm_ingest' — "
                                        "which of these peers actually run each cycle is decided automatically by "
                                        "their current traffic light, not fixed at creation time"}), 400
+    elif kind == "kiwix_update":
+        # Not a build: engine/template are unused but the table requires them.
+        engine, template = "tofu", "llm-chat"
     else:
         engine = body.get("engine")
         template = body.get("template")

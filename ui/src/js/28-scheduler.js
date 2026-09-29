@@ -26,7 +26,7 @@ async function loadScheduler() {
       tbody.innerHTML = data.items.map(s => `
         <tr>
           <td><strong>${_esc(s.name)}</strong></td>
-          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
+          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
           <td class="mono">${s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—'}</td>
           <td>${s.last_run_at ? new Date(s.last_run_at).toLocaleString() + ' ' + badge(s.last_status || 'pending') : '—'}</td>
           <td>${s.enabled ? '✅' : '⏸️'}</td>
@@ -47,6 +47,7 @@ function _schedOnKindChange() {
   const kind = document.getElementById('sched-kind').value;
   document.getElementById('sched-build-fields').style.display = kind === 'build' ? '' : 'none';
   document.getElementById('sched-llm-fields').style.display = kind === 'llm_ingest' ? '' : 'none';
+  document.getElementById('sched-kiwix-fields').style.display = kind === 'kiwix_update' ? '' : 'none';
   if (kind === 'llm_ingest') _schedLoadPeerPicker();
 }
 
@@ -210,6 +211,14 @@ async function schedCreate() {
       }
     }
     payload.var_overrides = var_overrides;
+  } else if (kind === 'kiwix_update') {
+    payload.var_overrides = {
+      min_growth_pct: parseFloat(document.getElementById('sched-kw-pct').value || '5'),
+      min_growth_mb: parseInt(document.getElementById('sched-kw-mb').value || '200', 10),
+      reserve_gb: parseInt(document.getElementById('sched-kw-reserve').value || '20', 10),
+      git: document.getElementById('sched-kw-git').value,
+      dry_run: document.getElementById('sched-kw-dry').checked,
+    };
   } else {
     const checked = Array.from(document.querySelectorAll('.sched-peer-cb:checked')).map(cb => cb.value);
     if (!checked.length) {
