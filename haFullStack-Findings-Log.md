@@ -3352,6 +3352,36 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 - the user's code-first answer: **lab_verified**; `login` prompts "Verification code, Password", the right code accepted, a wrong one refused;
 - the earlier password-first answer: still lab_verified, with prompts "Password, Verification code".
 
+### F-185 — A lab run was a report after the fact: no way to watch it, and the machine it ran on was destroyed before anyone could look
+
+**Where:**
+- `examples/llm-chat/files/advice_runner.py` (streaming transcript, `keep_vm`);
+- `verify_proxy.py` (per-run token, kept-machine registry, reaper, `/sandbox/lab-run?token=`, `/sandbox/lab-run/destroy`, local-only `/sandbox/lab-run/attach`, the page's live log, kept-machine block and `startTerminal(lab)`);
+- `sandbox_terminal.py` (`?lab=&token=` attaches instead of booting);
+- `microvm.py` (`MicroVM.attached`, `alive()` for attached handles).
+
+**Symptom:** direct request, "i'd like to see the actual steps being enacted on the lab machine (read only window …). at the end it would be useful to also provide the instructions on how to login in to the lab machine … and … offer a destroy the answers lab button to save resources and go again if needed." The page showed only a spinner, then a result, and the lab machine was torn down the moment the run ended.
+
+**Root cause:** the runner only published per-step results, and owned the VM for exactly the run's lifetime.
+
+**Fix:**
+- **Live, read-only view.** The runner keeps a transcript as it works: boot and lab setup; each command (`$ …`) with its output streaming; each config write with its content; the prober's baseline and tests; the checks and the verdict. It publishes at most once a second while output flows; the page polls every 1.5s while running and shows it in a dark read-only pane, then keeps it as "What ran on the lab machine".
+- **The machine stays up afterwards.** It's kept for `ADVICE_KEEP_MINUTES` (20), at most `ADVICE_KEEP_MAX` (2) at once; a new run evicts the oldest first, so kept machines never starve new runs.
+- **Only the asker can use it.** A per-run token goes in the answer's `lab_run` event; without it the status shows only the expiry.
+- **Login instructions:**
+  - open it in the Terminal panel as `student` (sudo works);
+  - try the login the answer configured: `sudo login student` / `su - student` / `ssh student@localhost`, as relevant;
+  - the test password the lab set, and `oathtool --totp -b <secret>` for the code.
+- **Attaching.** The Terminal service reaches the machine through a local-only verify-proxy endpoint and never destroys it.
+- **Destroy.** The button frees the machine now; the reaper frees it at its deadline.
+
+**Verified by:** live through the load balancer (2026-09-30):
+- **nginx run:** the transcript grew over 14 polls while running (46 → 14,278 characters, apt output streaming); lab_verified.
+- **Access:** the login details were returned only with the token; a wrong token was refused for the Terminal ("not your lab machine") and for Destroy (403).
+- **The Terminal on the kept machine:** the same machine as the run left it (`nginx` active, HTTP 200, site enabled, `student`).
+- **Destroy:** it worked, and the Terminal then reported "that lab machine has been destroyed".
+- **MFA:** after a lab_verified run, following the page's instructions exactly (`sudo login student`, the code from `oathtool` with the shown secret, then the shown password) logged in ("Welcome to Ubuntu 22.04").
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3488,3 +3518,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.10 | 2026-09-30 | Paul Scott | From a user's live MFA run. F-182: an install step that did nothing (`update || install`) is named and explained; the prompt now says to chain with && and keep || for the install-if-missing check. |
 | v3.11 | 2026-09-30 | Paul Scott | From a user's fourth live MFA run. F-183: lab facts now carry the correction (the real package for a wrong name), not only the prohibition; apt's all-or-nothing install is explained; failed steps show their real error. |
 | v3.12 | 2026-09-30 | Paul Scott | From a user's fifth live MFA run. F-184: false LOCKOUT from a fixed-order PAM probe; prompts are now answered by what they ask, and the false corpus record was corrected (now lab_verified). |
+| v3.13 | 2026-09-30 | Paul Scott | Direct request: a read-only live view of the lab machine, login instructions afterwards, and a Destroy button. F-185: streaming transcript; kept lab machines (token-gated, expiring, capped) opened in the Terminal panel; destroy. |

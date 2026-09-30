@@ -517,6 +517,9 @@ class MicroVM:
     def alive(self) -> bool:
         """False once the VMM has exited for any reason. Also reaps it,
         so a crashed VMM doesn't linger as a zombie until teardown."""
+        if getattr(self, "_attached", False):
+            # Owned by another process: alive while its jail still exists.
+            return os.path.exists(self.chroot + _IN_JAIL_API_SOCK)
         return self.proc is not None and self.proc.poll() is None
 
     def ssh_client(self, username: str = "student") -> paramiko.SSHClient:
@@ -545,6 +548,22 @@ class MicroVM:
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.5)
+
+    @classmethod
+    def attached(cls, session_id: str, ip: str = "") -> "MicroVM":
+        """A handle on a VM another process booted and still owns (a kept
+        lab machine): enough to open SSH over its control channel, nothing
+        that could tear it down."""
+        vm = cls.__new__(cls)
+        vm.session_id = session_id
+        vm.ip = ip
+        vm.jail_dir = os.path.join(CHROOT_BASE, "firecracker", session_id)
+        vm.chroot = os.path.join(vm.jail_dir, "root")
+        vm.key_dir = os.path.join(KEY_DIR, session_id)
+        vm.private_key_path = os.path.join(vm.key_dir, "id_ed25519")
+        vm.proc = None
+        vm._attached = True
+        return vm
 
     def wait_exit(self, timeout_s: float) -> bool:
         """True once the VMM has exited (a guest reboot with reboot=k ends

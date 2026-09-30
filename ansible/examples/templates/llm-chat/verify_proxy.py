@@ -50,6 +50,7 @@ import collections
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hmac
+import secrets
 import html
 import http.client
 import http.server
@@ -1811,6 +1812,44 @@ _advice_cv = threading.Condition()
 _advice_pool = None
 _advice_worker_started = False
 
+# Kept lab machines: after a run the target VM stays up so the person who
+# asked can open it in the Terminal panel and look around (direct request:
+# "provide the instructions on how to login in to the lab machine ... and
+# ... offer a destroy the answers lab button to save resources"). Each has a
+# deadline; at most ADVICE_KEEP_MAX exist at once, and a new run evicts the
+# oldest first, so kept machines never starve new runs of memory.
+ADVICE_KEEP_MINUTES = int(os.environ.get("ADVICE_KEEP_MINUTES", "20"))
+ADVICE_KEEP_MAX = int(os.environ.get("ADVICE_KEEP_MAX", "2"))
+_kept_labs: "collections.OrderedDict[str, dict]" = collections.OrderedDict()  # run id -> {vm, expires, token}
+_kept_lock = threading.Lock()
+
+
+def _release_kept(run_id: str, reason: str) -> bool:
+    with _kept_lock:
+        entry = _kept_labs.pop(run_id, None)
+    if entry is None:
+        return False
+    try:
+        entry["vm"].teardown()
+    except Exception as e:  # noqa: BLE001 -- nothing to recover; say so
+        print(f"verify-proxy: tearing down kept lab {run_id} failed: {e!r}", flush=True)
+    with _advice_cv:
+        data = _advice_runs.get(run_id)
+        if data is not None and data.get("kept"):
+            data["kept"] = dict(data["kept"], destroyed=True, reason=reason)
+    print(f"verify-proxy: kept lab {run_id} destroyed ({reason})", flush=True)
+    return True
+
+
+def _kept_reaper() -> None:
+    while True:
+        time.sleep(30)
+        now = time.time()
+        with _kept_lock:
+            due = [rid for rid, e in _kept_labs.items() if e["expires"] <= now]
+        for rid in due:
+            _release_kept(rid, "expired")
+
 
 def _advice_sizing():
     from microvm import VmSizing
@@ -1848,6 +1887,7 @@ def _advice_worker() -> None:
     def make_prober(bridge):
         return MicroVM("advp", IpPool(PAIR_SUBNET), bridge, sizing=prober_sizing, isolate=False,
                        boot_timeout_s=90, extra_boot_args=_RUN_VM_BOOT_ARGS)
+    threading.Thread(target=_kept_reaper, daemon=True).start()
     while True:
         with _advice_cv:
             while not _advice_waiting:
@@ -1856,16 +1896,48 @@ def _advice_worker() -> None:
             job = _advice_runs.get(run_id, {})
         answer, question = job.get("_answer", ""), job.get("question", "")
         search_terms = job.get("_search_terms", "")
+        token = job.get("_token", "")
+        # Room for this run's machine: never more than ADVICE_KEEP_MAX kept
+        # counting the one this run may keep.
+        with _kept_lock:
+            surplus = list(_kept_labs)[:max(0, len(_kept_labs) - (ADVICE_KEEP_MAX - 1))]
+        for rid in surplus:
+            _release_kept(rid, "made room for a newer run")
 
-        def publish(result, _q=question):
+        def keep(vm, info, _rid=run_id, _tok=token):
+            if ADVICE_KEEP_MINUTES <= 0 or ADVICE_KEEP_MAX <= 0:
+                return False
+            expires = time.time() + ADVICE_KEEP_MINUTES * 60
+            with _kept_lock:
+                _kept_labs[_rid] = {"vm": vm, "expires": expires, "token": _tok}
+            with _advice_cv:
+                data = _advice_runs.get(_rid)
+                if data is not None:
+                    data["_kept_info"] = info
+            return True
+
+        def publish(result, _q=question, _tok=token):
             data = result.to_dict()
             data["question"] = _q
+            data["_token"] = _tok
             data["lines"] = [advice_runner.plain_step_line(s) for s in data["steps"]]
+            with _advice_cv:
+                old = _advice_runs.get(result.id) or {}
+                if "_kept_info" in old:
+                    data["_kept_info"] = old["_kept_info"]
             _advice_store(result.id, data)
 
         result = advice_runner.run_advice(
             answer, make_target, progress=publish, run_id=run_id, question=question,
-            make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge))
+            make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge),
+            keep_vm=keep)
+        with _kept_lock:
+            kept = _kept_labs.get(run_id)
+        if kept is not None:
+            with _advice_cv:
+                data = _advice_runs.get(run_id)
+                if data is not None:
+                    data["kept"] = {"expires_at": kept["expires"]}
         entry = {"id": result.id, "source": "auto", "question": question, "answer": answer,
                  "search_terms": search_terms, "verdict": result.verdict,
                  "summary": result.summary, "error": result.error, "vm": result.vm,
@@ -1875,8 +1947,10 @@ def _advice_worker() -> None:
             _push_advice_run_to_sentinel(entry)
 
 
-def _start_advice_run(answer: str, question: str, search_terms: str = "") -> str | None:
-    """Queue a run of `answer`; returns its id, or None when disabled."""
+def _start_advice_run(answer: str, question: str, search_terms: str = "") -> tuple[str, str] | None:
+    """Queue a run of `answer`; returns (id, token), or None when disabled.
+    The token goes only to the person who asked: it unlocks the kept lab
+    machine (login details, Terminal, Destroy)."""
     global _advice_worker_started
     if not ADVICE_RUN_ENABLED:
         return None
@@ -1885,20 +1959,30 @@ def _start_advice_run(answer: str, question: str, search_terms: str = "") -> str
         if not _advice_worker_started:
             threading.Thread(target=_advice_worker, daemon=True).start()
             _advice_worker_started = True
+        token = secrets.token_hex(16)
         _advice_runs[run_id] = {"id": run_id, "status": "queued", "question": question,
-                                "_answer": answer, "_search_terms": search_terms}
+                                "_answer": answer, "_search_terms": search_terms, "_token": token}
         _advice_runs.move_to_end(run_id)
         _advice_waiting.append(run_id)
         _advice_cv.notify()
-    return run_id
+    return run_id, token
 
 
-def _advice_status(run_id: str) -> dict:
+def _token_ok(data: dict, token: str) -> bool:
+    return bool(token) and hmac.compare_digest(str(data.get("_token", "")), token)
+
+
+def _advice_status(run_id: str, token: str = "") -> dict:
     with _advice_cv:
         data = _advice_runs.get(run_id)
         if data is None:
             return {"id": run_id, "status": "unknown"}
         out = {k: v for k, v in data.items() if not k.startswith("_")}
+        # Only the asker sees how to get into the kept machine.
+        if out.get("kept") and _token_ok(data, token):
+            out["kept"] = dict(out["kept"], **data.get("_kept_info", {}))
+        elif out.get("kept"):
+            out["kept"] = {k: v for k, v in out["kept"].items() if k in ("expires_at", "destroyed")}
         if out.get("status") == "queued":
             out["queue_position"] = _advice_waiting.index(run_id) + 1 if run_id in _advice_waiting else 0
     return out
@@ -2693,6 +2777,11 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .labrun-head { font-weight: 600; margin-bottom: 0.2rem; }
 .labrun-summary { margin-bottom: 0.3rem; }
 .labrun-step { font-family: ui-monospace, monospace; font-size: 0.76rem; margin: 0.1rem 0; word-break: break-word; }
+.labrun pre.labrun-live { max-height: 260px; overflow: auto; background: #0d0d0d; color: #d6dae3; padding: 0.45rem 0.55rem; font-size: 0.72rem; line-height: 1.35; white-space: pre-wrap; word-break: break-word; border-radius: 4px; margin: 0.35rem 0; }
+.labrun-kept { margin-top: 0.45rem; padding: 0.4rem 0.55rem; border: 1px dashed #8a94a6; border-radius: 4px; background: #fbfcfe; }
+.labrun-kept div { margin: 0.12rem 0; }
+.labrun-kept-head { font-weight: 600; }
+.labrun-kept-buttons { margin-top: 0.35rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .labrun details pre { max-height: 220px; overflow: auto; background: #111; color: #ddd; padding: 0.4rem; font-size: 0.72rem; white-space: pre-wrap; }
 .msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
 @keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
@@ -2975,6 +3064,23 @@ function makeAskPanel(cfg) {
       row.textContent = mark + c.kind + ': ' + c.subject + (c.detail && (!c.ok || c.kind === 'login' || c.kind === 'http') ? ' — ' + c.detail.slice(0, 200) : '');
       box.appendChild(row);
     }
+    if (lab && lab.transcript) {
+      const pre = document.createElement('pre');
+      pre.className = 'labrun-live';
+      pre.textContent = lab.transcript;
+      if (['queued', 'running'].includes(lab.status)) {
+        box.appendChild(pre);
+      } else {
+        const det = document.createElement('details');
+        const s = document.createElement('summary');
+        s.textContent = 'What ran on the lab machine (read-only log)';
+        det.appendChild(s);
+        det.appendChild(pre);
+        box.appendChild(det);
+      }
+      requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+    }
+    if (lab && lab.kept) box.appendChild(labKeptBlock(lab));
     for (const f of (lab && lab.failures) || []) {
       const det = document.createElement('details');
       const s = document.createElement('summary');
@@ -2997,7 +3103,65 @@ function makeAskPanel(cfg) {
       steps: (data.steps || []).map(s => ({cls: s.cls})),
       failures: (data.steps || []).filter(s => s.cls && !['ok', 'skipped'].includes(s.cls) && s.output)
         .map(s => ({n: s.n, output: s.output.slice(-1500)})),
+      transcript: (data.transcript || '').slice(-12000),
+      kept: data.kept || null,
     };
+  }
+
+  // How to get into a kept lab machine, from what the run knows: a shell
+  // as student through the Terminal panel, and the login the answer set up.
+  function labKeptBlock(lab) {
+    const k = lab.kept;
+    const box = document.createElement('div');
+    box.className = 'labrun-kept';
+    const expired = !k.expires_at || k.expires_at * 1000 < Date.now();
+    const line = (text, cls) => {
+      const d = document.createElement('div');
+      if (cls) d.className = cls;
+      d.textContent = text;
+      box.appendChild(d);
+      return d;
+    };
+    if (k.destroyed || expired) {
+      line(k.destroyed ? 'The lab machine has been destroyed.' : 'The lab machine has expired and been destroyed.');
+      return box;
+    }
+    const until = new Date(k.expires_at * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    line(`The lab machine is kept, exactly as the run left it, until ${until}.`, 'labrun-kept-head');
+    if (!lab.token) return box;
+    line('To look around: open it in the Terminal panel below. You are logged in as student; sudo works without a password.');
+    const cmds = [];
+    const svcCmd = {login: 'sudo login student', su: 'su - student', sudo: 'sudo -k && sudo -v'};
+    for (const s of (k.pam_services || [])) if (svcCmd[s]) cmds.push(svcCmd[s]);
+    if (k.sshd_changed) cmds.push('ssh student@localhost');
+    if (cmds.length) {
+      line('To try the login the answer set up, run: ' + cmds.join('   or   '));
+      if (k.password) line(`Password for student (set by the lab for testing): ${k.password}`);
+      if (k.totp_secret) line(`Verification code: run  oathtool --totp -b ${k.totp_secret}  (the secret the answer's google-authenticator created)`);
+    }
+    const buttons = document.createElement('div');
+    buttons.className = 'labrun-kept-buttons';
+    const open = document.createElement('button');
+    open.textContent = 'Open it in the Terminal panel';
+    open.onclick = () => startTerminal({id: lab.id, token: lab.token});
+    const destroy = document.createElement('button');
+    destroy.textContent = 'Destroy this lab machine';
+    destroy.onclick = async () => {
+      destroy.disabled = true;
+      try {
+        await fetch('/sandbox/lab-run/destroy', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                 body: JSON.stringify({id: lab.id, token: lab.token})});
+      } catch (e) { /* the refresh below shows the real state either way */ }
+      const h = getHistory();
+      const entry = h.find(m => m.labRun && m.labRun.id === lab.id);
+      if (entry && entry.labRun.kept) { entry.labRun.kept.destroyed = true; saveHistory(h); }
+      const holder = transcriptEl.querySelector(`[data-labrun="${lab.id}"]`);
+      if (holder && entry) fillLabRun(holder, entry.labRun);
+    };
+    buttons.appendChild(open);
+    buttons.appendChild(destroy);
+    box.appendChild(buttons);
+    return box;
   }
 
   const labPolls = new Set();
@@ -3007,17 +3171,20 @@ function makeAskPanel(cfg) {
     const tick = async () => {
       let data;
       try {
-        const resp = await fetch('/sandbox/lab-run?id=' + encodeURIComponent(id), {cache: 'no-store'});
+        const known = getHistory().find(m => m.labRun && m.labRun.id === id);
+        const token = known && known.labRun.token ? known.labRun.token : '';
+        const resp = await fetch('/sandbox/lab-run?id=' + encodeURIComponent(id) + '&token=' + encodeURIComponent(token),
+                                 {cache: 'no-store'});
         data = await resp.json();
       } catch (e) { setTimeout(tick, 5000); return; }
       const lab = compactLab(data);
       const h = getHistory();
       const entry = h.find(m => m.labRun && m.labRun.id === id);
-      if (entry) { entry.labRun = lab; saveHistory(h); }
+      if (entry) { lab.token = entry.labRun.token; entry.labRun = lab; saveHistory(h); }
       const box = transcriptEl.querySelector(`[data-labrun="${id}"]`);
       if (box) fillLabRun(box, lab);
       if (['done', 'error', 'unknown'].includes(data.status)) { labPolls.delete(id); return; }
-      setTimeout(tick, 3000);
+      setTimeout(tick, data.status === 'running' ? 1500 : 3000);
     };
     tick();
   }
@@ -3241,7 +3408,7 @@ function makeAskPanel(cfg) {
               const obj = JSON.parse(payload);
               if (obj.sources) { answerSources = obj.sources; continue; }
               if (obj.notices) { answerNotices = obj.notices; continue; }
-              if (obj.lab_run) { answerLabRun = {id: obj.lab_run.id, status: 'queued'}; continue; }
+              if (obj.lab_run) { answerLabRun = {id: obj.lab_run.id, token: obj.lab_run.token, status: 'queued'}; continue; }
               const delta = (obj.choices[0].delta || {}).content || '';
               if (delta) {
                 assistantText += delta;
@@ -3408,7 +3575,10 @@ async function runCode() {
 // only ever one sandbox terminal per student session.
 let termState = null;  // { ws, term, fitAddon }
 
-function startTerminal() {
+// With `lab` ({id, token}), opens the kept lab machine an advice run left
+// behind instead of booting a fresh sandbox.
+function startTerminal(lab) {
+  if (termState && lab) stopTerminal();
   if (termState) return;
   const startBtn = document.getElementById('termStartBtn');
   const stopBtn = document.getElementById('termStopBtn');
@@ -3417,7 +3587,8 @@ function startTerminal() {
 
   startBtn.disabled = true;
   host.classList.add('open');
-  status.textContent = 'Booting a fresh sandboxed shell...';
+  status.textContent = lab ? 'Opening the lab machine...' : 'Booting a fresh sandboxed shell...';
+  host.scrollIntoView({behavior: 'smooth', block: 'center'});
 
   const term = new Terminal({
     theme: { background: '#0d0d0d', foreground: '#e2e6f0', cursor: '#4f8ef7' },
@@ -3438,7 +3609,8 @@ function startTerminal() {
   // this works the same whether the page was reached via the real LB
   // or a local port-forward used for testing.
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${wsProto}//${location.host}/terminal`);
+  const labQuery = lab ? `?lab=${encodeURIComponent(lab.id)}&token=${encodeURIComponent(lab.token)}` : '';
+  const ws = new WebSocket(`${wsProto}//${location.host}/terminal${labQuery}`);
   termState = {ws, term, fitAddon};
 
   ws.onopen = () => {
@@ -3825,6 +3997,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_run_status()
         elif path == "/sandbox/lab-run":
             self._handle_lab_run_status()
+        elif path == "/sandbox/lab-run/attach":
+            self._handle_lab_run_attach()
         elif path.startswith("/vendor/"):
             self._serve_vendor_file(path[len("/vendor/"):])
         else:
@@ -3860,6 +4034,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_sandbox_interrupt()
         elif path == "/sandbox/reverify":
             self._handle_sandbox_reverify()
+        elif path == "/sandbox/lab-run/destroy":
+            self._handle_lab_run_destroy()
         else:
             self._not_found()
 
@@ -4106,13 +4282,59 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         page under the answer until status is done or error."""
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         run_id = re.sub(r"[^0-9a-f]", "", (query.get("id") or [""])[0])[:12]
-        out = json.dumps(_advice_status(run_id) if run_id else {"status": "unknown"}).encode()
+        token = (query.get("token") or [""])[0][:64]
+        out = json.dumps(_advice_status(run_id, token) if run_id else {"status": "unknown"}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
+
+    def _send_small_json(self, code: int, obj: dict) -> None:
+        out = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def _handle_lab_run_destroy(self):
+        """POST /sandbox/lab-run/destroy {id, token} -- the page's "Destroy
+        this lab machine" button: frees the kept VM now instead of at its
+        deadline. Only with the run's token."""
+        body = self._read_json_body()
+        run_id = re.sub(r"[^0-9a-f]", "", str(body.get("id", "")))[:12]
+        with _advice_cv:
+            data = _advice_runs.get(run_id) or {}
+        if not _token_ok(data, str(body.get("token", ""))[:64]):
+            self._send_small_json(403, {"error": "not your lab machine"})
+            return
+        gone = _release_kept(run_id, "destroyed from the page")
+        self._send_small_json(200, {"destroyed": gone})
+
+    def _handle_lab_run_attach(self):
+        """GET /sandbox/lab-run/attach?id=&token= -- for sandbox_terminal.py
+        on this same host only (never through the LB): which VM a Terminal
+        session for this kept lab machine should open a shell on."""
+        if self.client_address[0] != "127.0.0.1" or self.headers.get("X-Forwarded-For"):
+            self._send_small_json(403, {"error": "local only"})
+            return
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        run_id = re.sub(r"[^0-9a-f]", "", (query.get("id") or [""])[0])[:12]
+        with _advice_cv:
+            data = _advice_runs.get(run_id) or {}
+        if not _token_ok(data, (query.get("token") or [""])[0][:64]):
+            self._send_small_json(403, {"error": "not your lab machine"})
+            return
+        with _kept_lock:
+            entry = _kept_labs.get(run_id)
+        if entry is None:
+            self._send_small_json(404, {"error": "that lab machine has been destroyed"})
+            return
+        vm = entry["vm"]
+        self._send_small_json(200, {"session_id": vm.session_id, "ip": vm.ip, "expires_at": entry["expires"]})
 
     def _handle_run_status(self):
         """GET /sandbox/run-status?ticket=<id> -- where the caller's own
@@ -4825,10 +5047,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if endpoint_label == "/sandbox/linux-ask":
                 notices = _answer_notices(full_text)
                 self.wfile.write(b"data: " + json.dumps({"notices": notices}).encode() + b"\n\n")
-                run_id = (_start_advice_run(full_text, question, search_terms)
-                          if outcome == "success" else None)
-                if run_id:
-                    self.wfile.write(b"data: " + json.dumps({"lab_run": {"id": run_id}}).encode() + b"\n\n")
+                started = (_start_advice_run(full_text, question, search_terms)
+                           if outcome == "success" else None)
+                if started:
+                    run_id, token = started
+                    self.wfile.write(b"data: " + json.dumps({"lab_run": {"id": run_id, "token": token}}).encode()
+                                     + b"\n\n")
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

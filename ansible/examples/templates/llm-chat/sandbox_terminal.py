@@ -32,6 +32,9 @@ import os
 import select
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import websockets
 import websockets.legacy.server
@@ -149,8 +152,30 @@ def _ssh_shell(vm: MicroVM):
     return client, channel
 
 
+# A kept lab machine (llm-chat-lab-sandbox): verify-proxy on this same host
+# owns it; this service only opens a shell on it, never boots or destroys it.
+VERIFY_LOCAL_URL = os.environ.get("VERIFY_LOCAL_URL", "http://127.0.0.1:8620")
+
+
+def _lab_attach_info(run_id: str, token: str) -> dict:
+    qs = urllib.parse.urlencode({"id": run_id, "token": token})
+    try:
+        with urllib.request.urlopen(f"{VERIFY_LOCAL_URL}/sandbox/lab-run/attach?{qs}", timeout=5) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return {"error": json.loads(e.read()).get("error", f"HTTP {e.code}")}
+        except ValueError:
+            return {"error": f"HTTP {e.code}"}
+    except (OSError, ValueError) as e:
+        return {"error": f"could not reach the lab service: {e}"}
+
+
 async def _terminal_handler(websocket):
     ip = _client_ip(websocket)
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(getattr(websocket, "path", "") or "").query)
+    lab_id = "".join(c for c in (query.get("lab") or [""])[0] if c in "0123456789abcdef")[:12]
+    lab_token = (query.get("token") or [""])[0][:64]
 
     async def send(msg: dict):
         try:
@@ -165,20 +190,35 @@ async def _terminal_handler(websocket):
             return
         _client_active[ip] = active + 1
 
-    vm = MicroVM(VM_OWNER, _ip_pool, FCBR, sizing=TERMINAL_SIZING,
-                 boot_timeout_s=TERMINAL_BOOT_TIMEOUT_S)
     loop = asyncio.get_event_loop()
+    owned = not lab_id
+    lab_expires = 0.0
+    if owned:
+        vm = MicroVM(VM_OWNER, _ip_pool, FCBR, sizing=TERMINAL_SIZING,
+                     boot_timeout_s=TERMINAL_BOOT_TIMEOUT_S)
+    else:
+        info = await loop.run_in_executor(None, _lab_attach_info, lab_id, lab_token)
+        if "session_id" not in info:
+            await send({"type": "error", "data": f"Can't open that lab machine: {info.get('error', 'unknown')}."})
+            with _client_lock:
+                _client_active[ip] = max(0, _client_active.get(ip, 1) - 1)
+            return
+        vm = MicroVM.attached(info["session_id"], info.get("ip", ""))
+        lab_expires = float(info.get("expires_at", 0))
     client = channel = None
     try:
-        await send({"type": "output", "data": "Booting a fresh sandboxed shell...\r\n"})
-        try:
-            await loop.run_in_executor(None, vm.boot)
-        except CapacityError as e:
-            await send({"type": "error", "data": f"The lab is full: {e}."})
-            return
-        except BootError as e:
-            await send({"type": "error", "data": f"Sandbox failed to start: {e}"})
-            return
+        if owned:
+            await send({"type": "output", "data": "Booting a fresh sandboxed shell...\r\n"})
+            try:
+                await loop.run_in_executor(None, vm.boot)
+            except CapacityError as e:
+                await send({"type": "error", "data": f"The lab is full: {e}."})
+                return
+            except BootError as e:
+                await send({"type": "error", "data": f"Sandbox failed to start: {e}"})
+                return
+        else:
+            await send({"type": "output", "data": "Opening the lab machine that ran the answer...\r\n"})
 
         try:
             client, channel = await loop.run_in_executor(None, _ssh_shell, vm)
@@ -193,12 +233,19 @@ async def _terminal_handler(websocket):
             f"Ports {', '.join(str(p) for p in PREVIEW_PORTS)} are reachable from your browser -- "
             f"start a web server on any of them and open this same host at that port in a new tab.\r\n"
         ) if PREVIEW_PORTS else ""
-        size_note = (f"This sandbox: {vm.vcpu_count} vCPU, {vm.mem_size_mib}MB RAM, "
-                     f"{vm.scratch_mib // 1024}GB disk. Anything can be installed with apt; "
-                     f"nothing survives the session.\r\n")
-        await send({"type": "connected",
-                     "data": "Connected. This shell has real internet access and is fully isolated -- "
-                             "it cannot reach anything else.\r\n" + size_note + preview_note})
+        if owned:
+            size_note = (f"This sandbox: {vm.vcpu_count} vCPU, {vm.mem_size_mib}MB RAM, "
+                         f"{vm.scratch_mib // 1024}GB disk. Anything can be installed with apt; "
+                         f"nothing survives the session.\r\n")
+            await send({"type": "connected",
+                         "data": "Connected. This shell has real internet access and is fully isolated -- "
+                                 "it cannot reach anything else.\r\n" + size_note + preview_note})
+        else:
+            until = time.strftime("%H:%M", time.localtime(lab_expires)) if lab_expires else "its deadline"
+            await send({"type": "connected",
+                         "data": "Connected to the lab machine that ran the answer, exactly as the run left it. "
+                                 f"It is destroyed at {until} (or when you press Destroy); closing this "
+                                 "terminal does not destroy it.\r\n"})
 
         stop_event = threading.Event()
         last_activity = time.monotonic()
@@ -318,7 +365,8 @@ async def _terminal_handler(websocket):
                 client.close()
             except Exception:
                 pass
-        await loop.run_in_executor(None, vm.teardown)
+        if owned:
+            await loop.run_in_executor(None, vm.teardown)
         with _client_lock:
             _client_active[ip] = max(0, _client_active.get(ip, 1) - 1)
             if _client_vm.get(ip) is vm:

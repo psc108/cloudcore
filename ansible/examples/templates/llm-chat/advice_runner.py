@@ -649,6 +649,11 @@ class RunResult:
     verdict: str = ""            # lab_verified | failed | partial | not_runnable
     summary: str = ""
     error: str = ""
+    # Everything that happened on the lab machine, as a read-only terminal
+    # log for the page (tail kept); and, once the run ends, how to reach the
+    # machine if the caller kept it.
+    transcript: str = ""
+    kept: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -657,6 +662,7 @@ class RunResult:
 STEP_TIMEOUT_S = 300
 RUN_TIMEOUT_S = 1200
 _OUTPUT_KEEP = 4000
+_TRANSCRIPT_KEEP = 150_000
 
 _HARNESS_SETUP = r"""set -e
 # The runner answers apt's and debconf's questions the way a person
@@ -692,7 +698,8 @@ def _reply_for(prompt: str, output: str) -> str | None:
     return ""
 
 
-def _exec_step(client, command: str, timeout_s: int) -> tuple[int | None, str, bool, list[str]]:
+def _exec_step(client, command: str, timeout_s: int,
+               on_output=None) -> tuple[int | None, str, bool, list[str]]:
     """Run one of the answer's steps the way a person following it would,
     answering its questions (see _reply_for). Returns (exit, output, timed
     out, replies given)."""
@@ -706,7 +713,10 @@ def _exec_step(client, command: str, timeout_s: int) -> tuple[int | None, str, b
     try:
         while time.monotonic() < deadline:
             if chan.recv_ready():
-                out += chan.recv(65536).decode("utf-8", "replace")
+                chunk = chan.recv(65536).decode("utf-8", "replace")
+                out += chunk
+                if on_output:
+                    on_output(chunk)
                 last_data = time.monotonic()
                 continue
             if chan.exit_status_ready():
@@ -723,13 +733,18 @@ def _exec_step(client, command: str, timeout_s: int) -> tuple[int | None, str, b
                 else:
                     chan.sendall((reply + "\n").encode())
                     replies.append(reply or "Enter")
+                    if on_output:
+                        on_output(f"{reply or ''}\n" if reply else "\n")
                     last_data = time.monotonic()
             elif stdin_open and idle > 30:
                 chan.shutdown_write()  # silent and not asking: whatever reads stdin gets EOF
                 stdin_open = False
             time.sleep(0.05)
         while chan.recv_ready():
-            out += chan.recv(65536).decode("utf-8", "replace")
+            chunk = chan.recv(65536).decode("utf-8", "replace")
+            out += chunk
+            if on_output:
+                on_output(chunk)
         code = chan.recv_exit_status() if chan.exit_status_ready() else None
     except OSError as e:
         return None, out + f"\n(connection lost: {e})", False, replies
@@ -855,15 +870,25 @@ def _collect_facts(steps: list[Step]) -> tuple[list[str], list[str], list[str]]:
 
 
 def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: str = "",
-               make_prober=None, pair_bridges=None) -> RunResult:
+               make_prober=None, pair_bridges=None, keep_vm=None) -> RunResult:
     """Run `answer` in a VM from make_vm(**kw) (an un-booted microvm.MicroVM;
     kw may carry pair_bridge and scratch_from). With make_prober(bridge)
     and pair_bridges=(create, delete), goal probes run from a second VM at
-    the end (L8). `progress(result)` is called after each step."""
+    the end (L8). `progress(result)` is called after each step, and at most
+    once a second while output streams. keep_vm(vm, info) -> bool, if given,
+    is offered the target VM at the end; when it returns True the VM is not
+    torn down (the caller now owns it)."""
     result = RunResult(id=run_id or uuid.uuid4().hex[:12], started_at=time.time())
     steps = parse_steps(answer)
     result.steps = [asdict(s) for s in steps]
     publish = progress or (lambda r: None)
+    last_pub = [0.0]
+
+    def say(text: str, now: bool = False) -> None:
+        result.transcript = (result.transcript + text)[-_TRANSCRIPT_KEEP:]
+        if now or time.monotonic() - last_pub[0] > 1.0:
+            last_pub[0] = time.monotonic()
+            publish(result)
     if not any(s.kind in ("run", "write", "append", "prepend", "edit") for s in steps):
         result.status, result.verdict = "done", "not_runnable"
         result.summary = "Nothing in this answer could be run as a step."
@@ -884,17 +909,25 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         if pair:
             _exec(root, f"ip link set eth1 up && ip addr replace {TARGET_PAIR_IP}/24 dev eth1", 15)
 
+    kept = False
+    login_prober = None
     try:
+        say("# booting a fresh Ubuntu 22.04 lab machine...\n", now=True)
+        t_boot = time.monotonic()
         vm.boot()
         result.vm = {"vcpus": vm.vcpu_count, "mem_mib": vm.mem_size_mib, "scratch_mib": vm.scratch_mib}
         connect()
+        say(f"# ready in {time.monotonic() - t_boot:.0f}s: {vm.vcpu_count} vCPU, {vm.mem_size_mib}MB RAM, "
+            f"{vm.scratch_mib // 1024}GB disk\n# lab setup: apt and debconf take the defaults, as a person "
+            "following the answer would\n")
         _exec(root, _HARNESS_SETUP, 60)
-        login_prober, baseline = None, {}
+        baseline = {}
         pam = _pam_services_touched(steps)
         sshd_changed = "sshd" in pam or any("sshd_config" in (s.target or "") or
                                             (s.kind == "run" and "sshd_config" in s.source) for s in steps)
         auth_related = bool(pam) or sshd_changed or bool(_MFA_RE.search(question + "\n" + answer))
         if make_prober and pair:
+            say("# booting the prober: a second machine on a private link, to test the result from outside\n")
             prober = make_prober(pair)
             prober.boot()
             prober_root = prober.ssh_client("root")
@@ -909,15 +942,26 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 login_prober = _LoginProber(root, prober_root, sorted(services))
                 login_prober.prepare()
                 baseline["ssh"] = login_prober.ssh()
+                say(f"# baseline before the answer -- SSH login as student from the prober: "
+                    f"{'works' if baseline['ssh'].get('ok') else 'fails'}\n")
                 for svc in login_prober.services:
                     baseline[f"pam:{svc}"] = login_prober.pam(svc)
-        publish(result)
+                    say(f"# baseline -- '{svc}' login (PAM): "
+                        f"{'works' if baseline[f'pam:{svc}']['ok'] else 'fails'}\n")
+        say("# now following the answer, step by step\n", now=True)
 
         for s in steps:
             if time.monotonic() > deadline:
                 s.cls, s.detail = "timeout", "the whole run hit its time limit before this step"
                 continue
             t0 = time.monotonic()
+            if s.kind == "run":
+                say("\n$ " + s.source.replace("\n", "\n> ") + "\n", now=True)
+            elif s.kind in ("write", "append", "prepend", "edit"):
+                how = s.note.partition("|")[0]
+                say(f"\n# {s.kind} {s.target} ({how}):\n" + textwrap.indent(s.source, "  ") + "\n", now=True)
+            else:
+                say(f"\n# skipped: {s.source.splitlines()[0][:100]} -- {s.note}\n", now=True)
             if s.kind == "run" and _REBOOT_RE.search(s.source):
                 # A real reboot: the guest shuts down cleanly (reboot=k ends
                 # the VMM), then a new VM boots from the same disk.
@@ -925,11 +969,12 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     _exec_step(student, s.source, 60)
                 except (OSError, EOFError):
                     pass  # the connection going away is the point
+                say("# the machine is shutting down to reboot...\n", now=True)
                 if vm.wait_exit(90):
-                    kept = vm.jail_dir + ".scratch"
-                    vm.take_scratch(kept)
+                    saved = vm.jail_dir + ".scratch"
+                    vm.take_scratch(saved)
                     vm.teardown()
-                    kw = {"scratch_from": kept}
+                    kw = {"scratch_from": saved}
                     if pair:
                         kw["pair_bridge"] = pair
                     vm = make_vm(**kw)
@@ -937,10 +982,13 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     connect()
                     s.exit, s.cls = 0, "ok"
                     s.note = f"rebooted: the sandbox restarted on the same disk in {time.monotonic() - t0:.0f}s"
+                    say(f"# back up after the reboot ({time.monotonic() - t0:.0f}s), same disk\n", now=True)
                 else:
                     s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not restart"
             elif s.kind == "run":
-                code, out, timed_out, replies = _exec_step(student, s.source, STEP_TIMEOUT_S)
+                code, out, timed_out, replies = _exec_step(student, s.source, STEP_TIMEOUT_S, on_output=say)
+                if code:
+                    say(f"# exit {code}\n")
                 s.exit, s.output = code, out[-_OUTPUT_KEEP:]
                 s.cls, s.detail = classify(code, out, timed_out)
                 if replies:
@@ -951,6 +999,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 how, _, flag = s.note.partition("|")
                 s.note = how
                 existed, ok = _put_file(root, s.target, s.source, s.kind)
+                say("# written\n" if ok else f"# could not write {s.target}\n")
                 s.exit = 0 if ok else 1
                 if not ok:
                     s.cls, s.detail = "step_failed", f"could not write {s.target}"
@@ -966,6 +1015,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             result.steps = [asdict(x) for x in steps]
             publish(result)
 
+        say("\n# checking the result...\n", now=True)
         # Whole-run checks, as root so a step that broke sudo can't hide them.
         pkgs, services, paths = _collect_facts(steps)
         services_started = services
@@ -999,6 +1049,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             # entry for it would point at the old one (found live: SSH timed
             # out, a port check seconds later worked).
             _exec(prober_root, "ip neigh flush all", 10)
+            say("# the prober is testing logins, ports and web servers from outside...\n", now=True)
             if login_prober is not None:
                 login_prober.root = root  # a reboot replaced the connection
                 checks += _login_probes(steps, login_prober, baseline, question, answer, sshd_changed)
@@ -1006,6 +1057,16 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
+        for c in checks:
+            mark = "i" if c.get("decisive") is False else ("ok " if c["ok"] else "FAIL")
+            say(f"# [{mark}] {c['kind']}: {c['subject']}" + (f" -- {c['detail'][:160]}" if c["detail"] else "") + "\n")
+        say(f"\n# verdict: {result.verdict} -- {result.summary}\n", now=True)
+        if keep_vm is not None:
+            info = {"user": "student", "pam_services": list(login_prober.services) if login_prober else [],
+                    "sshd_changed": sshd_changed,
+                    "password": login_prober.pw if login_prober else "",
+                    "totp_secret": login_prober.secret if login_prober else ""}
+            kept = bool(keep_vm(vm, info))
     except Exception as e:  # noqa: BLE001 -- any failure is reported as the run's error
         result.status, result.error = "error", f"{type(e).__name__}: {e}"
         result.verdict = result.verdict or "partial"
@@ -1017,7 +1078,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     c.close()
             except Exception:  # noqa: BLE001, S110 -- closing a dead session is not news
                 pass
-        for machine in (vm, prober):
+        for machine in (prober,) if kept else (vm, prober):
             try:
                 if machine is not None:
                     machine.teardown()
