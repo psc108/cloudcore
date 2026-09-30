@@ -357,19 +357,48 @@ class _LoginProber:
             return {"ok": False, "prompts": [], "methods": [], "used": [], "error": out.strip()[-300:]}
 
     def pam(self, service: str, wrong: bool = False) -> dict:
-        _, out, _ = _exec(self.root, f"printf '%s\\n%s\\n' {shlex.quote(self.pw)} {self._code(wrong)} | "
-                                     f"pamtester -v {shlex.quote(service)} student authenticate", 30)
+        """Authenticate through `service` with pamtester, answering each prompt
+        by what it asks for -- a code at a code prompt, the password at a
+        password prompt -- in whatever order the stack asks. (Feeding them
+        in a fixed order reported a false lockout, found live, for a correct
+        answer that put the code first.)"""
+        code = self._code(wrong)
+        chan = self.root.get_transport().open_session()
+        chan.set_combine_stderr(True)
+        chan.exec_command(f"timeout 30 pamtester -v {shlex.quote(service)} student authenticate")
+        out, answered = "", 0
+        last = time.monotonic()
+        deadline = last + 40
+        try:
+            while time.monotonic() < deadline:
+                if chan.recv_ready():
+                    out += chan.recv(65536).decode("utf-8", "replace")
+                    last = time.monotonic()
+                    continue
+                if chan.exit_status_ready():
+                    break
+                tail = out.rsplit("\n", 1)[-1]
+                if tail.rstrip().endswith(":") and time.monotonic() - last > 0.3 and answered < 6:
+                    reply = code if any(w in tail.lower() for w in _CODE_WORDS) else self.pw
+                    chan.sendall((reply + "\n").encode())
+                    answered += 1
+                    out += "\n"  # this prompt is answered; don't answer it again
+                    last = time.monotonic()
+                time.sleep(0.05)
+            while chan.recv_ready():
+                out += chan.recv(65536).decode("utf-8", "replace")
+        finally:
+            chan.close()
         self._pace()
         ok = "successfully authenticated" in out
-        last = (out.strip().splitlines() or [""])[-1]
-        error = re.sub(r"^(?:(?:[A-Z][a-z]+ )*(?:[Pp]assword|[Cc]ode):\s*)+", "", last).strip()
+        last_line = (out.strip().splitlines() or [""])[-1]
+        error = re.sub(r"^(?:(?:[A-Z][a-z]+ )*(?:[Pp]assword|[Cc]ode):\s*)+", "", last_line).strip()
         if "Module is unknown" in out:
             error = ("PAM cannot load a module named in this service's stack (not installed?), "
                      "so this login is refused for everyone")
         return {"ok": ok,
                 "prompts": re.findall(r"\b((?:[A-Z][a-z]+ )*(?:[Pp]assword|[Cc]ode))\s*:", out),
                 "error": "" if ok else error[:200]}
-
 
 def _describe(r: dict) -> str:
     bits = [f"prompts: {', '.join(r.get('prompts') or []) or 'none'}"]

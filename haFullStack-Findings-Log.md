@@ -3338,6 +3338,20 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 - step 5: the real `ls` error;
 - Sentinel 52/52 tests pass, one new for correction facts.
 
+### F-184 — The prober's PAM test reported a false LOCKOUT for a correct MFA answer: it typed the password and the code in a fixed order
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_LoginProber.pam`).
+
+**Symptom:** a user's fifth run of the MFA question produced a *correct* answer: `libpam-google-authenticator` installed, `google-authenticator` completed, `auth required pam_google_authenticator.so` added at the top of `/etc/pam.d/login`. The lab reported "LOCKOUT: following this answer breaks 'login' login". Its own record showed the prompts "Verification code, Password": the code comes first because the module sits above `@include common-auth`.
+
+**Root cause:** the PAM probe piped `password\ncode\n` into pamtester, assuming the usual order. With the module first, the password went into "Verification code" and the code into "Password". The SSH probe already answered by prompt text; the PAM probe didn't. A false lockout is the worst kind of wrong result for this lab, and it had already entered the corpus as a failed run, feeding the model a false fact about a working answer.
+
+**Fix:** the PAM probe now drives pamtester interactively and answers each prompt by what it asks for: a code at a code/verification/token prompt, the password otherwise. Order no longer matters. The false record (`5f574b21c24e`) was re-run with the fix and replaced in Sentinel; it is now `lab_verified`, and its grounding row was promoted, so similar questions are grounded on it.
+
+**Verified by:** on the lab coordinator (2026-09-30):
+- the user's code-first answer: **lab_verified**; `login` prompts "Verification code, Password", the right code accepted, a wrong one refused;
+- the earlier password-first answer: still lab_verified, with prompts "Password, Verification code".
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3473,3 +3487,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.9 | 2026-09-30 | Paul Scott | From a user's own run of the MFA question on the live page (a lockout the lab correctly found). F-181: a service restart deleted in-flight advice runs' private bridges; lockouts now lead the report; plainer step and PAM wording. |
 | v3.10 | 2026-09-30 | Paul Scott | From a user's live MFA run. F-182: an install step that did nothing (`update || install`) is named and explained; the prompt now says to chain with && and keep || for the install-if-missing check. |
 | v3.11 | 2026-09-30 | Paul Scott | From a user's fourth live MFA run. F-183: lab facts now carry the correction (the real package for a wrong name), not only the prohibition; apt's all-or-nothing install is explained; failed steps show their real error. |
+| v3.12 | 2026-09-30 | Paul Scott | From a user's fifth live MFA run. F-184: false LOCKOUT from a fixed-order PAM probe; prompts are now answered by what they ask, and the false corpus record was corrected (now lab_verified). |
