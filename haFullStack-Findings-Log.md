@@ -3475,6 +3475,47 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 
 The remaining 21 failures are itemised in the plan: 6 advice, 6 lab gaps for L13, 4 microVM limits, 3 assumed prerequisites, 2 harness (a timing race and an example subnet).
 
+### F-190 — Step-level repair (L10b): failed steps are now fixed and retried in place, and the working procedure is kept separately from the answer as written
+
+**Where:**
+- `examples/llm-chat/files/advice_runner.py` (`_judge`, `_repair_candidates`, `_repair_step`, `_procedure`, `RunResult.repaired`, and the read-to-end fix in `_exec_step`);
+- `verify_proxy.py` (`_model_fix`, the "After the lab repaired it" block on the page);
+- Sentinel (`advice_runs.repaired_json`, facts from repairs).
+
+**Symptom:** direct request: "are we preparing to allow repeated, automated attempts at fixes (so, a failure to install a package becomes multiple searches and download/install attempts etc)?" Until now, a failed step simply stayed failed. Most L10 failures were small and fixable, such as a forgotten package, directory or `sudo`, or an assumed key pair, and a person would have fixed them and carried on.
+
+**Root cause:** the lab had no notion of trying again, and one verdict had to serve both "is the advice right as written?" and "does this procedure work?".
+
+**Fix:** when a run step fails, the lab tries to repair *that step*, at most 3 attempts per step and 8 per run, every attempt in the live log and the corpus.
+- **The lab's own strategies come first:**
+  - the right package for a wrong name (command-not-found, then an exact-name package, then name search);
+  - installing a missing command's package;
+  - `apt-get update` on index or lock errors;
+  - creating a missing directory for a file being written;
+  - re-running as root when the answer left `sudo` off (never for the student's home);
+  - creating an SSH key pair the answer assumes;
+  - waiting for a service that isn't ready yet.
+- **Then the model:** up to 2 one-line fixes per run from the model, for that step alone.
+- **Risky repairs are flagged:** a repair that adds a PPA or third-party repository, or pipes a download into a shell, is marked `[risky]`.
+- **Two verdicts:** the answer keeps its honest verdict ("failed … (the lab repaired it)"). `repaired` holds the repaired procedure's own verdict, what the lab changed, and the procedure as it finally worked. The page shows it as "After the lab repaired it", with the procedure in a collapsible block.
+- **Positive facts:** Sentinel stores the repair and turns it into a fact, e.g. "In the lab, 'X' failed (…); what worked: ran it as root".
+
+**Found on the way:** with a terminal, a command that fails within milliseconds can deliver its output *after* its exit status. `sudo nginx -t` was recorded with no output, so "command not found" was never seen. The executor now reads to the end of the data.
+
+**Verified by:** on the lab coordinator (2026-10-01), seven L10 failures re-run with repair on:
+
+| # | Question | Result |
+|---|---|---|
+| 5 | memory (htop missing) | repaired to lab_verified (installed htop) |
+| 15 | SSH keys only | repaired to lab_verified (created the assumed key pair) |
+| 30 | iptables port forward | repaired to lab_verified (created /etc/iptables) |
+| 33 | SSH key login | repaired to lab_verified (created the assumed key pair) |
+| 19 | nginx HTTPS | repaired to lab_verified (created /etc/nginx/ssl; the model supplied the missing nginx install) |
+| 31 | WireGuard | still failed: `sudo` and a directory repaired, but the kernel-module step can't work in a microVM, and the model's two fixes for it were rightly unsuccessful |
+| 20 | fail2ban | verified as written; the timing race didn't recur |
+
+Each answer's own verdict stayed "failed". Sentinel: 54/54 tests pass, one new for repairs.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3616,3 +3657,4 @@ The remaining 21 failures are itemised in the plan: 6 advice, 6 lab gaps for L13
 | v3.15 | 2026-09-30 | Paul Scott | From a user's verified MFA run that needed three codes. F-187: TOTP codes follow the target's clock; sandboxes gain systemd-timesyncd. |
 | v3.16 | 2026-09-30 | Paul Scott | Direct request: measure before building further (L10, 40 questions). F-188: the harness, not the model, was the main source of wrong results; false passes and harness-caused facts quarantined from the corpus; plan reordered around harness correctness. |
 | v3.17 | 2026-09-30 | Paul Scott | Direct request: "yes" to the harness fixes first. F-189: L10a done; the same 40 answers re-run: 14 verified (was 8, 5 false), 21 failed (was 27), remaining failures itemised. |
+| v3.18 | 2026-10-01 | Paul Scott | Direct request: step-level repair ("a failure to install a package becomes multiple searches and download/install attempts"), then "yes, please". F-190: L10b done; failed steps repaired in place (lab strategies, then the model), repaired procedure kept beside the answer's own verdict. |

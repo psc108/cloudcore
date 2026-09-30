@@ -1870,6 +1870,34 @@ def _advice_store(run_id: str, data: dict) -> None:
             _advice_runs.popitem(last=False)
 
 
+_MODEL_FIX_SYSTEM = (
+    "A step from a Linux how-to answer failed in a fresh Ubuntu 22.04 server (a disposable lab machine; "
+    "you are the student's helper, commands run as a normal user with passwordless sudo). Reply with ONE shell "
+    "command, on one line, that fixes the cause so the same step will succeed when run again -- for example "
+    "installing a missing package, creating a missing directory, or fixing a permission. No explanation, no "
+    "code fences. If nothing sensible would fix it, reply exactly NONE.")
+
+
+def _model_fix(question: str, step: str, output: str) -> str:
+    """L10b: the model's one-line fix for one failed step (the lab's own
+    repair strategies having failed). "" on any failure."""
+    payload = {"messages": [
+        {"role": "system", "content": _MODEL_FIX_SYSTEM},
+        {"role": "user", "content": f"The question was: {question}\n\nThe step:\n{step}\n\n"
+                                    f"What it printed (last part):\n{output}"}],
+        "max_tokens": 80, "stream": False, "temperature": 0.2}
+    try:
+        req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
+                                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            text = json.loads(resp.read())["choices"][0]["message"]["content"].strip()
+    except Exception as e:  # noqa: BLE001 -- a repair aid, never a hard dependency
+        print(f"verify-proxy: model fix request failed: {e!r}", flush=True)
+        return ""
+    line = next((ln.strip().strip("`") for ln in text.splitlines() if ln.strip() and not ln.startswith("```")), "")
+    return line[:300]
+
+
 def _advice_worker() -> None:
     global _advice_pool
     import advice_runner
@@ -1930,7 +1958,7 @@ def _advice_worker() -> None:
         result = advice_runner.run_advice(
             answer, make_target, progress=publish, run_id=run_id, question=question,
             make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge),
-            keep_vm=keep)
+            keep_vm=keep, model_fix=_model_fix)
         with _kept_lock:
             kept = _kept_labs.get(run_id)
         if kept is not None:
@@ -1941,7 +1969,7 @@ def _advice_worker() -> None:
         entry = {"id": result.id, "source": "auto", "question": question, "answer": answer,
                  "search_terms": search_terms, "verdict": result.verdict,
                  "summary": result.summary, "error": result.error, "vm": result.vm,
-                 "steps": result.steps, "checks": result.checks}
+                 "steps": result.steps, "checks": result.checks, "repaired": result.repaired}
         print("ADVICE_RUN " + json.dumps({k: v for k, v in entry.items() if k != "answer"}), flush=True)
         if SENTINEL_HOST:
             _push_advice_run_to_sentinel(entry)
@@ -2778,6 +2806,9 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .labrun-summary { margin-bottom: 0.3rem; }
 .labrun-step { font-family: ui-monospace, monospace; font-size: 0.76rem; margin: 0.1rem 0; word-break: break-word; }
 .labrun pre.labrun-live { max-height: 260px; overflow: auto; background: #0d0d0d; color: #d6dae3; padding: 0.45rem 0.55rem; font-size: 0.72rem; line-height: 1.35; white-space: pre-wrap; word-break: break-word; border-radius: 4px; margin: 0.35rem 0; }
+.labrun-repaired { margin-top: 0.45rem; padding: 0.35rem 0.55rem; border-radius: 4px; border-left: 3px solid #d98e04; background: #fff8ea; }
+.labrun-repaired.ok { border-left-color: #2e7d32; background: #eef8ef; }
+.labrun-repaired pre { max-height: 260px; overflow: auto; background: #111; color: #ddd; padding: 0.4rem; font-size: 0.72rem; white-space: pre-wrap; }
 .labrun-kept { margin-top: 0.45rem; padding: 0.4rem 0.55rem; border: 1px dashed #8a94a6; border-radius: 4px; background: #fbfcfe; }
 .labrun-kept div { margin: 0.12rem 0; }
 .labrun-kept-head { font-weight: 600; }
@@ -3080,6 +3111,40 @@ function makeAskPanel(cfg) {
       }
       requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
     }
+    if (lab && lab.repaired) {
+      // L10b: the answer failed as written, but the lab repaired its steps.
+      const r = lab.repaired;
+      const rb = document.createElement('div');
+      rb.className = 'labrun-repaired ' + (r.verdict === 'lab_verified' ? 'ok' : 'bad');
+      const head = document.createElement('div');
+      head.className = 'labrun-head';
+      head.textContent = r.verdict === 'lab_verified'
+        ? 'After the lab repaired it: every step worked and every check passed'
+        : 'After the lab repaired it: ' + (r.summary || 'still not working');
+      rb.appendChild(head);
+      for (const c of r.changes) {
+        const d = document.createElement('div');
+        d.className = 'labrun-step';
+        d.textContent = '↻ ' + c;
+        rb.appendChild(d);
+      }
+      if (r.risky) {
+        const w = document.createElement('div');
+        w.textContent = 'A repair added a third-party source or piped a download into a shell: review it before trusting it.';
+        rb.appendChild(w);
+      }
+      if (r.procedure) {
+        const det = document.createElement('details');
+        const s = document.createElement('summary');
+        s.textContent = 'The procedure that worked in the lab';
+        const pre = document.createElement('pre');
+        pre.textContent = r.procedure;
+        det.appendChild(s);
+        det.appendChild(pre);
+        rb.appendChild(det);
+      }
+      box.appendChild(rb);
+    }
     if (lab && lab.kept) box.appendChild(labKeptBlock(lab));
     for (const f of (lab && lab.failures) || []) {
       const det = document.createElement('details');
@@ -3108,6 +3173,11 @@ function makeAskPanel(cfg) {
         ? data.transcript.slice(0, 6000) + '\\n# ... (middle of the log not kept in this browser) ...\\n' + data.transcript.slice(-18000)
         : (data.transcript || ''),
       kept: data.kept || null,
+      repaired: data.repaired && data.repaired.verdict ? {
+        verdict: data.repaired.verdict, summary: data.repaired.summary || '',
+        changes: data.repaired.changes || [], risky: !!data.repaired.risky,
+        procedure: (data.repaired.procedure || '').slice(0, 8000),
+      } : null,
     };
   }
 

@@ -197,6 +197,8 @@ class Step:
     edit_ops: list = field(default_factory=list)
     # L10a/L10b: every attempt at this step (the answer's own, then any repair).
     attempts: list = field(default_factory=list)
+    repair: str = ""      # L10b: what the lab changed to make this step work
+    final: str = ""       # L10b: the commands that worked (for the repaired procedure)
 
 
 def _strip_console(code: str) -> str:
@@ -287,6 +289,15 @@ def parse_steps(answer: str) -> list[Step]:
         last_config_target = target
         code, subs, needs = _substitute(code)
         target, tsubs, tneeds = _substitute(target)
+        if target == "/etc/exports":
+            # The answer's example client network means "your clients": in the
+            # lab that's the prober's private link (found in L10a: an export for
+            # 192.168.1.0/24 refused the lab's own mount).
+            new = re.sub(r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?(?=\()",
+                         "172.30.0.0/24", code)
+            if new != code:
+                subs.append("example client network in /etc/exports -> 172.30.0.0/24 (the lab's clients)")
+                code = new
         steps.append(Step(len(steps) + 1, kind, code, target=target, subs=subs + tsubs, needs=sorted(needs | tneeds),
                           note=how + (f"; the lab filled in: {', '.join(subs + tsubs)}" if subs or tsubs else "")
                           + ("|expects-existing" if wants_existing else "")))
@@ -785,6 +796,157 @@ def _sshd_effective_checks(steps: list[Step], root) -> list[dict]:
     return checks
 
 
+def _judge(code, out, timed_out, marks, fullscreen) -> tuple[str, str, str]:
+    """(class, detail, benign note) for one execution of a run step."""
+    bad = [(st, cmd) for st, cmd in marks if not _benign(cmd, st)]
+    benign = [_benign(cmd, st) for st, cmd in marks if _benign(cmd, st)]
+    if fullscreen and not bad:
+        return "ok", "", "full-screen tool: shown for a few seconds, then quit with q"
+    if timed_out:
+        cls, detail = classify(code, out, True)
+        return cls, detail, ""
+    if bad:
+        cls, detail = classify(bad[0][0] or 1, out, False)
+        if cls == "step_failed":
+            detail = (f"`{bad[0][1][:100]}` failed (exit {bad[0][0]})"
+                      + (f": {detail}" if detail and not detail.startswith("exit ") else ""))
+        return cls, detail, ""
+    if code and not benign:
+        cls, detail = classify(code, out, False)
+        return cls, detail, ""
+    return "ok", "", (benign[0] if benign else "")
+
+
+# -- Step-level repair (L10b) --------------------------------------------------------
+#
+# Direct request: "a failure to install a package becomes multiple searches
+# and download/install attempts etc". When a step fails, the lab tries to fix
+# *that step* before moving on -- its own strategies first (fast, no model),
+# then one-line fixes from the model -- bounded, every attempt in the log.
+# The answer keeps its honest verdict; the repaired procedure gets its own.
+
+REPAIRS_PER_STEP = 3
+REPAIRS_PER_RUN = 8
+MODEL_FIXES_PER_RUN = 2
+_RISKY_RE = re.compile(r"add-apt-repository|ppa:|/etc/apt/sources\.list|curl[^|\n]*\|\s*(?:sudo\s+)?(?:ba)?sh|"
+                       r"wget[^|\n]*\|\s*(?:sudo\s+)?(?:ba)?sh|apt-key|signed-by=", re.IGNORECASE)
+_APT_TRANSIENT_RE = re.compile(r"404\s+Not Found|Unable to fetch|Failed to fetch|Hash Sum mismatch|Could not get lock|"
+                               r"Unable to acquire the dpkg")
+_NOT_READY_RE = re.compile(r"does not exist|Failed to access socket|Connection refused|could not connect to server|"
+                           r"\.sock[^\n]*No such file|is not running|Is the server running", re.IGNORECASE)
+_MISSING_KEY_RE = re.compile(r"\.ssh/id_(rsa|ed25519|ecdsa)(?:\.pub)?['\"]?:? No such file")
+_MISSING_PARENT_RE = re.compile(r"(?:cannot create|Can't open|can't create|cannot open|No such file or directory)"
+                                r"[^\n]*?['\"]?((?:/etc|/var|/opt|/srv|/home|/usr/local)/[\w./-]+)")
+
+
+def _repair_candidates(s: Step, out: str, root, already: set, model_fix) -> list[dict]:
+    """Fixes worth trying for a failed run step, most specific first. Each is
+    {label, pre (commands run first), source (the step, possibly changed),
+    by, risky}."""
+    cands = []
+    quoted = re.findall(r"'([^']+)'", s.detail)
+    if s.cls == "package_not_found" and quoted:
+        wrong = quoted[0]
+        right = _suggest_package(root, wrong)
+        if right:
+            cands.append({"label": f"installed '{right}' instead of '{wrong}'", "pre": "",
+                          "source": re.sub(r"(?<![\w.+-])" + re.escape(wrong) + r"(?![\w.+-])", right, s.source)})
+    if s.cls == "command_not_found" and quoted:
+        pkg = _suggest_package(root, quoted[0], True)
+        if pkg:
+            cands.append({"label": f"installed '{pkg}', which provides '{quoted[0]}'",
+                          "pre": f"sudo apt-get install -y {pkg}", "source": s.source})
+    if _APT_TRANSIENT_RE.search(out):
+        cands.append({"label": "refreshed the package index and tried again",
+                      "pre": "while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done; "
+                             "sudo apt-get update", "source": s.source})
+    for path in dict.fromkeys(_MISSING_PARENT_RE.findall(out)):
+        parent = path.rsplit("/", 1)[0]
+        if parent and _exec(root, f"test -d {shlex.quote(parent)}", 10)[0] != 0:
+            cands.append({"label": f"created the missing directory {parent}",
+                          "pre": f"sudo mkdir -p {shlex.quote(parent)}", "source": s.source})
+            break
+    if "Permission denied" in out and not s.source.lstrip().startswith("sudo") and "/home/student" not in s.source \
+            and "~" not in s.source:
+        cands.append({"label": "ran it as root (the answer left sudo off)", "pre": "",
+                      "source": f"sudo bash -c {shlex.quote(s.source)}"})
+    m = _MISSING_KEY_RE.search(out)
+    if m:
+        kt = m.group(1)
+        cands.append({"label": f"created the SSH key pair the answer assumes you have (id_{kt})",
+                      "pre": f"test -f ~/.ssh/id_{kt} || ssh-keygen -q -t {kt} -N '' -f ~/.ssh/id_{kt}",
+                      "source": s.source})
+    if _NOT_READY_RE.search(out):
+        cands.append({"label": "waited for the service to finish starting and asked again", "pre": "sleep 6",
+                      "source": s.source})
+    if model_fix is not None:
+        cands.append({"label": "model", "pre": None, "source": s.source, "by": "model"})
+    return [c for c in cands if c["label"] not in already]
+
+
+def _repair_step(s: Step, student, root, say, budget: dict, model_fix, question: str) -> None:
+    """Try _repair_candidates on a failed run step until one works or the
+    budgets run out. Updates s in place (cls "repaired" on success)."""
+    tried = set()
+    for _ in range(REPAIRS_PER_STEP):
+        if budget["run"] <= 0:
+            return
+        cands = _repair_candidates(s, s.output, root, tried, model_fix if budget["model"] > 0 else None)
+        if not cands:
+            return
+        c = cands[0]
+        tried.add(c["label"])
+        budget["run"] -= 1
+        if c.get("by") == "model":
+            budget["model"] -= 1
+            say("# asking the model for a one-line fix for this step...\n", True)
+            fix = (model_fix(question, s.source, s.output[-1500:]) or "").strip()
+            if not fix or fix.upper().startswith("NONE"):
+                s.attempts.append({"by": "model", "action": "no fix offered"})
+                say("# the model had no fix\n")
+                continue
+            c = {"label": f"the model suggested: {fix[:160]}", "pre": fix, "source": s.source, "by": "model"}
+            tried.add(c["label"])
+        risky = bool(_RISKY_RE.search((c["pre"] or "") + "\n" + c["source"]))
+        say(f"# repair: {c['label']}" + (" [adds a third-party source or pipes a download into a shell]" if risky else "")
+            + "\n", True)
+        if c["pre"]:
+            pre_log = _StepLog(say)
+            _exec_step(student, c["pre"], STEP_TIMEOUT_S, on_output=pre_log)
+            pre_log.close()
+        say("$ " + c["source"].replace("\n", "\n> ") + "\n")
+        log = _StepLog(say)
+        code, out, timed_out, _, marks, fullscreen = _exec_step(student, c["source"], STEP_TIMEOUT_S, on_output=log)
+        log.close()
+        cls, detail, _ = _judge(code, out, timed_out, marks, fullscreen)
+        s.attempts.append({"by": c.get("by", "lab"), "action": c["label"], "pre": c["pre"], "source": c["source"],
+                           "exit": code, "cls": cls, "risky": risky})
+        if cls == "ok":
+            s.cls, s.repair = "repaired", c["label"] + (" [risky]" if risky else "")
+            s.final = ((c["pre"] + "\n") if c["pre"] else "") + c["source"]
+            say(f"# repaired: {c['label']}\n")
+            return
+        s.output, s.detail = out[-_OUTPUT_KEEP:], detail or s.detail
+        say(f"# still failing: {detail}\n")
+
+
+def _procedure(steps: list[Step]) -> str:
+    """The repaired procedure as an answer a person could follow: each step
+    as it finally worked, the lab's changes marked."""
+    parts = []
+    for s in steps:
+        if s.kind == "run" and s.cls in ("ok", "repaired"):
+            note = f"# lab: {s.repair}\n" if s.repair else ""
+            parts.append(f"```bash\n{note}{s.final or s.source}\n```")
+        elif s.kind in ("write", "append", "prepend", "edit") and s.cls == "ok":
+            how = {"write": "Create", "append": "Add to the end of", "prepend": "Add at the top of",
+                   "edit": "Set in"}[s.kind]
+            parts.append(f"{how} `{s.target}`:\n```text\n{s.source}\n```")
+        elif s.kind == "prose" and s.cls == "ok":
+            parts.append(f"In `{s.target}`: {s.note}.")
+    return "\n\n".join(parts)
+
+
 # -- The run ----------------------------------------------------------------------
 
 @dataclass
@@ -804,6 +966,10 @@ class RunResult:
     # machine if the caller kept it.
     transcript: str = ""
     kept: dict = field(default_factory=dict)
+    # L10b: when the lab repaired steps, the verdict of the *repaired*
+    # procedure, what it changed, and the procedure itself. `verdict` above
+    # stays the honest verdict on the answer as written.
+    repaired: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -1002,10 +1168,19 @@ def _exec_step(client, command: str, timeout_s: int, on_output=None):
                 chan.sendall(b"\x04")  # silent and not asking: whatever reads input gets EOF
                 stdin_open = False
             time.sleep(0.05)
-        while chan.recv_ready():
-            chunk = chan.recv(65536).decode("utf-8", "replace")
-            raw += chunk
-            emit(chunk)
+        # With a terminal, a fast command's output can arrive after its exit
+        # status (found live: `sudo nginx -t` failing in a few ms recorded no
+        # output, so "command not found" was never seen). Read to end of data.
+        drain_until = time.monotonic() + 3
+        while time.monotonic() < drain_until:
+            if chan.recv_ready():
+                chunk = chan.recv(65536).decode("utf-8", "replace")
+                raw += chunk
+                emit(chunk)
+            elif chan.eof_received or chan.closed:
+                break
+            else:
+                time.sleep(0.02)
         code = chan.recv_exit_status() if chan.exit_status_ready() else None
     except OSError as e:
         return None, shown + f"\n(connection lost: {e})", False, replies, [], bool(fullscreen)
@@ -1257,7 +1432,8 @@ def _collect_facts(steps: list[Step]) -> tuple[list[str], list[str], list[str]]:
 
 
 def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: str = "",
-               make_prober=None, pair_bridges=None, keep_vm=None) -> RunResult:
+               make_prober=None, pair_bridges=None, keep_vm=None, repair: bool = True,
+               model_fix=None) -> RunResult:
     """Run `answer` in a VM from make_vm(**kw) (an un-booted microvm.MicroVM;
     kw may carry pair_bridge and scratch_from). With make_prober(bridge)
     and pair_bridges=(create, delete), goal probes run from a second VM at
@@ -1298,6 +1474,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
 
     kept = False
     login_prober = None
+    budget = {"run": REPAIRS_PER_RUN, "model": MODEL_FIXES_PER_RUN}
     global _lab_password, _unit_scripts
     _lab_password = "Lab-" + secrets.token_hex(6)
     _unit_scripts = {p for line in answer.splitlines() if "ExecStart" in line
@@ -1398,27 +1575,15 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     student, s.source, STEP_TIMEOUT_S, on_output=step_log)
                 step_log.close()
                 s.exit, s.output = code, out[-_OUTPUT_KEEP:]
-                bad = [(st, cmd) for st, cmd in marks if not _benign(cmd, st)]
-                benign = [_benign(cmd, st) for st, cmd in marks if _benign(cmd, st)]
-                if fullscreen and not bad:
-                    s.cls, s.detail = "ok", ""
-                    s.note = (s.note + "; " if s.note else "") + "full-screen tool: shown for a few seconds, then quit with q"
-                elif timed_out:
-                    s.cls, s.detail = classify(code, out, True)
-                elif bad:
-                    s.cls, s.detail = classify(bad[0][0] or 1, out, False)
-                    if s.cls == "step_failed":
-                        s.detail = (f"`{bad[0][1][:100]}` failed (exit {bad[0][0]})"
-                                    + (f": {s.detail}" if s.detail and not s.detail.startswith("exit ") else ""))
-                elif code and not benign:
-                    s.cls, s.detail = classify(code, out, False)
-                else:
-                    s.cls, s.detail = "ok", ""
-                    if benign:
-                        s.note = (s.note + "; " if s.note else "") + benign[0]
-                s.attempts.append({"by": "answer", "exit": code, "cls": s.cls, "failed": bad[:3]})
+                s.cls, s.detail, benign_note = _judge(code, out, timed_out, marks, fullscreen)
+                if benign_note:
+                    s.note = (s.note + "; " if s.note else "") + benign_note
+                s.attempts.append({"by": "answer", "exit": code, "cls": s.cls,
+                                   "failed": [m for m in marks if not _benign(m[1], m[0])][:3]})
                 if s.cls != "ok":
                     say(f"# {s.cls.replace('_', ' ')}: {s.detail}\n")
+                    if repair:
+                        _repair_step(s, student, root, say, budget, model_fix, question)
                 if replies:
                     shown = ["the code from the new secret" if r.isdigit() and len(r) == 6 else f"'{r}'"
                              for r in replies[:8]]
@@ -1510,6 +1675,19 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
+        repaired = [s for s in steps if s.cls == "repaired"]
+        if repaired:
+            twin = RunResult(id=result.id, started_at=result.started_at)
+            as_fixed = [Step(**{**asdict(s), "cls": "ok" if s.cls == "repaired" else s.cls}) for s in steps]
+            _finish_verdict(twin, as_fixed, checks)
+            result.repaired = {
+                "verdict": twin.verdict,
+                "summary": twin.summary,
+                "changes": [f"step {s.n}: {s.repair}" for s in repaired],
+                "risky": any("[risky]" in s.repair for s in repaired),
+                "procedure": _procedure(steps),
+            }
+            say(f"\n# after the lab's repairs: {twin.verdict} -- {'; '.join(result.repaired['changes'])}\n")
         for c in checks:
             mark = "i" if c.get("decisive") is False else ("ok " if c["ok"] else "FAIL")
             say(f"# [{mark}] {c['kind']}: {c['subject']}" + (f" -- {c['detail'][:160]}" if c["detail"] else "") + "\n")
@@ -1576,7 +1754,8 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
             what = ", ".join(c["subject"].split(" (")[0].replace(" still works", "") for c in lockouts)
             parts.append(f"LOCKOUT: following this answer breaks {what}, which worked before it")
         for s in bad:
-            parts.append(f"step {s.n}: {s.detail or s.cls.replace('_', ' ')}")
+            parts.append(f"step {s.n}: {s.detail or s.cls.replace('_', ' ')}"
+                         + (" (the lab repaired it)" if s.cls == "repaired" else ""))
         for c in failed_checks:
             parts.append(f"{c['kind']} check failed: {c['subject']}")
         result.summary = "; ".join(parts[:6]) + ("; ..." if len(parts) > 6 else "")
@@ -1584,9 +1763,11 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
 
 def plain_step_line(step: dict) -> str:
     """One human line per step for the page and the corpus."""
-    icon = {"ok": "✓", "skipped": "–", "": "·"}.get(step["cls"], "✗")
+    icon = {"ok": "✓", "skipped": "–", "": "·", "repaired": "↻"}.get(step["cls"], "✗")
     what = step["target"] and f"{step['kind']} {step['target']}" or step["source"].splitlines()[0][:80]
     extra = step["detail"] or step["note"]
+    if step.get("repair"):
+        extra = f"{extra} -- repaired: {step['repair']}" if extra else f"repaired: {step['repair']}"
     return f"{icon} {step['n']}. {what}" + (f" — {extra}" if extra else "")
 
 
