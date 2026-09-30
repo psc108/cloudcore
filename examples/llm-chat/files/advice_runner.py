@@ -204,7 +204,8 @@ def classify(exit_code: int | None, output: str, timed_out: bool) -> tuple[str, 
         if m:
             what = next((g for g in m.groups() if g), "")
             return cls, wording[cls].format(what)
-    return "step_failed", f"exit {exit_code}"
+    last = next((ln.strip() for ln in reversed(tail.splitlines()) if ln.strip()), "")
+    return "step_failed", (last[:160] if last else f"exit {exit_code}")
 
 
 # -- Validators run at the end, for config the answer touched -------------------
@@ -490,6 +491,46 @@ def _network_probes(steps, root, prober_root, answer: str, services: list[str], 
                                  + ("; the proxy works but the upstream app the answer assumes isn't running here" if proxied else ""),
                                  decisive=ours))
     return checks
+
+
+def _suggest_package(root, name: str) -> str:
+    """The real package for a name the answer got wrong, from the sandbox's
+    own data: Ubuntu's command-not-found database for a command, else a
+    package whose name contains it (google-authenticator ->
+    libpam-google-authenticator). "" when there's no clear answer."""
+    _, out, _ = _exec(root, f"/usr/lib/command-not-found --ignore-installed {shlex.quote(name)} 2>&1", 20)
+    m = re.search(r"sudo apt install ([a-z0-9][a-z0-9+.-]+)", out)
+    if m:
+        return m.group(1)
+    # The command-not-found database isn't always built in a fresh sandbox;
+    # a package named after the command is the usual case either way.
+    _, out, _ = _exec(root, f"apt-cache search --names-only {shlex.quote(re.escape(name))} 2>/dev/null", 20)
+    names = [ln.split(" - ", 1)[0].strip() for ln in out.splitlines() if " - " in ln]
+    names = [n for n in names if n != name and name in n]
+    return min(names, key=len) if names else ""
+
+
+def _add_corrections(steps: list[Step], root) -> None:
+    """Say what the right package is, not only what doesn't exist -- a small
+    model follows a correction better than a prohibition (found live: told
+    'google-authenticator is not a package', it kept installing it)."""
+    for s in steps:
+        if s.cls not in ("package_not_found", "command_not_found"):
+            continue
+        m = re.search(r"'([^']+)'", s.detail)
+        if not m:
+            continue
+        name = m.group(1)
+        right = _suggest_package(root, name)
+        if s.cls == "package_not_found":
+            multi = any(len([t for t in im.group(1).split() if not t.startswith("-")]) > 1
+                        for im in _APT_INSTALL_RE.finditer(s.source))
+            if right:
+                s.detail += f" -- did you mean '{right}'?"
+            if multi:
+                s.detail += "; apt then installed none of the packages on that line"
+        elif right:
+            s.detail += f" -- it comes from the package '{right}'"
 
 
 _OR_INSTALL_RE = re.compile(r"\|\|\s*(?:sudo\s+)?apt(?:-get)?\s+(?:-\S+\s+)*install\b")
@@ -909,6 +950,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             checks.append({"kind": "service", "subject": svc, "ok": out.strip() == "active",
                            "detail": out.strip()[:200] if out.strip() != "active" else ""})
         _explain_missing_packages(steps, checks, root)
+        _add_corrections(steps, root)
         checks += _sshd_effective_checks(steps, root)
         touched = " ".join(paths)
         for rx, cmd, label in _VALIDATORS:

@@ -3318,6 +3318,26 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 - the prompt copies (Python, OpenTofu, Ansible, live file) are identical;
 - Sentinel 51/51 tests pass.
 
+### F-183 — Told by lab facts that 'google-authenticator' isn't a package, the model kept installing it: the facts said what not to do, never what to do instead
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_suggest_package`, `_add_corrections`, `classify` fallback); Sentinel `advice_runs._facts_of`.
+
+**Symptom:** a user's fourth run of the MFA question. The prompt fix from F-182 took (the model chained with `&&`), and the answer now included the right package, but on the same line as the wrong one: `apt-get install -y google-authenticator libpam-google-authenticator`. apt installs nothing when any named package is missing, so the run failed as before and console login was locked out again. On the coordinator, `_lab_facts()` confirmed the prompt *had* carried "'google-authenticator' is not an installable package in Ubuntu 22.04" for these search terms. Step 5 (`ls …`) showed only "exit 2".
+
+**Root cause:** the lab facts were prohibitions without a correction. A small model given "X is wrong" but not "use Y" often keeps X alongside its own guess. The runner didn't say that one bad name makes apt install nothing from the whole line. Failed steps without a known class showed the exit code instead of the error.
+
+**Fix:**
+- **Corrections for wrong names.** A package-not-found or command-not-found step gets the right package from the sandbox's own data: Ubuntu's command-not-found database, else the shortest package whose name contains the missing one.
+- **Explained consequences.** Package-not-found also says "apt then installed none of the packages on that line" when the line named several.
+- **Positive facts.** Sentinel words them as instructions: "…; install 'libpam-google-authenticator' instead", "…; it comes from the package 'libpam-google-authenticator'".
+- **Real error lines.** Other failed steps show their last error line (e.g. "ls: cannot access '/home/student/.google_authenticator': No such file or directory").
+
+**Verified by:** the user's answer re-run on the lab coordinator (2026-09-30):
+- step 1: "no package called 'google-authenticator' in Ubuntu 22.04 -- did you mean 'libpam-google-authenticator'?; apt then installed none of the packages on that line";
+- step 2: "… -- it comes from the package 'libpam-google-authenticator'";
+- step 5: the real `ls` error;
+- Sentinel 52/52 tests pass, one new for correction facts.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3452,3 +3472,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.8 | 2026-09-30 | Paul Scott | Direct request: "add another (simpler probably) terminal/vm that can run automated ssh/login (but not limited to) so that the test could work before committing this to a reviewed and working corpus". F-180: a prober VM per run tests the answer's goal from outside (real SSH/PAM logins with TOTP, reachability, HTTP), with a baseline, real reboots, answered prompts and an sshd effective-config check. |
 | v3.9 | 2026-09-30 | Paul Scott | From a user's own run of the MFA question on the live page (a lockout the lab correctly found). F-181: a service restart deleted in-flight advice runs' private bridges; lockouts now lead the report; plainer step and PAM wording. |
 | v3.10 | 2026-09-30 | Paul Scott | From a user's live MFA run. F-182: an install step that did nothing (`update || install`) is named and explained; the prompt now says to chain with && and keep || for the install-if-missing check. |
+| v3.11 | 2026-09-30 | Paul Scott | From a user's fourth live MFA run. F-183: lab facts now carry the correction (the real package for a wrong name), not only the prohibition; apt's all-or-nothing install is explained; failed steps show their real error. |
