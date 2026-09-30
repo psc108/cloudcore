@@ -3514,7 +3514,7 @@ The remaining 21 failures are itemised in the plan: 6 advice, 6 lab gaps for L13
 | 31 | WireGuard | still failed: `sudo` and a directory repaired, but the kernel-module step can't work in a microVM, and the model's two fixes for it were rightly unsuccessful |
 | 20 | fail2ban | verified as written; the timing race didn't recur |
 
-Each answer's own verdict stayed "failed". Sentinel: 54/54 tests pass, one new for repairs.
+Each answer's own verdict stayed "failed". Sentinel: 53/53 tests pass, one new for repairs.
 
 ## Document History
 
