@@ -52,6 +52,44 @@ _FENCE_RE = re.compile(r"```([A-Za-z0-9_+-]*)[^\n]*\n(.*?)```", re.DOTALL)
 _PATH_RE = re.compile(r"(?<![\w.$-])((?:/etc|/usr|/var|/opt|/srv|/home|/root|/lib|/run)/[\w./@+:-]*[\w@+-])")
 _EDITOR_RE = re.compile(r"^\s*(?:sudo\s+(?:-\S+\s+)*)?(?:nano|vim?|vi|emacs|gedit|editor|sensible-editor|sudoedit)"
                         r"(?:\s+-\S+)*\s+(\S+)\s*$")
+_SUDO_E_RE = re.compile(r"^\s*sudo\s+-e\s+(\S+)\s*$")
+_CRONTAB_E_RE = re.compile(r"^\s*(sudo\s+)?crontab\s+(?:-u\s+(\S+)\s+)?-e\s*$")
+_VISUDO_RE = re.compile(r"^\s*(?:sudo\s+)?visudo(?:\s+-f\s+(\S+))?\s*$")
+_SYSTEMCTL_EDIT_RE = re.compile(r"^\s*(?:sudo\s+)?systemctl\s+edit\s+(--full\s+)?([\w@.-]+)\s*$")
+
+
+def _editor_target(line: str) -> str:
+    """The file an editor command opens -- "" if the line isn't one. L10a:
+    beyond nano/vim, `crontab -e` (as "crontab:<user>"), `visudo`,
+    `systemctl edit` and `sudo -e` (found in L10: `crontab -e` failed)."""
+    m = _EDITOR_RE.match(line) or _SUDO_E_RE.match(line)
+    if m:
+        return m.group(1).replace("~", "/home/student", 1)
+    m = _CRONTAB_E_RE.match(line)
+    if m:
+        return f"crontab:{m.group(2) or ('root' if m.group(1) else 'student')}"
+    m = _VISUDO_RE.match(line)
+    if m:
+        return m.group(1) or "/etc/sudoers"
+    m = _SYSTEMCTL_EDIT_RE.match(line)
+    if m:
+        unit = m.group(2) if "." in m.group(2) else m.group(2) + ".service"
+        return f"/etc/systemd/system/{unit}" if m.group(1) else f"/etc/systemd/system/{unit}.d/override.conf"
+    return ""
+
+
+# Edits given in prose rather than a block (found in L10: "Change `#Port 22`
+# to `Port 2222`" was never applied, and the run still passed).
+_PROSE_CHANGE_RE = re.compile(r"\b[Cc]hange\s+(?:the\s+line\s+|it\s+from\s+)?`([^`\n]+)`\s+to\s+`([^`\n]+)`")
+_PROSE_SET_RE = re.compile(r"\b[Ss]et\s+`([A-Za-z_][\w.-]*)`\s+to\s+`([^`\n]+)`")
+_PROSE_UNCOMMENT_RE = re.compile(r"\b[Uu]ncomment\s+(?:the\s+line\s+)?`([^`\n]+)`")
+
+
+def _prose_edits(text: str) -> list[list[str]]:
+    ops = [["change", a, b] for a, b in _PROSE_CHANGE_RE.findall(text)]
+    ops += [["set", k, v] for k, v in _PROSE_SET_RE.findall(text)]
+    ops += [["uncomment", a, ""] for a in _PROSE_UNCOMMENT_RE.findall(text)]
+    return ops
 _OUTPUT_HINT_RE = re.compile(r"(?:you should see|output (?:should|will|similar)|similar to (?:this|the following)"
                              r"|will (?:look|show|display|print)|example output|sample output|returns?:?\s*$)",
                              re.IGNORECASE)
@@ -62,9 +100,66 @@ _APT_INSTALL_RE = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\s+([^\n;&|`)
 _SERVICE_RE = re.compile(r"\bsystemctl\s+(?:--now\s+)?(?:start|restart|reload|enable(?:\s+--now)?)\s+"
                          r"(?:--now\s+)?([\w@.-]+)")
 _PKG_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
-# Example commands the student is meant to fill in ("ssh username@your_server_ip").
-_PLACEHOLDER_RE = re.compile(r"\byour[_-][a-z_]+|\b(?:username|user|youruser)@|<[a-z][\w -]*>|\bexample\.com\b|"
-                             r"\bYOUR_[A-Z_]+\b|\bserver_ip\b", re.IGNORECASE)
+# Placeholders the student is meant to fill in. L10a: the lab fills them in
+# the way a person would -- with a real user, group, path or address it
+# creates -- and says so, instead of skipping the step or running it
+# literally (found in L10: `sudo passwd -l username`, `/path/to/directory`).
+# What still matches _PLACEHOLDER_RE afterwards is skipped as before.
+_PLACEHOLDER_RE = re.compile(r"\byour[_-][a-z_]+|\b(?:username|user|youruser)@|"
+                             r"<(?:your[\w -]*|[\w-]*(?:user|name|server|ip|file|path|dir|domain|host|group|"
+                             r"password|key|port)[\w-]*)>|\bYOUR_[A-Z_]+\b|\bserver_ip\b", re.IGNORECASE)
+LAB_USER, LAB_GROUP, LAB_DIR = "labuser", "labgroup", "/srv/lab"
+TARGET_PAIR_IP = "172.30.0.2"
+_SUBSTITUTIONS = [
+    # (pattern, replacement or callable, what the lab must create first)
+    (re.compile(r"/home/(?:user|username|your[_-]?user(?:name)?|youruser|<user(?:name)?>)/"), "/home/student/", ""),
+    (re.compile(r"(?<![\w/.-])/path/to/([\w./-]*[\w-])"), lambda m: f"{LAB_DIR}/{m.group(1).split('/')[-1]}", "path"),
+    (re.compile(r"\b(?:your[_-]?user(?:name)?|user[_-]name|new[_-]?user(?:name)?|youruser|username)\b|<user(?:name)?>",
+                re.IGNORECASE), LAB_USER, "user"),
+    (re.compile(r"\b(?:your[_-]?group(?:name)?|group[_-]?name)\b|<group(?:name)?>", re.IGNORECASE), LAB_GROUP, "group"),
+    (re.compile(r"\b(?:your[_-]?server[_-]?ip|server[_-]?ip|your[_-]?ip(?:[_-]?address)?|server[_-]?address|"
+                r"remote[_-]?(?:host|server)|server\.example\.com)\b|<(?:server|host|ip)[\w-]*>", re.IGNORECASE),
+     TARGET_PAIR_IP, ""),
+]
+
+
+# Set per answer by parse_steps: the answer's placeholder home is /home/user,
+# so a bare account named "user" (User=user, chown user:user) is the same
+# placeholder (found in L10: a unit with User=user failed with 217/USER).
+_placeholder_account = False
+_ACCOUNT_USER_RE = re.compile(r"(?<=\bUser=)user\b|(?<=\bGroup=)user\b|\buser:user\b|(?<=-u )user\b")
+
+
+def _substitute(text: str) -> tuple[str, list[str], set[str]]:
+    """(text with placeholders filled in, what changed, what to create)."""
+    changes, needs = [], set()
+    if _placeholder_account:
+        new = _ACCOUNT_USER_RE.sub(lambda m: "student:student" if m.group(0) == "user:user" else "student", text)
+        if new != text:
+            changes.append("user -> student (the answer's placeholder account)")
+            text = new
+    for rx, repl, need in _SUBSTITUTIONS:
+        def sub(m, _repl=repl, _need=need):
+            new = _repl(m) if callable(_repl) else _repl
+            if m.group(0) != new:
+                changes.append(f"{m.group(0)} -> {new}")
+                if _need == "path":
+                    needs.add("path:" + new)
+                elif _need:
+                    needs.add(_need)
+            return new
+        text = rx.sub(sub, text)
+    # A private example address given as "your DNS server" (nslookup/dig
+    # server argument, a resolv.conf nameserver) means this machine here.
+    out_lines = []
+    for line in text.split("\n"):
+        if re.search(r"\b(?:nslookup|dig|host)\b|^\s*nameserver\s", line):
+            new = re.sub(r"\b(?:192\.168\.[01]\.\d{1,3}|10\.0\.0\.\d{1,3})\b", "127.0.0.1", line)
+            if new != line:
+                changes.append("example DNS server address -> 127.0.0.1 (this machine)")
+            line = new
+        out_lines.append(line)
+    return "\n".join(out_lines), list(dict.fromkeys(changes)), needs
 
 
 def looks_like_config(code: str) -> bool:
@@ -77,7 +172,10 @@ def looks_like_config(code: str) -> bool:
                 or re.match(r"^\[[\w.:-][\w .:-]*\]$", first)
                 # "key = value" with spaces round "=" is never valid shell;
                 # "VAR=1 ./run.sh" is.
-                or re.match(r"^[A-Za-z_][\w.-]*\s+=\s", first))
+                or re.match(r"^[A-Za-z_][\w.-]*\s+=\s", first)
+                # a crontab line: five schedule fields (or @daily ...) then a command
+                or re.match(r"^(?:@(?:reboot|yearly|annually|monthly|weekly|daily|midnight|hourly)|"
+                            r"(?:[\d*/,-]+\s+){4}[\d*/,-]+)\s+\S", first))
 
 
 @dataclass
@@ -92,6 +190,13 @@ class Step:
     cls: str = ""
     detail: str = ""
     duration_s: float = 0.0
+    # L10a: placeholders the lab filled in, and what it had to create for them.
+    subs: list = field(default_factory=list)
+    needs: list = field(default_factory=list)
+    # L10a: edits given in prose ([op, a, b]), applied to `target`.
+    edit_ops: list = field(default_factory=list)
+    # L10a/L10b: every attempt at this step (the answer's own, then any repair).
+    attempts: list = field(default_factory=list)
 
 
 def _strip_console(code: str) -> str:
@@ -103,6 +208,8 @@ def _strip_console(code: str) -> str:
 
 
 def parse_steps(answer: str) -> list[Step]:
+    global _placeholder_account
+    _placeholder_account = "/home/user/" in answer
     steps: list[Step] = []
     pos = 0
     pending_editor_target = ""
@@ -122,23 +229,31 @@ def parse_steps(answer: str) -> list[Step]:
             continue
         if tag in RUNNABLE_TAGS and not looks_like_config(code):
             code = _strip_console(code) if tag == "console" else code
+            # Prose edits for the file an earlier editor step opened.
+            if pending_editor_target:
+                ops = _prose_edits(before)
+                if ops:
+                    steps.append(Step(len(steps) + 1, "prose", before.strip()[-300:], target=pending_editor_target,
+                                      edit_ops=ops, note="edit described in the text, applied to the file"))
+                    last_config_target, pending_editor_target = pending_editor_target, ""
             kept, editors = [], []
             for line in code.splitlines():
-                em = _EDITOR_RE.match(line)
-                if em:
-                    editors.append(em.group(1))
+                et = _editor_target(line)
+                if et:
+                    editors.append(et)
                     continue
                 kept.append(line)
             if editors:
-                pending_editor_target = editors[-1].replace("~", "/home/student", 1)
-            body = "\n".join(kept).strip()
+                pending_editor_target = editors[-1]
+            body, subs, needs = _substitute("\n".join(kept).strip())
             placeholder = _PLACEHOLDER_RE.search(body)
             if body and placeholder:
                 steps.append(Step(len(steps) + 1, "skip", body,
                                   note=f"example with a placeholder ({placeholder.group(0)}) for you to fill in; "
                                        "logins are tested from the lab's prober machine instead"))
             elif body:
-                steps.append(Step(len(steps) + 1, "run", body))
+                steps.append(Step(len(steps) + 1, "run", body, subs=subs, needs=sorted(needs),
+                                  note=("the lab filled in: " + ", ".join(subs)) if subs else ""))
             elif editors:
                 steps.append(Step(len(steps) + 1, "skip", code,
                                   note=f"opens an editor on {editors[-1]}; the next config block is applied there"))
@@ -170,8 +285,18 @@ def parse_steps(answer: str) -> list[Step]:
             kind, how = "prepend", "added at the top of the file"
         wants_existing = bool(_EDIT_HINT_RE.search(last_sentence)) and not _CREATE_HINT_RE.search(last_sentence)
         last_config_target = target
-        steps.append(Step(len(steps) + 1, kind, code, target=target,
-                          note=how + ("|expects-existing" if wants_existing else "")))
+        code, subs, needs = _substitute(code)
+        target, tsubs, tneeds = _substitute(target)
+        steps.append(Step(len(steps) + 1, kind, code, target=target, subs=subs + tsubs, needs=sorted(needs | tneeds),
+                          note=how + (f"; the lab filled in: {', '.join(subs + tsubs)}" if subs or tsubs else "")
+                          + ("|expects-existing" if wants_existing else "")))
+    # Prose edits after the last block, for a file still open in an editor.
+    if pending_editor_target:
+        tail = answer[pos:]
+        ops = _prose_edits(tail)
+        if ops:
+            steps.append(Step(len(steps) + 1, "prose", tail.strip()[:300], target=pending_editor_target,
+                              edit_ops=ops, note="edit described in the text, applied to the file"))
     return steps
 
 
@@ -248,6 +373,7 @@ _PROBER_SSH = r"""
 import json, socket, sys
 import paramiko
 host, user, pw, code, keyfile = sys.argv[1:6]
+port = int(sys.argv[6]) if len(sys.argv) > 6 else 22
 use_key = keyfile != "-"
 res = {"ok": False, "prompts": [], "methods": [], "used": [], "error": ""}
 def handler(title, instructions, fields):
@@ -258,7 +384,7 @@ def handler(title, instructions, fields):
         out.append(code if any(w in p for w in ("code", "verification", "token", "otp")) else pw)
     return out
 try:
-    sock = socket.create_connection((host, 22), timeout=8)
+    sock = socket.create_connection((host, port), timeout=8)
     t = paramiko.Transport(sock)
     t.banner_timeout = 10
     t.start_client(timeout=10)
@@ -328,7 +454,7 @@ class _LoginProber:
 
     def __init__(self, root, prober_root, services: list[str]):
         self.root, self.prober_root, self.services = root, prober_root, services
-        self.pw = "Lab-" + secrets.token_hex(6)
+        self.pw = _lab_password or ("Lab-" + secrets.token_hex(6))
         self.attempts = 0
         self.secret = ""
         _exec(prober_root, "test -s /tmp/probe_key || ssh-keygen -q -t ed25519 -N '' -f /tmp/probe_key", 20)
@@ -355,9 +481,14 @@ class _LoginProber:
             time.sleep(31)
 
     def ssh(self, wrong: bool = False, key: bool = True) -> dict:
+        # The port sshd really listens on now (found in L10: an answer that
+        # moved SSH to 2222 was reported as a lockout because the prober
+        # still knocked on 22).
+        _, ports, _ = _exec(self.root, "sshd -T 2>/dev/null | awk '$1==\"port\"{print $2; exit}'", 15)
+        port = ports.strip() if ports.strip().isdigit() else "22"
         _, out, _ = _exec(self.prober_root, f"python3 /tmp/probe_ssh.py {TARGET_PAIR_IP} student "
                                             f"{shlex.quote(self.pw)} {self._code(wrong)} "
-                                            f"{'/tmp/probe_key' if key else '-'}", 60)
+                                            f"{'/tmp/probe_key' if key else '-'} {port}", 60)
         self._pace()
         try:
             return json.loads(out.strip().splitlines()[-1])
@@ -530,7 +661,7 @@ def _network_probes(steps, root, prober_root, answer: str, services: list[str], 
     return checks
 
 
-def _suggest_package(root, name: str) -> str:
+def _suggest_package(root, name: str, is_command: bool = False) -> str:
     """The real package for a name the answer got wrong, from the sandbox's
     own data: Ubuntu's command-not-found database for a command, else a
     package whose name contains it (google-authenticator ->
@@ -539,6 +670,12 @@ def _suggest_package(root, name: str) -> str:
     m = re.search(r"sudo apt install ([a-z0-9][a-z0-9+.-]+)", out)
     if m:
         return m.group(1)
+    if is_command:
+        # A package named exactly like the command is the usual answer
+        # (found in L10: htop was "corrected" to bashtop).
+        _, pol, _ = _exec(root, f"apt-cache policy {shlex.quote(name)} 2>/dev/null", 15)
+        if re.search(r"Candidate:\s*(?!\(none\))\S", pol):
+            return name
     # The command-not-found database isn't always built in a fresh sandbox;
     # a package named after the command is the usual case either way.
     _, out, _ = _exec(root, f"apt-cache search --names-only {shlex.quote(re.escape(name))} 2>/dev/null", 20)
@@ -558,7 +695,7 @@ def _add_corrections(steps: list[Step], root) -> None:
         if not m:
             continue
         name = m.group(1)
-        right = _suggest_package(root, name)
+        right = _suggest_package(root, name, s.cls == "command_not_found")
         if s.cls == "package_not_found":
             multi = any(len([t for t in im.group(1).split() if not t.startswith("-")]) > 1
                         for im in _APT_INSTALL_RE.finditer(s.source))
@@ -615,6 +752,11 @@ def _sshd_effective_checks(steps: list[Step], root) -> list[dict]:
     same key -- found live with an MFA answer's ChallengeResponseAuthentication."""
     wrote = []
     for s in steps:
+        if s.cls == "ok" and s.kind == "prose" and s.target.endswith("sshd_config"):
+            for op, a, b in s.edit_ops:
+                m = re.match(r"^\s*([A-Za-z][A-Za-z0-9]+)\s+(\S.*?)\s*$", b if op == "change" else f"{a} {b}")
+                if op in ("change", "set") and m:
+                    wrote.append((m.group(1), m.group(2)))
         if s.cls == "ok" and s.kind in ("write", "append", "prepend", "edit") and s.target.endswith("sshd_config"):
             for line in s.source.splitlines():
                 m = re.match(r"^\s*([A-Za-z][A-Za-z0-9]+)\s+(\S.*?)\s*$", line)
@@ -718,6 +860,10 @@ _HARNESS_SETUP = r"""set -e
 # The runner answers apt's and debconf's questions the way a person
 # following the answer would (yes / defaults); nothing else is changed.
 printf 'APT::Get::Assume-Yes "true";\n' > /etc/apt/apt.conf.d/99lab-assume-yes
+# Steps run in a real terminal, where systemctl/journalctl open a pager; sudo
+# would drop the variables that turn pagers off, so keep them through sudo.
+printf 'Defaults env_keep += "PAGER SYSTEMD_PAGER GIT_PAGER LESS SYSTEMD_COLORS MANPAGER"\n' > /etc/sudoers.d/99-lab-env
+chmod 440 /etc/sudoers.d/99-lab-env
 echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
 """
 
@@ -730,77 +876,148 @@ _YES_NO_RE = re.compile(r"\(y/n\)|\[y/n\]|\[Y/n\]|\[y/N\]|\byes/no\b", re.IGNORE
 _NEW_SECRET_RE = re.compile(r"secret key is:?\s*([A-Z2-7]{16,})")
 
 
+# The password the lab uses wherever an answer's step asks for one (passwd,
+# adduser ...), per run; reported with the kept machine's login details.
+_lab_password = ""
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78]")
+_ERR_MARK = "__LABERR__"
+# Pagers off: systemctl/journalctl/git would otherwise wait in `less`.
+_STEP_ENV = "export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat SYSTEMD_COLORS=0 LESS=FRX MANPAGER=cat"
+# Full-screen tools a person looks at and quits (found in L10: `top` failed
+# with no terminal). Shown for a few seconds, then quit with q.
+_FULLSCREEN_RE = re.compile(r"(?m)^\s*(?:sudo\s+)?(top|htop|atop|btop|iotop|iftop|nethogs|nload|watch|less|more|"
+                            r"man|ncdu|mc|nmtui|glances|bmon)\b(?![^\n]*\s-b\b)")
+# Commands whose non-zero exit means "found nothing" or "partly readable",
+# not "failed" (found in L10: grep with no match, find / with permission
+# noise, `ss | grep :80` with nothing listening).
+_SEARCH_CMDS = {"grep", "egrep", "fgrep", "zgrep", "rg", "pgrep", "pidof", "lsof", "diff", "cmp", "test", "[", "[[",
+                "which", "type", "command", "find", "locate", "whereis"}
+
+
+def _clean_tty(text: str) -> str:
+    """Terminal output as a person would read it: no escape codes, and a
+    progress line redrawn with bare \\r shows only its final state."""
+    text = _ANSI_RE.sub("", text).replace("\r\n", "\n")
+    return "\n".join(seg.rsplit("\r", 1)[-1] for seg in text.split("\n"))
+
+
+def _benign(cmd: str, status: int) -> str:
+    """Why a failing command isn't a failure ("" if it is one)."""
+    words = [w for w in cmd.split("|")[-1].split() if "=" not in w or w.startswith("-")]
+    while words and words[0] in ("sudo", "env", "time", "nice", "nohup"):
+        words = words[1:]
+    head = words[0].rsplit("/", 1)[-1] if words else ""
+    if head == "find" and status == 1:
+        return "find printed its results, with some paths it couldn't read"
+    if head in _SEARCH_CMDS and status == 1:
+        return f"{head} found nothing to match (exit 1 means no match, not an error)"
+    if head == "systemctl" and len(words) > 1 and words[1] in ("is-active", "is-enabled", "is-failed", "status") \
+            and status in (1, 3, 4):
+        return f"systemctl {words[1]} reports a state; it isn't an error"
+    return ""
+
+
 def _reply_for(prompt: str, output: str) -> str | None:
     """What a person following the answer types at `prompt`: yes to yes/no
     questions, the current code when a tool has just shown a new TOTP
-    secret (as they would from their app), Enter for defaults; None when
-    there is no sensible reply (a password nobody gave them)."""
+    secret (as they would from their app), the lab's password at a password
+    prompt, Enter for defaults; None when there is no sensible reply."""
     low = prompt.lower()
     secrets_seen = _NEW_SECRET_RE.findall(output)
     if "code" in low and secrets_seen:
         return totp(secrets_seen[-1])
     if "-1 to skip" in low:
         return "-1"
+    if re.search(r"\byes/no\b", prompt, re.IGNORECASE):
+        return "yes"  # ssh's host-key question wants the whole word
     if _YES_NO_RE.search(prompt):
         return "y"
-    if any(w in low for w in ("password", "passphrase", "pin")):
+    if any(w in low for w in ("password", "passphrase")):
+        return _lab_password or None
+    if "pin" in low.split():
         return None
     return ""
 
 
-def _exec_step(client, command: str, timeout_s: int,
-               on_output=None) -> tuple[int | None, str, bool, list[str]]:
-    """Run one of the answer's steps the way a person following it would,
-    answering its questions (see _reply_for). Returns (exit, output, timed
-    out, replies given)."""
+def _exec_step(client, command: str, timeout_s: int, on_output=None):
+    """Run one of the answer's steps the way a person at a terminal would.
+    L10a: in a real pseudo-terminal (TERM=xterm, pagers off), with every
+    failing command reported by an ERR trap -- a multi-line block fails if
+    any line fails, not only the last (found in L10: an mdadm failure hid
+    inside a block that 'passed'). Returns (exit, output, timed out,
+    replies given, failing commands [(status, command)], full-screen tool)."""
+    script = f"{_STEP_ENV}\ntrap 'echo \"{_ERR_MARK} $? $BASH_COMMAND\"' ERR\n{command}"
+    fullscreen = _FULLSCREEN_RE.search(command)
     chan = client.get_transport().open_session()
-    chan.set_combine_stderr(True)
-    chan.exec_command(f"timeout --kill-after=10 {timeout_s} bash -c {shlex.quote(command)}")
-    out, replies = "", []
-    last_data = time.monotonic()
-    deadline = last_data + timeout_s + 30
-    stdin_open = True
+    chan.get_pty(term="xterm", width=160, height=48)
+    # --foreground: without it the command can't read the terminal at all.
+    chan.exec_command(f"timeout --foreground --kill-after=10 {timeout_s} bash -c {shlex.quote(script)}")
+    raw, replies = "", []
+    started = last_data = time.monotonic()
+    deadline = started + timeout_s + 30
+    stdin_open, quit_sent = True, 0
+    shown = ""
+
+    def emit(text: str) -> None:
+        nonlocal shown
+        clean = _clean_tty(text)
+        visible = "\n".join(ln for ln in clean.split("\n") if _ERR_MARK not in ln)
+        if on_output and visible:
+            on_output(visible)
+        shown += visible
+
     try:
         while time.monotonic() < deadline:
             if chan.recv_ready():
                 chunk = chan.recv(65536).decode("utf-8", "replace")
-                out += chunk
-                if on_output:
-                    on_output(chunk)
+                raw += chunk
+                emit(chunk)
                 last_data = time.monotonic()
                 continue
             if chan.exit_status_ready():
                 break
-            idle = time.monotonic() - last_data
-            tail = out.rsplit("\n", 1)[-1]
+            now = time.monotonic()
+            if fullscreen and quit_sent < 2 and now - started > (5 if quit_sent == 0 else 8):
+                chan.sendall(b"q" if quit_sent == 0 else b"\x03")
+                quit_sent += 1
+                continue
+            idle = now - last_data
+            tail = _clean_tty(raw).rsplit("\n", 1)[-1]
+            if idle > 1 and re.search(r"(?:lines \d+-\d+.*|\(END\))\s*$", tail):
+                chan.sendall(b"q")  # a pager left waiting: quit it, as a person would
+                last_data = time.monotonic()
+                continue
             waiting = bool(tail.strip()) and _PROMPT_TAIL_RE.search(tail)
-            if stdin_open and waiting and idle > 0.7:
-                reply = _reply_for(tail, out) if len(replies) < 40 else None
+            if stdin_open and waiting and idle > 0.7 and not fullscreen:
+                reply = _reply_for(tail, _clean_tty(raw)) if len(replies) < 40 else None
                 if reply is None:
                     if idle > 5:
-                        chan.shutdown_write()  # nothing sensible to type: end of input
+                        chan.sendall(b"\x04")  # nothing sensible to type: end of input
                         stdin_open = False
                 else:
-                    chan.sendall((reply + "\n").encode())
-                    replies.append(reply or "Enter")
-                    if on_output:
-                        on_output(f"{reply or ''}\n" if reply else "\n")
+                    chan.sendall((reply + "\n").encode())  # the terminal echoes it
+                    replies.append("the lab's password" if reply == _lab_password and reply else (reply or "Enter"))
                     last_data = time.monotonic()
-            elif stdin_open and idle > 30:
-                chan.shutdown_write()  # silent and not asking: whatever reads stdin gets EOF
+            elif stdin_open and idle > 30 and not fullscreen:
+                chan.sendall(b"\x04")  # silent and not asking: whatever reads input gets EOF
                 stdin_open = False
             time.sleep(0.05)
         while chan.recv_ready():
             chunk = chan.recv(65536).decode("utf-8", "replace")
-            out += chunk
-            if on_output:
-                on_output(chunk)
+            raw += chunk
+            emit(chunk)
         code = chan.recv_exit_status() if chan.exit_status_ready() else None
     except OSError as e:
-        return None, out + f"\n(connection lost: {e})", False, replies
+        return None, shown + f"\n(connection lost: {e})", False, replies, [], bool(fullscreen)
     finally:
         chan.close()
-    return code, out, code in (124, 137) or code is None, replies
+    marks = []
+    for line in _clean_tty(raw).splitlines():
+        m = re.search(_ERR_MARK + r" (\d+) (.*)$", line)
+        if m and "echo \"" + _ERR_MARK not in line:
+            marks.append((int(m.group(1)), m.group(2).strip()))
+    timed_out = (code in (124, 137) or code is None) and not fullscreen
+    return code, shown, timed_out, replies, marks, bool(fullscreen)
 
 
 def _exec(client, command: str, timeout_s: int) -> tuple[int | None, str, bool]:
@@ -865,17 +1082,137 @@ def _edit_config(old: str, block: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+_STUB_SCRIPT_RE = re.compile(r"(/(?:home|opt|srv|usr/local)/[\w./-]+\.(?:py|sh))\b")
+# Scripts any unit in the answer runs (ExecStart=): their stand-ins must keep
+# running, or systemd sees a service that exits and restarts it forever.
+_unit_scripts: set[str] = set()
+
+
+def _prepare_needs(root_client, s: Step) -> list[str]:
+    """Create what the lab's placeholder values refer to, and stand-ins for
+    scripts the answer assumes already exist. Returns what was made."""
+    made = []
+    needs = set(s.needs)
+    if "user" in needs:
+        _exec(root_client, f"id {LAB_USER} >/dev/null 2>&1 || useradd -m -s /bin/bash {LAB_USER}; "
+                           f"echo '{LAB_USER}:{_lab_password}' | chpasswd", 30)
+        made.append(f"user '{LAB_USER}'")
+    if "group" in needs:
+        _exec(root_client, f"getent group {LAB_GROUP} >/dev/null || groupadd {LAB_GROUP}; "
+                           f"usermod -aG {LAB_GROUP} student; id {LAB_USER} >/dev/null 2>&1 && "
+                           f"usermod -aG {LAB_GROUP} {LAB_USER}; true", 30)
+        made.append(f"group '{LAB_GROUP}'")
+    for n in sorted(x for x in needs if x.startswith("path:")):
+        path = n[5:]
+        if "." in path.rsplit("/", 1)[-1]:
+            _exec(root_client, f"mkdir -p {shlex.quote(path.rsplit('/', 1)[0])}; test -e {shlex.quote(path)} || "
+                               f"echo 'stand-in file created by the lab' > {shlex.quote(path)}", 15)
+        else:
+            _exec(root_client, f"mkdir -p {shlex.quote(path)}", 15)
+        made.append(path)
+    long_running = "ExecStart" in s.source or any(
+        path in _unit_scripts for path in _STUB_SCRIPT_RE.findall(s.source + "\n" + s.target))
+    for path in dict.fromkeys(_STUB_SCRIPT_RE.findall(s.source + "\n" + s.target)):
+        if _exec(root_client, f"test -e {shlex.quote(path)}", 10)[0] == 0:
+            continue
+        if path.endswith(".py"):
+            body = ("#!/usr/bin/env python3\n# stand-in created by the lab: the answer assumes this script exists\n"
+                    + ("import time\nwhile True:\n    time.sleep(60)\n" if long_running else "print('stand-in script')\n"))
+        else:
+            body = ("#!/bin/bash\n# stand-in created by the lab: the answer assumes this script exists\n"
+                    + ("exec sleep infinity\n" if long_running else "echo stand-in script\n"))
+        owner = "student:student" if path.startswith("/home/student/") else "root:root"
+        _exec(root_client, f"mkdir -p {shlex.quote(path.rsplit('/', 1)[0])} && printf %s {shlex.quote(body)} > "
+                           f"{shlex.quote(path)} && chmod 755 {shlex.quote(path)} && chown {owner} {shlex.quote(path)}", 15)
+        made.append(f"a stand-in for {path}")
+    return made
+
+
+def _apply_prose(root_client, s: Step) -> tuple[bool, str]:
+    """Apply edits described in prose to s.target. (ok, what was done)."""
+    sftp = root_client.open_sftp()
+    try:
+        try:
+            with sftp.open(s.target, "r") as f:
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            return False, f"{s.target} doesn't exist"
+        done = []
+        for op, a, b in s.edit_ops:
+            if op == "change":
+                hit = next((i for i, ln in enumerate(lines) if ln.strip() == a.strip()), None)
+                if hit is None:
+                    hit = next((i for i, ln in enumerate(lines) if a.strip() in ln), None)
+                if hit is not None:
+                    lines[hit] = b
+                    done.append(f"changed '{a}' to '{b}'")
+                else:
+                    lines = _edit_config("\n".join(lines), b).splitlines()
+                    done.append(f"'{a}' wasn't in the file; set '{b}'")
+            elif op == "set":
+                rx = re.compile(r"^\s*#?\s*" + re.escape(a) + r"\b\s*(=|\s)")
+                hit = next((i for i, ln in enumerate(lines) if rx.match(ln)), None)
+                sep = "=" if hit is not None and "=" in lines[hit].split(a, 1)[-1][:3] else " "
+                if hit is not None:
+                    lines[hit] = f"{a}{sep}{b}"
+                else:
+                    lines.append(f"{a} {b}")
+                done.append(f"set {a} to {b}")
+            elif op == "uncomment":
+                hit = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("#") and a.strip().lstrip("#").strip()
+                            in ln), None)
+                if hit is not None:
+                    lines[hit] = re.sub(r"^(\s*)#\s?", r"\1", lines[hit])
+                    done.append(f"uncommented '{a}'")
+                else:
+                    done.append(f"no commented-out '{a}' to uncomment")
+        with sftp.open(s.target, "w") as f:
+            f.write(("\n".join(lines) + "\n").encode())
+        return True, "; ".join(done)
+    except OSError as e:
+        return False, f"could not edit {s.target}: {e}"
+    finally:
+        sftp.close()
+
+
+def _put_crontab(root_client, target: str, content: str, mode: str) -> tuple[bool, bool]:
+    user = target.split(":", 1)[1] or "student"
+    _, old, _ = _exec(root_client, f"crontab -u {shlex.quote(user)} -l 2>/dev/null", 15)
+    body = content if content.endswith("\n") else content + "\n"
+    new = body if mode == "write" else (old + ("" if not old or old.endswith("\n") else "\n") + body)
+    code, _, _ = _exec(root_client, f"printf %s {shlex.quote(new)} | crontab -u {shlex.quote(user)} -", 15)
+    return bool(old.strip()), code == 0
+
+
 def _put_file(root_client, path: str, content: str, mode: str) -> tuple[bool, bool]:
     """Write/append/prepend `content` to `path` as root. Returns
     (existed_before, ok)."""
+    if path.startswith("crontab:"):
+        return _put_crontab(root_client, path, content, mode)
     sftp = root_client.open_sftp()
     try:
+        import stat as _stat
+        try:
+            if _stat.S_ISDIR(sftp.stat(path).st_mode):
+                # A block aimed at a directory (found in L10: "/etc/netplan")
+                # goes into a file inside it, as a person would name one.
+                path = path.rstrip("/") + ("/99-lab.yaml" if "netplan" in path else "/lab.conf")
+        except OSError:
+            pass
         try:
             with sftp.open(path, "r") as f:
                 old = f.read().decode("utf-8", "replace")
             existed = True
         except OSError:
             old, existed = "", False
+        first = next((ln for ln in content.splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
+        sm = _INI_SECTION_RE.match(first)
+        if mode == "append" and sm and any(_INI_SECTION_RE.match(ln) and _INI_SECTION_RE.match(ln).group(1).strip()
+                                           == sm.group(1).strip() for ln in old.splitlines()):
+            # The section already exists: a person with the file open edits
+            # it rather than adding a duplicate (found in L10: fail2ban
+            # refused a jail.local with two [sshd] sections).
+            mode = "edit"
         parent = path.rsplit("/", 1)[0] or "/"
         root_client.exec_command(f"mkdir -p {shlex.quote(parent)}")[1].channel.recv_exit_status()
         body = content if content.endswith("\n") else content + "\n"
@@ -910,7 +1247,7 @@ def _collect_facts(steps: list[Step]) -> tuple[list[str], list[str], list[str]]:
             for m in _SERVICE_RE.finditer(s.source):
                 if m.group(1) not in services:
                     services.append(m.group(1))
-        if s.target and s.target not in paths:
+        if s.target and s.target not in paths and not s.target.startswith("crontab:"):
             paths.append(s.target)
         if s.kind == "run":
             for p in _PATH_RE.findall(s.source):
@@ -939,7 +1276,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         if now or time.monotonic() - last_pub[0] > 1.0:
             last_pub[0] = time.monotonic()
             publish(result)
-    if not any(s.kind in ("run", "write", "append", "prepend", "edit") for s in steps):
+    if not any(s.kind in ("run", "write", "append", "prepend", "edit", "prose") for s in steps):
         result.status, result.verdict = "done", "not_runnable"
         result.summary = "Nothing in this answer could be run as a step."
         result.finished_at = time.time()
@@ -961,6 +1298,10 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
 
     kept = False
     login_prober = None
+    global _lab_password, _unit_scripts
+    _lab_password = "Lab-" + secrets.token_hex(6)
+    _unit_scripts = {p for line in answer.splitlines() if "ExecStart" in line
+                     for p in _STUB_SCRIPT_RE.findall(_substitute(line)[0])}
     try:
         say("# booting a fresh Ubuntu 22.04 lab machine...\n", now=True)
         t_boot = time.monotonic()
@@ -1013,18 +1354,26 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 s.cls, s.detail = "timeout", "the whole run hit its time limit before this step"
                 continue
             t0 = time.monotonic()
+            if s.kind in ("run", "write", "append", "prepend", "edit", "prose") and (s.needs or _STUB_SCRIPT_RE.search(s.source)):
+                made = _prepare_needs(root, s)
+                if made:
+                    s.note = (s.note + "; " if s.note else "") + "the lab created " + ", ".join(made)
+                    say(f"# the lab created {', '.join(made)} (the answer assumes they exist)\n")
             if s.kind == "run":
                 say("\n$ " + s.source.replace("\n", "\n> ") + "\n", now=True)
             elif s.kind in ("write", "append", "prepend", "edit"):
                 how = s.note.partition("|")[0]
                 say(f"\n# {s.kind} {s.target} ({how}):\n" + textwrap.indent(s.source, "  ") + "\n", now=True)
+            elif s.kind == "prose":
+                say(f"\n# edit {s.target} as the text describes: "
+                    + "; ".join(f"{op} {a!r}" + (f" -> {b!r}" if b else "") for op, a, b in s.edit_ops) + "\n", now=True)
             else:
                 say(f"\n# skipped: {s.source.splitlines()[0][:100]} -- {s.note}\n", now=True)
             if s.kind == "run" and _REBOOT_RE.search(s.source):
                 # A real reboot: the guest shuts down cleanly (reboot=k ends
                 # the VMM), then a new VM boots from the same disk.
                 try:
-                    _exec_step(student, s.source, 60)
+                    _exec_step(student, s.source, 60)[0]
                 except (OSError, EOFError):
                     pass  # the connection going away is the point
                 say("# the machine is shutting down to reboot...\n", now=True)
@@ -1045,16 +1394,41 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not restart"
             elif s.kind == "run":
                 step_log = _StepLog(say)
-                code, out, timed_out, replies = _exec_step(student, s.source, STEP_TIMEOUT_S, on_output=step_log)
+                code, out, timed_out, replies, marks, fullscreen = _exec_step(
+                    student, s.source, STEP_TIMEOUT_S, on_output=step_log)
                 step_log.close()
-                if code:
-                    say(f"# exit {code}\n")
                 s.exit, s.output = code, out[-_OUTPUT_KEEP:]
-                s.cls, s.detail = classify(code, out, timed_out)
+                bad = [(st, cmd) for st, cmd in marks if not _benign(cmd, st)]
+                benign = [_benign(cmd, st) for st, cmd in marks if _benign(cmd, st)]
+                if fullscreen and not bad:
+                    s.cls, s.detail = "ok", ""
+                    s.note = (s.note + "; " if s.note else "") + "full-screen tool: shown for a few seconds, then quit with q"
+                elif timed_out:
+                    s.cls, s.detail = classify(code, out, True)
+                elif bad:
+                    s.cls, s.detail = classify(bad[0][0] or 1, out, False)
+                    if s.cls == "step_failed":
+                        s.detail = (f"`{bad[0][1][:100]}` failed (exit {bad[0][0]})"
+                                    + (f": {s.detail}" if s.detail and not s.detail.startswith("exit ") else ""))
+                elif code and not benign:
+                    s.cls, s.detail = classify(code, out, False)
+                else:
+                    s.cls, s.detail = "ok", ""
+                    if benign:
+                        s.note = (s.note + "; " if s.note else "") + benign[0]
+                s.attempts.append({"by": "answer", "exit": code, "cls": s.cls, "failed": bad[:3]})
+                if s.cls != "ok":
+                    say(f"# {s.cls.replace('_', ' ')}: {s.detail}\n")
                 if replies:
                     shown = ["the code from the new secret" if r.isdigit() and len(r) == 6 else f"'{r}'"
                              for r in replies[:8]]
                     s.note = "answered its questions: " + ", ".join(shown) + (" ..." if len(replies) > 8 else "")
+            elif s.kind == "prose":
+                ok, what = _apply_prose(root, s)
+                s.exit, s.cls = (0, "ok") if ok else (1, "file_missing" if "doesn't exist" in what else "step_failed")
+                s.detail = "" if ok else what
+                s.note = what if ok else s.note
+                say(f"# {what}\n")
             elif s.kind in ("write", "append", "prepend", "edit"):
                 how, _, flag = s.note.partition("|")
                 s.note = how
@@ -1084,10 +1458,29 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             code, out, _ = _exec(root, f"dpkg-query -W -f='${{Status}}' {shlex.quote(p)}", 30)
             checks.append({"kind": "package", "subject": p, "ok": "install ok installed" in out,
                            "detail": out.strip()[:200]})
+        started = set()
+        for s in steps:
+            if s.kind == "run" and s.cls == "ok":
+                started |= set(re.findall(r"\bsystemctl\s+(?:start|restart|reload)\s+([\w@.-]+)", s.source))
+                started |= set(re.findall(r"\bsystemctl\s+enable\s+--now\s+([\w@.-]+)", s.source))
         for svc in services:
-            code, out, _ = _exec(root, f"systemctl is-active {shlex.quote(svc)}", 30)
-            checks.append({"kind": "service", "subject": svc, "ok": out.strip() == "active",
-                           "detail": out.strip()[:200] if out.strip() != "active" else ""})
+            # `enable` alone means "at the next boot" (found in L10: a unit
+            # the answer only enabled was failed for not running yet).
+            want = "active" if svc in started else "enabled"
+            verb = "is-enabled" if want == "enabled" else "is-active"
+            code, out, _ = _exec(root, f"systemctl {verb} {shlex.quote(svc)}", 30)
+            state = out.strip()
+            checks.append({"kind": "service", "subject": svc + ("" if want == "active" else " (enabled for boot)"),
+                           "ok": state == want, "detail": "" if state == want else state[:200]})
+        for s in steps:
+            # A crontab edit: is the answer's line really in that crontab?
+            if s.target.startswith("crontab:") and s.cls == "ok":
+                user = s.target.split(":", 1)[1]
+                _, tab, _ = _exec(root, f"crontab -u {shlex.quote(user)} -l 2>/dev/null", 15)
+                want = [ln.strip() for ln in s.source.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+                checks.append({"kind": "cron", "subject": f"{user}'s crontab has the answer's entry",
+                               "ok": bool(want) and all(w in tab for w in want),
+                               "detail": "" if want and all(w in tab for w in want) else tab.strip()[-200:]})
         _explain_missing_packages(steps, checks, root)
         _add_corrections(steps, root)
         checks += _sshd_effective_checks(steps, root)
@@ -1153,12 +1546,22 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
     return result
 
 
+# Commands that change the system (found in L10: `hostnamectl set-hostname`
+# was graded "nothing changed").
+_STATE_CHANGE_RE = re.compile(
+    r"\b(?:hostnamectl\s+set-|timedatectl\s+set-|useradd|usermod|userdel|adduser|deluser|groupadd|gpasswd|passwd|"
+    r"chmod|chown|chgrp|setfacl|ln\s+-s|mkdir|touch|tee|sed\s+-i|sysctl\s+-w|ufw\s+(?:allow|deny|enable|default|limit)|"
+    r"iptables\s+-[AIDPt]|nft\s+add|crontab|mount|swapon|mkfs|mdadm\s+--create|pvcreate|vgcreate|lvcreate|"
+    r"tar\s+-?[a-z]*x|unzip|git\s+clone|pip3?\s+install|npm\s+install|update-alternatives|locale-gen|"
+    r"dpkg-reconfigure|netplan\s+apply|ip\s+(?:addr|address|route)\s+add|openssl\s+req|ssh-keygen|wg\s+genkey)\b")
+
+
 def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) -> None:
-    acted = [s for s in steps if s.kind in ("run", "write", "append", "prepend", "edit")]
+    acted = [s for s in steps if s.kind in ("run", "write", "append", "prepend", "edit", "prose")]
     bad = [s for s in acted if s.cls not in ("ok",)]
     failed_checks = [c for c in checks if not c["ok"] and c.get("decisive", True)]
-    changed = any(s.kind in ("write", "append", "prepend", "edit") or _APT_INSTALL_RE.search(s.source)
-                  or _SERVICE_RE.search(s.source) for s in acted if s.cls == "ok")
+    changed = any(s.kind in ("write", "append", "prepend", "edit", "prose") or _APT_INSTALL_RE.search(s.source)
+                  or _SERVICE_RE.search(s.source) or _STATE_CHANGE_RE.search(s.source) for s in acted if s.cls == "ok")
     if not bad and not failed_checks and changed:
         result.verdict = "lab_verified"
         result.summary = f"All {len(acted)} steps worked in a fresh Ubuntu 22.04 sandbox and every check passed."
