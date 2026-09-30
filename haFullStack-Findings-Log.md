@@ -3434,6 +3434,47 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 
 **Verified by:** Sentinel advice stats after the clean-up: 11 lab_verified, 12 failed, 5 partial, 25 needs_rerun. The five demoted grounding rows are `unreviewed`.
 
+### F-189 — Harness correctness (L10a): the same 40 answers went from 8 "verified" (5 false) to 14, and the lab stopped blaming the advice for its own gaps
+
+**Where:** `examples/llm-chat/files/advice_runner.py`. Stage L10a of `llm-chat-lab-sandbox-Phased-Implementation.md`; results in `reports/llm-chat-lab/l10a-rerun-same-answers.jsonl`.
+
+**Symptom:** see F-188. L10 found the harness judged steps by the last exit code of a block and ignored prose edits, terminals, editors other than nano, placeholders and the difference between "found nothing" and "failed".
+
+**Root cause:** the runner treated an answer as a list of shell blocks to pipe into bash and grade by exit status; a person follows it at a terminal, reads the prose, fills in names, and knows `grep` printing nothing isn't an error.
+
+**Fix:**
+- **A real terminal for every step:**
+  - `timeout --foreground`, `TERM=xterm`, with pagers switched off and kept off through sudo (`/etc/sudoers.d/99-lab-env`);
+  - an ERR trap reports every failing command, so a multi-line block fails if any line fails;
+  - full-screen tools are shown briefly and quit with `q`, and a pager left waiting is quit;
+  - password prompts get the lab's password, and ssh's host-key question gets `yes`.
+- **Search results aren't failures:** `grep`/`find`/`pgrep`/`ss|grep`/`systemctl is-*|status` exiting 1 (or 3) means "nothing found" or "a state", not an error.
+- **More editors, and prose edits:**
+  - `crontab -e` (the entry is applied and then checked), `visudo`, `systemctl edit` and `sudo -e`;
+  - "change `A` to `B`", "set `K` to `V`" and "uncomment `X`" in the text are applied to the file being edited.
+- **Placeholders filled in the way a person would, and said so:**
+  - `username`, `yourgroup` and `/path/to/…` become a lab user, group and paths that the lab creates;
+  - server addresses become the target, example DNS servers become 127.0.0.1, and the answer's `/home/user` account becomes student;
+  - the lab creates stand-ins for scripts an answer assumes exist, kept running when a unit starts them.
+- **Files:**
+  - an INI block for an existing section is merged, not duplicated (this fixed fail2ban's two `[sshd]` sections);
+  - a block aimed at a directory goes to a file inside it (netplan).
+- **Checks:**
+  - `enable` alone is checked with `is-enabled`, and `start` with `is-active`;
+  - SSH probes use the port sshd really listens on (fixing a false LOCKOUT after a correct port change);
+  - sshd prose edits are checked against `sshd -T`;
+  - state-changing commands count as changes;
+  - a missing command's own-name package is suggested first (htop, not bashtop).
+- **Attempts:** each step records its attempts (for L10b).
+
+**Verified by:** the same 40 L10 answers re-run through the new harness on the lab coordinator (2026-09-30), with no new model output, so only the lab changed:
+- verified 8 → 14; failed 27 → 21;
+- nine harness-caused failures fixed;
+- the RAID1 and NFS false passes now fail for their real reasons;
+- a regression pass on the day's MFA, nginx and Apache answers kept every earlier verdict: console-login MFA verified, SSH MFA failed for its ineffective config, nginx and Apache verified.
+
+The remaining 21 failures are itemised in the plan: 6 advice, 6 lab gaps for L13, 4 microVM limits, 3 assumed prerequisites, 2 harness (a timing race and an example subnet).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3574,3 +3615,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.14 | 2026-09-30 | Paul Scott | From a user's run. F-186: per-step caps keep the whole lab log readable; a kept machine explains why a tab without its key can't open it. |
 | v3.15 | 2026-09-30 | Paul Scott | From a user's verified MFA run that needed three codes. F-187: TOTP codes follow the target's clock; sandboxes gain systemd-timesyncd. |
 | v3.16 | 2026-09-30 | Paul Scott | Direct request: measure before building further (L10, 40 questions). F-188: the harness, not the model, was the main source of wrong results; false passes and harness-caused facts quarantined from the corpus; plan reordered around harness correctness. |
+| v3.17 | 2026-09-30 | Paul Scott | Direct request: "yes" to the harness fixes first. F-189: L10a done; the same 40 answers re-run: 14 verified (was 8, 5 false), 21 failed (was 27), remaining failures itemised. |
