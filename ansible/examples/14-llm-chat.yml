@@ -494,7 +494,7 @@
     # Rebuilt by api/build-firecracker-rootfs.sh — update these two by
     # hand whenever that script is re-run.
     firecracker_rootfs_name: firecracker-rootfs-jammy.ext4.gz
-    firecracker_rootfs_sha256: 5477b21353db68a8dca6637506e392419c32d8861368caec612b412124f05f8a
+    firecracker_rootfs_sha256: 3eebfef7812571e35e81ce71be1919b2cfd423ca7271c9dec448b2dc562615a4
     # Deliberately outside both the platform's own real bridge range
     # (192.168.x.0/24) and this example's own fictional declared VPC CIDR
     # (10.91.0.0/16 default) — no overlap with either.

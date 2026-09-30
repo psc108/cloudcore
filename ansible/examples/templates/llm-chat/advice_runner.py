@@ -31,8 +31,14 @@ after it -- which is exactly the finding -- and never loses the run.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import io
+import json
 import re
+import secrets
+import struct
 import shlex
 import textwrap
 import time
@@ -56,6 +62,9 @@ _APT_INSTALL_RE = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\s+([^\n;&|`)
 _SERVICE_RE = re.compile(r"\bsystemctl\s+(?:--now\s+)?(?:start|restart|reload|enable(?:\s+--now)?)\s+"
                          r"(?:--now\s+)?([\w@.-]+)")
 _PKG_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
+# Example commands the student is meant to fill in ("ssh username@your_server_ip").
+_PLACEHOLDER_RE = re.compile(r"\byour[_-][a-z_]+|\b(?:username|user|youruser)@|<[a-z][\w -]*>|\bexample\.com\b|"
+                             r"\bYOUR_[A-Z_]+\b|\bserver_ip\b", re.IGNORECASE)
 
 
 def looks_like_config(code: str) -> bool:
@@ -123,7 +132,12 @@ def parse_steps(answer: str) -> list[Step]:
             if editors:
                 pending_editor_target = editors[-1].replace("~", "/home/student", 1)
             body = "\n".join(kept).strip()
-            if body:
+            placeholder = _PLACEHOLDER_RE.search(body)
+            if body and placeholder:
+                steps.append(Step(len(steps) + 1, "skip", body,
+                                  note=f"example with a placeholder ({placeholder.group(0)}) for you to fill in; "
+                                       "logins are tested from the lab's prober machine instead"))
+            elif body:
                 steps.append(Step(len(steps) + 1, "run", body))
             elif editors:
                 steps.append(Step(len(steps) + 1, "skip", code,
@@ -203,6 +217,310 @@ _VALIDATORS = [
 ]
 
 
+# -- Goal probes (L8) --------------------------------------------------------------
+#
+# "It ran" says nothing about whether the answer did what was asked: an MFA
+# answer can install, configure and restart cleanly and still never ask for
+# a code. So after the steps, a second, small prober VM -- joined to the
+# target by a private two-VM bridge -- tests the goal from outside: logs in
+# for real, recording every prompt; checks which ports another machine can
+# reach; fetches what web servers serve. Probes of something the answer
+# changed decide the verdict; the rest are reported as information.
+
+TARGET_PAIR_IP = "172.30.0.2"
+_MFA_RE = re.compile(r"\b(?:mfa|2fa|two[- ]factor|multi[- ]factor|totp|otp|one[- ]time|authenticator|yubikey|"
+                     r"pam_google|pam_oath|pam_u2f|verification code)\b", re.I)
+_FIREWALL_RE = re.compile(r"\b(?:ufw|iptables|ip6tables|nft|firewall-cmd)\b")
+_WEB_PROCS = ("nginx", "apache2", "httpd", "caddy", "lighttpd", "node", "python", "gunicorn", "uvicorn", "php-fpm")
+_CODE_WORDS = ("code", "verification", "token", "otp")
+
+_PROBER_SSH = r"""
+# Logs in the way the server asks: its key first (as students do), then any
+# further method the server requires -- a second factor arrives as a
+# keyboard-interactive prompt -- recording every prompt and method used.
+import json, socket, sys
+import paramiko
+host, user, pw, code, keyfile = sys.argv[1:6]
+use_key = keyfile != "-"
+res = {"ok": False, "prompts": [], "methods": [], "used": [], "error": ""}
+def handler(title, instructions, fields):
+    out = []
+    for prompt, echo in fields:
+        res["prompts"].append(prompt.strip())
+        p = prompt.lower()
+        out.append(code if any(w in p for w in ("code", "verification", "token", "otp")) else pw)
+    return out
+try:
+    sock = socket.create_connection((host, 22), timeout=8)
+    t = paramiko.Transport(sock)
+    t.banner_timeout = 10
+    t.start_client(timeout=10)
+    try:
+        t.auth_none(user)
+    except paramiko.BadAuthenticationType as e:
+        res["methods"] = list(e.allowed_types)
+    remaining = list(res["methods"])
+    if use_key and "publickey" in remaining:
+        more = t.auth_publickey(user, paramiko.Ed25519Key.from_private_key_file(keyfile))
+        res["used"].append("publickey")
+        remaining = list(more or [])
+    if not t.is_authenticated() and "keyboard-interactive" in remaining:
+        t.auth_interactive(user, handler)
+        res["used"].append("keyboard-interactive")
+    elif not t.is_authenticated() and "password" in remaining:
+        res["prompts"].append("(password)")
+        t.auth_password(user, pw)
+        res["used"].append("password")
+    res["ok"] = t.is_authenticated()
+    t.close()
+except paramiko.AuthenticationException as e:
+    res["error"] = "authentication failed" + (f": {e}" if str(e) else "")
+except Exception as e:
+    res["error"] = f"{type(e).__name__}: {e}"
+print(json.dumps(res))
+"""
+
+
+def totp(secret_b32: str, at: float | None = None, step: int = 30, digits: int = 6) -> str:
+    """RFC 6238 code for a base32 secret (google-authenticator's first line)."""
+    key = base64.b32decode(secret_b32.strip().upper() + "=" * (-len(secret_b32.strip()) % 8))
+    counter = int((time.time() if at is None else at) // step)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return str(value % 10 ** digits).zfill(digits)
+
+
+def _check(kind: str, subject: str, ok: bool, detail: str = "", decisive: bool = True) -> dict:
+    return {"kind": kind, "subject": subject, "ok": ok, "detail": detail, "decisive": decisive}
+
+
+def _pam_services_touched(steps: list[Step]) -> set[str]:
+    touched = set()
+    for s in steps:
+        for path in [s.target] + _PATH_RE.findall(s.source if s.kind == "run" else ""):
+            m = re.match(r"/etc/pam\.d/([\w.-]+)$", path or "")
+            if m:
+                touched.add(m.group(1))
+    return touched
+
+
+class _LoginProber:
+    """SSH (from the prober) and PAM (pamtester, on the target) logins as
+    `student`, with a test password and a prober key the harness installs --
+    said so in the results. Used for a baseline before the answer's steps
+    and again after them."""
+
+    def __init__(self, root, prober_root, services: list[str]):
+        self.root, self.prober_root, self.services = root, prober_root, services
+        self.pw = "Lab-" + secrets.token_hex(6)
+        self.attempts = 0
+        self.secret = ""
+        _exec(prober_root, "test -s /tmp/probe_key || ssh-keygen -q -t ed25519 -N '' -f /tmp/probe_key", 20)
+        self.pubkey = _exec(prober_root, "cat /tmp/probe_key.pub", 10)[1].strip()
+
+    def prepare(self) -> None:
+        # Re-applied each time: a reboot rewrites authorized_keys from MMDS.
+        _exec(self.root, f"echo 'student:{self.pw}' | chpasswd; install -d -o student -g student -m 700 "
+                         f"/home/student/.ssh; echo {shlex.quote(self.pubkey)} >> /home/student/.ssh/authorized_keys; "
+                         "chown student:student /home/student/.ssh/authorized_keys", 30)
+        head = _exec(self.root, "head -1 /home/student/.google_authenticator 2>/dev/null", 15)[1].strip()
+        self.secret = head if re.fullmatch(r"[A-Z2-7]{16,}", head) else ""
+
+    def _code(self, wrong: bool = False) -> str:
+        if wrong or not self.secret:
+            return "000000"
+        # A distinct time step per attempt: "disallow reuse" is common.
+        return totp(self.secret, time.time() + 30 * ((self.attempts % 3) - 1))
+
+    def _pace(self) -> None:
+        # pam_google_authenticator's default rate limit is 3 logins per 30s.
+        self.attempts += 1
+        if self.secret and self.attempts % 3 == 0:
+            time.sleep(31)
+
+    def ssh(self, wrong: bool = False, key: bool = True) -> dict:
+        _, out, _ = _exec(self.prober_root, f"python3 /tmp/probe_ssh.py {TARGET_PAIR_IP} student "
+                                            f"{shlex.quote(self.pw)} {self._code(wrong)} "
+                                            f"{'/tmp/probe_key' if key else '-'}", 60)
+        self._pace()
+        try:
+            return json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {"ok": False, "prompts": [], "methods": [], "used": [], "error": out.strip()[-300:]}
+
+    def pam(self, service: str, wrong: bool = False) -> dict:
+        _, out, _ = _exec(self.root, f"printf '%s\\n%s\\n' {shlex.quote(self.pw)} {self._code(wrong)} | "
+                                     f"pamtester -v {shlex.quote(service)} student authenticate", 30)
+        self._pace()
+        return {"ok": "successfully authenticated" in out,
+                "prompts": re.findall(r"\b((?:[A-Z][a-z]+ )*(?:[Pp]assword|[Cc]ode))\s*:", out),
+                "error": "" if "successfully" in out else (out.strip().splitlines() or [""])[-1][:160]}
+
+
+def _describe(r: dict) -> str:
+    bits = [f"prompts: {', '.join(r.get('prompts') or []) or 'none'}"]
+    if r.get("methods") and not r.get("used"):
+        bits.append(f"server offers only: {', '.join(r['methods'])}")
+    if r.get("used"):
+        bits.append(f"methods used: {', '.join(r['used'])}")
+    if r.get("error"):
+        bits.append(r["error"])
+    return "; ".join(bits)
+
+
+def _asks_code(r: dict) -> bool:
+    return any(any(w in p.lower() for w in _CODE_WORDS) for p in r.get("prompts") or [])
+
+
+def _login_probes(steps, prober: _LoginProber, baseline: dict, question: str, answer: str,
+                  sshd_changed: bool) -> list[dict]:
+    """Can the student still log in -- over SSH from another machine and
+    through each PAM service the answer edited -- compared with before the
+    answer ran; and for an MFA answer, is a second factor asked for,
+    accepted when right and refused when wrong?"""
+    mfa = bool(_MFA_RE.search(question + "\n" + answer))
+    checks = []
+    prober.prepare()
+    if mfa and not prober.secret:
+        checks.append(_check("login", "authenticator secret for student", False,
+                             "no ~/.google_authenticator was created, so no code could ever be right"))
+    note = " (logging in as student with the prober's key and a test password the lab set)"
+    good = prober.ssh()
+    before = baseline.get("ssh", {}).get("ok")
+    checks.append(_check("login", "SSH login from another machine still works" + note, good["ok"],
+                         _describe(good) + ("" if before else "; it didn't work before the answer either"),
+                         decisive=bool(before)))
+    if mfa:
+        # Keys skip PAM's auth stack, so a key login and a password login can
+        # behave differently; both are tried.
+        nokey = prober.ssh(key=False)
+        key_asked, nokey_asked = _asks_code(good), _asks_code(nokey)
+        checks.append(_check("login", "SSH login without a key asks for a verification code", nokey_asked,
+                             _describe(nokey), decisive=False))
+        checks.append(_check("login", "SSH login with a key asks for a verification code", key_asked,
+                             _describe(good) + ("" if key_asked else
+                                                "; key logins skip PAM's auth stack -- "
+                                                "'AuthenticationMethods publickey,keyboard-interactive' in "
+                                                "sshd_config would require the code as well"),
+                             decisive=False))
+        checks.append(_check("login", "SSH login asks for a verification code", key_asked or nokey_asked,
+                             "asked with a key" if key_asked else ("asked without a key" if nokey_asked
+                                                                  else "neither kind of login asked"),
+                             decisive=sshd_changed))
+        if key_asked or nokey_asked:
+            bad = prober.ssh(wrong=True, key=key_asked)
+            checks.append(_check("login", "SSH login refuses a wrong code", not bad["ok"],
+                                 "" if not bad["ok"] else "a wrong code was accepted", decisive=sshd_changed))
+    for svc in prober.services:
+        r = prober.pam(svc)
+        was = baseline.get(f"pam:{svc}", {}).get("ok")
+        checks.append(_check("login", f"'{svc}' login (PAM) still works", r["ok"],
+                             _describe(r) + ("" if was else "; it didn't work before the answer either"),
+                             decisive=bool(was)))
+        if mfa:
+            asked = _asks_code(r)
+            checks.append(_check("login", f"'{svc}' login asks for a verification code", asked, _describe(r)))
+            if asked:
+                bad = prober.pam(svc, wrong=True)
+                checks.append(_check("login", f"'{svc}' login refuses a wrong code", not bad["ok"],
+                                     "" if not bad["ok"] else "a wrong code was accepted"))
+    if mfa and not any(c["subject"].endswith("asks for a verification code") and c["ok"] for c in checks):
+        checks.append(_check("login", "some login path asks for a second factor", False,
+                             "none of the login paths tested asked for a verification code"))
+    return checks
+
+
+def _network_probes(steps, root, prober_root, answer: str, services: list[str], pkgs: list[str]) -> list[dict]:
+    """Which listening ports another machine can reach, and what web servers
+    return. Decisive for services the answer set up and ports it opened."""
+    _, out, _ = _exec(root, "ss -ltnpH", 15)
+    listening = {}
+    for line in out.splitlines():
+        cols = line.split()
+        if len(cols) < 4:
+            continue
+        addr = cols[3]
+        if addr.startswith(("127.", "[::1]", "::1")):
+            continue
+        port = addr.rsplit(":", 1)[-1]
+        proc = (re.search(r'users:\(\("([^"]+)"', line) or [None, "?"])[1]
+        if port.isdigit():
+            listening.setdefault(int(port), proc)
+    if not listening:
+        return []
+    ports = sorted(listening)
+    probe = "; ".join(f"timeout 3 bash -c '</dev/tcp/{TARGET_PAIR_IP}/{p}' 2>/dev/null && echo {p}:open || echo {p}:closed"
+                      for p in ports)
+    reach = dict(x.split(":") for x in _exec(prober_root, probe, 60)[1].split() if ":" in x)
+    fw = any(s.cls == "ok" and _FIREWALL_RE.search(s.source) for s in steps if s.kind == "run")
+    started = {x.split(".")[0] for x in services} | set(pkgs)
+    checks = []
+    for port in ports:
+        proc = listening[port]
+        is_open = reach.get(str(port)) == "open"
+        ours = any(proc.startswith(x) or x.startswith(proc) for x in started if x)
+        checks.append(_check("reachable", f"port {port} ({proc}) from another machine", is_open if ours else True,
+                             "reachable" if is_open else ("blocked" + (" by the firewall the answer set up" if fw else "")),
+                             decisive=ours))
+        if is_open and (proc.startswith(_WEB_PROCS) or port in (80, 443, 8080, 8000, 8443)):
+            scheme = "https" if port in (443, 8443) else "http"
+            # The site the answer configured, not whatever the default server
+            # answers for a bare IP.
+            names = [n for n in re.findall(r"server_name\s+([^;\s]+)", answer) if n not in ("_", "localhost")]
+            host_hdr = f"-H {shlex.quote('Host: ' + names[0])} " if names else ""
+            code = _exec(prober_root, f"curl -sk -o /dev/null -m 8 {host_hdr}-w '%{{http_code}}' "
+                                      f"{scheme}://{TARGET_PAIR_IP}:{port}/", 20)[1].strip()
+            proxied = "proxy_pass" in answer and code in ("502", "503", "504")
+            good = code not in ("", "000") and (code < "500" or proxied)
+            checks.append(_check("http", f"{scheme}://{names[0] if names else '…'}:{port}/ ({proc})", good,
+                                 f"HTTP {code or 'no response'}"
+                                 + ("; the proxy works but the upstream app the answer assumes isn't running here" if proxied else ""),
+                                 decisive=ours))
+    return checks
+
+
+# sshd -T prints canonical, lower-case names; these are the old spellings
+# answers still use.
+_SSHD_ALIASES = {"challengeresponseauthentication": "kbdinteractiveauthentication",
+                 "skeyauthentication": "kbdinteractiveauthentication"}
+
+
+def _sshd_effective_checks(steps: list[Step], root) -> list[dict]:
+    """Did each directive the answer wrote to sshd_config take effect? sshd
+    uses the FIRST value it reads (sshd_config.d is included at the top), so
+    a line added at the end is silently ignored when an earlier one sets the
+    same key -- found live with an MFA answer's ChallengeResponseAuthentication."""
+    wrote = []
+    for s in steps:
+        if s.cls == "ok" and s.kind in ("write", "append", "prepend", "edit") and s.target.endswith("sshd_config"):
+            for line in s.source.splitlines():
+                m = re.match(r"^\s*([A-Za-z][A-Za-z0-9]+)\s+(\S.*?)\s*$", line)
+                if m and not line.lstrip().startswith("#") and m.group(1).lower() not in ("match", "include"):
+                    wrote.append((m.group(1), m.group(2)))
+    if not wrote:
+        return []
+    code, out, _ = _exec(root, "sshd -T 2>&1", 30)
+    if code != 0:
+        return [_check("validator", "sshd effective configuration", False, out.strip()[-300:])]
+    eff = {}
+    for line in out.splitlines():
+        k, _, v = line.partition(" ")
+        eff.setdefault(k.lower(), []).append(v.strip().lower())
+    checks = []
+    for key, value in wrote:
+        k = _SSHD_ALIASES.get(key.lower(), key.lower())
+        now = eff.get(k)
+        if now is None:
+            continue
+        took = value.lower() in now
+        checks.append(_check("effective", f"sshd uses '{key} {value}'", took,
+                             "" if took else f"sshd is using '{k} {now[0]}': the answer's line did not take "
+                                             "effect (sshd keeps the first value it reads; an earlier line, "
+                                             "or a file in sshd_config.d, already sets it)"))
+    return checks
+
+
 # -- The run ----------------------------------------------------------------------
 
 @dataclass
@@ -232,6 +550,78 @@ _HARNESS_SETUP = r"""set -e
 printf 'APT::Get::Assume-Yes "true";\n' > /etc/apt/apt.conf.d/99lab-assume-yes
 echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
 """
+
+
+_REBOOT_RE = re.compile(r"\b(?:reboot|shutdown\s+(?:-\S+\s+)*-r|systemctl\s+reboot|init\s+6)\b")
+
+
+_PROMPT_TAIL_RE = re.compile(r"(?:[?:>]|\(y/n\)|\[y/n\]|\[Y/n\]|\[y/N\])\s*$", re.IGNORECASE)
+_YES_NO_RE = re.compile(r"\(y/n\)|\[y/n\]|\[Y/n\]|\[y/N\]|\byes/no\b", re.IGNORECASE)
+_NEW_SECRET_RE = re.compile(r"secret key is:?\s*([A-Z2-7]{16,})")
+
+
+def _reply_for(prompt: str, output: str) -> str | None:
+    """What a person following the answer types at `prompt`: yes to yes/no
+    questions, the current code when a tool has just shown a new TOTP
+    secret (as they would from their app), Enter for defaults; None when
+    there is no sensible reply (a password nobody gave them)."""
+    low = prompt.lower()
+    secrets_seen = _NEW_SECRET_RE.findall(output)
+    if "code" in low and secrets_seen:
+        return totp(secrets_seen[-1])
+    if "-1 to skip" in low:
+        return "-1"
+    if _YES_NO_RE.search(prompt):
+        return "y"
+    if any(w in low for w in ("password", "passphrase", "pin")):
+        return None
+    return ""
+
+
+def _exec_step(client, command: str, timeout_s: int) -> tuple[int | None, str, bool, list[str]]:
+    """Run one of the answer's steps the way a person following it would,
+    answering its questions (see _reply_for). Returns (exit, output, timed
+    out, replies given)."""
+    chan = client.get_transport().open_session()
+    chan.set_combine_stderr(True)
+    chan.exec_command(f"timeout --kill-after=10 {timeout_s} bash -c {shlex.quote(command)}")
+    out, replies = "", []
+    last_data = time.monotonic()
+    deadline = last_data + timeout_s + 30
+    stdin_open = True
+    try:
+        while time.monotonic() < deadline:
+            if chan.recv_ready():
+                out += chan.recv(65536).decode("utf-8", "replace")
+                last_data = time.monotonic()
+                continue
+            if chan.exit_status_ready():
+                break
+            idle = time.monotonic() - last_data
+            tail = out.rsplit("\n", 1)[-1]
+            waiting = bool(tail.strip()) and _PROMPT_TAIL_RE.search(tail)
+            if stdin_open and waiting and idle > 0.7:
+                reply = _reply_for(tail, out) if len(replies) < 40 else None
+                if reply is None:
+                    if idle > 5:
+                        chan.shutdown_write()  # nothing sensible to type: end of input
+                        stdin_open = False
+                else:
+                    chan.sendall((reply + "\n").encode())
+                    replies.append(reply or "Enter")
+                    last_data = time.monotonic()
+            elif stdin_open and idle > 30:
+                chan.shutdown_write()  # silent and not asking: whatever reads stdin gets EOF
+                stdin_open = False
+            time.sleep(0.05)
+        while chan.recv_ready():
+            out += chan.recv(65536).decode("utf-8", "replace")
+        code = chan.recv_exit_status() if chan.exit_status_ready() else None
+    except OSError as e:
+        return None, out + f"\n(connection lost: {e})", False, replies
+    finally:
+        chan.close()
+    return code, out, code in (124, 137) or code is None, replies
 
 
 def _exec(client, command: str, timeout_s: int) -> tuple[int | None, str, bool]:
@@ -350,9 +740,12 @@ def _collect_facts(steps: list[Step]) -> tuple[list[str], list[str], list[str]]:
     return pkgs, services, paths
 
 
-def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResult:
-    """Run `answer` in a VM from make_vm() (an un-booted microvm.MicroVM).
-    `progress(result)` is called after each step so a caller can publish it."""
+def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: str = "",
+               make_prober=None, pair_bridges=None) -> RunResult:
+    """Run `answer` in a VM from make_vm(**kw) (an un-booted microvm.MicroVM;
+    kw may carry pair_bridge and scratch_from). With make_prober(bridge)
+    and pair_bridges=(create, delete), goal probes run from a second VM at
+    the end (L8). `progress(result)` is called after each step."""
     result = RunResult(id=run_id or uuid.uuid4().hex[:12], started_at=time.time())
     steps = parse_steps(answer)
     result.steps = [asdict(s) for s in steps]
@@ -364,15 +757,46 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
         publish(result)
         return result
 
-    vm = make_vm()
-    student = root = None
+    pair = pair_bridges[0]() if (make_prober and pair_bridges) else ""
+    vm = make_vm(pair_bridge=pair) if pair else make_vm()
+    prober = None
+    student = root = prober_root = None
     deadline = time.monotonic() + RUN_TIMEOUT_S
+
+    def connect():
+        nonlocal root, student
+        root = vm.ssh_client("root")
+        student = vm.ssh_client("student")
+        if pair:
+            _exec(root, f"ip link set eth1 up && ip addr replace {TARGET_PAIR_IP}/24 dev eth1", 15)
+
     try:
         vm.boot()
         result.vm = {"vcpus": vm.vcpu_count, "mem_mib": vm.mem_size_mib, "scratch_mib": vm.scratch_mib}
-        root = vm.ssh_client("root")
-        student = vm.ssh_client("student")
+        connect()
         _exec(root, _HARNESS_SETUP, 60)
+        login_prober, baseline = None, {}
+        pam = _pam_services_touched(steps)
+        sshd_changed = "sshd" in pam or any("sshd_config" in (s.target or "") or
+                                            (s.kind == "run" and "sshd_config" in s.source) for s in steps)
+        auth_related = bool(pam) or sshd_changed or bool(_MFA_RE.search(question + "\n" + answer))
+        if make_prober and pair:
+            prober = make_prober(pair)
+            prober.boot()
+            prober_root = prober.ssh_client("root")
+            sftp = prober_root.open_sftp()
+            with sftp.open("/tmp/probe_ssh.py", "w") as f:
+                f.write(_PROBER_SSH)
+            sftp.close()
+            if auth_related:
+                services = pam - {"sshd", "common-password", "common-session", "common-account"}
+                if "common-auth" in services:
+                    services = (services - {"common-auth"}) | {"login", "su"}
+                login_prober = _LoginProber(root, prober_root, sorted(services))
+                login_prober.prepare()
+                baseline["ssh"] = login_prober.ssh()
+                for svc in login_prober.services:
+                    baseline[f"pam:{svc}"] = login_prober.pam(svc)
         publish(result)
 
         for s in steps:
@@ -380,10 +804,35 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
                 s.cls, s.detail = "timeout", "the whole run hit its time limit before this step"
                 continue
             t0 = time.monotonic()
-            if s.kind == "run":
-                code, out, timed_out = _exec(student, s.source, STEP_TIMEOUT_S)
+            if s.kind == "run" and _REBOOT_RE.search(s.source):
+                # A real reboot: the guest shuts down cleanly (reboot=k ends
+                # the VMM), then a new VM boots from the same disk.
+                try:
+                    _exec_step(student, s.source, 60)
+                except (OSError, EOFError):
+                    pass  # the connection going away is the point
+                if vm.wait_exit(90):
+                    kept = vm.jail_dir + ".scratch"
+                    vm.take_scratch(kept)
+                    vm.teardown()
+                    kw = {"scratch_from": kept}
+                    if pair:
+                        kw["pair_bridge"] = pair
+                    vm = make_vm(**kw)
+                    vm.boot()
+                    connect()
+                    s.exit, s.cls = 0, "ok"
+                    s.note = f"rebooted: the sandbox restarted on the same disk in {time.monotonic() - t0:.0f}s"
+                else:
+                    s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not restart"
+            elif s.kind == "run":
+                code, out, timed_out, replies = _exec_step(student, s.source, STEP_TIMEOUT_S)
                 s.exit, s.output = code, out[-_OUTPUT_KEEP:]
                 s.cls, s.detail = classify(code, out, timed_out)
+                if replies:
+                    shown = ["the code from the new secret" if r.isdigit() and len(r) == 6 else f"'{r}'"
+                             for r in replies[:8]]
+                    s.note = "answered its questions: " + ", ".join(shown) + (" ..." if len(replies) > 8 else "")
             elif s.kind in ("write", "append", "prepend", "edit"):
                 how, _, flag = s.note.partition("|")
                 s.note = how
@@ -405,6 +854,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
 
         # Whole-run checks, as root so a step that broke sudo can't hide them.
         pkgs, services, paths = _collect_facts(steps)
+        services_started = services
         checks = []
         for p in pkgs:
             code, out, _ = _exec(root, f"dpkg-query -W -f='${{Status}}' {shlex.quote(p)}", 30)
@@ -414,6 +864,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
             code, out, _ = _exec(root, f"systemctl is-active {shlex.quote(svc)}", 30)
             checks.append({"kind": "service", "subject": svc, "ok": out.strip() == "active",
                            "detail": out.strip()[:200] if out.strip() != "active" else ""})
+        checks += _sshd_effective_checks(steps, root)
         touched = " ".join(paths)
         for rx, cmd, label in _VALIDATORS:
             if rx.search(touched):
@@ -426,6 +877,16 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
             code, _, _ = _exec(root, f"test -e {shlex.quote(p)}", 15)
             checks.append({"kind": "path", "subject": p, "ok": code == 0,
                            "detail": "" if code == 0 else "does not exist after the answer's steps"})
+        if prober_root is not None:
+            _exec(root, f"ip link set eth1 up && ip addr replace {TARGET_PAIR_IP}/24 dev eth1", 15)
+            # After a reboot the target's eth1 has a new MAC; the prober's ARP
+            # entry for it would point at the old one (found live: SSH timed
+            # out, a port check seconds later worked).
+            _exec(prober_root, "ip neigh flush all", 10)
+            if login_prober is not None:
+                login_prober.root = root  # a reboot replaced the connection
+                checks += _login_probes(steps, login_prober, baseline, question, answer, sshd_changed)
+            checks += _network_probes(steps, root, prober_root, answer, services_started, pkgs)
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
@@ -434,16 +895,20 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
         result.verdict = result.verdict or "partial"
         result.summary = result.summary or "The lab run could not finish."
     finally:
-        for c in (student, root):
+        for c in (student, root, prober_root):
             try:
                 if c is not None:
                     c.close()
             except Exception:  # noqa: BLE001, S110 -- closing a dead session is not news
                 pass
-        try:
-            vm.teardown()
-        except Exception as e:  # noqa: BLE001 -- the run's result stands; say so and move on
-            result.error = result.error or f"teardown failed: {e}"
+        for machine in (vm, prober):
+            try:
+                if machine is not None:
+                    machine.teardown()
+            except Exception as e:  # noqa: BLE001 -- the run's result stands; say so and move on
+                result.error = result.error or f"teardown failed: {e}"
+        if pair:
+            pair_bridges[1](pair)
         result.finished_at = time.time()
         if result.status == "running":
             result.status = "done"
@@ -454,7 +919,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "") -> RunResu
 def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) -> None:
     acted = [s for s in steps if s.kind in ("run", "write", "append", "prepend", "edit")]
     bad = [s for s in acted if s.cls not in ("ok",)]
-    failed_checks = [c for c in checks if not c["ok"]]
+    failed_checks = [c for c in checks if not c["ok"] and c.get("decisive", True)]
     changed = any(s.kind in ("write", "append", "prepend", "edit") or _APT_INSTALL_RE.search(s.source)
                   or _SERVICE_RE.search(s.source) for s in acted if s.cls == "ok")
     if not bad and not failed_checks and changed:
@@ -487,6 +952,7 @@ def text_report(result: RunResult) -> str:
     for s in result.steps:
         out.write(plain_step_line(s) + "\n")
     for c in result.checks:
-        out.write(f"{'✓' if c['ok'] else '✗'} {c['kind']}: {c['subject']}"
-                  + (f" -- {c['detail'][:160]}" if c["detail"] and not c["ok"] else "") + "\n")
+        mark = "ℹ" if c.get("decisive") is False else ("✓" if c["ok"] else "✗")
+        show = c["detail"] and (not c["ok"] or c["kind"] in ("login", "http"))
+        out.write(f"{mark} {c['kind']}: {c['subject']}" + (f" -- {c['detail'][:160]}" if show else "") + "\n")
     return out.getvalue()

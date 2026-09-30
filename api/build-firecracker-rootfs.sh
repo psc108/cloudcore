@@ -203,6 +203,11 @@ deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe mu
 EOS
 apt-get update
 apt-get install -y --no-install-recommends nodejs gcc g++ libc6-dev golang-go
+# L8: what the prober VM needs to test an answer's goal from outside: PAM
+# stacks exercised directly (pamtester), a scripted SSH client that records
+# every prompt (python3-paramiko), and TOTP codes (oathtool). pamtester and
+# oathtool are in universe, so this comes after the full sources above.
+apt-get install -y --no-install-recommends pamtester python3-paramiko oathtool
 
 # Stage 11/12: the guest-side counterpart of verify_proxy.py's own
 # _stdin_wait_state(). Run as root (via sudo) over SSH by the per-run

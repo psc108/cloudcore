@@ -255,11 +255,21 @@ class MicroVM:
     def __init__(self, owner: str, pool: IpPool, bridge: str,
                  vcpu_count: int = 1, mem_size_mib: int = 256,
                  scratch_mib: int = 1024, boot_timeout_s: int = 20,
-                 extra_boot_args: str = "", sizing: VmSizing | None = None):
+                 extra_boot_args: str = "", sizing: VmSizing | None = None,
+                 isolate: bool = True, pair_bridge: str = "", scratch_from: str = ""):
         """With `sizing`, vcpu_count/mem_size_mib/scratch_mib are only
-        placeholders: boot() replaces them with plan_vm_size()'s answer."""
+        placeholders: boot() replaces them with plan_vm_size()'s answer.
+
+        L8 (the advice runner's prober): `pair_bridge` adds a second NIC,
+        eth1, on a private per-run bridge shared only with a prober VM (no
+        uplink, no host address); `isolate=False` is for a VM whose only
+        NIC is on such a bridge. `scratch_from` boots from a preserved
+        scratch disk instead of a fresh one: a reboot that keeps state."""
         self.owner = owner
         self.sizing = sizing
+        self.isolate = isolate
+        self.pair_bridge = pair_bridge
+        self.scratch_from = scratch_from
         self.pool = pool
         self.bridge = bridge
         self.vcpu_count = vcpu_count
@@ -272,6 +282,8 @@ class MicroVM:
         self.session_id = f"{owner}-{short}"
         # IFNAMSIZ is 16 including the NUL: "fc" + owner[:4] + "-" + 8 hex fits.
         self.tap_name = f"fc{owner[:4]}-{short[:8]}"
+        self.pair_tap = f"fp{owner[:4]}-{short[:8]}" if pair_bridge else ""
+        self._short = short
         self.ip: str | None = None
 
         self.jail_dir = os.path.join(CHROOT_BASE, "firecracker", self.session_id)
@@ -317,10 +329,14 @@ class MicroVM:
 
         # Sparse: only blocks the guest actually writes cost real disk.
         scratch = self.chroot + _IN_JAIL_SCRATCH
-        with open(scratch, "wb") as f:
-            f.truncate(self.scratch_mib * 1024 * 1024)
-        subprocess.run(["mkfs.ext4", "-q", "-F", scratch], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if self.scratch_from:
+            os.rename(self.scratch_from, scratch)
+            self.scratch_mib = os.path.getsize(scratch) // (1024 * 1024)
+        else:
+            with open(scratch, "wb") as f:
+                f.truncate(self.scratch_mib * 1024 * 1024)
+            subprocess.run(["mkfs.ext4", "-q", "-F", scratch], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         os.chown(scratch, uid, gid)
         os.chmod(scratch, 0o600)
 
@@ -362,8 +378,16 @@ class MicroVM:
         # other, only with the bridge itself (the gateway/NAT). One VM can
         # never reach another, whether or not br_netfilter is loaded to send
         # bridged traffic through the FORWARD rules.
-        subprocess.run(["bridge", "link", "set", "dev", self.tap_name, "isolated", "on"], check=True)
+        if self.isolate:
+            subprocess.run(["bridge", "link", "set", "dev", self.tap_name, "isolated", "on"], check=True)
         subprocess.run(["ip", "link", "set", self.tap_name, "up"], check=True)
+        if self.pair_tap:
+            # Deliberately not isolated: the pair bridge exists so this VM and
+            # its prober can reach each other, and nothing else is on it.
+            subprocess.run(["ip", "tuntap", "add", self.pair_tap, "mode", "tap",
+                            "user", str(uid), "group", str(gid)], check=True)
+            subprocess.run(["ip", "link", "set", self.pair_tap, "master", self.pair_bridge], check=True)
+            subprocess.run(["ip", "link", "set", self.pair_tap, "up"], check=True)
 
         mem_max = (self.mem_size_mib + VMM_OVERHEAD_MIB) * 1024 * 1024
         cpu_max = f"{self.vcpu_count * 100000} 100000"
@@ -424,6 +448,12 @@ class MicroVM:
             "guest_mac": mac,
             "host_dev_name": self.tap_name,
         })
+        if self.pair_tap:
+            self._api("PUT", "/network-interfaces/eth1", {
+                "iface_id": "eth1",
+                "guest_mac": "AA:FD:" + ":".join(self._short[i:i + 2] for i in range(0, 8, 2)).upper(),
+                "host_dev_name": self.pair_tap,
+            })
         self._api("PUT", "/vsock", {
             "guest_cid": GUEST_CID,
             "uds_path": _IN_JAIL_VSOCK,
@@ -516,6 +546,20 @@ class MicroVM:
                     raise
                 time.sleep(0.5)
 
+    def wait_exit(self, timeout_s: float) -> bool:
+        """True once the VMM has exited (a guest reboot with reboot=k ends
+        it), False if it's still running after `timeout_s`."""
+        try:
+            self.proc.wait(timeout=timeout_s)
+            return True
+        except subprocess.TimeoutExpired:
+            return False
+
+    def take_scratch(self, dest: str) -> None:
+        """Move this (stopped) VM's scratch disk -- everything the guest
+        wrote -- to `dest`, for a new VM to boot from (scratch_from)."""
+        os.rename(self.chroot + _IN_JAIL_SCRATCH, dest)
+
     def teardown(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
             try:
@@ -533,6 +577,9 @@ class MicroVM:
             except OSError:
                 pass
         _remove_jail(self.session_id, self.tap_name)
+        if self.pair_tap:
+            subprocess.run(["ip", "link", "del", self.pair_tap],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         shutil.rmtree(self.key_dir, ignore_errors=True)
         self.pool.release(self.ip)
 
@@ -590,12 +637,33 @@ def sweep_orphans(owner: str) -> int:
         shutil.rmtree(os.path.join(KEY_DIR, sid), ignore_errors=True)
         removed += 1
 
-    tap_prefix = f"fc{owner[:4]}-"
+    # Its TAPs, pair TAPs, and (L8) the per-run pair bridges.
+    prefixes = (f"fc{owner[:4]}-", f"fp{owner[:4]}-", PAIR_BRIDGE_PREFIX)
     try:
         for name in os.listdir("/sys/class/net"):
-            if name.startswith(tap_prefix):
+            if name.startswith(prefixes):
                 subprocess.run(["ip", "link", "del", name],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except FileNotFoundError:
         pass
     return removed
+
+
+# L8: each advice run's target and prober share a private bridge of their
+# own -- no uplink, no host address, nothing else attached -- so the prober
+# can test the target from outside without either reaching anything else.
+PAIR_BRIDGE_PREFIX = "fcpair"
+PAIR_SUBNET = "172.30.0.0/24"
+
+
+def create_pair_bridge() -> str:
+    name = f"{PAIR_BRIDGE_PREFIX}{uuid.uuid4().hex[:8]}"
+    subprocess.run(["ip", "link", "add", name, "type", "bridge"], check=True)
+    subprocess.run(["sysctl", "-qw", f"net.ipv6.conf.{name}.disable_ipv6=1"], check=False)
+    subprocess.run(["ip", "link", "set", name, "up"], check=True)
+    return name
+
+
+def delete_pair_bridge(name: str) -> None:
+    subprocess.run(["ip", "link", "del", name],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)

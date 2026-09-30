@@ -1831,9 +1831,20 @@ def _advice_store(run_id: str, data: dict) -> None:
 def _advice_worker() -> None:
     global _advice_pool
     import advice_runner
-    from microvm import IpPool, MicroVM
+    from microvm import PAIR_SUBNET, IpPool, MicroVM, VmSizing, create_pair_bridge, delete_pair_bridge
     _advice_pool = IpPool(SANDBOX_SUBNET_CIDR, part="advice")
     sizing = _advice_sizing()
+    # L8: the prober only needs to log in, connect and fetch -- the smallest
+    # VM that boots the image. Its only NIC is the run's private pair bridge.
+    prober_sizing = VmSizing(mem_target_mib=512, mem_floor_mib=384, vcpu_target=1,
+                             scratch_target_mib=2048, scratch_floor_mib=1024)
+
+    def make_target(**kw):
+        return MicroVM("advc", _advice_pool, SANDBOX_BRIDGE, sizing=sizing, boot_timeout_s=90, **kw)
+
+    def make_prober(bridge):
+        return MicroVM("advp", IpPool(PAIR_SUBNET), bridge, sizing=prober_sizing, isolate=False,
+                       boot_timeout_s=90, extra_boot_args=_RUN_VM_BOOT_ARGS)
     while True:
         with _advice_cv:
             while not _advice_waiting:
@@ -1850,9 +1861,8 @@ def _advice_worker() -> None:
             _advice_store(result.id, data)
 
         result = advice_runner.run_advice(
-            answer, lambda: MicroVM("advc", _advice_pool, SANDBOX_BRIDGE, sizing=sizing,
-                                    boot_timeout_s=90),
-            progress=publish, run_id=run_id)
+            answer, make_target, progress=publish, run_id=run_id, question=question,
+            make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge))
         entry = {"id": result.id, "source": "auto", "question": question, "answer": answer,
                  "search_terms": search_terms, "verdict": result.verdict,
                  "summary": result.summary, "error": result.error, "vm": result.vm,
@@ -2746,7 +2756,7 @@ footer a { color: #2a5db0; }
 
 <div class="panel">
   <h2>Linux Help</h2>
-  <p class="sub" style="margin-bottom:0.75rem">Ask any Linux question -- from everyday commands to real system administration -- kept separate from the coding Ask panel above. Answers aren't automatically run or checked the way code is; use the "Run in Terminal" button on a suggested command to actually try it in the Terminal panel and see the real result.</p>
+  <p class="sub" style="margin-bottom:0.75rem">Ask any Linux question -- from everyday commands to real system administration -- kept separate from the coding Ask panel above. Every answer is tried automatically, step by step, in a fresh Ubuntu 22.04 sandbox, and a second machine then checks what it was meant to achieve (logins, open ports, web servers) &mdash; the result appears under the answer. Use "Run in Terminal" to try a command yourself in the Terminal panel.</p>
   <div id="linuxTranscript"></div>
   <div class="row" style="align-items:flex-end">
     <textarea id="linuxQuestion" rows="4" placeholder="e.g. how do I check disk usage? -- or: how do I add a new user? (Shift+Enter for a new line)" onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();linuxAsk.askModel();}"></textarea>
@@ -2958,7 +2968,8 @@ function makeAskPanel(cfg) {
     for (const c of (lab && lab.checks) || []) {
       const row = document.createElement('div');
       row.className = 'labrun-step';
-      row.textContent = (c.ok ? '✓ ' : '✗ ') + c.kind + ': ' + c.subject + (!c.ok && c.detail ? ' — ' + c.detail.slice(0, 200) : '');
+      const mark = c.decisive === false ? 'ℹ ' : (c.ok ? '✓ ' : '✗ ');
+      row.textContent = mark + c.kind + ': ' + c.subject + (c.detail && (!c.ok || c.kind === 'login' || c.kind === 'http') ? ' — ' + c.detail.slice(0, 200) : '');
       box.appendChild(row);
     }
     for (const f of (lab && lab.failures) || []) {
@@ -2979,7 +2990,7 @@ function makeAskPanel(cfg) {
     return {
       id: data.id, status: data.status, verdict: data.verdict || '', summary: data.summary || '',
       error: data.error || '', queue_position: data.queue_position || 0, lines: data.lines || [],
-      checks: (data.checks || []).map(c => ({kind: c.kind, subject: c.subject, ok: c.ok, detail: (c.detail || '').slice(0, 300)})),
+      checks: (data.checks || []).map(c => ({kind: c.kind, subject: c.subject, ok: c.ok, decisive: c.decisive, detail: (c.detail || '').slice(0, 300)})),
       steps: (data.steps || []).map(s => ({cls: s.cls})),
       failures: (data.steps || []).filter(s => s.cls && !['ok', 'skipped'].includes(s.cls) && s.output)
         .map(s => ({n: s.n, output: s.output.slice(-1500)})),
@@ -5030,7 +5041,7 @@ def main():
     # the Python-only path never needs them.
     try:
         from microvm import sweep_orphans
-        swept = sweep_orphans("run") + sweep_orphans("advc")
+        swept = sweep_orphans("run") + sweep_orphans("advc") + sweep_orphans("advp")
         if swept:
             print(f"verify-proxy: removed {swept} per-run/advice microVM(s) orphaned by a previous run",
                   flush=True)
