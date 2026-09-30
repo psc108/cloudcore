@@ -84,6 +84,12 @@ write_files:
     content: |
       ${indent(6, microvm_source)}
 
+  # llm-chat-lab-sandbox L4 -- runs each Linux Help answer, step by step,
+  # in a disposable microVM on the sandbox bridge (verify_proxy.py).
+  - path: /opt/llama.cpp/advice_runner.py
+    content: |
+      ${indent(6, advice_runner_source)}
+
   # Phase 4 — the sandbox's own system prompt (verify_proxy.py's
   # SANDBOX_SYSTEM_MESSAGE_FILE), plain text rather than an
   # Environment= line — see that constant's own comment for why.
@@ -313,6 +319,7 @@ write_files:
       Environment=RATE_LIMIT_ASK_PER_10MIN=${rate_limit_ask_per_10min}
       Environment=ASK_QUEUE_ENABLED=${ask_queue_enabled}
       Environment=RUN_SUBNET_CIDR=${run_subnet_cidr}
+      Environment=SANDBOX_SUBNET_CIDR=${sandbox_subnet_cidr}
       Environment=RUN_VM_MAX_CONCURRENT=${run_vm_max_concurrent}
       Environment=RUN_VM_MEM_MIB=${run_vm_mem_mib}
       Environment=RUN_VM_MEM_MIB_GO=${run_vm_mem_mib_go}

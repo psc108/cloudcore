@@ -360,14 +360,54 @@ def _local_corpus_search(search_terms: str) -> tuple[str, list[dict]]:
         snippet = (match.get("answer") or "").strip()
         if not snippet:
             return "", []
-        reference = {"source": "Verified Q&A", "title": match.get("question", ""), "snippet": snippet}
+        # L7: an answer a lab run verified by running it, not one a person
+        # approved, says so -- to the model and in the page's sources.
+        label = ("Verified in the lab" if match.get("review_status") == "lab_verified"
+                 else "Verified Q&A")
+        reference = {"source": label, "title": match.get("question", ""), "snippet": snippet}
         block = ("Reference material (for fact-checking only -- explain in your own "
                  "words, and note plainly if this doesn't fully answer the question):\n"
-                 f'[Verified Q&A] "{reference["title"]}": {snippet}\n\n')
+                 f'[{label}] "{reference["title"]}": {snippet}\n\n')
         return block, [reference]
     except Exception as e:
         print(f"verify-proxy: local corpus lookup failed, trying kiwix instead: {e!r}", flush=True)
         return "", []
+
+
+def _lab_facts(search_terms: str) -> str:
+    """L7: facts earlier lab runs established about similar advice ("X is
+    not an installable package in Ubuntu 22.04", a config check that
+    failed), from Sentinel's /api/lab-facts, as a prompt block. Sits
+    alongside whichever grounding tier answered, not instead of it. Empty
+    on no facts or any failure -- never blocks an answer."""
+    if not SENTINEL_HOST or not search_terms:
+        return ""
+    try:
+        qs = urllib.parse.urlencode({"q": search_terms})
+        url = f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/lab-facts?{qs}"
+        with urllib.request.urlopen(url, timeout=_SENTINEL_LOOKUP_TIMEOUT_S) as resp:
+            facts = json.loads(resp.read()) or []
+    except Exception as e:  # noqa: BLE001 -- optional grounding, never fatal
+        print(f"verify-proxy: lab facts lookup failed (non-fatal): {e!r}", flush=True)
+        return ""
+    lines = [f"- {f['fact']}" for f in facts if isinstance(f, dict) and f.get("fact")]
+    if not lines:
+        return ""
+    return ("Lab findings -- established by actually running earlier answers to similar "
+            "questions in a fresh Ubuntu 22.04 sandbox. Do not repeat advice these show "
+            "does not work:\n" + "\n".join(lines) + "\n\n")
+
+
+def _push_advice_run_to_sentinel(entry: dict) -> None:
+    """L6: best-effort POST of a finished advice run to Sentinel's corpus.
+    Called from the advice worker thread, never a request path."""
+    try:
+        req = urllib.request.Request(
+            f"http://{SENTINEL_HOST}:{SENTINEL_PORT}/api/advice-runs",
+            data=json.dumps(entry).encode(), headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).close()
+    except Exception as e:  # noqa: BLE001 -- the corpus is optional; the run itself stands
+        print(f"verify-proxy: Sentinel advice-run push failed (non-fatal): {e!r}", flush=True)
 
 
 # llm-chat-kiwix-expansion (F-167): the codebase tier is only consulted
@@ -638,30 +678,41 @@ def _kiwix_search(search_pattern: str, panel: str = "") -> tuple[str, list[dict]
 # never fed back to the model. The model is small and Linux Help answers are
 # not executed or checked, so every answer carries a general caution; two
 # kinds of answer get a specific one on top.
-_TERMINAL_PACKAGES_URL = os.environ.get(
-    "TERMINAL_PACKAGES_URL",
-    "http://archive.ubuntu.com/ubuntu/dists/jammy/main/binary-amd64/Packages.xz")
-# The Terminal's runtime index is jammy main only (build-firecracker-rootfs.sh
-# enables universe just long enough to install the toolchains below).
-_TERMINAL_PREINSTALLED_UNIVERSE = frozenset({"nodejs"})
+# llm-chat-lab-sandbox L2: the lab installs from the whole archive, so the
+# useful check is whether a suggested package exists in Ubuntu 22.04 at all
+# -- a model inventing a package name is one of the failures the lab exists
+# to catch. Every component of the release and -updates pockets, ~26MB,
+# fetched once per service start.
+_UBUNTU_ARCHIVE = os.environ.get("UBUNTU_ARCHIVE_URL", "http://archive.ubuntu.com/ubuntu")
+_TERMINAL_PACKAGE_INDEXES = [
+    f"{_UBUNTU_ARCHIVE}/dists/{pocket}/{component}/binary-amd64/Packages.xz"
+    for pocket in ("jammy", "jammy-updates")
+    for component in ("main", "restricted", "universe", "multiverse")]
 _terminal_packages: frozenset | None = None
 
 
 def _load_terminal_packages() -> None:
-    """Fetch jammy main's package names once, in the background. The
-    release pocket never changes, so one fetch per service start is
-    enough. On failure the package check is simply skipped -- no notice
-    is better than a wrong one."""
+    """Fetch every Ubuntu 22.04 package name once, in the background. Names
+    (and Provides:, so virtual packages like mail-transport-agent count)
+    change rarely, so one fetch per service start is enough. On any failure
+    the check is skipped -- no notice is better than a wrong one."""
     global _terminal_packages
     import lzma
+    names: set[str] = set()
     try:
-        with urllib.request.urlopen(_TERMINAL_PACKAGES_URL, timeout=60) as resp:
-            text = lzma.decompress(resp.read()).decode("utf-8", "replace")
-        _terminal_packages = frozenset(
-            line[9:].strip() for line in text.splitlines() if line.startswith("Package: "))
-        print(f"verify-proxy: loaded {len(_terminal_packages)} Terminal package names", flush=True)
+        for url in _TERMINAL_PACKAGE_INDEXES:
+            with urllib.request.urlopen(url, timeout=120) as resp:
+                text = lzma.decompress(resp.read()).decode("utf-8", "replace")
+            for line in text.splitlines():
+                if line.startswith("Package: "):
+                    names.add(line[9:].strip())
+                elif line.startswith("Provides: "):
+                    for prov in line[10:].split(","):
+                        names.add(prov.strip().split(" ", 1)[0])
+        _terminal_packages = frozenset(names)
+        print(f"verify-proxy: loaded {len(_terminal_packages)} Ubuntu 22.04 package names", flush=True)
     except (OSError, lzma.LZMAError, ValueError) as e:
-        print(f"verify-proxy: Terminal package index unavailable, skipping that notice: {e!r}",
+        print(f"verify-proxy: Ubuntu package index unavailable, skipping that notice: {e!r}",
               flush=True)
 
 
@@ -690,8 +741,15 @@ _NOTICE_AREAS = [
 ]
 
 
+_NOTICE_GENERAL_LAB = (
+    "This answer comes from a small local model. It is tried automatically in a fresh "
+    "sandbox below, but a step that runs is not proof the advice is good: check it "
+    "against the sources and the man pages before using it on a real system.")
+
+
 def _answer_notices(answer: str) -> list[dict]:
-    notices = [{"level": "info", "text": _NOTICE_GENERAL}]
+    notices = [{"level": "info",
+                "text": _NOTICE_GENERAL_LAB if ADVICE_RUN_ENABLED else _NOTICE_GENERAL}]
     pkgs = _terminal_packages
     if pkgs is not None:
         missing = []
@@ -702,15 +760,14 @@ def _answer_notices(answer: str) -> list[dict]:
                 if tok.startswith("-"):
                     continue
                 name = tok.split("=", 1)[0].split(":", 1)[0]
-                if (_APT_PKG_RE.match(name) and name not in pkgs
-                        and name not in _TERMINAL_PREINSTALLED_UNIVERSE and name not in missing):
+                if _APT_PKG_RE.match(name) and name not in pkgs and name not in missing:
                     missing.append(name)
         if missing:
             notices.append({"level": "warn", "text": (
-                f"Can't be tried in this lab: {', '.join(missing)} "
-                f"{'is' if len(missing) == 1 else 'are'} not in the Terminal's package "
-                "index (Ubuntu 22.04 main), so installing will fail there. Those steps "
-                "are unproven here -- test them on a machine you can afford to break.")})
+                f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} not "
+                f"{'a package' if len(missing) == 1 else 'packages'} in Ubuntu 22.04, in any "
+                "component, so that install step will fail. The name may be wrong, or it "
+                "may need a third-party repository the answer doesn't mention.")})
     areas = [label for rx, label in _NOTICE_AREAS if rx.search(answer)]
     if areas:
         notices.append({"level": "warn", "text": (
@@ -1029,51 +1086,49 @@ _LINUX_SYSTEM_MESSAGE_DEFAULT = (
     "Linux question, from everyday usage (files, permissions, "
     "searching, editors) through real system administration (systemd, "
     "networking, package management, users and groups, disk and "
-    "filesystem, cron, log inspection) -- the student may be a "
-    "complete beginner or already comfortable at the command line, so "
-    "don't assume either. Only describe what a command actually does "
-    "-- never claim a flag or behavior exists unless you are genuinely "
-    "sure of it; if you are not certain something is correct, say so "
-    "explicitly rather than stating it as fact. When you suggest a "
-    "command, put it in its own fenced ```bash code block so the "
-    "student can run it with one click -- a command you suggest is "
-    "NEVER run without the student clicking 'Run in Terminal' "
-    "themselves, but once they do, the real result IS automatically "
-    "checked: if it fails, you will be shown the real terminal "
-    "transcript and exit code and asked to diagnose it and suggest a "
-    "fix, same as this turn. This hardware generates slowly, so keep answers "
-    "short and precise rather than long where both would be equally "
-    "correct. The student's own Terminal panel is a real, minimal "
-    "Ubuntu 22.04 shell with genuine internet access, but: its package "
-    "index only covers the 'main' archive component (a 'universe' "
-    "package needs another route), it has no persistent storage "
-    "across sessions, and it cannot reach anything on the local "
-    "network except the real internet. Ports __PREVIEW_PORTS_LIST__ "
-    "are reachable from the student's browser for previewing anything "
-    "they serve there. This is a genuinely minimal image -- ordinary "
-    "tools you might expect (e.g. fdisk) are often not preinstalled. "
-    "If a command you suggest might need one, give ONLY ONE fenced "
-    "```bash block for it, combining the install check and the real "
-    "command with `||` in that single block -- for example exactly "
-    "`command -v fdisk >/dev/null || sudo apt-get install -y fdisk; "
-    "fdisk -l /dev/vda` (adjust the tool/package name and real "
-    "command). Do NOT also show a plain, naive version of the command "
-    "on its own first -- that copy would just fail with 'command not "
-    "found' if the tool is missing, defeating the whole point. The "
-    "student should only ever need to click 'Run in Terminal' once, "
-    "on the one block you give them. "
-    "Only runnable shell commands go in ```bash blocks: file "
-    "contents, config lines (sshd_config, PAM, fstab, systemd units) "
-    "and example output go in ```text blocks, because every ```bash "
-    "block gets a 'Run in Terminal' button. If a package you suggest "
-    "is in 'universe' rather than 'main' (for example "
-    "libpam-google-authenticator), say it cannot be installed in this "
-    "lab's Terminal. For any change to authentication or remote "
+    "filesystem, cron, log inspection) -- the student may be a complete"
+    " beginner or already comfortable at the command line, so don't "
+    "assume either. Only describe what a command actually does -- never"
+    " claim a flag or behavior exists unless you are genuinely sure of "
+    "it; if you are not certain something is correct, say so explicitly"
+    " rather than stating it as fact. When you suggest a command, put "
+    "it in its own fenced ```bash code block so the student can run it "
+    "with one click -- a command you suggest is NEVER run without the "
+    "student clicking 'Run in Terminal' themselves, but once they do, "
+    "the real result IS automatically checked: if it fails, you will be"
+    " shown the real terminal transcript and exit code and asked to "
+    "diagnose it and suggest a fix, same as this turn. This hardware "
+    "generates slowly, so keep answers short and precise rather than "
+    "long where both would be equally correct. The student's own "
+    "Terminal panel is a real, minimal Ubuntu 22.04 shell with genuine "
+    "internet access, but: apt can install anything from the whole "
+    "Ubuntu 22.04 archive (main, restricted, universe and multiverse), "
+    "it has no persistent storage across sessions, and it cannot reach "
+    "anything on the local network except the real internet. Ports "
+    "__PREVIEW_PORTS_LIST__ are reachable from the student's browser "
+    "for previewing anything they serve there. This is a genuinely "
+    "minimal image -- ordinary tools you might expect (e.g. fdisk) are "
+    "often not preinstalled. If a command you suggest might need one, "
+    "give ONLY ONE fenced ```bash block for it, combining the install "
+    "check and the real command with `||` in that single block -- for "
+    "example exactly `command -v fdisk >/dev/null || sudo apt-get "
+    "install -y fdisk; fdisk -l /dev/vda` (adjust the tool/package name"
+    " and real command). Do NOT also show a plain, naive version of the"
+    " command on its own first -- that copy would just fail with "
+    "'command not found' if the tool is missing, defeating the whole "
+    "point. The student should only ever need to click 'Run in "
+    "Terminal' once, on the one block you give them. Only runnable "
+    "shell commands go in ```bash blocks: file contents, config lines "
+    "(sshd_config, PAM, fstab, systemd units) and example output go in "
+    "```text blocks, because every ```bash block gets a 'Run in "
+    "Terminal' button. Only suggest packages that really exist in "
+    "Ubuntu 22.04 under that exact name (a command name is not always "
+    "its package name). For any change to authentication or remote "
     "access (PAM, SSH, sudo, firewall), warn about lockout: keep an "
     "existing session open while testing from a second one, and avoid "
     "settings that lock out users who have not been set up yet. "
-    "Politely decline anything "
-    "clearly unrelated to Linux or this lab and redirect back to that."
+    "Politely decline anything clearly unrelated to Linux or this lab "
+    "and redirect back to that."
 )
 _LINUX_SYSTEM_MESSAGE_PATH = os.environ.get(
     "LINUX_SYSTEM_MESSAGE_FILE", "/opt/llama.cpp/linux-system-message.txt")
@@ -1737,6 +1792,103 @@ def _get_run_pool():
         if _run_pool is None:
             _run_pool = IpPool(RUN_SUBNET_CIDR)
         return _run_pool
+
+
+# llm-chat-lab-sandbox L4: every Linux Help answer is tried for real, step
+# by step, in a disposable microVM on the sandbox bridge (internet-only
+# egress, like the Terminal; never the student's own session). One run at a
+# time, in answer order; the page polls /sandbox/lab-run for progress.
+ADVICE_RUN_ENABLED = os.environ.get("ADVICE_RUN_ENABLED", "true").lower() == "true"
+SANDBOX_SUBNET_CIDR = os.environ.get("SANDBOX_SUBNET_CIDR", "10.200.0.0/24")
+SANDBOX_BRIDGE = os.environ.get("SANDBOX_BRIDGE", "fcbr0")
+_ADVICE_KEEP = 50
+_advice_runs: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_advice_waiting: list[str] = []
+_advice_cv = threading.Condition()
+_advice_pool = None
+_advice_worker_started = False
+
+
+def _advice_sizing():
+    from microvm import VmSizing
+    return VmSizing(
+        mem_target_mib=int(os.environ.get("ADVICE_MEM_TARGET_MIB", "2048")),
+        mem_floor_mib=int(os.environ.get("ADVICE_MEM_FLOOR_MIB", "1024")),
+        vcpu_target=int(os.environ.get("ADVICE_VCPU_TARGET", "2")),
+        scratch_target_mib=int(os.environ.get("ADVICE_SCRATCH_MIB", "16384")),
+        scratch_floor_mib=int(os.environ.get("ADVICE_SCRATCH_FLOOR_MIB", "4096")),
+    )
+
+
+def _advice_store(run_id: str, data: dict) -> None:
+    with _advice_cv:
+        _advice_runs[run_id] = data
+        _advice_runs.move_to_end(run_id)
+        while len(_advice_runs) > _ADVICE_KEEP:
+            _advice_runs.popitem(last=False)
+
+
+def _advice_worker() -> None:
+    global _advice_pool
+    import advice_runner
+    from microvm import IpPool, MicroVM
+    _advice_pool = IpPool(SANDBOX_SUBNET_CIDR, part="advice")
+    sizing = _advice_sizing()
+    while True:
+        with _advice_cv:
+            while not _advice_waiting:
+                _advice_cv.wait()
+            run_id = _advice_waiting.pop(0)
+            job = _advice_runs.get(run_id, {})
+        answer, question = job.get("_answer", ""), job.get("question", "")
+        search_terms = job.get("_search_terms", "")
+
+        def publish(result, _q=question):
+            data = result.to_dict()
+            data["question"] = _q
+            data["lines"] = [advice_runner.plain_step_line(s) for s in data["steps"]]
+            _advice_store(result.id, data)
+
+        result = advice_runner.run_advice(
+            answer, lambda: MicroVM("advc", _advice_pool, SANDBOX_BRIDGE, sizing=sizing,
+                                    boot_timeout_s=90),
+            progress=publish, run_id=run_id)
+        entry = {"id": result.id, "source": "auto", "question": question, "answer": answer,
+                 "search_terms": search_terms, "verdict": result.verdict,
+                 "summary": result.summary, "error": result.error, "vm": result.vm,
+                 "steps": result.steps, "checks": result.checks}
+        print("ADVICE_RUN " + json.dumps({k: v for k, v in entry.items() if k != "answer"}), flush=True)
+        if SENTINEL_HOST:
+            _push_advice_run_to_sentinel(entry)
+
+
+def _start_advice_run(answer: str, question: str, search_terms: str = "") -> str | None:
+    """Queue a run of `answer`; returns its id, or None when disabled."""
+    global _advice_worker_started
+    if not ADVICE_RUN_ENABLED:
+        return None
+    run_id = uuid.uuid4().hex[:12]
+    with _advice_cv:
+        if not _advice_worker_started:
+            threading.Thread(target=_advice_worker, daemon=True).start()
+            _advice_worker_started = True
+        _advice_runs[run_id] = {"id": run_id, "status": "queued", "question": question,
+                                "_answer": answer, "_search_terms": search_terms}
+        _advice_runs.move_to_end(run_id)
+        _advice_waiting.append(run_id)
+        _advice_cv.notify()
+    return run_id
+
+
+def _advice_status(run_id: str) -> dict:
+    with _advice_cv:
+        data = _advice_runs.get(run_id)
+        if data is None:
+            return {"id": run_id, "status": "unknown"}
+        out = {k: v for k, v in data.items() if not k.startswith("_")}
+        if out.get("status") == "queued":
+            out["queue_position"] = _advice_waiting.index(run_id) + 1 if run_id in _advice_waiting else 0
+    return out
 
 
 def _mem_available_mb() -> int:
@@ -2522,6 +2674,13 @@ pre { background: #f6f6f6; border-radius: 4px; padding: 0.6rem; overflow-x: auto
 .notice { margin-top: 0.5rem; padding: 0.35rem 0.55rem; border-radius: 4px; white-space: normal; font-size: 0.8rem; }
 .notice.info { background: #eef1f5; border-left: 3px solid #8a94a6; color: #333; }
 .notice.warn { background: #fff4e0; border-left: 3px solid #d98e04; color: #4a3300; }
+.labrun { margin-top: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 4px; white-space: normal; font-size: 0.8rem; border-left: 3px solid #8a94a6; background: #f3f5f8; }
+.labrun.ok { border-left-color: #2e7d32; background: #edf7ee; }
+.labrun.bad { border-left-color: #c62828; background: #fdecec; }
+.labrun-head { font-weight: 600; margin-bottom: 0.2rem; }
+.labrun-summary { margin-bottom: 0.3rem; }
+.labrun-step { font-family: ui-monospace, monospace; font-size: 0.76rem; margin: 0.1rem 0; word-break: break-word; }
+.labrun details pre { max-height: 220px; overflow: auto; background: #111; color: #ddd; padding: 0.4rem; font-size: 0.72rem; white-space: pre-wrap; }
 .msg .content.thinking { color: #666; font-style: italic; animation: bm-pulse 1.4s ease-in-out infinite; }
 @keyframes bm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 #question { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; }
@@ -2754,6 +2913,110 @@ function makeAskPanel(cfg) {
     parentEl.appendChild(box);
   }
 
+  // L4: the lab run of a Linux Help answer, rendered from the compact copy
+  // kept in history (DOM calls and textContent only, like everything the
+  // model or a run produces).
+  const LAB_VERDICTS = {
+    lab_verified: ['ok', 'Verified: every step worked in a fresh Ubuntu 22.04 sandbox'],
+    failed: ['bad', 'Tried in a fresh Ubuntu 22.04 sandbox: problems found'],
+    partial: ['info', 'Tried in a fresh Ubuntu 22.04 sandbox'],
+    not_runnable: ['info', 'Nothing in this answer could be run as a step'],
+  };
+
+  function fillLabRun(box, lab) {
+    box.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'labrun-head';
+    let tone = 'info', title;
+    if (!lab || lab.status === 'queued') {
+      title = 'Lab run: waiting to start' + (lab && lab.queue_position > 1 ? ` (#${lab.queue_position} in line)` : '') + '…';
+    } else if (lab.status === 'running') {
+      const done = (lab.steps || []).filter(s => s.cls).length;
+      title = `Lab run: trying the steps in a fresh sandbox (${done}/${(lab.steps || []).length})…`;
+    } else if (lab.status === 'error' && !lab.verdict) {
+      title = 'Lab run could not finish: ' + (lab.error || 'unknown error');
+    } else if (lab.status === 'unknown') {
+      title = 'Lab run result is no longer available';
+    } else {
+      [tone, title] = LAB_VERDICTS[lab.verdict] || ['info', 'Lab run finished'];
+    }
+    box.className = 'labrun ' + tone;
+    head.textContent = title;
+    box.appendChild(head);
+    if (lab && lab.summary && lab.status !== 'running') {
+      const sum = document.createElement('div');
+      sum.className = 'labrun-summary';
+      sum.textContent = lab.summary;
+      box.appendChild(sum);
+    }
+    for (const line of (lab && lab.lines) || []) {
+      const row = document.createElement('div');
+      row.className = 'labrun-step';
+      row.textContent = line;
+      box.appendChild(row);
+    }
+    for (const c of (lab && lab.checks) || []) {
+      const row = document.createElement('div');
+      row.className = 'labrun-step';
+      row.textContent = (c.ok ? '✓ ' : '✗ ') + c.kind + ': ' + c.subject + (!c.ok && c.detail ? ' — ' + c.detail.slice(0, 200) : '');
+      box.appendChild(row);
+    }
+    for (const f of (lab && lab.failures) || []) {
+      const det = document.createElement('details');
+      const s = document.createElement('summary');
+      s.textContent = `Output of step ${f.n}`;
+      const pre = document.createElement('pre');
+      pre.textContent = f.output;
+      det.appendChild(s);
+      det.appendChild(pre);
+      box.appendChild(det);
+    }
+  }
+
+  // What's kept of a run in localStorage: verdict and plain lines, plus the
+  // output tail of failed steps only.
+  function compactLab(data) {
+    return {
+      id: data.id, status: data.status, verdict: data.verdict || '', summary: data.summary || '',
+      error: data.error || '', queue_position: data.queue_position || 0, lines: data.lines || [],
+      checks: (data.checks || []).map(c => ({kind: c.kind, subject: c.subject, ok: c.ok, detail: (c.detail || '').slice(0, 300)})),
+      steps: (data.steps || []).map(s => ({cls: s.cls})),
+      failures: (data.steps || []).filter(s => s.cls && !['ok', 'skipped'].includes(s.cls) && s.output)
+        .map(s => ({n: s.n, output: s.output.slice(-1500)})),
+    };
+  }
+
+  const labPolls = new Set();
+  function pollLabRun(id) {
+    if (labPolls.has(id)) return;
+    labPolls.add(id);
+    const tick = async () => {
+      let data;
+      try {
+        const resp = await fetch('/sandbox/lab-run?id=' + encodeURIComponent(id), {cache: 'no-store'});
+        data = await resp.json();
+      } catch (e) { setTimeout(tick, 5000); return; }
+      const lab = compactLab(data);
+      const h = getHistory();
+      const entry = h.find(m => m.labRun && m.labRun.id === id);
+      if (entry) { entry.labRun = lab; saveHistory(h); }
+      const box = transcriptEl.querySelector(`[data-labrun="${id}"]`);
+      if (box) fillLabRun(box, lab);
+      if (['done', 'error', 'unknown'].includes(data.status)) { labPolls.delete(id); return; }
+      setTimeout(tick, 3000);
+    };
+    tick();
+  }
+
+  function renderLabRun(parentEl, lab) {
+    if (!lab || !lab.id) return;
+    const box = document.createElement('div');
+    box.dataset.labrun = lab.id;
+    fillLabRun(box, lab);
+    parentEl.appendChild(box);
+    if (!['done', 'error', 'unknown'].includes(lab.status)) pollLabRun(lab.id);
+  }
+
   function renderTranscript() {
     const h = getHistory();
     transcriptEl.innerHTML = h.map(m => `
@@ -2770,6 +3033,7 @@ function makeAskPanel(cfg) {
       } else {
         renderAssistantContent(contentEl, h[i].content);
         renderNotices(contentEl, h[i].notices);
+        renderLabRun(contentEl, h[i].labRun);
         renderSources(contentEl, h[i].sources);
       }
     });
@@ -2897,6 +3161,7 @@ function makeAskPanel(cfg) {
     let assistantText = '';
     let answerSources = [];
     let answerNotices = [];
+    let answerLabRun = null;
     try {
       const resp = await fetch(cfg.endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2962,6 +3227,7 @@ function makeAskPanel(cfg) {
               const obj = JSON.parse(payload);
               if (obj.sources) { answerSources = obj.sources; continue; }
               if (obj.notices) { answerNotices = obj.notices; continue; }
+              if (obj.lab_run) { answerLabRun = {id: obj.lab_run.id, status: 'queued'}; continue; }
               const delta = (obj.choices[0].delta || {}).content || '';
               if (delta) {
                 assistantText += delta;
@@ -2992,7 +3258,7 @@ function makeAskPanel(cfg) {
 
     const h = getHistory();
     h.push({role: 'assistant', content: assistantText || bubbleContent.textContent,
-            sources: answerSources, notices: answerNotices});
+            sources: answerSources, notices: answerNotices, labRun: answerLabRun});
     saveHistory(h);
     // Re-render from the now-saved history -- turns the plain streamed
     // text just shown above into the same structured, button-equipped
@@ -3543,6 +3809,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_ask_status()
         elif path == "/sandbox/run-status":
             self._handle_run_status()
+        elif path == "/sandbox/lab-run":
+            self._handle_lab_run_status()
         elif path.startswith("/vendor/"):
             self._serve_vendor_file(path[len("/vendor/"):])
         else:
@@ -3818,6 +4086,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         reply(200, execute(language, code))
 
+    def _handle_lab_run_status(self):
+        """GET /sandbox/lab-run?id=<run> -- progress and results of one
+        Linux Help advice run (L4). Instant, no side effects; polled by the
+        page under the answer until status is done or error."""
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        run_id = re.sub(r"[^0-9a-f]", "", (query.get("id") or [""])[0])[:12]
+        out = json.dumps(_advice_status(run_id) if run_id else {"status": "unknown"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
     def _handle_run_status(self):
         """GET /sandbox/run-status?ticket=<id> -- where the caller's own
         in-flight non-Python Run is in the per-run microVM queue. Instant,
@@ -4024,6 +4306,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             grounding, references = _kiwix_search(search_terms, "coding" if include_code else "linux")
             if references:
                 grounding_source = "kiwix"
+        if endpoint_label == "/sandbox/linux-ask":
+            grounding = _lab_facts(search_terms) + grounding
         messages = ([{"role": "system", "content": system_message}]
                     + [{"role": m["role"], "content": str(m.get("content") or "")}
                        for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
@@ -4527,6 +4811,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if endpoint_label == "/sandbox/linux-ask":
                 notices = _answer_notices(full_text)
                 self.wfile.write(b"data: " + json.dumps({"notices": notices}).encode() + b"\n\n")
+                run_id = (_start_advice_run(full_text, question, search_terms)
+                          if outcome == "success" else None)
+                if run_id:
+                    self.wfile.write(b"data: " + json.dumps({"lab_run": {"id": run_id}}).encode() + b"\n\n")
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -4742,9 +5030,10 @@ def main():
     # the Python-only path never needs them.
     try:
         from microvm import sweep_orphans
-        swept = sweep_orphans("run")
+        swept = sweep_orphans("run") + sweep_orphans("advc")
         if swept:
-            print(f"verify-proxy: removed {swept} per-run microVM(s) orphaned by a previous run", flush=True)
+            print(f"verify-proxy: removed {swept} per-run/advice microVM(s) orphaned by a previous run",
+                  flush=True)
     except ImportError:
         pass
     server = _QuietDisconnectServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)

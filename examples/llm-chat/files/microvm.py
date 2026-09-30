@@ -30,6 +30,7 @@ The caller must run as root: it creates TAP devices and runs jailer.
 """
 from __future__ import annotations
 
+import fcntl
 import ipaddress
 import json
 import os
@@ -72,24 +73,140 @@ _IN_JAIL_KERNEL = "/vmlinux"
 _IN_JAIL_ROOTFS = "/rootfs.ext4"
 _IN_JAIL_SCRATCH = "/scratch.ext4"
 _IN_JAIL_API_SOCK = "/run/firecracker.socket"
+_IN_JAIL_VSOCK = "/run/control.vsock"
+
+# Control channel (llm-chat-lab-sandbox L2): SSH runs over virtio-vsock to
+# a separate, PAM-free sshd in the guest (sshd-control, launched per
+# connection by socat), never over the guest NIC. Guest firewall rules,
+# routing, PAM and sshd_config -- all things lab advice changes -- cannot
+# cut the session off. Port 22 on eth0 stays the student's own sshd.
+GUEST_CID = 3
+CONTROL_VSOCK_PORT = 1022
 
 
 class BootError(Exception):
     pass
 
 
+class CapacityError(BootError):
+    """The coordinator can't give a new VM even its floor right now."""
+
+
+# -- Sizing from real resources (llm-chat-lab-sandbox L3) ---------------------
+#
+# No fixed per-VM size tied to any machine: each VM asks for a target and
+# gets whatever the coordinator can actually spare, down to a floor, below
+# which it's refused with a clear reason. The ledger is the kernel's own:
+# every live VM's cgroup under CGROUP_PARENT carries memory.max (what it was
+# promised) and memory.current (what it uses), so the Terminal service and
+# verify-proxy see each other's VMs with no shared state of their own.
+
+# Kept free for the coordinator's own services (llama-server, verify-proxy,
+# the page cache kiwix/NFS lean on) on top of what they use right now.
+HOST_RESERVE_MIB = int(os.environ.get("VM_HOST_RESERVE_MIB", "768"))
+DISK_RESERVE_MIB = int(os.environ.get("VM_DISK_RESERVE_MIB", "4096"))
+_PLAN_LOCK_PATH = "/run/fcsandbox-plan.lock"
+
+
+class VmSizing:
+    """What a kind of VM would like and the least it can usefully run with."""
+
+    def __init__(self, mem_target_mib: int, mem_floor_mib: int,
+                 vcpu_target: int, scratch_target_mib: int, scratch_floor_mib: int):
+        self.mem_target_mib = mem_target_mib
+        self.mem_floor_mib = mem_floor_mib
+        self.vcpu_target = vcpu_target
+        self.scratch_target_mib = scratch_target_mib
+        self.scratch_floor_mib = scratch_floor_mib
+
+
+def _meminfo_mib() -> tuple[int, int]:
+    vals = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            key, rest = line.split(":", 1)
+            vals[key] = int(rest.split()[0]) // 1024
+    return vals["MemTotal"], vals["MemAvailable"]
+
+
+def _vm_memory_ledger_mib() -> tuple[int, int]:
+    """(promised, in use) across every live VM cgroup, in MiB."""
+    promised = in_use = 0
+    base = os.path.join(CGROUP_ROOT, CGROUP_PARENT)
+    try:
+        entries = [e for e in os.scandir(base) if e.is_dir()]
+    except OSError:
+        return 0, 0
+    for e in entries:
+        try:
+            with open(os.path.join(e.path, "memory.max")) as f:
+                raw = f.read().strip()
+            with open(os.path.join(e.path, "memory.current")) as f:
+                cur = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        if raw != "max":
+            promised += int(raw) // (1024 * 1024)
+        in_use += cur // (1024 * 1024)
+    return promised, in_use
+
+
+def plan_vm_size(sizing: VmSizing) -> tuple[int, int, int]:
+    """(vcpus, mem MiB, scratch MiB) for one new VM from what this host has
+    free right now. Raises CapacityError below the floors. Call with the
+    plan lock held (MicroVM.boot does) so two starts can't both spend the
+    same memory."""
+    total, available = _meminfo_mib()
+    promised, in_use = _vm_memory_ledger_mib()
+    # Everything that isn't a VM: the coordinator's services, page cache
+    # pressure, kernel. VM memory is counted at its promise, not its use,
+    # since guests grow into it.
+    non_vm = max(0, (total - available) - in_use)
+    spare = total - non_vm - HOST_RESERVE_MIB - promised - VMM_OVERHEAD_MIB
+    mem = min(sizing.mem_target_mib, spare) // 128 * 128
+    if mem < sizing.mem_floor_mib:
+        raise CapacityError(
+            f"not enough free memory for another sandbox right now ({max(spare, 0)}MB spare, "
+            f"{sizing.mem_floor_mib}MB needed) -- try again when a session ends")
+    # Never hand one VM every core the coordinator has.
+    cpus = os.cpu_count() or 1
+    vcpus = max(1, min(sizing.vcpu_target, cpus - 1 if cpus > 1 else 1))
+    st = os.statvfs(CHROOT_BASE)
+    disk_free = st.f_bavail * st.f_frsize // (1024 * 1024)
+    scratch = min(sizing.scratch_target_mib, disk_free - DISK_RESERVE_MIB)
+    if scratch < sizing.scratch_floor_mib:
+        raise CapacityError(
+            f"not enough free disk for another sandbox right now ({max(disk_free, 0)}MB free)")
+    return vcpus, mem, scratch
+
+
+# Two services start VMs on the sandbox bridge, each with its own in-process
+# pool, so the subnet is split: the Terminal takes the lower part and the
+# Linux Help advice runner (llm-chat-lab-sandbox L4) the top ADVICE_SLOTS.
+ADVICE_SLOTS = 16
+
+
 class IpPool:
     """Thread-safe allocator over one bridge subnet. The first 8 and last
     4 host addresses are held back (gateway, dnsmasq and future
-    fixed-address uses), same as the Stage 5 pool this replaces."""
+    fixed-address uses), same as the Stage 5 pool this replaces.
+    `part` picks the Terminal's or the advice runner's share of a subnet
+    both use; "all" (per-run VMs, alone on their own bridge) takes it all."""
 
-    def __init__(self, cidr: str):
+    def __init__(self, cidr: str, part: str = "all"):
         net = ipaddress.ip_network(cidr)
         hosts = [str(ip) for ip in net.hosts()]
         self.gateway = hosts[0]
         self.prefixlen = net.prefixlen
         self.netmask = str(net.netmask)
-        self._pool = hosts[8:-4]
+        usable = hosts[8:-4]
+        if part == "terminal":
+            usable = usable[:-ADVICE_SLOTS]
+        elif part == "advice":
+            usable = usable[-ADVICE_SLOTS:]
+        elif part != "all":
+            raise ValueError(f"unknown pool part {part!r}")
+        self._pool = usable
         self._in_use: set[str] = set()
         self._lock = threading.Lock()
 
@@ -138,8 +255,11 @@ class MicroVM:
     def __init__(self, owner: str, pool: IpPool, bridge: str,
                  vcpu_count: int = 1, mem_size_mib: int = 256,
                  scratch_mib: int = 1024, boot_timeout_s: int = 20,
-                 extra_boot_args: str = ""):
+                 extra_boot_args: str = "", sizing: VmSizing | None = None):
+        """With `sizing`, vcpu_count/mem_size_mib/scratch_mib are only
+        placeholders: boot() replaces them with plan_vm_size()'s answer."""
         self.owner = owner
+        self.sizing = sizing
         self.pool = pool
         self.bridge = bridge
         self.vcpu_count = vcpu_count
@@ -212,6 +332,18 @@ class MicroVM:
         if self.ip is None:
             raise BootError("No sandbox IP available (concurrent session limit reached)")
 
+        # Held from sizing until this VM's cgroup (and so its memory.max)
+        # exists, across processes: the Terminal service and verify-proxy
+        # both start VMs on this host.
+        with open(_PLAN_LOCK_PATH, "w") as plan_lock:
+            fcntl.flock(plan_lock, fcntl.LOCK_EX)
+            if self.sizing is not None:
+                self.vcpu_count, self.mem_size_mib, self.scratch_mib = plan_vm_size(self.sizing)
+            self._boot_locked(uid, gid)
+
+        self._wait_for_ssh()
+
+    def _boot_locked(self, uid: int, gid: int) -> None:
         self._prepare_chroot(uid, gid)
 
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
@@ -226,6 +358,11 @@ class MicroVM:
         subprocess.run(["ip", "tuntap", "add", self.tap_name, "mode", "tap",
                         "user", str(uid), "group", str(gid)], check=True)
         subprocess.run(["ip", "link", "set", self.tap_name, "master", self.bridge], check=True)
+        # Port isolation: isolated ports can't exchange frames with each
+        # other, only with the bridge itself (the gateway/NAT). One VM can
+        # never reach another, whether or not br_netfilter is loaded to send
+        # bridged traffic through the FORWARD rules.
+        subprocess.run(["bridge", "link", "set", "dev", self.tap_name, "isolated", "on"], check=True)
         subprocess.run(["ip", "link", "set", self.tap_name, "up"], check=True)
 
         mem_max = (self.mem_size_mib + VMM_OVERHEAD_MIB) * 1024 * 1024
@@ -277,10 +414,19 @@ class MicroVM:
             "is_root_device": False,
             "is_read_only": False,
         })
+        # One MAC per VM, derived from its (pool-unique) IP. A fixed MAC
+        # shared by every VM made concurrent sessions on one bridge steal
+        # each other's frames: the bridge learns the MAC on whichever tap
+        # spoke last (found live with a Terminal and an advice run at once).
+        mac = "AA:FC:" + ":".join(f"{int(o):02X}" for o in self.ip.split("."))
         self._api("PUT", "/network-interfaces/eth0", {
             "iface_id": "eth0",
-            "guest_mac": "AA:FC:00:00:00:01",
+            "guest_mac": mac,
             "host_dev_name": self.tap_name,
+        })
+        self._api("PUT", "/vsock", {
+            "guest_cid": GUEST_CID,
+            "uds_path": _IN_JAIL_VSOCK,
         })
         self._api("PUT", "/machine-config", {
             "vcpu_count": self.vcpu_count,
@@ -297,7 +443,28 @@ class MicroVM:
         })
         self._api("PUT", "/actions", {"action_type": "InstanceStart"})
 
-        self._wait_for_ssh()
+    def _control_socket(self, timeout: float = 10.0) -> socket.socket:
+        """A connected stream to the guest's control sshd: Firecracker's
+        host-side vsock protocol is "CONNECT <port>\\n" on the UDS, answered
+        by "OK <host port>\\n" once the guest is listening."""
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect(self.chroot + _IN_JAIL_VSOCK)
+            s.sendall(f"CONNECT {CONTROL_VSOCK_PORT}\n".encode())
+            reply = b""
+            while not reply.endswith(b"\n") and len(reply) < 64:
+                chunk = s.recv(1)
+                if not chunk:
+                    break
+                reply += chunk
+            if not reply.startswith(b"OK "):
+                raise OSError(f"vsock CONNECT refused: {reply!r}")
+        except OSError:
+            s.close()
+            raise
+        s.settimeout(None)
+        return s
 
     def _wait_for_ssh(self) -> None:
         deadline = time.monotonic() + self.boot_timeout_s
@@ -305,26 +472,49 @@ class MicroVM:
             if self.proc.poll() is not None:
                 raise BootError(f"Firecracker process exited during boot: {self._log_tail()}")
             try:
-                with socket.create_connection((self.ip, 22), timeout=0.5):
+                s = self._control_socket(timeout=0.5)
+                # The SSH banner proves sshd-control itself is up, not just socat.
+                s.settimeout(2)
+                banner = s.recv(4)
+                s.close()
+                if banner == b"SSH-":
                     return
             except OSError:
-                time.sleep(0.2)
-        raise BootError(f"Guest did not become SSH-reachable within {self.boot_timeout_s}s")
+                pass
+            time.sleep(0.2)
+        raise BootError(f"Guest control channel not up within {self.boot_timeout_s}s")
 
     def alive(self) -> bool:
         """False once the VMM has exited for any reason. Also reaps it,
         so a crashed VMM doesn't linger as a zombie until teardown."""
         return self.proc is not None and self.proc.poll() is None
 
-    def ssh_client(self) -> paramiko.SSHClient:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            hostname=self.ip, port=22, username="student",
-            key_filename=self.private_key_path,
-            timeout=10, banner_timeout=10,
-        )
-        return client
+    def ssh_client(self, username: str = "student") -> paramiko.SSHClient:
+        """SSH over the vsock control channel. `username` is "student" for
+        the Terminal and the advice steps, "root" for checks that must not
+        depend on the guest's sudo configuration."""
+        # sshd-control can answer a moment before this session's key has
+        # landed from MMDS (found live: the first root login right after
+        # boot failed once, the next succeeded), so authentication is
+        # retried briefly; anything else fails at once.
+        deadline = time.monotonic() + 15
+        while True:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            try:
+                client.connect(
+                    hostname=self.ip, port=22, username=username,
+                    key_filename=self.private_key_path,
+                    timeout=10, banner_timeout=10,
+                    sock=self._control_socket(),
+                    look_for_keys=False, allow_agent=False,
+                )
+                return client
+            except paramiko.AuthenticationException:
+                client.close()
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.5)
 
     def teardown(self) -> None:
         if self.proc is not None and self.proc.poll() is None:

@@ -156,6 +156,7 @@ locals {
   # bolted onto verify_proxy.py's zero-dependency stdlib posture).
   sandbox_terminal_source = file("${path.module}/files/sandbox_terminal.py")
   microvm_source          = file("${path.module}/files/microvm.py")
+  advice_runner_source    = file("${path.module}/files/advice_runner.py")
 
   # Fixed host-level address, same convention as promtail_config's own
   # Loki target and the host-level package repo (192.168.100.1:8090) —
@@ -246,6 +247,7 @@ locals {
     sandbox_subnet_cidr              = var.sandbox_subnet_cidr
     sandbox_terminal_source          = local.sandbox_terminal_source
     microvm_source                   = local.microvm_source
+    advice_runner_source             = local.advice_runner_source
     run_subnet_cidr                  = var.run_subnet_cidr
     run_vm_max_concurrent            = var.run_vm_max_concurrent
     run_vm_mem_mib                   = var.run_vm_mem_mib

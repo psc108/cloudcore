@@ -167,7 +167,7 @@ HOSTSEOF
 apt-get install -y --no-install-recommends \
   systemd systemd-sysv \
   openssh-server curl wget ca-certificates iproute2 iputils-ping \
-  python3 nano vim less procps fdisk
+  python3 nano vim less procps fdisk socat
 # A real login shell (not the minbase default of dash-only bare
 # essentials) and a real, unprivileged-by-default student account --
 # sudo works passwordless inside the microVM because the isolation
@@ -178,17 +178,31 @@ apt-get install -y --no-install-recommends \
 # already have. Never gets them anywhere the guest itself cannot go.
 apt-get install -y --no-install-recommends sudo bash-completion
 
+# llm-chat-lab-sandbox L2: the userland a real Ubuntu 22.04 server has, so
+# lab advice meets the same base system it was written for (a minbase has no
+# rsyslog, so no /var/log/auth.log, and fail2ban's default sshd jail fails
+# for a reason no real server would hit). ubuntu-minimal + ubuntu-standard
+# and the server's usual recommends (iptables, ufw, apparmor, nftables,
+# dbus/logind). Not ubuntu-server-minimal: that pulls cloud-init, snapd,
+# multipath-tools and open-iscsi, which have no place in a microVM.
+apt-get install -y --no-install-recommends \
+  ubuntu-minimal ubuntu-standard rsyslog dbus libpam-systemd iptables ufw \
+  apparmor command-not-found openssh-client tcpdump mtr-tiny uuid-runtime \
+  manpages iputils-tracepath
+
 # Stage 12 (llm-chat-sandbox-extensions-Phased-Implementation.md): the
 # toolchains verify_proxy.py's per-run microVMs use for Bash, Node, C/C++
 # and Go. nodejs is in jammy's universe component, so universe is enabled
-# for this install only and removed again afterwards: the Terminal's own
-# runtime package index stays main-only, which is exactly what the Linux
-# Help system prompt tells the model.
-cp /etc/apt/sources.list /etc/apt/sources.list.main-only
-sed -i \"s/ main\$/ main universe/\" /etc/apt/sources.list
+# for this install. llm-chat-lab-sandbox L2: the runtime sources are now the
+# whole archive too (all four components, -updates and -security), so any
+# package the Linux Help model suggests can really be installed and tried.
+cat > /etc/apt/sources.list <<\"EOS\"
+deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+EOS
 apt-get update
 apt-get install -y --no-install-recommends nodejs gcc g++ libc6-dev golang-go
-mv /etc/apt/sources.list.main-only /etc/apt/sources.list
 
 # Stage 11/12: the guest-side counterpart of verify_proxy.py's own
 # _stdin_wait_state(). Run as root (via sudo) over SSH by the per-run
@@ -294,6 +308,10 @@ else:
 EOS
 chmod 755 /usr/local/bin/stdin-wait-check
 useradd -m -s /bin/bash student
+# L2: '*' (no password, not locked) instead of useradd's '!'. The control
+# sshd runs without PAM, and OpenSSH then refuses even key logins to a
+# locked account. Password logins are off everywhere regardless.
+usermod -p '*' student
 usermod -aG sudo student
 echo \"student ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/90-student
 chmod 440 /etc/sudoers.d/90-student
@@ -338,6 +356,11 @@ if [ -n \"\$KEY\" ]; then
   echo \"\$KEY\" > /home/student/.ssh/authorized_keys
   chmod 600 /home/student/.ssh/authorized_keys
   chown student:student /home/student/.ssh/authorized_keys
+  # The control channel's copy: root-owned, outside any home directory, so
+  # nothing a student or lab advice does to ~/.ssh can lock the host out.
+  mkdir -p /etc/ssh/control
+  echo \"\$KEY\" > /etc/ssh/control/authorized_keys
+  chmod 644 /etc/ssh/control/authorized_keys
 fi
 # Explicit exit 0 -- confirmed live that without this, a false \"if\"
 # condition (no key available) becomes this script own exit status,
@@ -389,6 +412,84 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOS
 systemctl enable regen-host-keys.service
+
+# llm-chat-lab-sandbox L2: the control channel. The host reaches every
+# session (the Terminal bridge, the Linux Help advice runner) over
+# virtio-vsock, never the guest NIC, and lands in a SEPARATE sshd: its own
+# copied binary, config, host key and root-owned authorized_keys, with PAM
+# off. Lab advice routinely changes PAM, sshd_config, the firewall and
+# networking, and even removes openssh-server; none of that can reach this
+# path. The guest's normal sshd on port 22 stays the student's to break.
+# socat starts sshd-control in inetd mode (-i) for each connection.
+# (No double quotes or backticks in this comment: it sits inside the
+# outer ssh string.)
+cp /usr/sbin/sshd /usr/local/sbin/sshd-control
+cp /usr/bin/socat /usr/local/bin/socat-control
+mkdir -p /etc/ssh/control
+cat > /etc/ssh/control/sshd_config <<\"EOS\"
+HostKey /etc/ssh/control/ssh_host_ed25519_key
+AuthorizedKeysFile /etc/ssh/control/authorized_keys
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+PermitRootLogin prohibit-password
+AllowUsers student root
+PrintMotd no
+# UsePAM is off, so pam_env never applies /etc/environment: set the PATH a
+# real Ubuntu login gets (sbin included) or plain ufw/iptables are not found.
+SetEnv PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games
+Subsystem sftp internal-sftp
+EOS
+cat > /usr/local/sbin/control-prep.sh <<\"EOS\"
+#!/bin/sh
+# sshd needs its privilege-separation directory even in inetd mode.
+mkdir -p /run/sshd
+[ -s /etc/ssh/control/ssh_host_ed25519_key ] || \\
+  ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/control/ssh_host_ed25519_key
+# Without PAM, OpenSSH refuses key logins to a locked account, and lab
+# advice may lock one (passwd -l): keep the control accounts unlocked.
+for u in student root; do
+  case \$(getent shadow \$u | cut -d: -f2) in '!'*) usermod -p '*' \$u ;; esac
+done
+# Purging openssh-server deletes the sshd privilege-separation user, and
+# sshd refuses to run without it (found live).
+getent passwd sshd >/dev/null || \\
+  useradd --system --no-create-home --home-dir /run/sshd --shell /usr/sbin/nologin sshd
+EOS
+chmod 755 /usr/local/sbin/control-prep.sh
+# Per connection, not just per service start: a lab step may delete
+# /run/sshd or lock an account mid-run, and the next control login must
+# still work.
+cat > /usr/local/sbin/control-sshd <<\"EOS\"
+#!/bin/sh
+# stdout is the SSH stream: nothing may be printed before sshd.
+/usr/local/sbin/control-prep.sh >/dev/null 2>&1
+exec /usr/local/sbin/sshd-control -i -f /etc/ssh/control/sshd_config
+EOS
+chmod 755 /usr/local/sbin/control-sshd
+# Stopping or restarting ssh.service would otherwise delete /run/sshd.
+mkdir -p /etc/systemd/system/ssh.service.d
+cat > /etc/systemd/system/ssh.service.d/keep-privsep-dir.conf <<\"EOS\"
+[Service]
+RuntimeDirectoryPreserve=yes
+EOS
+cat > /etc/systemd/system/control-channel.service <<\"EOS\"
+[Unit]
+Description=Lab control channel: sshd-control over vsock port 1022
+After=fetch-mmds-key.service
+Wants=fetch-mmds-key.service
+
+[Service]
+ExecStartPre=/usr/local/sbin/control-prep.sh
+ExecStart=/usr/local/bin/socat-control VSOCK-LISTEN:1022,reuseaddr,fork EXEC:/usr/local/sbin/control-sshd
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl enable control-channel.service
 
 # The image-build cleanup below strips /var/lib/apt/lists/* to keep
 # the shipped golden image small -- correct for a frozen artifact
@@ -515,8 +616,11 @@ exec /sbin/init \"\$@\"
 EOS
 chmod 755 /sbin/overlay-init
 
+# L2: the full-archive lists stay in the image, so a session can install
+# straight away; the boot refresh above only fetches what changed since.
+apt-get update
 apt-get clean
-rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+rm -rf /tmp/* /var/tmp/*
 BUILDEOF
   sudo cp /tmp/build-inner.sh \"\$ROOTFS_DIR/build-inner.sh\"
   sudo chroot \"\$ROOTFS_DIR\" /bin/bash /build-inner.sh
@@ -533,7 +637,8 @@ BUILDEOF
   # its demo image, avoids a separate mount/copy/unmount dance.
   # 2048, up from 768 for Stage 12's toolchains (Go alone is ~400MB).
   # Costs disk once: the image is shared read-only by every session.
-  ROOTFS_SIZE_MB=2048
+  # 4096 for L2's baked full-archive package lists and server userland.
+  ROOTFS_SIZE_MB=4096
   sudo truncate -s \"\${ROOTFS_SIZE_MB}M\" /tmp/firecracker-rootfs-jammy.ext4
   sudo mkfs.ext4 -q -d \"\$ROOTFS_DIR\" -F /tmp/firecracker-rootfs-jammy.ext4
   sudo e2fsck -fy /tmp/firecracker-rootfs-jammy.ext4 || true

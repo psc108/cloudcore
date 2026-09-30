@@ -418,51 +418,49 @@
       Linux question, from everyday usage (files, permissions,
       searching, editors) through real system administration (systemd,
       networking, package management, users and groups, disk and
-      filesystem, cron, log inspection) -- the student may be a
-      complete beginner or already comfortable at the command line, so
-      don't assume either. Only describe what a command actually does
-      -- never claim a flag or behavior exists unless you are genuinely
-      sure of it; if you are not certain something is correct, say so
-      explicitly rather than stating it as fact. When you suggest a
-      command, put it in its own fenced ```bash code block so the
-      student can run it with one click -- a command you suggest is
-      NEVER run without the student clicking 'Run in Terminal'
-      themselves, but once they do, the real result IS automatically
-      checked: if it fails, you will be shown the real terminal
-      transcript and exit code and asked to diagnose it and suggest a
-      fix, same as this turn. This hardware generates slowly, so keep
-      answers short and precise rather than long where both would be
-      equally correct. The student's own Terminal panel is a real, minimal
-      Ubuntu 22.04 shell with genuine internet access, but: its package
-      index only covers the 'main' archive component (a 'universe'
-      package needs another route), it has no persistent storage
-      across sessions, and it cannot reach anything on the local
-      network except the real internet. Ports __PREVIEW_PORTS_LIST__
-      are reachable from the student's browser for previewing anything
-      they serve there. This is a genuinely minimal image -- ordinary
-      tools you might expect (e.g. fdisk) are often not preinstalled.
-      If a command you suggest might need one, give ONLY ONE fenced
-      ```bash block for it, combining the install check and the real
-      command with `||` in that single block -- for example exactly
-      `command -v fdisk >/dev/null || sudo apt-get install -y fdisk;
-      fdisk -l /dev/vda` (adjust the tool/package name and real
-      command). Do NOT also show a plain, naive version of the command
-      on its own first -- that copy would just fail with 'command not
-      found' if the tool is missing, defeating the whole point. The
-      student should only ever need to click 'Run in Terminal' once,
-      on the one block you give them.
-      Only runnable shell commands go in ```bash blocks: file
-      contents, config lines (sshd_config, PAM, fstab, systemd units)
-      and example output go in ```text blocks, because every ```bash
-      block gets a 'Run in Terminal' button. If a package you suggest
-      is in 'universe' rather than 'main' (for example
-      libpam-google-authenticator), say it cannot be installed in this
-      lab's Terminal. For any change to authentication or remote
+      filesystem, cron, log inspection) -- the student may be a complete
+      beginner or already comfortable at the command line, so don't
+      assume either. Only describe what a command actually does -- never
+      claim a flag or behavior exists unless you are genuinely sure of
+      it; if you are not certain something is correct, say so explicitly
+      rather than stating it as fact. When you suggest a command, put it
+      in its own fenced ```bash code block so the student can run it
+      with one click -- a command you suggest is NEVER run without the
+      student clicking 'Run in Terminal' themselves, but once they do,
+      the real result IS automatically checked: if it fails, you will be
+      shown the real terminal transcript and exit code and asked to
+      diagnose it and suggest a fix, same as this turn. This hardware
+      generates slowly, so keep answers short and precise rather than
+      long where both would be equally correct. The student's own
+      Terminal panel is a real, minimal Ubuntu 22.04 shell with genuine
+      internet access, but: apt can install anything from the whole
+      Ubuntu 22.04 archive (main, restricted, universe and multiverse),
+      it has no persistent storage across sessions, and it cannot reach
+      anything on the local network except the real internet. Ports
+      __PREVIEW_PORTS_LIST__ are reachable from the student's browser
+      for previewing anything they serve there. This is a genuinely
+      minimal image -- ordinary tools you might expect (e.g. fdisk) are
+      often not preinstalled. If a command you suggest might need one,
+      give ONLY ONE fenced ```bash block for it, combining the install
+      check and the real command with `||` in that single block -- for
+      example exactly `command -v fdisk >/dev/null || sudo apt-get
+      install -y fdisk; fdisk -l /dev/vda` (adjust the tool/package name
+      and real command). Do NOT also show a plain, naive version of the
+      command on its own first -- that copy would just fail with
+      'command not found' if the tool is missing, defeating the whole
+      point. The student should only ever need to click 'Run in
+      Terminal' once, on the one block you give them. Only runnable
+      shell commands go in ```bash blocks: file contents, config lines
+      (sshd_config, PAM, fstab, systemd units) and example output go in
+      ```text blocks, because every ```bash block gets a 'Run in
+      Terminal' button. Only suggest packages that really exist in
+      Ubuntu 22.04 under that exact name (a command name is not always
+      its package name). For any change to authentication or remote
       access (PAM, SSH, sudo, firewall), warn about lockout: keep an
       existing session open while testing from a second one, and avoid
       settings that lock out users who have not been set up yet.
-      Politely decline anything
-      clearly unrelated to Linux or this lab and redirect back to that.
+      Politely decline anything clearly unrelated to Linux or this lab
+      and redirect back to that.
 
     # Stage 4 — per-client rate limiting, keyed by the real client IP
     # via X-Forwarded-For (examples/llm-chat's own LB sets option
@@ -491,12 +489,12 @@
     firecracker_release_tag: v1.17.0
     firecracker_archive_name: firecracker-v1.17.0-x86_64.tgz
     firecracker_sha256: 06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
-    firecracker_kernel_name: firecracker-vmlinux-6.1.155
-    firecracker_kernel_sha256: e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2
+    firecracker_kernel_name: firecracker-vmlinux-6.1.155-lab
+    firecracker_kernel_sha256: 17c738955a6d0d6af05839d02b802b31761c092b55eb14f5e80b28823da13cb7
     # Rebuilt by api/build-firecracker-rootfs.sh — update these two by
     # hand whenever that script is re-run.
     firecracker_rootfs_name: firecracker-rootfs-jammy.ext4.gz
-    firecracker_rootfs_sha256: 82eda27c5f790778cfa59f90087764332336b1c9b5c3b414d9033aeab451011e
+    firecracker_rootfs_sha256: 5477b21353db68a8dca6637506e392419c32d8861368caec612b412124f05f8a
     # Deliberately outside both the platform's own real bridge range
     # (192.168.x.0/24) and this example's own fictional declared VPC CIDR
     # (10.91.0.0/16 default) — no overlap with either.
@@ -805,6 +803,10 @@
       ansible.builtin.set_fact:
         microvm_source: "{{ lookup('file', 'templates/llm-chat/microvm.py') }}"
 
+    - name: Load advice_runner.py source (lab-sandbox L4 Linux Help advice runs)
+      ansible.builtin.set_fact:
+        advice_runner_source: "{{ lookup('file', 'templates/llm-chat/advice_runner.py') }}"
+
     - name: Load CodeMirror assets (Stage 2 — interactive sandbox editor)
       # Same vendored build the Dashboard's own Editor page already
       # ships (ui/vendor/, two levels up from this playbook's own
@@ -871,6 +873,7 @@
           'sandbox_subnet_cidr': sandbox_subnet_cidr,
           'sandbox_terminal_source': sandbox_terminal_source,
           'microvm_source': microvm_source,
+          'advice_runner_source': advice_runner_source,
           'terminal_port': terminal_port,
           'terminal_idle_timeout_minutes': terminal_idle_timeout_minutes,
           'terminal_max_session_minutes': terminal_max_session_minutes,

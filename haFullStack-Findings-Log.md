@@ -3105,6 +3105,128 @@ The coding panel is unchanged: its code is really executed and verified.
 - **No false alarms:** nothing extra for `ls -la`, the `command -v fdisk || apt-get install -y fdisk; fdisk -l` idiom, `iptables -L`, `htop`+`nodejs`, or prose saying "install it with apt install and then configure it". A multi-package line (`--no-install-recommends fail2ban=0.11.2-6 libpam-u2f:amd64 curl`) flagged exactly fail2ban and libpam-u2f.
 - **Page:** a Node test of `renderNotices` gives info and warn boxes set via `textContent` (markup renders as text) and skips malformed entries. The page's JavaScript passes `node --check`, and the deployed page serves `renderNotices`.
 
+### F-176 — The Firecracker guest kernel couldn't run common admin advice: no nf_tables, no ufw/fail2ban matches, no TUN/WireGuard/FUSE, and AppArmor never activated
+
+**Where:** new `api/build-firecracker-kernel.sh` and `api/firecracker-kernel-lab.config`; `api/build-package-repo.sh` (builds it with the rootfs); `examples/llm-chat/variables.tf` and the Ansible playbook (`firecracker_kernel_name` becomes `firecracker-vmlinux-6.1.155-lab`). Stage L1 of `llm-chat-lab-sandbox-Phased-Implementation.md`.
+
+**Symptom:** the lab's own request was "we need to be able to install anything the llm might offer as advice to install and then configure it". The stock guest kernel (Firecracker's CI 6.1 build) made that impossible for a whole class of advice: jammy's iptables (the nf_tables backend), ufw, fail2ban's ban actions, nft, WireGuard/OpenVPN, sshfs, cryptsetup and tc all fail inside the sandbox even after they install cleanly. In the first lab kernel, two more problems showed up live:
+- `ufw enable` failed with "ip6tables-restore: Couldn't load match `rt'";
+- `aa-status` said "apparmor filesystem is not mounted", and `/sys/kernel/security/lsm` read `capability,selinux`.
+
+**Root cause:**
+1. Firecracker's CI config is built for fast CI boots, not a general server: `NF_TABLES`, the xtables `limit`/`recent`/`multiport`/`state`/`LOG` matches, `TUN`, `WIREGUARD`, `FUSE_FS`, `NFSD` and AppArmor are all off, and `MODULES` is off, so nothing can be added at runtime.
+2. ufw's `before6.rules` also needs the IPv6 `rt`/`hl`/`ipv6header` matches.
+3. SELinux and AppArmor are both *exclusive* LSMs, and the first one in `CONFIG_LSM` wins. Firecracker's order lists selinux before apparmor, so AppArmor was built but never activated.
+
+**Fix:** build our own guest kernel. The base config comes from the pinned CI kernel's own embedded `/proc/config.gz` (so the result is exactly that config plus our additions), and a reviewable fragment of 176 options is merged over it. It covers:
+- nf_tables and its expressions, and the xtables and IPv6 matches/targets ufw, fail2ban, Docker and kube-proxy use;
+- IPVS, TUN, WireGuard, VLAN/bonding/dummy/macvlan/ipvlan/VXLAN/GRE, and tc qdiscs;
+- FUSE, NFSD, dm-crypt/LVM/MD, btrfs/vfat/exfat/ntfs3/iso9660/CIFS, and AF_ALG for cryptsetup;
+- AppArmor first in `CONFIG_LSM`, as in Ubuntu's own kernels.
+
+The build runs in a throwaway jammy instance (jammy's gcc 11.4, the base kernel's compiler) and **fails if any fragment option isn't enabled after `olddefconfig`**, because Kconfig silently drops options whose dependencies aren't met. `build-package-repo.sh` builds it too, so a fresh checkout gets it like the rootfs.
+
+**Verified by:** a clean redeploy on 2026-09-30 with the pinned kernel (`17c73895…`, 176 fragment options, every one confirmed enabled). In a sandbox:
+- **ufw:** `ufw enable` gives "Status: active", default deny (incoming).
+- **fail2ban:** installed, sshd jail watching `/var/log/auth.log`.
+- **iptables:** v1.8.7 on nf_tables.
+- **WireGuard:** a `wg` link can be created.
+- **FUSE / TUN:** `/dev/fuse` and `/dev/net/tun` present.
+- **AppArmor:** `/sys/kernel/security/lsm` reads `capability,apparmor`, `apparmor.service` active, 11 profiles in enforce mode.
+- **nginx:** installs, serves, and passes `nginx -t`.
+
+The first lab kernel (`c97479cf…`) had passed the fail2ban/nft/WireGuard/FUSE checks, but its ufw and AppArmor failures are what led to the IPv6 matches and the LSM order.
+
+### F-177 — Lab advice that touches sshd, PAM, sudo or the firewall would have cut off the session running it; the control channel moved to vsock and a separate, self-repairing sshd
+
+**Where:** `examples/llm-chat/files/microvm.py` (`_control_socket`, `ssh_client`, `/vsock` device); `api/build-firecracker-rootfs.sh` (`sshd-control`, `socat-control`, `control-channel.service`, `control-sshd`, `control-prep.sh`). Stage L2.
+
+**Symptom:** the Terminal bridge and the per-run executor reached every guest by SSH to the guest's *own* sshd on eth0. That is exactly what the lab now exists to let students and the advice runner change: an MFA answer edits `/etc/pam.d/sshd` and `sshd_config` and restarts sshd; a firewall answer enables ufw with "deny incoming"; other advice removes openssh-server. Any of these would disconnect the session doing it. Three more problems surfaced while building the replacement:
+1. With PAM off, the control sshd refused key logins to `student`: `useradd` leaves the account "locked" (`!`), and OpenSSH without PAM rejects locked accounts even for keys.
+2. After `apt-get purge openssh-server` no control login worked: the purge **deletes the `sshd` privilege-separation user**, and sshd won't run without it.
+3. The first login right after boot occasionally raced the MMDS key fetch.
+
+**Root cause:** the management path and the thing being managed were the same service on the same network interface.
+
+**Fix:**
+- **vsock instead of the NIC.** The host connects through Firecracker's vsock UDS (`CONNECT 1022`), so guest firewall rules, routes and interface changes don't apply to it.
+- **A separate sshd behind it.** socat starts a *copied* `sshd-control` in inetd mode per connection, with:
+  - its own config, host key and root-owned authorized_keys;
+  - `UsePAM no`, and `SetEnv PATH` including sbin, since pam_env no longer supplies it.
+- **Self-repair on every connection.** A wrapper recreates `/run/sshd` and the `sshd` user, and unlocks `student`/`root`, before exec'ing sshd.
+- **Host side.** `student` gets `*` instead of `!` in the image, and authentication is retried for up to 15s after boot.
+
+The student's normal sshd on port 22 is now theirs to break and learn from.
+
+**Verified by:** on the lab coordinator (2026-09-30), one sandbox was broken in every way at once: ufw default-deny, `auth requisite pam_deny.so` in common-auth, an invalid `sshd_config`, a broken sudoers drop-in, openssh-server purged, `/run/sshd` and `~/.ssh/authorized_keys` deleted, `student` locked and the default route removed. Afterwards fresh `student` and `root` control logins both succeeded. Before the per-connection self-repair, the same purge made every control login fail (banner EOF), which is how problem 2 was found.
+
+### F-178 — Sandbox VMs on the shared bridge could reach each other, and all shared one MAC address
+
+**Where:** `examples/llm-chat/files/microvm.py` (`boot`/`_boot_locked`: bridge port isolation, per-VM `guest_mac`).
+
+**Symptom:**
+- The coordinator's comment says "any other student's VM sharing that bridge falls inside one of these three RFC1918 blocks and is dropped". On the live coordinator, `br_netfilter` is not loaded (`/proc/sys/net/bridge/bridge-nf-call-iptables` does not exist), so frames between two taps on `fcbr0` never reach iptables.
+- Every VM was also given `guest_mac: AA:FC:00:00:00:01`. With two sessions up, the bridge learns that MAC on whichever tap spoke last, so concurrent sessions steal each other's return traffic.
+
+The two bugs masked each other. A first isolation test showed "blocked" in both configurations, but only because both VMs had the same MAC.
+
+**Root cause:** isolation was assumed to come from routed-traffic rules that bridged traffic bypasses. The MAC was a constant copied from a single-VM example.
+
+**Fix:**
+- Every tap is set `bridge link … isolated on`: isolated ports exchange frames only with the bridge itself (gateway/NAT), never with each other, whether or not br_netfilter is loaded.
+- Each VM's MAC is derived from its IP (`AA:FC:` + the four IP octets), which is unique within its pool.
+
+**Verified by:** two sandboxes on `fcbr0` with unique MACs, a TCP connect from A to B's port 22:
+- with port isolation: **blocked**;
+- with isolation switched off (the behaviour before today): **REACHED**;
+- A's internet access: unaffected (`HTTP/1.1 200 OK` from archive.ubuntu.com).
+
+### F-179 — Every Linux Help answer is now tried in a real Ubuntu 22.04 sandbox, step by step, and the results build a corpus the model is grounded on
+
+**Where:**
+- new `examples/llm-chat/files/advice_runner.py`;
+- `verify_proxy.py` (queue and worker, `/sandbox/lab-run`, `lab_run` SSE event, Lab-run box on the page, `_lab_facts`, lab-verified labelling, whole-archive package check);
+- `microvm.py` (`plan_vm_size`, `VmSizing`, `CapacityError`, `IpPool` parts), `sandbox_terminal.py`;
+- `api/build-firecracker-rootfs.sh` (full archive sources and baked lists, the Ubuntu server userland);
+- Sentinel: `advice_runs.py`, the `advice_runs` table, `/api/advice-runs`, `/api/advice-stats`, `/api/lab-facts`, the `find_match` tiers, the Lab runs tab.
+
+Stages L2–L7 of `llm-chat-lab-sandbox-Phased-Implementation.md`.
+
+**Symptom:** direct request, "we need to be able to install anything the llm might offer as advice to install and then configure it ... and as a bonus we'll start collecting a decent corpus of our own that is verified working response or not". Before this:
+- the Terminal saw only `jammy main`, so fail2ban, docker.io and libpam-google-authenticator couldn't be installed;
+- it ran a debootstrap minbase (no rsyslog, so no `/var/log/auth.log`, so fail2ban's sshd jail fails for a reason no real server hits);
+- it was a fixed 1 vCPU / 256MB / 2GB VM;
+- no answer was ever run.
+
+**Root cause:** the sandbox was built for running a student's own small programs, not for reproducing a real server.
+
+**Fix:**
+- **Rootfs:** the whole archive (four components, `-updates`, `-security`) with the lists baked in, plus `ubuntu-minimal`/`ubuntu-standard` and a server's usual recommends (rsyslog, cron, dbus/logind, iptables, ufw, apparmor, nftables). Not `ubuntu-server-minimal`, which pulls cloud-init, snapd and multipath into a microVM.
+- **Sizing:** from real resources, never tied to a machine (per direct instruction: "let's size the vm by available resources across the peers already available"). At build time `recommend-placement` picks the largest flavor any peer affords. At run time each VM gets a target size (Terminal and advice run: 2 vCPU / 2GB / 16GB), reduced to what the coordinator has free, measured from `/proc/meminfo` and the kernel's own cgroup ledger of every live VM, under a cross-process lock. Below the floor, the session is refused with a clear "lab is full" reason.
+- **Advice runner:** after each Linux Help answer, the answer's steps are run in a fresh microVM (internet-only egress, never the student's Terminal):
+  - shell blocks run as `student`; editor commands are replaced by writing the next config block to that file;
+  - config is applied as written, section-aware for INI files and replacing existing or commented-out directives (sshd and friends take the first value, so appending would silently do nothing);
+  - each step is classified: package not found, command not found, file missing, service failed, config invalid, interactive, timeout;
+  - the whole run is then checked: packages installed, services active, validators (`sshd -t`, `nginx -t`, `visudo -c`, `fail2ban-client -t` …), paths present.
+- **Corpus and reuse:** runs go to Sentinel. A `lab_verified` run promotes the answer's grounding row (never over a human decision), and `find_match` reuses such answers after human-approved ones, at a stricter overlap, labelled "Verified in the lab". Failed runs become plain facts ("X is not an installable package in Ubuntu 22.04") that are added to the prompt for questions with overlapping search terms.
+
+**Verified by:** on the lab coordinator (peer-placed, `standard.2xlarge`, whole 14B model, 2026-09-30):
+- **Sizing:** Terminal/advice VMs got 2 vCPU / 2048MB / 16GB and booted in ~4s.
+- **Real answers from 2026-09-29 through the runner (16–17s each):**
+  - fail2ban+ufw: fail2ban installed, `jail.local` edited in place, `fail2ban-client -t` passed; only `ufw enable` failed, with the kernel error that led to the second lab kernel (F-176);
+  - MFA: stopped at `google-authenticator` as **interactive** ("Do you want authentication tokens to be time-based (y/n)").
+- **A live ask end to end** ("set up nginx as a reverse proxy for an app on port 3000"):
+  - the page got the notices and a `lab_run` id;
+  - the run was **lab_verified**: nginx installed, site written, symlinked, `nginx -t` passed, service active;
+  - the run reached Sentinel, the grounding row became `lab_verified`, and a similar query now matches it.
+- **Tests:** Sentinel 48/48 (6 new tests for the corpus, promotion, match tiers and facts).
+
+**Known limits, stated rather than hidden:**
+- "It ran" is not "it's good advice", as F-174's MD5 line showed: reused answers keep their risk notices, and a human rejection always wins.
+- A generic runner can't test an answer's *goal*. The MFA answer's `ChallengeResponseAuthentication yes` beside the stock `KbdInteractiveAuthentication no` passes `sshd -t` but would never prompt for a code.
+- Interactive tools stop at their first prompt.
+- `wireguard` pulls in an Ubuntu kernel package through Recommends (harmless, ~40s), and DKMS/`linux-headers-$(uname -r)` advice can't work against a custom kernel.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3235,3 +3357,4 @@ The coding panel is unchanged: its code is really executed and verified.
 | v3.4 | 2026-09-29 | Paul Scott | Direct request: "on a weekly basis check the size of the download. if the have increaed in a meaningful way we update them"; git handling: "Commit and push". F-173: new scheduler kind `kiwix_update` (weekly, ≥5% or ≥200MB growth, sha256-verified, disk reserve, 14-day retention of superseded files, manifest-only commit + push); the first cut would have left the manifest's size stale without libzim. |
 | v3.5 | 2026-09-29 | Paul Scott | Direct request: review of a Linux Help answer to "how could we add mfa to the linux login process?", then "yes, please" to the fixes. F-174: Run in Terminal only on shell fences (Copy otherwise); prompt covers config fences, universe packages and lockout warnings; near-empty snippets recovered; the lead-paragraph regex no longer matches `<path>`; abbreviations expanded in search terms; zero-hit searches relaxed term by term. |
 | v3.6 | 2026-09-29 | Paul Scott | Direct request: "lets warn users but generally. the model is small and we are no where near perfect in using it yet". F-175: every Linux Help answer carries a structured caution; extra warnings when it needs packages outside the Terminal's index (jammy main) or changes login, firewall or disk/boot configuration. |
+| v3.7 | 2026-09-30 | Paul Scott | Direct request: "we need to be able to install anything the llm might offer as advice to install and then configure it ... we'll start collecting a decent corpus of our own"; "size the vm by available resources across the peers"; run every step automatically and reuse verified answers automatically. F-176 (a lab guest kernel: netfilter, ufw's IPv6 matches, tunnels, filesystems, AppArmor LSM order), F-177 (the control channel on vsock plus a separate, self-repairing sshd), F-178 (VM-to-VM isolation and a MAC shared by every VM), F-179 (the advice runner, whole-archive rootfs, resource-based sizing, the Sentinel corpus and reuse). |

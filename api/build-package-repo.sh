@@ -324,6 +324,16 @@ if [ "${SKIP_FC_ROOTFS:-0}" != "1" ] && [ "$CODENAME" = "jammy" ]; then
   "$SCRIPT_DIR/build-firecracker-rootfs.sh"
 fi
 
+# llm-chat-lab-sandbox L1 — the lab guest kernel: Firecracker's CI kernel
+# (downloaded above as firecracker-vmlinux-6.1.155, which also provides
+# the base config) rebuilt with api/firecracker-kernel-lab.config. Built,
+# not downloaded, so a fresh checkout gets it here like the rootfs.
+# Skippable with SKIP_FC_KERNEL=1.
+if [ "${SKIP_FC_KERNEL:-0}" != "1" ] && [ "$CODENAME" = "jammy" ]; then
+  echo "=== Building the Firecracker lab guest kernel (llm-chat-lab-sandbox L1) ==="
+  "$SCRIPT_DIR/build-firecracker-kernel.sh"
+fi
+
 {
   echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for name in "${!ARTIFACT_URLS[@]}"; do
@@ -333,6 +343,9 @@ fi
   if [ -f "$REPO_DIR/artifacts/firecracker-rootfs-jammy.ext4.gz" ]; then
     echo "firecracker-rootfs-jammy.ext4.gz  sha256=$(sha256sum "$REPO_DIR/artifacts/firecracker-rootfs-jammy.ext4.gz" | cut -d' ' -f1)  source=build-firecracker-rootfs.sh (debootstrap, built fresh each run)"
   fi
+  for k in "$REPO_DIR"/artifacts/firecracker-vmlinux-*-lab; do
+    [ -f "$k" ] && echo "$(basename "$k")  sha256=$(sha256sum "$k" | cut -d' ' -f1)  source=build-firecracker-kernel.sh (Firecracker CI config + firecracker-kernel-lab.config)"
+  done
 } > "$REPO_DIR/artifacts/MANIFEST.txt"
 touch "$REPO_DIR/artifacts/.build-complete"
 

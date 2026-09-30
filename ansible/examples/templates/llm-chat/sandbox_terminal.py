@@ -36,7 +36,7 @@ import time
 import websockets
 import websockets.legacy.server
 
-from microvm import BootError, IpPool, MicroVM, sweep_orphans
+from microvm import BootError, CapacityError, IpPool, MicroVM, VmSizing, sweep_orphans
 
 # verify_proxy.py's own LB-facing convention, not loopback: HAProxy runs
 # on the CloudCore host itself and reaches this service over the bridge
@@ -78,13 +78,18 @@ TERMINAL_BOOT_TIMEOUT_S = int(os.environ.get("TERMINAL_BOOT_TIMEOUT_SECONDS", "2
 # usually starts well under that, but a legitimately slow one (a big
 # apt install, a large download) shouldn't false-positive.
 TERMINAL_UNRESPONSIVE_S = int(os.environ.get("TERMINAL_UNRESPONSIVE_SECONDS", "30"))
-VCPU_COUNT = 1
-MEM_SIZE_MIB = 256
-# Sparse, so this is a ceiling on what one session can write (apt
-# installs, pip packages, the student's own files), not disk reserved
-# up front. Sized above the ~400MB of free space the old 768MB
-# per-session rootfs copy used to leave.
-SCRATCH_MIB = int(os.environ.get("TERMINAL_SCRATCH_MIB", "2048"))
+# llm-chat-lab-sandbox L3: sized per session from what the coordinator
+# actually has free (microvm.plan_vm_size), aiming for enough to install
+# and run what lab advice suggests (databases, docker, a JVM) and accepting
+# less down to the floor. Scratch is sparse: a ceiling on what a session can
+# write, not disk reserved up front.
+TERMINAL_SIZING = VmSizing(
+    mem_target_mib=int(os.environ.get("TERMINAL_MEM_TARGET_MIB", "2048")),
+    mem_floor_mib=int(os.environ.get("TERMINAL_MEM_FLOOR_MIB", "512")),
+    vcpu_target=int(os.environ.get("TERMINAL_VCPU_TARGET", "2")),
+    scratch_target_mib=int(os.environ.get("TERMINAL_SCRATCH_MIB", "16384")),
+    scratch_floor_mib=int(os.environ.get("TERMINAL_SCRATCH_FLOOR_MIB", "2048")),
+)
 
 # Per direct request: a browser-reachable way to see the output of a web
 # app a student wrote and ran in their own sandbox terminal. Fixed pool
@@ -120,7 +125,7 @@ _client_active: dict[str, int] = {}
 # never creates that situation in practice.
 _client_vm: dict[str, "MicroVM"] = {}
 
-_ip_pool = IpPool(SANDBOX_SUBNET)
+_ip_pool = IpPool(SANDBOX_SUBNET, part="terminal")
 
 
 def _client_ip(websocket) -> str:
@@ -160,8 +165,7 @@ async def _terminal_handler(websocket):
             return
         _client_active[ip] = active + 1
 
-    vm = MicroVM(VM_OWNER, _ip_pool, FCBR, vcpu_count=VCPU_COUNT,
-                 mem_size_mib=MEM_SIZE_MIB, scratch_mib=SCRATCH_MIB,
+    vm = MicroVM(VM_OWNER, _ip_pool, FCBR, sizing=TERMINAL_SIZING,
                  boot_timeout_s=TERMINAL_BOOT_TIMEOUT_S)
     loop = asyncio.get_event_loop()
     client = channel = None
@@ -169,6 +173,9 @@ async def _terminal_handler(websocket):
         await send({"type": "output", "data": "Booting a fresh sandboxed shell...\r\n"})
         try:
             await loop.run_in_executor(None, vm.boot)
+        except CapacityError as e:
+            await send({"type": "error", "data": f"The lab is full: {e}."})
+            return
         except BootError as e:
             await send({"type": "error", "data": f"Sandbox failed to start: {e}"})
             return
@@ -186,9 +193,12 @@ async def _terminal_handler(websocket):
             f"Ports {', '.join(str(p) for p in PREVIEW_PORTS)} are reachable from your browser -- "
             f"start a web server on any of them and open this same host at that port in a new tab.\r\n"
         ) if PREVIEW_PORTS else ""
+        size_note = (f"This sandbox: {vm.vcpu_count} vCPU, {vm.mem_size_mib}MB RAM, "
+                     f"{vm.scratch_mib // 1024}GB disk. Anything can be installed with apt; "
+                     f"nothing survives the session.\r\n")
         await send({"type": "connected",
                      "data": "Connected. This shell has real internet access and is fully isolated -- "
-                             "it cannot reach anything else.\r\n" + preview_note})
+                             "it cannot reach anything else.\r\n" + size_note + preview_note})
 
         stop_event = threading.Event()
         last_activity = time.monotonic()
