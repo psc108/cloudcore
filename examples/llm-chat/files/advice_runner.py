@@ -193,11 +193,17 @@ def classify(exit_code: int | None, output: str, timed_out: bool) -> tuple[str, 
     if exit_code == 0:
         return "ok", ""
     tail = output[-3000:]
+    wording = {
+        "package_not_found": "no package called '{}' in Ubuntu 22.04",
+        "service_failed": "the service '{}' failed or doesn't exist",
+        "command_not_found": "'{}' is not a command here",
+        "interactive": "it waited for input nobody could sensibly type",
+    }
     for cls, rx in _CLASSIFIERS:
         m = rx.search(tail)
         if m:
             what = next((g for g in m.groups() if g), "")
-            return cls, what
+            return cls, wording[cls].format(what)
     return "step_failed", f"exit {exit_code}"
 
 
@@ -353,9 +359,15 @@ class _LoginProber:
         _, out, _ = _exec(self.root, f"printf '%s\\n%s\\n' {shlex.quote(self.pw)} {self._code(wrong)} | "
                                      f"pamtester -v {shlex.quote(service)} student authenticate", 30)
         self._pace()
-        return {"ok": "successfully authenticated" in out,
+        ok = "successfully authenticated" in out
+        last = (out.strip().splitlines() or [""])[-1]
+        error = re.sub(r"^(?:(?:[A-Z][a-z]+ )*(?:[Pp]assword|[Cc]ode):\s*)+", "", last).strip()
+        if "Module is unknown" in out:
+            error = ("PAM cannot load a module named in this service's stack (not installed?), "
+                     "so this login is refused for everyone")
+        return {"ok": ok,
                 "prompts": re.findall(r"\b((?:[A-Z][a-z]+ )*(?:[Pp]assword|[Cc]ode))\s*:", out),
-                "error": "" if "successfully" in out else (out.strip().splitlines() or [""])[-1][:160]}
+                "error": "" if ok else error[:200]}
 
 
 def _describe(r: dict) -> str:
@@ -931,8 +943,12 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
     else:
         result.verdict = "failed"
         parts = []
+        lockouts = [c for c in failed_checks if c["kind"] == "login" and "still works" in c["subject"]]
+        if lockouts:
+            what = ", ".join(c["subject"].split(" (")[0].replace(" still works", "") for c in lockouts)
+            parts.append(f"LOCKOUT: following this answer breaks {what}, which worked before it")
         for s in bad:
-            parts.append(f"step {s.n}: {s.cls.replace('_', ' ')}" + (f" ({s.detail})" if s.detail else ""))
+            parts.append(f"step {s.n}: {s.detail or s.cls.replace('_', ' ')}")
         for c in failed_checks:
             parts.append(f"{c['kind']} check failed: {c['subject']}")
         result.summary = "; ".join(parts[:6]) + ("; ..." if len(parts) > 6 else "")
@@ -940,7 +956,7 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
 
 def plain_step_line(step: dict) -> str:
     """One human line per step for the page and the corpus."""
-    icon = {"ok": "✓", "skipped": "–"}.get(step["cls"], "✗")
+    icon = {"ok": "✓", "skipped": "–", "": "·"}.get(step["cls"], "✗")
     what = step["target"] and f"{step['kind']} {step['target']}" or step["source"].splitlines()[0][:80]
     extra = step["detail"] or step["note"]
     return f"{icon} {step['n']}. {what}" + (f" — {extra}" if extra else "")

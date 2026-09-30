@@ -637,8 +637,10 @@ def sweep_orphans(owner: str) -> int:
         shutil.rmtree(os.path.join(KEY_DIR, sid), ignore_errors=True)
         removed += 1
 
-    # Its TAPs, pair TAPs, and (L8) the per-run pair bridges.
-    prefixes = (f"fc{owner[:4]}-", f"fp{owner[:4]}-", PAIR_BRIDGE_PREFIX)
+    # Its TAPs and pair TAPs; pair bridges only when sweeping the advice
+    # runner's own VMs -- another service's restart must never delete a
+    # bridge a live advice run is using (found live).
+    prefixes = (f"fc{owner[:4]}-", f"fp{owner[:4]}-") + ((PAIR_BRIDGE_PREFIX,) if owner == "advc" else ())
     try:
         for name in os.listdir("/sys/class/net"):
             if name.startswith(prefixes):

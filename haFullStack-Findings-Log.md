@@ -3271,6 +3271,31 @@ Direct request: "can you add another (simpler probably) terminal/vm that can run
   - the nginx reverse proxy is lab_verified: port 80 reachable, and HTTP 502 for its own `server_name`, reported as "the proxy works, the upstream app isn't running here";
   - Sentinel 49/49 tests pass, one new for probe facts.
 
+### F-181 — Restarting either sandbox service deleted the private bridges of advice runs in progress; lockouts were buried in the lab report
+
+**Where:** `examples/llm-chat/files/microvm.py` (`sweep_orphans`); `advice_runner.py` (`classify` wording, `_LoginProber.pam`, `_finish_verdict`, `plain_step_line`); Sentinel `advice_runs._facts_of`.
+
+**Symptom:** a user asked the MFA question on the live page. The model's answer installed `google-authenticator`, which isn't a package; the right name is `libpam-google-authenticator`. It still added `auth required pam_google_authenticator.so` to `/etc/pam.d/login` and rebooted. The lab verdict was correct, `failed`, but:
+- the most important finding, that console login then refused everyone ("pamtester: Module is unknown"), sat in the middle of a long list;
+- step details were bare names ("— google-authenticator");
+- the PAM line read "prompts: Password; Password: pamtester: Module is unknown".
+
+Re-running that answer right after restarting verify-proxy failed at once with "Device does not exist": the new process's startup cleanup had deleted the run's `fcpair…` bridge.
+
+**Root cause:**
+- `sweep_orphans()` deleted pair bridges whatever owner it was sweeping for. `sandbox-terminal` runs the same sweep at its own start, so restarting the Terminal service would cut the private link of any advice run in progress.
+- The report was built for completeness, not priority.
+
+**Fix:**
+- Pair bridges are swept only for the advice runner's own owner (`advc`).
+- A failed "still works" login check leads the summary as `LOCKOUT: following this answer breaks …, which worked before it`.
+- Step details are sentences ("no package called 'x' in Ubuntu 22.04", "'x' is not a command here").
+- pamtester's "Module is unknown" becomes "PAM cannot load a module named in this service's stack (not installed?), so this login is refused for everyone".
+- Steps that never ran show `·`, not ✗.
+- Sentinel reads the quoted name out of the new wording when building facts.
+
+**Verified by:** the user's exact answer re-run on the lab coordinator after restarting both services (2026-09-30), 27s. Summary: "LOCKOUT: following this answer breaks 'login' login, which worked before it; step 1: no package called 'google-authenticator' in Ubuntu 22.04; step 2: 'google-authenticator' is not a command here; …". SSH checks shown as ℹ. Sentinel 50/50 tests pass, one new for worded details.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3403,3 +3428,4 @@ Direct request: "can you add another (simpler probably) terminal/vm that can run
 | v3.6 | 2026-09-29 | Paul Scott | Direct request: "lets warn users but generally. the model is small and we are no where near perfect in using it yet". F-175: every Linux Help answer carries a structured caution; extra warnings when it needs packages outside the Terminal's index (jammy main) or changes login, firewall or disk/boot configuration. |
 | v3.7 | 2026-09-30 | Paul Scott | Direct request: "we need to be able to install anything the llm might offer as advice to install and then configure it ... we'll start collecting a decent corpus of our own"; "size the vm by available resources across the peers"; run every step automatically and reuse verified answers automatically. F-176 (a lab guest kernel: netfilter, ufw's IPv6 matches, tunnels, filesystems, AppArmor LSM order), F-177 (the control channel on vsock plus a separate, self-repairing sshd), F-178 (VM-to-VM isolation and a MAC shared by every VM), F-179 (the advice runner, whole-archive rootfs, resource-based sizing, the Sentinel corpus and reuse). |
 | v3.8 | 2026-09-30 | Paul Scott | Direct request: "add another (simpler probably) terminal/vm that can run automated ssh/login (but not limited to) so that the test could work before committing this to a reviewed and working corpus". F-180: a prober VM per run tests the answer's goal from outside (real SSH/PAM logins with TOTP, reachability, HTTP), with a baseline, real reboots, answered prompts and an sshd effective-config check. |
+| v3.9 | 2026-09-30 | Paul Scott | From a user's own run of the MFA question on the live page (a lockout the lab correctly found). F-181: a service restart deleted in-flight advice runs' private bridges; lockouts now lead the report; plainer step and PAM wording. |
