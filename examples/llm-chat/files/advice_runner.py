@@ -663,6 +663,48 @@ STEP_TIMEOUT_S = 300
 RUN_TIMEOUT_S = 1200
 _OUTPUT_KEEP = 4000
 _TRANSCRIPT_KEEP = 150_000
+# Per step in the log: one noisy step (found live: `journalctl -xe`) must not
+# push boot, installs and config writes out of it.
+_LOG_HEAD_LINES = 40
+_LOG_TAIL_LINES = 15
+
+
+class _StepLog:
+    """Streams a step's output into the transcript, keeping its first
+    _LOG_HEAD_LINES lines live, then only the last _LOG_TAIL_LINES, and a
+    count of what was left out."""
+
+    def __init__(self, say):
+        self.say = say
+        self.lines = 0
+        self.tail: list[str] = []
+        self.partial = ""
+
+    def __call__(self, chunk: str) -> None:
+        text = self.partial + chunk
+        parts = text.split("\n")
+        self.partial = parts.pop()
+        for line in parts:
+            self.lines += 1
+            if self.lines <= _LOG_HEAD_LINES:
+                self.say(line + "\n")
+            else:
+                self.tail = (self.tail + [line])[-_LOG_TAIL_LINES:]
+        if self.lines <= _LOG_HEAD_LINES and self.partial and _PROMPT_TAIL_RE.search(self.partial):
+            self.say(self.partial)  # a prompt waiting on this line
+            self.partial = ""
+
+    def close(self) -> None:
+        if self.partial and self.lines < _LOG_HEAD_LINES:
+            self.say(self.partial + "\n")
+        elif self.partial:
+            self.tail = (self.tail + [self.partial])[-_LOG_TAIL_LINES:]
+            self.lines += 1
+        omitted = self.lines - _LOG_HEAD_LINES - len(self.tail)
+        if omitted > 0:
+            self.say(f"# ... {omitted} lines omitted ...\n")
+        for line in self.tail:
+            self.say(line + "\n")
 
 _HARNESS_SETUP = r"""set -e
 # The runner answers apt's and debconf's questions the way a person
@@ -986,7 +1028,9 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 else:
                     s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not restart"
             elif s.kind == "run":
-                code, out, timed_out, replies = _exec_step(student, s.source, STEP_TIMEOUT_S, on_output=say)
+                step_log = _StepLog(say)
+                code, out, timed_out, replies = _exec_step(student, s.source, STEP_TIMEOUT_S, on_output=step_log)
+                step_log.close()
                 if code:
                     say(f"# exit {code}\n")
                 s.exit, s.output = code, out[-_OUTPUT_KEEP:]

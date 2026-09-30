@@ -3103,7 +3103,10 @@ function makeAskPanel(cfg) {
       steps: (data.steps || []).map(s => ({cls: s.cls})),
       failures: (data.steps || []).filter(s => s.cls && !['ok', 'skipped'].includes(s.cls) && s.output)
         .map(s => ({n: s.n, output: s.output.slice(-1500)})),
-      transcript: (data.transcript || '').slice(-12000),
+      // Start and end of a long log: the start holds boot and the first steps.
+      transcript: (data.transcript || '').length > 24000
+        ? data.transcript.slice(0, 6000) + '\\n# ... (middle of the log not kept in this browser) ...\\n' + data.transcript.slice(-18000)
+        : (data.transcript || ''),
       kept: data.kept || null,
     };
   }
@@ -3128,7 +3131,10 @@ function makeAskPanel(cfg) {
     }
     const until = new Date(k.expires_at * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     line(`The lab machine is kept, exactly as the run left it, until ${until}.`, 'labrun-kept-head');
-    if (!lab.token) return box;
+    if (!lab.token) {
+      line('Logging in and Destroy are only available in the browser tab that asked the question (it holds the key to this machine).');
+      return box;
+    }
     line('To look around: open it in the Terminal panel below. You are logged in as student; sudo works without a password.');
     const cmds = [];
     const svcCmd = {login: 'sudo login student', su: 'su - student', sudo: 'sudo -k && sudo -v'};

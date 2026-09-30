@@ -3382,6 +3382,21 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 - **Destroy:** it worked, and the Terminal then reported "that lab machine has been destroyed".
 - **MFA:** after a lab_verified run, following the page's instructions exactly (`sudo login student`, the code from `oathtool` with the shown secret, then the shown password) logged in ("Welcome to Ubuntu 22.04").
 
+### F-186 — One noisy step (`journalctl -xe`) pushed the rest of the lab log out of view, and a kept machine showed no way in from a tab without its key
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_StepLog`); `verify_proxy.py` (page `compactLab`, `labKeptBlock`).
+
+**Symptom:** a user's MFA run (lab_verified). The read-only log under the answer showed almost nothing but the systemd journal: the answer's troubleshooting step printed ~1,500 lines, and the page keeps a bounded log, so boot, the install and the PAM change were gone. The box said "The lab machine is kept … until 04:52 PM" with no login instructions and no buttons: the tab had asked the question on the page from before the kept-machine update, so it never stored the run's key.
+
+**Root cause:** step output went into the transcript uncapped, and the page kept only its tail. The kept-machine block returned silently when there was no token.
+
+**Fix:**
+- Each step's output in the log keeps its first 40 lines live, then "# … N lines omitted …", then its last 15. Prompts still show as they appear.
+- The page keeps the start and the end of a long log.
+- Without a token the box says that logging in and Destroy are only available in the tab that asked.
+
+**Verified by:** the user's answer re-run on the lab coordinator: lab_verified, a 10,402-character log with every step, the PAM write, the baseline logins, the checks and the verdict, and `journalctl -xe` reduced to its ends ("… 1479 lines omitted …"). The deployed page (through the LB) serves the token-storing code and the new message.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3519,3 +3534,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.11 | 2026-09-30 | Paul Scott | From a user's fourth live MFA run. F-183: lab facts now carry the correction (the real package for a wrong name), not only the prohibition; apt's all-or-nothing install is explained; failed steps show their real error. |
 | v3.12 | 2026-09-30 | Paul Scott | From a user's fifth live MFA run. F-184: false LOCKOUT from a fixed-order PAM probe; prompts are now answered by what they ask, and the false corpus record was corrected (now lab_verified). |
 | v3.13 | 2026-09-30 | Paul Scott | Direct request: a read-only live view of the lab machine, login instructions afterwards, and a Destroy button. F-185: streaming transcript; kept lab machines (token-gated, expiring, capped) opened in the Terminal panel; destroy. |
+| v3.14 | 2026-09-30 | Paul Scott | From a user's run. F-186: per-step caps keep the whole lab log readable; a kept machine explains why a tab without its key can't open it. |
