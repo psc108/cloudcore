@@ -1,0 +1,3082 @@
+[
+ {
+  "n": 1,
+  "kind": "everyday",
+  "question": "How do I see how much disk space each directory under /var is using?",
+  "gen_s": 138,
+  "run_s": 15,
+  "run_id": "247352449986",
+  "lab_verdict": "partial",
+  "lab_summary": "All 1 steps ran, but none changed the system, so there was nothing to verify.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo du -h --max-depth=1 /var | sort -hr | head -n 10"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 2,
+  "kind": "everyday",
+  "question": "How do I find all files larger than 100MB on the system?",
+  "gen_s": 160,
+  "run_s": 20,
+  "run_id": "d4f6b3adc10d",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: find: '/sys/fs/bpf': Permission denied; step 2: find: '/proc/1010/fdinfo/6': No such file or directory",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "find: '/sys/fs/bpf': Permission denied",
+    "note": "",
+    "target": "",
+    "cmd": "find / -type f -size +100M"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "find: '/proc/1010/fdinfo/6': No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "sudo find / -type f -size +100M"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 3,
+  "kind": "everyday",
+  "question": "How do I find out which process is listening on port 80?",
+  "gen_s": 178,
+  "run_s": 15,
+  "run_id": "4bfe821016eb",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: exit 1; step 2: exit 1",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "exit 1",
+    "note": "",
+    "target": "",
+    "cmd": "ss -tuln | grep :80"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "exit 1",
+    "note": "",
+    "target": "",
+    "cmd": "command -v ss >/dev/null || sudo apt-get install -y iproute2; ss -tuln | grep :80"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 4,
+  "kind": "everyday",
+  "question": "How do I search recursively for the word 'Listen' in all .conf files under /etc?",
+  "gen_s": 98,
+  "run_s": 15,
+  "run_id": "788a6c162408",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: exit 1",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "exit 1",
+    "note": "",
+    "target": "",
+    "cmd": "grep -rn 'Listen' /etc/*.conf"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 5,
+  "kind": "everyday",
+  "question": "How do I check how much memory is free and what is using it?",
+  "gen_s": 227,
+  "run_s": 20,
+  "run_id": "5e1595f66037",
+  "lab_verdict": "failed",
+  "lab_summary": "step 2: TERM environment variable not set.; step 3: 'htop' is not a command here -- it comes from the package 'bashtop'",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "free -h"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "TERM environment variable not set.",
+    "note": "",
+    "target": "",
+    "cmd": "top"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'htop' is not a command here -- it comes from the package 'bashtop'",
+    "note": "",
+    "target": "",
+    "cmd": "htop"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ps -eo pid,ppid,cmd,%mem --sort=-%mem | head"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "swapon --show"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 6,
+  "kind": "everyday",
+  "question": "How do I create a tar.gz archive of a directory and extract it somewhere else?",
+  "gen_s": 232,
+  "run_s": 15,
+  "run_id": "6a0043764534",
+  "lab_verdict": "partial",
+  "lab_summary": "All 1 steps ran, but none changed the system, so there was nothing to verify.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "# Step 1: Create a directory to hold the extracted files"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 7,
+  "kind": "services",
+  "question": "How do I add a new user called deploy who can use sudo?",
+  "gen_s": 164,
+  "run_s": 20,
+  "run_id": "50c1b81eedad",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: passwd: password unchanged",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "passwd: password unchanged",
+    "note": "",
+    "target": "",
+    "cmd": "sudo useradd -m deploy && sudo passwd deploy && sudo usermod -aG sudo deploy"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 8,
+  "kind": "services",
+  "question": "How do I create a systemd service that runs a Python script at boot and restarts it if it crashes?",
+  "gen_s": 364,
+  "run_s": 15,
+  "run_id": "87903b3d21aa",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: chmod: cannot access '/home/user/scripts/my_script.py': No such file or directory; step 6: Sep 30 16:55:02 sandbox systemd[1]: my_script.service: Failed with result 'exit-code'.; service check failed: my_script.service; path check failed: /home/user/scripts/my_script.py",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "chmod: cannot access '/home/user/scripts/my_script.py': No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "chmod +x /home/user/scripts/my_script.py"
+   },
+   {
+    "n": 2,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/systemd/system/my_script.service; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/systemd/system/my_script.service"
+   },
+   {
+    "n": 3,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/systemd/system/my_script.service",
+    "cmd": "[Unit]"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl daemon-reload"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl enable my_script.service"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "Sep 30 16:55:02 sandbox systemd[1]: my_script.service: Failed with result 'exit-code'.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl status my_script.service"
+   },
+   {
+    "n": 7,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo journalctl -u my_script.service"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "service",
+    "subject": "my_script.service",
+    "ok": false,
+    "decisive": null,
+    "detail": "activating"
+   },
+   {
+    "kind": "path",
+    "subject": "/home/user/scripts/my_script.py",
+    "ok": false,
+    "decisive": null,
+    "detail": "does not exist after the answer's steps"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/systemd/system/my_script.service",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 9,
+  "kind": "services",
+  "question": "How do I schedule a script to run every day at 2am with cron?",
+  "gen_s": 182,
+  "run_s": 50,
+  "run_id": "b98de0faa726",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: crontab: \"/usr/bin/sensible-editor\" exited with status 1",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "crontab: \"/usr/bin/sensible-editor\" exited with status 1",
+    "note": "",
+    "target": "",
+    "cmd": "crontab -e"
+   },
+   {
+    "n": 2,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "config block with no file named for it",
+    "target": "",
+    "cmd": "0 2 * * * /path/to/your/script.sh"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 10,
+  "kind": "services",
+  "question": "How do I give a group read and write access to a shared directory so new files inherit the group?",
+  "gen_s": 195,
+  "run_s": 15,
+  "run_id": "ea5ad3f854ca",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: chgrp: invalid group: 'yourgroup'; step 2: chmod: cannot access '/path/to/directory': No such file or directory; step 3: chmod: cannot access '/path/to/directory': No such file or directory; step 4: chgrp: invalid group: 'yourgroup'",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "chgrp: invalid group: 'yourgroup'",
+    "note": "",
+    "target": "",
+    "cmd": "sudo chgrp yourgroup /path/to/directory"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "chmod: cannot access '/path/to/directory': No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "sudo chmod g+rw /path/to/directory"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "chmod: cannot access '/path/to/directory': No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "sudo chmod g+s /path/to/directory"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "chgrp: invalid group: 'yourgroup'",
+    "note": "",
+    "target": "",
+    "cmd": "sudo chgrp yourgroup /path/to/directory && sudo chmod g+rwxs /path/to/directory"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 11,
+  "kind": "services",
+  "question": "How do I set up log rotation for my application's logs in /var/log/myapp?",
+  "gen_s": 306,
+  "run_s": 15,
+  "run_id": "e71cd8243ccc",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 3 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/logrotate.d/myapp; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/logrotate.d/myapp"
+   },
+   {
+    "n": 2,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/logrotate.d/myapp",
+    "cmd": "/var/log/myapp/*.log {"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo logrotate -d /etc/logrotate.d/myapp"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo logrotate /etc/logrotate.d/myapp"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "path",
+    "subject": "/etc/logrotate.d/myapp",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 12,
+  "kind": "services",
+  "question": "How do I change the hostname permanently?",
+  "gen_s": 124,
+  "run_s": 15,
+  "run_id": "0f4571878052",
+  "lab_verdict": "partial",
+  "lab_summary": "All 1 steps ran, but none changed the system, so there was nothing to verify.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo hostnamectl set-hostname new-hostname"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 13,
+  "kind": "services",
+  "question": "How do I set the timezone to Europe/London?",
+  "gen_s": 150,
+  "run_s": 25,
+  "run_id": "420163129957",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 4 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "command -v timedatectl >/dev/null || sudo apt-get update && sudo apt-get install -y tzdata"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "timedatectl list-timezones | grep London"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo timedatectl set-timezone Europe/London"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "timedatectl"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "tzdata",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 14,
+  "kind": "services",
+  "question": "How do I lock a user account and later unlock it?",
+  "gen_s": 93,
+  "run_s": 15,
+  "run_id": "0eb6e337354f",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: passwd: user 'username' does not exist; step 2: passwd: user 'username' does not exist",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "passwd: user 'username' does not exist",
+    "note": "",
+    "target": "",
+    "cmd": "sudo passwd -l username"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "passwd: user 'username' does not exist",
+    "note": "",
+    "target": "",
+    "cmd": "sudo passwd -u username"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 15,
+  "kind": "logins-web",
+  "question": "How do I disable SSH password login and allow key-based login only?",
+  "gen_s": 282,
+  "run_s": 15,
+  "run_id": "bf56da512489",
+  "lab_verdict": "failed",
+  "lab_summary": "step 4: cat: /home/student/.ssh/id_rsa.pub: No such file or directory",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/ssh/sshd_config; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/ssh/sshd_config"
+   },
+   {
+    "n": 2,
+    "kind": "edit",
+    "cls": "ok",
+    "detail": "",
+    "note": "set in place: existing (or commented-out) lines replaced, missing ones added",
+    "target": "/etc/ssh/sshd_config",
+    "cmd": "PasswordAuthentication no"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart sshd"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "cat: /home/student/.ssh/id_rsa.pub: No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys"
+   },
+   {
+    "n": 5,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (user@) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "ssh -i ~/.ssh/id_rsa user@hostname"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "service",
+    "subject": "sshd",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "effective",
+    "subject": "sshd uses 'PasswordAuthentication no'",
+    "ok": true,
+    "decisive": true,
+    "detail": ""
+   },
+   {
+    "kind": "effective",
+    "subject": "sshd uses 'PubkeyAuthentication yes'",
+    "ok": true,
+    "decisive": true,
+    "detail": ""
+   },
+   {
+    "kind": "effective",
+    "subject": "sshd uses 'ChallengeResponseAuthentication no'",
+    "ok": true,
+    "decisive": true,
+    "detail": ""
+   },
+   {
+    "kind": "effective",
+    "subject": "sshd uses 'UsePAM no'",
+    "ok": true,
+    "decisive": true,
+    "detail": ""
+   },
+   {
+    "kind": "validator",
+    "subject": "sshd config",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/ssh/sshd_config",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "login",
+    "subject": "SSH login from another machine still works (logging in as student with the prober's key and a test password the lab set)",
+    "ok": true,
+    "decisive": true,
+    "detail": "prompts: none; methods used: publickey"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": true,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 16,
+  "kind": "logins-web",
+  "question": "How do I change the SSH port to 2222?",
+  "gen_s": 164,
+  "run_s": 15,
+  "run_id": "522116e1425f",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 1 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/ssh/sshd_config; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/ssh/sshd_config"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart sshd"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "service",
+    "subject": "sshd",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": true,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 17,
+  "kind": "logins-web",
+  "question": "How do I allow only SSH, HTTP and HTTPS through the firewall using ufw?",
+  "gen_s": 212,
+  "run_s": 20,
+  "run_id": "ffa57a3a86a8",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 5 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "command -v ufw >/dev/null || sudo apt-get install -y ufw"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo ufw enable"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo ufw allow 22/tcp"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo ufw status verbose"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "ufw",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 18,
+  "kind": "logins-web",
+  "question": "How do I install Apache and serve a simple web page?",
+  "gen_s": 173,
+  "run_s": 35,
+  "run_id": "efac006f806c",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 3 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt update && sudo apt install -y apache2"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl start apache2 && sudo systemctl enable apache2"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl status apache2"
+   },
+   {
+    "n": 4,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (<html>) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "echo \"<html><body><h1>Hello, World!</h1></body></html>\" | sudo tee /var/www/html/index.html"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "apache2",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "service",
+    "subject": "apache2",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 80 (apache2) from another machine",
+    "ok": true,
+    "decisive": true,
+    "detail": "reachable"
+   },
+   {
+    "kind": "http",
+    "subject": "http://\u2026:80/ (apache2)",
+    "ok": true,
+    "decisive": true,
+    "detail": "HTTP 200"
+   }
+  ]
+ },
+ {
+  "n": 19,
+  "kind": "logins-web",
+  "question": "How do I set up nginx with a self-signed HTTPS certificate?",
+  "gen_s": 317,
+  "run_s": 20,
+  "run_id": "c653c51610e8",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: req: Can't open \"/etc/nginx/ssl/nginx.key\" for writing, No such file or directory; step 4: 'nginx' is not a command here -- it comes from the package 'nginx-doc'; step 5: the service 'nginx.service' failed or doesn't exist; validator check failed: nginx config; path check failed: /etc/nginx/ssl/nginx.key; path check failed: /etc/nginx/ssl/nginx.crt",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "req: Can't open \"/etc/nginx/ssl/nginx.key\" for writing, No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/nginx.key -out /etc/nginx/ssl/nginx.crt"
+   },
+   {
+    "n": 2,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/nginx/sites-available/default; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/nginx/sites-available/default"
+   },
+   {
+    "n": 3,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/nginx/sites-available/default",
+    "cmd": "server {"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'nginx' is not a command here -- it comes from the package 'nginx-doc'",
+    "note": "",
+    "target": "",
+    "cmd": "sudo nginx -t"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "service_failed",
+    "detail": "the service 'nginx.service' failed or doesn't exist",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart nginx"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "validator",
+    "subject": "nginx config",
+    "ok": false,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/nginx/ssl/nginx.key",
+    "ok": false,
+    "decisive": null,
+    "detail": "does not exist after the answer's steps"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/nginx/ssl/nginx.crt",
+    "ok": false,
+    "decisive": null,
+    "detail": "does not exist after the answer's steps"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/nginx/sites-available/default",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 20,
+  "kind": "logins-web",
+  "question": "How do I install fail2ban to protect SSH from brute-force attacks?",
+  "gen_s": 281,
+  "run_s": 25,
+  "run_id": "94ef496643af",
+  "lab_verdict": "failed",
+  "lab_summary": "step 6: 2026-09-30 17:40:49,117 fail2ban                [1354]: ERROR   Failed to access socket path: /var/run/fail2ban/fail2ban.sock. Is fail2ban running?; service check failed: fail2ban; validator check failed: fail2ban config",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update && sudo apt-get install -y fail2ban"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local"
+   },
+   {
+    "n": 3,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/fail2ban/jail.local; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/fail2ban/jail.local"
+   },
+   {
+    "n": 4,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/fail2ban/jail.local",
+    "cmd": "[sshd]"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart fail2ban"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "2026-09-30 17:40:49,117 fail2ban                [1354]: ERROR   Failed to access socket path: /var/run/fail2ban/fail2ban.sock. Is fail2ban running?",
+    "note": "",
+    "target": "",
+    "cmd": "sudo fail2ban-client status sshd"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "fail2ban",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "service",
+    "subject": "fail2ban",
+    "ok": false,
+    "decisive": null,
+    "detail": "failed"
+   },
+   {
+    "kind": "validator",
+    "subject": "fail2ban config",
+    "ok": false,
+    "decisive": null,
+    "detail": "2026-09-30 17:40:49,263 fail2ban                [1364]: ERROR   Failed during configuration: While reading from '/etc/fail2ban/jail.local' [line 969]: section 'sshd' already exists\n2026-09-30 17:40:49,263 fail2ban                [1364]: ERROR   ERROR: test configuration failed"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/fail2ban/jail.conf",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/fail2ban/jail.local",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 21,
+  "kind": "logins-web",
+  "question": "How do I install PostgreSQL and create a database and a user for an application?",
+  "gen_s": 213,
+  "run_s": 75,
+  "run_id": "e2ac5a520a5d",
+  "lab_verdict": "failed",
+  "lab_summary": "step 5: psql: error: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  role \"student\" does not exist",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get install -y postgresql postgresql-contrib"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl start postgresql"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo -i -u postgres"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "psql: error: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  role \"student\" does not exist",
+    "note": "",
+    "target": "",
+    "cmd": "psql"
+   },
+   {
+    "n": 6,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "config block with no file named for it",
+    "target": "",
+    "cmd": "CREATE DATABASE myappdb;"
+   },
+   {
+    "n": 7,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "config block with no file named for it",
+    "target": "",
+    "cmd": "CREATE USER myappuser WITH ENCRYPTED PASSWORD 'mypassword';"
+   },
+   {
+    "n": 8,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "config block with no file named for it",
+    "target": "",
+    "cmd": "GRANT ALL PRIVILEGES ON DATABASE myappdb TO myappuser;"
+   },
+   {
+    "n": 9,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "config block with no file named for it",
+    "target": "",
+    "cmd": "\\q"
+   },
+   {
+    "n": 10,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "exit"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "postgresql",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "package",
+    "subject": "postgresql-contrib",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "service",
+    "subject": "postgresql",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 22,
+  "kind": "disks",
+  "question": "How do I partition and format a new disk /dev/sdb and mount it at /data permanently?",
+  "gen_s": 270,
+  "run_s": 15,
+  "run_id": "f3a814200b32",
+  "lab_verdict": "failed",
+  "lab_summary": "step 2: Be careful before using the write command.; step 3: The file /dev/sdb1 does not exist and no size was specified.; step 5: mount: /data: special device /dev/sdb1 does not exist.; step 7: bash: line 1: /dev/sdb1: No such file or directory",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "lsblk"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "Be careful before using the write command.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo fdisk /dev/sdb"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "The file /dev/sdb1 does not exist and no size was specified.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkfs.ext4 /dev/sdb1"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkdir /data"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "mount: /data: special device /dev/sdb1 does not exist.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mount /dev/sdb1 /data"
+   },
+   {
+    "n": 6,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/fstab; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/fstab"
+   },
+   {
+    "n": 7,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "bash: line 1: /dev/sdb1: No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "/dev/sdb1 /data ext4 defaults 0 2"
+   },
+   {
+    "n": 8,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mount -a"
+   },
+   {
+    "n": 9,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "df -h /data"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 23,
+  "kind": "disks",
+  "question": "How do I create an LVM logical volume on a new disk /dev/sdb?",
+  "gen_s": 418,
+  "run_s": 20,
+  "run_id": "1e02d34348ba",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: 'pvcreate' is not a command here; step 2: 'vgcreate' is not a command here; step 3: 'lvcreate' is not a command here; step 4: 'pvdisplay' is not a command here; step 5: The file /dev/my_vg/my_lv does not exist and no size was specified.; step 6: mount: /mnt/my_lv: special device /dev/my_vg/my_lv does not exist.; ...",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'pvcreate' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo pvcreate /dev/sdb"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'vgcreate' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo vgcreate my_vg /dev/sdb"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'lvcreate' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo lvcreate -L 500M -n my_lv my_vg"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'pvdisplay' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo pvdisplay"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "The file /dev/my_vg/my_lv does not exist and no size was specified.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkfs.ext4 /dev/my_vg/my_lv"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "mount: /mnt/my_lv: special device /dev/my_vg/my_lv does not exist.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkdir /mnt/my_lv"
+   },
+   {
+    "n": 7,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "exit 2",
+    "note": "",
+    "target": "",
+    "cmd": "sudo blkid /dev/my_vg/my_lv"
+   },
+   {
+    "n": 8,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/fstab",
+    "cmd": "UUID=<YOUR_UUID> /mnt/my_lv ext4 defaults 0 2"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "validator",
+    "subject": "fstab",
+    "ok": false,
+    "decisive": null,
+    "detail": "0 parse errors, 1 error, 0 warnings\n/mnt/my_lv\n   [E] unreachable on boot required source: UUID=<YOUR_UUID>"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 24,
+  "kind": "disks",
+  "question": "How do I create and enable a 1GB swap file?",
+  "gen_s": 174,
+  "run_s": 25,
+  "run_id": "8571ccce6ed6",
+  "lab_verdict": "failed",
+  "lab_summary": "step 4: swapon: /swapfile: swapon failed: Invalid argument",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo dd if=/dev/zero of=/swapfile bs=1G count=1"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo chmod 600 /swapfile"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkswap /swapfile"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "swapon: /swapfile: swapon failed: Invalid argument",
+    "note": "",
+    "target": "",
+    "cmd": "sudo swapon /swapfile"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "validator",
+    "subject": "fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": "0 parse errors, 0 errors, 1 warning\nnone\n   [W] non-bind mount source /swapfile is a directory or regular file"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 25,
+  "kind": "disks",
+  "question": "How do I check a filesystem for errors?",
+  "gen_s": 365,
+  "run_s": 20,
+  "run_id": "013f3c636967",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: umount: /dev/sdb1: no mount point specified.; step 2: e2fsck: need terminal for interactive repairs; step 3: umount: /dev/sdb1: no mount point specified.; step 4: 'fsck.ntfs' is not a command here; step 6: e2fsck: need terminal for interactive repairs",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "umount: /dev/sdb1: no mount point specified.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo umount /dev/sdb1"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "e2fsck: need terminal for interactive repairs",
+    "note": "",
+    "target": "",
+    "cmd": "sudo fsck -f /dev/sdb1"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "umount: /dev/sdb1: no mount point specified.",
+    "note": "",
+    "target": "",
+    "cmd": "sudo umount /dev/sdb1"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'fsck.ntfs' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo fsck.ntfs -f /dev/sdb1"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "lsblk"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "e2fsck: need terminal for interactive repairs",
+    "note": "",
+    "target": "",
+    "cmd": "sudo fsck -f /dev/sda1  # Replace /dev/sda1 with your root partition"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 26,
+  "kind": "disks",
+  "question": "How do I set up a RAID1 array with mdadm on /dev/sdb and /dev/sdc?",
+  "gen_s": 436,
+  "run_s": 25,
+  "run_id": "f4e783803d47",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 1 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "# Install mdadm if it's not already installed"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "mdadm",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "validator",
+    "subject": "fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": "0 parse errors, 0 errors, 2 warnings\n/mnt/raid1\n   [W] unreachable source: /dev/md0: No such file or directory\n   [W] cannot detect on-disk filesystem type"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 27,
+  "kind": "networking",
+  "question": "How do I set a static IP address on Ubuntu 22.04?",
+  "gen_s": 328,
+  "run_s": 15,
+  "run_id": "cbca159bb636",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 4 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ip link show"
+   },
+   {
+    "n": 2,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/netplan/01-netcfg.yaml; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/netplan/01-netcfg.yaml"
+   },
+   {
+    "n": 3,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/netplan/01-netcfg.yaml",
+    "cmd": "network:"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo netplan apply"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ip addr show"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "path",
+    "subject": "/etc/netplan/01-netcfg.yaml",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 28,
+  "kind": "networking",
+  "question": "How do I add a second IP address to a network interface?",
+  "gen_s": 436,
+  "run_s": 20,
+  "run_id": "870e79a024df",
+  "lab_verdict": "failed",
+  "lab_summary": "step 4: could not write /etc/netplan; step 6: 'nmcli' is not a command here",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ip addr show"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo ip addr add 192.168.1.100/24 dev eth0"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ip addr show eth0"
+   },
+   {
+    "n": 4,
+    "kind": "append",
+    "cls": "step_failed",
+    "detail": "could not write /etc/netplan",
+    "note": "added to the end of the file",
+    "target": "/etc/netplan",
+    "cmd": "network:"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo netplan apply"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'nmcli' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo nmcli connection modify \"Wired connection 1\" +ipv4.addresses 192.168.1.100/24"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "path",
+    "subject": "/etc/netplan",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 29,
+  "kind": "networking",
+  "question": "How do I check which DNS server I'm using and change it?",
+  "gen_s": 189,
+  "run_s": 15,
+  "run_id": "5231950c937c",
+  "lab_verdict": "partial",
+  "lab_summary": "All 2 steps ran, but none changed the system, so there was nothing to verify.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "nslookup trakit.in"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "nslookup trakit.in"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 30,
+  "kind": "networking",
+  "question": "How do I forward incoming port 8080 to port 80 with iptables?",
+  "gen_s": 252,
+  "run_s": 25,
+  "run_id": "4fe434a21663",
+  "lab_verdict": "failed",
+  "lab_summary": "step 2: sh: 1: cannot create /etc/iptables/rules.v4: Directory nonexistent",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo iptables -t nat -A PREROUTING -p tcp --dport 8080 -j REDIRECT --to-port 80"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "sh: 1: cannot create /etc/iptables/rules.v4: Directory nonexistent",
+    "note": "",
+    "target": "",
+    "cmd": "sudo sh -c \"iptables-save > /etc/iptables/rules.v4\""
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update && sudo apt-get install -y iptables-persistent"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "iptables-persistent",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/iptables/rules.v4",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 31,
+  "kind": "networking",
+  "question": "How do I set up a WireGuard VPN server?",
+  "gen_s": 641,
+  "run_s": 360,
+  "run_id": "f62fa98c418e",
+  "lab_verdict": "failed",
+  "lab_summary": "step 2: tee: /etc/wireguard/privatekey: Permission denied; step 6: Configuration parsing error; step 8: sh: 1: cannot create /etc/iptables/rules.v4: Directory nonexistent; step 9: the service 'wg-quick@wg0.service' failed or doesn't exist; step 11: Configuration parsing error; step 12: the step didn't finish within its time limit; ...",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update && sudo apt-get install -y wireguard"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "tee: /etc/wireguard/privatekey: Permission denied",
+    "note": "",
+    "target": "",
+    "cmd": "umask 077"
+   },
+   {
+    "n": 3,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/wireguard/wg0.conf; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/wireguard/wg0.conf"
+   },
+   {
+    "n": 4,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/wireguard/wg0.conf",
+    "cmd": "[Interface]"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "echo net.ipv4.ip_forward = 1 | sudo tee -a /etc/sysctl.conf"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "Configuration parsing error",
+    "note": "",
+    "target": "",
+    "cmd": "sudo modprobe wireguard"
+   },
+   {
+    "n": 7,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo iptables -A FORWARD -i wg0 -o eth0 -j ACCEPT"
+   },
+   {
+    "n": 8,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "sh: 1: cannot create /etc/iptables/rules.v4: Directory nonexistent",
+    "note": "",
+    "target": "",
+    "cmd": "sudo sh -c \"iptables-save > /etc/iptables/rules.v4\""
+   },
+   {
+    "n": 9,
+    "kind": "run",
+    "cls": "service_failed",
+    "detail": "the service 'wg-quick@wg0.service' failed or doesn't exist",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl enable wg-quick@wg0"
+   },
+   {
+    "n": 10,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example output, not a step",
+    "target": "",
+    "cmd": "[Interface]"
+   },
+   {
+    "n": 11,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "Configuration parsing error",
+    "note": "",
+    "target": "",
+    "cmd": "sudo modprobe wireguard"
+   },
+   {
+    "n": 12,
+    "kind": "run",
+    "cls": "timeout",
+    "detail": "the step didn't finish within its time limit",
+    "note": "",
+    "target": "",
+    "cmd": "ping 10.0.0.1"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "wireguard",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/wireguard/privatekey",
+    "ok": false,
+    "decisive": null,
+    "detail": "does not exist after the answer's steps"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/wireguard/publickey",
+    "ok": false,
+    "decisive": null,
+    "detail": "does not exist after the answer's steps"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/wireguard/wg0.conf",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/sysctl.conf",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/iptables/rules.v4",
+    "ok": false,
+    "decisive": null,
+    "detail": "does not exist after the answer's steps"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 32,
+  "kind": "multi-machine",
+  "question": "How do I set up an NFS share and mount it on another machine?",
+  "gen_s": 401,
+  "run_s": 30,
+  "run_id": "89bbb59e3516",
+  "lab_verdict": "lab_verified",
+  "lab_summary": "All 9 steps worked in a fresh Ubuntu 22.04 sandbox and every check passed.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update && sudo apt-get install -y nfs-kernel-server"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkdir -p /home/user/shared"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo chown -R nobody:nogroup /home/user/shared"
+   },
+   {
+    "n": 4,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/exports; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/exports"
+   },
+   {
+    "n": 5,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/exports",
+    "cmd": "/home/user/shared client_ip(rw,sync,no_subtree_check)"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart nfs-kernel-server"
+   },
+   {
+    "n": 7,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update && sudo apt-get install -y nfs-common"
+   },
+   {
+    "n": 8,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo mkdir -p /mnt/shared"
+   },
+   {
+    "n": 9,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (server_ip) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "sudo mount server_ip:/home/user/shared /mnt/shared"
+   },
+   {
+    "n": 10,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ls /mnt/shared"
+   },
+   {
+    "n": 11,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/fstab; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/fstab"
+   },
+   {
+    "n": 12,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/fstab",
+    "cmd": "server_ip:/home/user/shared /mnt/shared nfs defaults 0 0"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "nfs-kernel-server",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "package",
+    "subject": "nfs-common",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "service",
+    "subject": "nfs-kernel-server",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "validator",
+    "subject": "fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": "Success, no errors or warnings detected"
+   },
+   {
+    "kind": "path",
+    "subject": "/home/user/shared",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/exports",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/fstab",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 111 (rpcbind) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 2049 (?) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 36391 (rpc.statd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "blocked"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 37749 (rpc.mountd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 38745 (rpc.mountd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "blocked"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 40505 (?) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 44049 (rpc.mountd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 44837 (?) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "blocked"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 47757 (rpc.statd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 48247 (rpc.mountd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "blocked"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 53391 (rpc.mountd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 56641 (rpc.mountd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "blocked"
+   }
+  ]
+ },
+ {
+  "n": 33,
+  "kind": "multi-machine",
+  "question": "How do I set up SSH key login from one machine to another?",
+  "gen_s": 343,
+  "run_s": 15,
+  "run_id": "c31d4c9865bd",
+  "lab_verdict": "failed",
+  "lab_summary": "step 6: chmod: cannot access '/home/student/.ssh/id_rsa': No such file or directory",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (your_email) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "ssh-keygen -t rsa -b 4096 -C \"your_email@example.com\""
+   },
+   {
+    "n": 2,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (user@) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "ssh-copy-id user@machine_b_ip"
+   },
+   {
+    "n": 3,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/ssh/sshd_config",
+    "cmd": "PubkeyAuthentication yes"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart sshd"
+   },
+   {
+    "n": 5,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (user@) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "ssh user@machine_b_ip"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "chmod: cannot access '/home/student/.ssh/id_rsa': No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "chmod 600 ~/.ssh/id_rsa"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "service",
+    "subject": "sshd",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "effective",
+    "subject": "sshd uses 'PubkeyAuthentication yes'",
+    "ok": true,
+    "decisive": true,
+    "detail": ""
+   },
+   {
+    "kind": "effective",
+    "subject": "sshd uses 'AuthorizedKeysFile .ssh/authorized_keys'",
+    "ok": true,
+    "decisive": true,
+    "detail": ""
+   },
+   {
+    "kind": "validator",
+    "subject": "sshd config",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/ssh/sshd_config",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "login",
+    "subject": "SSH login from another machine still works (logging in as student with the prober's key and a test password the lab set)",
+    "ok": true,
+    "decisive": true,
+    "detail": "prompts: none; methods used: publickey"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": true,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 34,
+  "kind": "multi-machine",
+  "question": "How do I set up a DNS server with bind9 for a local domain?",
+  "gen_s": 530,
+  "run_s": 40,
+  "run_id": "0a443c1a0a2c",
+  "lab_verdict": "failed",
+  "lab_summary": "step 7: ;; no servers could be reached",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt update && sudo apt install -y bind9"
+   },
+   {
+    "n": 2,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/bind/named.conf.local; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/bind/named.conf.local"
+   },
+   {
+    "n": 3,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/bind/named.conf.local",
+    "cmd": "zone \"example.local\" {"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo cp /etc/bind/db.empty /etc/bind/db.example.local"
+   },
+   {
+    "n": 5,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/bind/db.example.local",
+    "cmd": ";"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl restart bind9"
+   },
+   {
+    "n": 7,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": ";; no servers could be reached",
+    "note": "",
+    "target": "",
+    "cmd": "nslookup example.local 192.168.1.1"
+   },
+   {
+    "n": 8,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/resolv.conf; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/resolv.conf"
+   },
+   {
+    "n": 9,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/resolv.conf",
+    "cmd": "nameserver 192.168.1.1"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "bind9",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "service",
+    "subject": "bind9",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "validator",
+    "subject": "BIND config",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/bind/named.conf.local",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/bind/db.empty",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/bind/db.example.local",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/resolv.conf",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 53 (named) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 35,
+  "kind": "kernel-boot",
+  "question": "How do I load a kernel module automatically at boot?",
+  "gen_s": 258,
+  "run_s": 15,
+  "run_id": "e9f560b65f11",
+  "lab_verdict": "failed",
+  "lab_summary": "step 5: the service 'load-i2c-dev.service' failed or doesn't exist; step 6: Error: could not get list of modules: No such file or directory; service check failed: load-i2c-dev.service",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/systemd/system/load-i2c-dev.service; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/systemd/system/load-i2c-dev.service"
+   },
+   {
+    "n": 2,
+    "kind": "append",
+    "cls": "ok",
+    "detail": "",
+    "note": "added to the end of the file",
+    "target": "/etc/systemd/system/load-i2c-dev.service",
+    "cmd": "[Unit]"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl daemon-reload"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl enable load-i2c-dev.service"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "service_failed",
+    "detail": "the service 'load-i2c-dev.service' failed or doesn't exist",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl start load-i2c-dev.service"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "Error: could not get list of modules: No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "lsmod | grep i2c_dev"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "service",
+    "subject": "load-i2c-dev.service",
+    "ok": false,
+    "decisive": null,
+    "detail": "failed"
+   },
+   {
+    "kind": "path",
+    "subject": "/etc/systemd/system/load-i2c-dev.service",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 36,
+  "kind": "kernel-boot",
+  "question": "How do I change the default kernel boot parameters in GRUB?",
+  "gen_s": 166,
+  "run_s": 20,
+  "run_id": "b2b5d4eeeed1",
+  "lab_verdict": "failed",
+  "lab_summary": "step 2: the answer edits /etc/default/grub as if it already exists, but it didn't at this point (created it so the remaining steps could still be tried); step 3: 'update-grub' is not a command here",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "opens an editor on /etc/default/grub; the next config block is applied there",
+    "target": "",
+    "cmd": "sudo nano /etc/default/grub"
+   },
+   {
+    "n": 2,
+    "kind": "append",
+    "cls": "file_missing",
+    "detail": "the answer edits /etc/default/grub as if it already exists, but it didn't at this point (created it so the remaining steps could still be tried)",
+    "note": "added to the end of the file",
+    "target": "/etc/default/grub",
+    "cmd": "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash console=ttyS0,1100\""
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'update-grub' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "sudo update-grub"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "path",
+    "subject": "/etc/default/grub",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 37,
+  "kind": "kernel-boot",
+  "question": "How do I install the NVIDIA drivers?",
+  "gen_s": 300,
+  "run_s": 30,
+  "run_id": "a077041acb8d",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: 'nvidia-smi' is not a command here; step 6: 'nvidia-smi' is not a command here",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'nvidia-smi' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "nvidia-smi"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl isolate multi-user.target"
+   },
+   {
+    "n": 3,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (<version>) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "chmod +x NVIDIA-Linux-x86_64-<version>.run"
+   },
+   {
+    "n": 4,
+    "kind": "skip",
+    "cls": "skipped",
+    "detail": "",
+    "note": "example with a placeholder (<version>) for you to fill in; logins are tested from the lab's prober machine instead",
+    "target": "",
+    "cmd": "sudo ./NVIDIA-Linux-x86_64-<version>.run"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "rebooted: the sandbox restarted on the same disk in 5s",
+    "target": "",
+    "cmd": "sudo reboot"
+   },
+   {
+    "n": 6,
+    "kind": "run",
+    "cls": "command_not_found",
+    "detail": "'nvidia-smi' is not a command here",
+    "note": "",
+    "target": "",
+    "cmd": "nvidia-smi"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 38,
+  "kind": "kernel-boot",
+  "question": "How do I install Docker and run a hello-world container?",
+  "gen_s": 125,
+  "run_s": 45,
+  "run_id": "efcc6be1584f",
+  "lab_verdict": "failed",
+  "lab_summary": "step 5: Run 'docker run --help' for more information",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get update"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo apt-get install -y docker.io"
+   },
+   {
+    "n": 3,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl start docker"
+   },
+   {
+    "n": 4,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "sudo systemctl enable docker"
+   },
+   {
+    "n": 5,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "Run 'docker run --help' for more information",
+    "note": "",
+    "target": "",
+    "cmd": "sudo docker run hello-world"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "package",
+    "subject": "docker.io",
+    "ok": true,
+    "decisive": null,
+    "detail": "install ok installed"
+   },
+   {
+    "kind": "service",
+    "subject": "docker",
+    "ok": true,
+    "decisive": null,
+    "detail": ""
+   },
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 39,
+  "kind": "explanation",
+  "question": "What does the load average in uptime actually mean?",
+  "gen_s": 168,
+  "run_s": 15,
+  "run_id": "6a16e18b38f9",
+  "lab_verdict": "partial",
+  "lab_summary": "All 2 steps ran, but none changed the system, so there was nothing to verify.",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "uptime | awk '{print $NF}'"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "# 1-minute load average"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ },
+ {
+  "n": 40,
+  "kind": "explanation",
+  "question": "What is the difference between a hard link and a symbolic link?",
+  "gen_s": 245,
+  "run_s": 15,
+  "run_id": "873f096e8e95",
+  "lab_verdict": "failed",
+  "lab_summary": "step 1: ln: failed to access 'original_file': No such file or directory",
+  "steps": [
+   {
+    "n": 1,
+    "kind": "run",
+    "cls": "step_failed",
+    "detail": "ln: failed to access 'original_file': No such file or directory",
+    "note": "",
+    "target": "",
+    "cmd": "ln original_file hard_link"
+   },
+   {
+    "n": 2,
+    "kind": "run",
+    "cls": "ok",
+    "detail": "",
+    "note": "",
+    "target": "",
+    "cmd": "ln -s target_file_or_directory symlink"
+   }
+  ],
+  "checks": [
+   {
+    "kind": "reachable",
+    "subject": "port 22 (sshd) from another machine",
+    "ok": true,
+    "decisive": false,
+    "detail": "reachable"
+   }
+  ]
+ }
+]

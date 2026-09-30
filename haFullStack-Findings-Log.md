@@ -3414,6 +3414,26 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 
 **Verified by:** the same answer re-run on the new rootfs: "Code confirmed" on the first code, verdict lab_verified. In a fresh sandbox, `timedatectl` reports "System clock synchronized: yes", "NTP service: active".
 
+### F-188 — The 40-question measurement showed the lab's harness, not the model, was the main source of wrong results: 5 of 9 "verified" answers were false, and 21 of 40 results were untrustworthy
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (step parsing and judging); the Sentinel corpus. Stage L10 of `llm-chat-lab-sandbox-Phased-Implementation.md`; raw results in `reports/llm-chat-lab/l10-results.json`.
+
+**Symptom:** 40 real Linux Help questions ran through the model and the lab (2026-09-30). Raw tally: 9 lab_verified, 6 partial, 25 failed. Reading every run by hand showed:
+- **Five "verified" results were false or weak.** An SSH-port answer whose change was in prose, so nothing changed, while the prober only checked port 22. A ufw answer that opened only SSH when the question asked for HTTP/HTTPS too. A RAID1 answer whose `mdadm --create` failed inside a multi-line block that was judged by its last line. A static IP never checked. NFS never tested between machines.
+- **Many failures were not the advice.**
+  - Harness: `find`/`grep`/`ss | grep` exit statuses, `top`/`passwd` with no terminal, `crontab -e`, a wrong correction (htop → "bashtop"), a duplicated INI section, a netplan directory bug.
+  - Placeholders run literally: `username`, `/path/to/…`, `server_ip`.
+  - Fixable lab gaps: no spare disk, lvm2 missing, Docker storage on the overlay root.
+- **Genuine advice errors were caught:** four.
+
+**Root cause:** the harness judged only exit codes and code blocks. It ignored prose instructions, judged a whole multi-line block by its last line, and had no goal checks for most kinds of question. So "it ran" was too often read as "it worked", and harness failures were recorded as advice failures.
+
+**Fix (this entry):**
+- **The corpus is quarantined, as the false results had already reached it.** The five false passes were demoted from automatic reuse (grounding rows back to `unreviewed`, runs marked `needs_rerun`). The 20 runs that failed because of the harness, placeholders or a fixable lab gap were marked `needs_rerun`, so their "lab facts" no longer reach the prompt. Genuine advice errors and true microVM limits are kept.
+- **The plan is reordered:** L10a (harness correctness, nine specific fixes) comes first, then graded verification with goal checks for exactly the five false passes, then spare disks and server packages, then a re-run of the same 40, then "try another way".
+
+**Verified by:** Sentinel advice stats after the clean-up: 11 lab_verified, 12 failed, 5 partial, 25 needs_rerun. The five demoted grounding rows are `unreviewed`.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3553,3 +3573,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.13 | 2026-09-30 | Paul Scott | Direct request: a read-only live view of the lab machine, login instructions afterwards, and a Destroy button. F-185: streaming transcript; kept lab machines (token-gated, expiring, capped) opened in the Terminal panel; destroy. |
 | v3.14 | 2026-09-30 | Paul Scott | From a user's run. F-186: per-step caps keep the whole lab log readable; a kept machine explains why a tab without its key can't open it. |
 | v3.15 | 2026-09-30 | Paul Scott | From a user's verified MFA run that needed three codes. F-187: TOTP codes follow the target's clock; sandboxes gain systemd-timesyncd. |
+| v3.16 | 2026-09-30 | Paul Scott | Direct request: measure before building further (L10, 40 questions). F-188: the harness, not the model, was the main source of wrong results; false passes and harness-caused facts quarantined from the corpus; plan reordered around harness correctness. |
