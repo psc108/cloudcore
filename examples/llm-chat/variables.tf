@@ -586,7 +586,7 @@ variable "firecracker_rootfs_name" {
 variable "firecracker_rootfs_sha256" {
   description = "SHA-256 of firecracker_rootfs_name — printed by api/build-firecracker-rootfs.sh itself after each build; update this value by hand whenever that script is re-run."
   type        = string
-  default     = "3eebfef7812571e35e81ce71be1919b2cfd423ca7271c9dec448b2dc562615a4"
+  default     = "87e5cf4f9af2027ebca28d28940ab371d44e3dcd7155087d447cba38ea0b7046"
 }
 
 # Deliberately outside both the platform's own real bridge range

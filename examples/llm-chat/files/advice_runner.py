@@ -288,10 +288,18 @@ print(json.dumps(res))
 """
 
 
+# The target's clock minus ours, measured at setup: codes must match the
+# clock the target checks them with. A microVM's clock starts from a
+# whole-second RTC (found live: up to ~1s behind, so codes computed from the
+# coordinator's clock were rejected near a 30s boundary).
+_target_clock_offset = 0.0
+
+
 def totp(secret_b32: str, at: float | None = None, step: int = 30, digits: int = 6) -> str:
-    """RFC 6238 code for a base32 secret (google-authenticator's first line)."""
+    """RFC 6238 code for a base32 secret (google-authenticator's first line),
+    by the target's clock unless `at` is given."""
     key = base64.b32decode(secret_b32.strip().upper() + "=" * (-len(secret_b32.strip()) % 8))
-    counter = int((time.time() if at is None else at) // step)
+    counter = int(((time.time() + _target_clock_offset) if at is None else at) // step)
     digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
     value = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
@@ -338,7 +346,7 @@ class _LoginProber:
         if wrong or not self.secret:
             return "000000"
         # A distinct time step per attempt: "disallow reuse" is common.
-        return totp(self.secret, time.time() + 30 * ((self.attempts % 3) - 1))
+        return totp(self.secret, time.time() + _target_clock_offset + 30 * ((self.attempts % 3) - 1))
 
     def _pace(self) -> None:
         # pam_google_authenticator's default rate limit is 3 logins per 30s.
@@ -963,6 +971,14 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             f"{vm.scratch_mib // 1024}GB disk\n# lab setup: apt and debconf take the defaults, as a person "
             "following the answer would\n")
         _exec(root, _HARNESS_SETUP, 60)
+        global _target_clock_offset
+        t_a = time.time()
+        _, guest_now, _ = _exec(root, "date +%s.%N", 15)
+        try:
+            _target_clock_offset = float(guest_now.strip()) - (t_a + time.time()) / 2
+        except ValueError:
+            _target_clock_offset = 0.0
+        say(f"# lab machine clock: {_target_clock_offset:+.1f}s from the lab's (codes follow the machine's clock)\n")
         baseline = {}
         pam = _pam_services_touched(steps)
         sshd_changed = "sshd" in pam or any("sshd_config" in (s.target or "") or

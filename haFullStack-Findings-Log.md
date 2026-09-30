@@ -3397,6 +3397,23 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 
 **Verified by:** the user's answer re-run on the lab coordinator: lab_verified, a 10,402-character log with every step, the PAM write, the baseline logins, the checks and the verdict, and `journalctl -xe` reduced to its ends ("… 1479 lines omitted …"). The deployed page (through the LB) serves the token-storing code and the new message.
 
+### F-187 — The lab typed TOTP codes by the coordinator's clock while the sandbox checked them by its own, ~1s behind and never synced
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_target_clock_offset`, `totp`, `_LoginProber._code`); `api/build-firecracker-rootfs.sh` (`systemd-timesyncd`).
+
+**Symptom:** a user's verified MFA run showed step 2 "answered its questions: 'y', the code from the new secret, the code from the new secret, the code from the new secret …". `google-authenticator` rejected the lab's first two codes ("Code incorrect (correct code 289189)" three times) and accepted the third.
+
+**Root cause:**
+- A microVM's wall clock starts from a whole-second RTC at boot; measured live, the guest ran 0.67s behind the coordinator.
+- The image had no time sync: `timedatectl` said "NTP service: n/a", because `systemd-timesyncd` is a separate package that ubuntu-minimal/standard don't pull in. A real Ubuntu server has it active.
+- Near a 30s boundary, a code computed by the coordinator's clock belongs to the next window until the guest catches up.
+
+**Fix:**
+- The runner measures the target's clock offset at setup, logs it ("# lab machine clock: -0.7s …"), and computes every code by the target's time, in the step responder and in the prober.
+- The rootfs now installs `systemd-timesyncd`, so sandboxes keep synced time like real servers.
+
+**Verified by:** the same answer re-run on the new rootfs: "Code confirmed" on the first code, verdict lab_verified. In a fresh sandbox, `timedatectl` reports "System clock synchronized: yes", "NTP service: active".
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3535,3 +3552,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.12 | 2026-09-30 | Paul Scott | From a user's fifth live MFA run. F-184: false LOCKOUT from a fixed-order PAM probe; prompts are now answered by what they ask, and the false corpus record was corrected (now lab_verified). |
 | v3.13 | 2026-09-30 | Paul Scott | Direct request: a read-only live view of the lab machine, login instructions afterwards, and a Destroy button. F-185: streaming transcript; kept lab machines (token-gated, expiring, capped) opened in the Terminal panel; destroy. |
 | v3.14 | 2026-09-30 | Paul Scott | From a user's run. F-186: per-step caps keep the whole lab log readable; a kept machine explains why a tab without its key can't open it. |
+| v3.15 | 2026-09-30 | Paul Scott | From a user's verified MFA run that needed three codes. F-187: TOTP codes follow the target's clock; sandboxes gain systemd-timesyncd. |

@@ -188,7 +188,7 @@ apt-get install -y --no-install-recommends sudo bash-completion
 apt-get install -y --no-install-recommends \
   ubuntu-minimal ubuntu-standard rsyslog dbus libpam-systemd iptables ufw \
   apparmor command-not-found openssh-client tcpdump mtr-tiny uuid-runtime \
-  manpages iputils-tracepath
+  manpages iputils-tracepath systemd-timesyncd
 
 # Stage 12 (llm-chat-sandbox-extensions-Phased-Implementation.md): the
 # toolchains verify_proxy.py's per-run microVMs use for Bash, Node, C/C++
