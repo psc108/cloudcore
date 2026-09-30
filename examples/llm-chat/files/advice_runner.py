@@ -492,6 +492,38 @@ def _network_probes(steps, root, prober_root, answer: str, services: list[str], 
     return checks
 
 
+_OR_INSTALL_RE = re.compile(r"\|\|\s*(?:sudo\s+)?apt(?:-get)?\s+(?:-\S+\s+)*install\b")
+_GUARDED_INSTALL_RE = re.compile(r"(?:command\s+-v|which|type|dpkg\s+-s)\s+(\S+)[^|;&\n]*\|\|\s*(?:sudo\s+)?"
+                                 r"apt(?:-get)?\s+(?:-\S+\s+)*install\s+([^\n;&|]*)")
+
+
+def _explain_missing_packages(steps: list[Step], checks: list[dict], root) -> None:
+    """An install step that exited 0 but left its package missing did
+    nothing: say which step and why, instead of a bare package failure.
+    Found live: `apt-get update || apt-get install X` -- the install only
+    runs if the update FAILS. The install-if-missing idiom
+    (`command -v X || apt-get install X`) is not a mistake when X exists."""
+    for c in checks:
+        if c["kind"] != "package" or c["ok"]:
+            continue
+        pkg = c["subject"]
+        for s in steps:
+            if s.kind != "run" or s.cls != "ok" or pkg not in s.source:
+                continue
+            guard = next((m for m in _GUARDED_INSTALL_RE.finditer(s.source) if pkg in m.group(2).split()), None)
+            if guard and _exec(root, f"command -v {shlex.quote(guard.group(1))}", 10)[0] == 0:
+                c["ok"] = True
+                c["detail"] = f"not installed, but '{guard.group(1)}' already existed, so the answer's check skipped it"
+                break
+            s.cls = "no_effect"
+            if _OR_INSTALL_RE.search(s.source):
+                s.detail = (f"exited 0, but '{pkg}' was never installed: in 'A || B', B only runs when A "
+                            "fails, and A succeeded -- chain steps that must all happen with '&&'")
+            else:
+                s.detail = f"exited 0, but '{pkg}' is not installed afterwards"
+            break
+
+
 # sshd -T prints canonical, lower-case names; these are the old spellings
 # answers still use.
 _SSHD_ALIASES = {"challengeresponseauthentication": "kbdinteractiveauthentication",
@@ -876,6 +908,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             code, out, _ = _exec(root, f"systemctl is-active {shlex.quote(svc)}", 30)
             checks.append({"kind": "service", "subject": svc, "ok": out.strip() == "active",
                            "detail": out.strip()[:200] if out.strip() != "active" else ""})
+        _explain_missing_packages(steps, checks, root)
         checks += _sshd_effective_checks(steps, root)
         touched = " ".join(paths)
         for rx, cmd, label in _VALIDATORS:

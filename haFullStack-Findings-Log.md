@@ -3296,6 +3296,28 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 
 **Verified by:** the user's exact answer re-run on the lab coordinator after restarting both services (2026-09-30), 27s. Summary: "LOCKOUT: following this answer breaks 'login' login, which worked before it; step 1: no package called 'google-authenticator' in Ubuntu 22.04; step 2: 'google-authenticator' is not a command here; …". SSH checks shown as ℹ. Sentinel 50/50 tests pass, one new for worded details.
 
+### F-182 — An MFA answer wrote `apt-get update || apt-get install …`, so the install never ran; the lab caught the lockout but showed step 1 as ✓. Our own prompt's `||` example probably taught it
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_explain_missing_packages`, the `no_effect` class); the Linux Help system prompt (all three copies); Sentinel `advice_runs._facts_of`.
+
+**Symptom:** a user's live MFA answer used the right package this time, but step 1 was `sudo apt-get update || sudo apt-get install -y libpam-google-authenticator`. The update succeeded, so the install (which only runs if the update *fails*) never happened. The lab found every consequence: the package missing, `google-authenticator` not a command, and after the reboot the added `pam_google_authenticator.so` line locking console login. But step 1 showed ✓ (exit 0), and nothing named the `||` as the cause.
+
+**Root cause:**
+- A step was judged only by its exit status.
+- The Linux Help prompt's only chaining example is the install-if-missing idiom `command -v X || sudo apt-get install -y X`. The model generalised `||` to steps that must all happen.
+
+**Fix:**
+- **Runner:** when an install step exited 0 but its package is missing afterwards, the step is re-marked `no_effect` with the reason. For `A || install`: "in 'A || B', B only runs when A fails, and A succeeded; chain steps that must all happen with '&&'".
+- **The idiom is left alone:** for `command -v X || install`, if X already exists the missing package is not a failure ("'X' already existed, so the answer's check skipped it").
+- **Prompt:** one sentence in all three copies: "Chain steps that must all happen with && …; || means 'only if the first part failed', so use it only for that install-if-missing check".
+- **Sentinel:** `no_effect` steps become lab facts quoting the command.
+
+**Verified by:**
+- the user's answer re-run on the lab coordinator (2026-09-30): step 1 ✗ with the `||` explanation, and the lockout leads the summary;
+- `command -v curl >/dev/null || sudo apt-get install -y curl` stays lab_verified ("curl" present);
+- the prompt copies (Python, OpenTofu, Ansible, live file) are identical;
+- Sentinel 51/51 tests pass.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3429,3 +3451,4 @@ Re-running that answer right after restarting verify-proxy failed at once with "
 | v3.7 | 2026-09-30 | Paul Scott | Direct request: "we need to be able to install anything the llm might offer as advice to install and then configure it ... we'll start collecting a decent corpus of our own"; "size the vm by available resources across the peers"; run every step automatically and reuse verified answers automatically. F-176 (a lab guest kernel: netfilter, ufw's IPv6 matches, tunnels, filesystems, AppArmor LSM order), F-177 (the control channel on vsock plus a separate, self-repairing sshd), F-178 (VM-to-VM isolation and a MAC shared by every VM), F-179 (the advice runner, whole-archive rootfs, resource-based sizing, the Sentinel corpus and reuse). |
 | v3.8 | 2026-09-30 | Paul Scott | Direct request: "add another (simpler probably) terminal/vm that can run automated ssh/login (but not limited to) so that the test could work before committing this to a reviewed and working corpus". F-180: a prober VM per run tests the answer's goal from outside (real SSH/PAM logins with TOTP, reachability, HTTP), with a baseline, real reboots, answered prompts and an sshd effective-config check. |
 | v3.9 | 2026-09-30 | Paul Scott | From a user's own run of the MFA question on the live page (a lockout the lab correctly found). F-181: a service restart deleted in-flight advice runs' private bridges; lockouts now lead the report; plainer step and PAM wording. |
+| v3.10 | 2026-09-30 | Paul Scott | From a user's live MFA run. F-182: an install step that did nothing (`update || install`) is named and explained; the prompt now says to chain with && and keep || for the install-if-missing check. |

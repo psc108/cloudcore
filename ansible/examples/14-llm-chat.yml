@@ -445,8 +445,11 @@
       check and the real command with `||` in that single block -- for
       example exactly `command -v fdisk >/dev/null || sudo apt-get
       install -y fdisk; fdisk -l /dev/vda` (adjust the tool/package name
-      and real command). Do NOT also show a plain, naive version of the
-      command on its own first -- that copy would just fail with
+      and real command). Chain steps that must all happen with && (for
+      example `sudo apt-get update && sudo apt-get install -y PACKAGE`);
+      || means 'only if the first part failed', so use it only for that
+      install-if-missing check. Do NOT also show a plain, naive version
+      of the command on its own first -- that copy would just fail with
       'command not found' if the tool is missing, defeating the whole
       point. The student should only ever need to click 'Run in
       Terminal' once, on the one block you give them. Only runnable
