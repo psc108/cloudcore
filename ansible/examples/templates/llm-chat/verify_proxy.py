@@ -3050,6 +3050,8 @@ function makeAskPanel(cfg) {
   // kept in history (DOM calls and textContent only, like everything the
   // model or a run produces).
   const LAB_VERDICTS = {
+    goal_verified: ['ok', 'Verified: every step worked in a fresh Ubuntu 22.04 sandbox, and the result was checked'],
+    ran_clean: ['info', 'Every step worked, but nothing checked the result (not reused until reviewed)'],
     lab_verified: ['ok', 'Verified: every step worked in a fresh Ubuntu 22.04 sandbox'],
     failed: ['bad', 'Tried in a fresh Ubuntu 22.04 sandbox: problems found'],
     partial: ['info', 'Tried in a fresh Ubuntu 22.04 sandbox'],
@@ -3115,12 +3117,15 @@ function makeAskPanel(cfg) {
       // L10b: the answer failed as written, but the lab repaired its steps.
       const r = lab.repaired;
       const rb = document.createElement('div');
-      rb.className = 'labrun-repaired ' + (r.verdict === 'lab_verified' ? 'ok' : 'bad');
+      const good = ['goal_verified', 'lab_verified'].includes(r.verdict);
+      rb.className = 'labrun-repaired ' + (good ? 'ok' : (r.verdict === 'ran_clean' ? 'info' : 'bad'));
       const head = document.createElement('div');
       head.className = 'labrun-head';
-      head.textContent = r.verdict === 'lab_verified'
-        ? 'After the lab repaired it: every step worked and every check passed'
-        : 'After the lab repaired it: ' + (r.summary || 'still not working');
+      head.textContent = good
+        ? 'After the lab repaired it: every step worked, and the result was checked'
+        : r.verdict === 'ran_clean'
+          ? 'After the lab repaired it: every step worked, but nothing checked the result'
+          : 'After the lab repaired it: ' + (r.summary || 'still not working');
       rb.appendChild(head);
       for (const c of r.changes) {
         const d = document.createElement('div');

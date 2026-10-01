@@ -208,6 +208,10 @@ apt-get install -y --no-install-recommends nodejs gcc g++ libc6-dev golang-go
 # every prompt (python3-paramiko), and TOTP codes (oathtool). pamtester and
 # oathtool are in universe, so this comes after the full sources above.
 apt-get install -y --no-install-recommends pamtester python3-paramiko oathtool
+# L12/L13: the prober mounts NFS shares an answer sets up (nfs-common), and
+# the image carries what a real Ubuntu 22.04 server ships for disks and
+# monitoring (found in L10: pvcreate and htop were missing).
+apt-get install -y --no-install-recommends nfs-common lvm2 mdadm cryptsetup htop
 
 # Stage 11/12: the guest-side counterpart of verify_proxy.py's own
 # _stdin_wait_state(). Run as root (via sudo) over SSH by the per-run

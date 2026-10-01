@@ -293,8 +293,9 @@ def parse_steps(answer: str) -> list[Step]:
             # The answer's example client network means "your clients": in the
             # lab that's the prober's private link (found in L10a: an export for
             # 192.168.1.0/24 refused the lab's own mount).
-            new = re.sub(r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?(?=\()",
-                         "172.30.0.0/24", code)
+            new = re.sub(r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?(?=\()"
+                         r"|\b(?:client[_-]?ip|client[_-]?address|your[_-]?client\w*)\b(?=\()|<client[\w-]*>(?=\()",
+                         "172.30.0.0/24", code, flags=re.IGNORECASE)
             if new != code:
                 subs.append("example client network in /etc/exports -> 172.30.0.0/24 (the lab's clients)")
                 code = new
@@ -750,6 +751,138 @@ def _explain_missing_packages(steps: list[Step], checks: list[dict], root) -> No
             break
 
 
+# -- Goal checks from the question (L12) ---------------------------------------------
+#
+# "It ran" is not "it did what was asked" (found in L10: a ufw answer that
+# opened only SSH when the question asked for HTTP/HTTPS too, a static IP
+# never checked). Each check below is triggered by what the QUESTION asks,
+# takes its parameters from the answer, and tests the resulting state --
+# from the prober where "from another machine" matters.
+
+_PORT_WORDS = {"ssh": 22, "http": 80, "https": 443, "dns": 53, "smtp": 25, "mysql": 3306, "mariadb": 3306,
+               "postgres": 5432, "postgresql": 5432, "ftp": 21, "imap": 143, "rdp": 3389}
+
+
+def _port_state(prober_root, port: int) -> str:
+    """open / refused (the host answered: the firewall let it through) /
+    filtered (no answer: dropped), seen from the prober."""
+    _, out, _ = _exec(prober_root, f"timeout 3 bash -c '</dev/tcp/{TARGET_PAIR_IP}/{port}' 2>&1; echo rc=$?", 10)
+    rc = re.search(r"rc=(\d+)", out)
+    code = int(rc.group(1)) if rc else 1
+    return "open" if code == 0 else ("refused" if "refused" in out.lower() else "filtered")
+
+
+def _goal(subject: str, ok: bool, detail: str = "") -> dict:
+    return {"kind": "goal", "subject": subject, "ok": ok, "detail": detail, "decisive": True}
+
+
+def _goal_checks(question: str, answer: str, steps: list, root, prober_root) -> list[dict]:
+    q, a = question.lower(), answer
+    ran = "\n".join(s.final or s.source for s in steps if s.cls in ("ok", "repaired"))
+    checks = []
+
+    def sh(cmd, t=30):
+        return _exec(root, cmd, t)
+
+    if prober_root is not None and re.search(r"\b(?:ufw|firewall|iptables|nft)\b", q):
+        wanted = {p for w, p in _PORT_WORDS.items() if re.search(r"\b" + w + r"\b", q)}
+        wanted |= {int(n) for n in re.findall(r"\bport\s+(\d{2,5})\b", q)}
+        for port in sorted(wanted):
+            st = _port_state(prober_root, port)
+            checks.append(_goal(f"port {port} is allowed through the firewall (from another machine)",
+                                st != "filtered", f"connection {st}"))
+        if wanted and re.search(r"\bonly\b", q):
+            st = _port_state(prober_root, 8081)
+            checks.append(_goal("a port the question didn't ask for (8081) is blocked", st == "filtered",
+                                f"connection {st}" + ("" if st == "filtered" else ": the firewall let it through")))
+    m = re.search(r"\bssh\b.*?\bport\b.*?\b(\d{2,5})\b", q)
+    if m and prober_root is not None:
+        port = m.group(1)
+        _, banner, _ = _exec(prober_root, f"timeout 4 bash -c 'exec 3<>/dev/tcp/{TARGET_PAIR_IP}/{port}; "
+                                          f"head -c 4 <&3' 2>&1", 10)
+        checks.append(_goal(f"SSH answers on port {port} (from another machine)", banner.startswith("SSH-"),
+                            "" if banner.startswith("SSH-") else banner.strip()[:120] or "no answer"))
+    if re.search(r"\bpassword\b", q) and re.search(r"\b(?:disable|no|without|only)\b", q) and "ssh" in q:
+        _, eff, _ = sh("sshd -T 2>/dev/null | grep -E '^(passwordauthentication|kbdinteractiveauthentication) '")
+        on = [ln for ln in eff.splitlines() if ln.split()[-1:] == ["yes"]]
+        checks.append(_goal("SSH no longer accepts passwords", not on, "; ".join(on)))
+    if re.search(r"\b(?:static ip|ip address|second ip|another ip|add(?:ing)? an? ip)\b", q):
+        addrs = sorted({f"{ip}/{pl}" for ip, pl in re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3})/(\d{1,2})\b", ran)
+                        if not ip.startswith(("0.", "255."))})
+        _, have, _ = sh("ip -4 -o addr show")
+        for addr in addrs[:3]:
+            checks.append(_goal(f"{addr} is assigned to an interface", f" {addr} " in have))
+    if "hostname" in q:
+        m = re.search(r"hostnamectl\s+set-hostname\s+(\S+)", ran)
+        if m:
+            name = m.group(1).strip("'\"")
+            _, now, _ = sh("hostnamectl --static 2>/dev/null || cat /etc/hostname")
+            checks.append(_goal(f"the hostname is now '{name}'", now.strip() == name, f"it is '{now.strip()}'"))
+    if "timezone" in q or "time zone" in q:
+        m = re.search(r"\b([A-Z][a-z]+/[A-Z][A-Za-z_]+)\b", question) or re.search(r"\b([A-Z][a-z]+/[A-Z][A-Za-z_]+)\b", ran)
+        if m:
+            _, tz, _ = sh("timedatectl show -p Timezone --value")
+            checks.append(_goal(f"the timezone is {m.group(1)}", tz.strip() == m.group(1), f"it is {tz.strip()}"))
+    if "sudo" in q and re.search(r"\b(?:user|account)\b", q):
+        m = re.search(r"\b(?:called|named)\s+['\"`]?([a-z_][a-z0-9_-]*)", q) or \
+            re.search(r"\b(?:useradd|adduser)\s+(?:-\S+\s+)*([a-z_][a-z0-9_-]*)", ran)
+        if m:
+            user = m.group(1)
+            _, groups, _ = sh(f"id -nG {shlex.quote(user)} 2>&1")
+            _, rights, _ = sh(f"sudo -l -U {shlex.quote(user)} 2>&1")
+            ok = "sudo" in groups.split() or "(ALL" in rights
+            checks.append(_goal(f"user '{user}' exists and can use sudo", ok, groups.strip()[:120]))
+    if re.search(r"\binherit", q) and "group" in q:
+        m = re.search(r"chmod\s+(?:-R\s+)?[0-7]*g\+[rwx]*s[rwx]*\s+(\S+)|chmod\s+2[0-7]{3}\s+(\S+)", ran)
+        if m:
+            d = m.group(1) or m.group(2)
+            _, mode, _ = sh(f"stat -c %A {shlex.quote(d)}")
+            ok = len(mode.strip()) == 10 and mode.strip()[6] in "sS"
+            checks.append(_goal(f"new files in {d} inherit its group (setgid)", ok, mode.strip()))
+    if re.search(r"\b(?:systemd|service)\b", q) and re.search(r"\bboot\b", q):
+        for unit in dict.fromkeys(re.findall(r"/etc/systemd/system/([\w@.-]+\.service)", a)):
+            _, en, _ = sh(f"systemctl is-enabled {unit}")
+            checks.append(_goal(f"{unit} will start at boot", en.strip() == "enabled", en.strip()))
+            if re.search(r"\b(?:restart|crash)", q):
+                _, rs, _ = sh(f"systemctl show -p Restart --value {unit}")
+                checks.append(_goal(f"{unit} restarts if it crashes", rs.strip() not in ("", "no"), f"Restart={rs.strip()}"))
+    if "fail2ban" in q:
+        code, out, _ = sh("for i in 1 2 3; do fail2ban-client status sshd && exit 0; sleep 4; done; exit 1")
+        checks.append(_goal("fail2ban is protecting SSH (sshd jail active)", code == 0, out.strip()[-160:]))
+    if re.search(r"\blog ?rotat", q):
+        m = re.search(r"(/var/log/[\w./*-]+)", question) or re.search(r"(/var/log/[\w./*-]+)", ran)
+        if m:
+            code, out, _ = sh(f"logrotate -d /etc/logrotate.conf 2>&1 | grep -F {shlex.quote(m.group(1).rstrip('/*'))} | head -3")
+            checks.append(_goal(f"logrotate covers {m.group(1)}", bool(out.strip())))
+    if "swap" in q:
+        _, sw, _ = sh("swapon --show --noheadings")
+        checks.append(_goal("swap is active", bool(sw.strip()), sw.strip()[:120]))
+    if "docker" in q:
+        code, out, _ = sh("docker run --rm hello-world 2>&1 | tail -3", 180)
+        checks.append(_goal("a Docker container runs", "Hello from Docker" in out, out.strip()[-160:]))
+    if "nfs" in q and prober_root is not None:
+        _, exports, _ = sh("exportfs -v 2>/dev/null | awk 'NR==1{print $1}'")
+        path = exports.strip()
+        if path:
+            code, out, _ = _exec(prober_root, f"mkdir -p /mnt/labnfs && timeout 30 mount -t nfs {TARGET_PAIR_IP}:{path} "
+                                              f"/mnt/labnfs && ls /mnt/labnfs >/dev/null && umount /mnt/labnfs", 45)
+            checks.append(_goal(f"another machine can mount {path} over NFS", code == 0, out.strip()[-160:]))
+    if re.search(r"\bdns\b|\bbind9?\b", q) and prober_root is not None:
+        zones = [z for z in re.findall(r'zone\s+"([\w.-]+)"', a) if not z.endswith((".arpa", "."))]
+        for z in zones[:2]:
+            _, out, _ = _exec(prober_root, f"dig +short @{TARGET_PAIR_IP} {z} SOA 2>&1", 20)
+            checks.append(_goal(f"another machine can resolve {z} from this DNS server", bool(out.strip()) and
+                                "timed out" not in out and "SERVFAIL" not in out, out.strip()[:120]))
+    if re.search(r"\bpostgres", q):
+        for db in dict.fromkeys(re.findall(r"CREATE DATABASE\s+\"?(\w+)", a, re.IGNORECASE)):
+            _, out, _ = sh(f"cd /tmp && sudo -u postgres psql -tAc \"select 1 from pg_database where datname='{db}'\" 2>&1")
+            checks.append(_goal(f"database '{db}' exists", out.strip() == "1", out.strip()[:120]))
+        for user in dict.fromkeys(re.findall(r"CREATE (?:USER|ROLE)\s+\"?(\w+)", a, re.IGNORECASE)):
+            _, out, _ = sh(f"cd /tmp && sudo -u postgres psql -tAc \"select 1 from pg_roles where rolname='{user}'\" 2>&1")
+            checks.append(_goal(f"database user '{user}' exists", out.strip() == "1", out.strip()[:120]))
+    return checks
+
+
 # sshd -T prints canonical, lower-case names; these are the old spellings
 # answers still use.
 _SSHD_ALIASES = {"challengeresponseauthentication": "kbdinteractiveauthentication",
@@ -958,7 +1091,7 @@ class RunResult:
     vm: dict = field(default_factory=dict)
     steps: list = field(default_factory=list)
     checks: list = field(default_factory=list)
-    verdict: str = ""            # lab_verified | failed | partial | not_runnable
+    verdict: str = ""            # goal_verified | ran_clean | failed | partial | not_runnable
     summary: str = ""
     error: str = ""
     # Everything that happened on the lab machine, as a read-only terminal
@@ -1672,6 +1805,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 login_prober.root = root  # a reboot replaced the connection
                 checks += _login_probes(steps, login_prober, baseline, question, answer, sshd_changed)
             checks += _network_probes(steps, root, prober_root, answer, services_started, pkgs)
+        say("# checking what the question asked for...\n", True)
+        checks += _goal_checks(question, answer, steps, root, prober_root)
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
@@ -1740,9 +1875,18 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
     failed_checks = [c for c in checks if not c["ok"] and c.get("decisive", True)]
     changed = any(s.kind in ("write", "append", "prepend", "edit", "prose") or _APT_INSTALL_RE.search(s.source)
                   or _SERVICE_RE.search(s.source) or _STATE_CHANGE_RE.search(s.source) for s in acted if s.cls == "ok")
-    if not bad and not failed_checks and changed:
-        result.verdict = "lab_verified"
-        result.summary = f"All {len(acted)} steps worked in a fresh Ubuntu 22.04 sandbox and every check passed."
+    # L12: a check on what the answer set out to achieve.
+    goal = [c for c in checks if c["ok"] and c.get("decisive", True)
+            and c["kind"] in ("goal", "login", "http", "cron", "effective")]
+    if not bad and not failed_checks and changed and goal:
+        result.verdict = "goal_verified"
+        result.summary = (f"All {len(acted)} steps worked in a fresh Ubuntu 22.04 sandbox, and what they were meant to "
+                          f"achieve was checked: " + "; ".join(c["subject"] for c in goal[:3])
+                          + ("; ..." if len(goal) > 3 else "") + ".")
+    elif not bad and not failed_checks and changed:
+        result.verdict = "ran_clean"
+        result.summary = (f"All {len(acted)} steps worked and every check passed, but nothing tested what they were "
+                          "meant to achieve, so this is not reused until someone reviews it.")
     elif not bad and not failed_checks:
         result.verdict = "partial"
         result.summary = f"All {len(acted)} steps ran, but none changed the system, so there was nothing to verify."

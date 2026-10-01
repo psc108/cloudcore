@@ -3516,6 +3516,43 @@ The remaining 21 failures are itemised in the plan: 6 advice, 6 lab gaps for L13
 
 Each answer's own verdict stayed "failed". Sentinel: 53/53 tests pass, one new for repairs.
 
+### F-191 — Graded verification (L12): "verified" now requires a check of what the question asked for; answers that only ran cleanly wait for a human
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_goal_checks`, `_port_state`, `_finish_verdict` grades); `verify_proxy.py` (page labels); Sentinel (`insert_advice_run` promotion, UI filters); `api/build-firecracker-rootfs.sh` (nfs-common, lvm2, mdadm, cryptsetup, htop).
+
+**Symptom:** one verdict, lab_verified, meant anything from "the goal was tested from another machine" to "the steps exited 0", and both kinds were reused automatically. In L10, 5 of 9 lab_verified results were false or weak.
+
+**Root cause:** the lab only had goal checks for logins, ports and HTTP; everything else was judged by steps and syntax.
+
+**Fix:**
+- **Grades:**
+  - `goal_verified`: every step worked and a decisive check of what the answer set out to achieve passed;
+  - `ran_clean`: every step worked and every check passed, but nothing tested the result;
+  - `failed`, and `partial` (read-only), as before.
+- **Only `goal_verified` is promoted for automatic reuse.** `ran_clean` waits for a human approval.
+- **17 goal checks, triggered by the question, with parameters taken from the answer:**
+  - networking: firewall ports allowed or blocked from the prober (a refused connection still proves the firewall let it through); SSH answering on a requested port; SSH no longer accepting passwords; addresses assigned;
+  - system settings: hostname; timezone;
+  - users and permissions: a named user with sudo; setgid group inheritance;
+  - services: units enabled for boot and restarting on crash; the fail2ban sshd jail (with a wait); logrotate covering the path; swap; Docker;
+  - multi-machine: an NFS mount from the prober; DNS resolution from the prober;
+  - databases: the PostgreSQL database and user.
+- **Labels everywhere:** the page, the repaired-procedure verdict and Sentinel's Lab runs tab all show the new grades.
+- **Image:** the rootfs gains `nfs-common` (the prober mounts shares) and, as on a real Ubuntu server, `lvm2`, `mdadm`, `cryptsetup` and `htop`.
+
+**Correction to F-188:** its "ufw (only SSH opened)" was a misreading on my part. The lab's step list showed only the first line of a block, and the answer had also run `ufw allow 80/tcp` and `443/tcp`. That pass was weak (nothing checked it), not false. L12's checks now confirm 22, 80 and 443 are allowed and an unlisted port is blocked, from another machine.
+
+**Found on the way:** the lab's root filesystem is an overlay, and Linux can't NFS-export overlay directories by default. The server answered "No such file or directory" for an existing exported path. Together with Docker storage and swap files, this is why L13's scope widened: the root becomes a device-mapper snapshot instead.
+
+**Verified by:** 17 stored L10 answers on the lab coordinator (2026-10-01).
+- **goal_verified (11):** ufw (22/80/443 allowed, 8081 blocked), SSH on 2222, hostname, timezone, `deploy` with sudo, setgid directory, systemd unit at boot with restart, logrotate, Apache (HTTP 200), static IP, and fail2ban.
+- **failed as written, goal_verified after the lab's repairs (2):** fail2ban (a wait for the jail), and SSH keys only (a created key pair, with passwords off confirmed).
+- **Failed on their goal (2):** bind9 (another machine can't resolve the zone) and PostgreSQL (the database and user were never created, because the answer's `psql` ran as the wrong user).
+- **#5 (memory):** `ran_clean`.
+- **NFS:** failed on the overlay limit above.
+
+Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3658,3 +3695,4 @@ Each answer's own verdict stayed "failed". Sentinel: 53/53 tests pass, one new f
 | v3.16 | 2026-09-30 | Paul Scott | Direct request: measure before building further (L10, 40 questions). F-188: the harness, not the model, was the main source of wrong results; false passes and harness-caused facts quarantined from the corpus; plan reordered around harness correctness. |
 | v3.17 | 2026-09-30 | Paul Scott | Direct request: "yes" to the harness fixes first. F-189: L10a done; the same 40 answers re-run: 14 verified (was 8, 5 false), 21 failed (was 27), remaining failures itemised. |
 | v3.18 | 2026-10-01 | Paul Scott | Direct request: step-level repair ("a failure to install a package becomes multiple searches and download/install attempts"), then "yes, please". F-190: L10b done; failed steps repaired in place (lab strategies, then the model), repaired procedure kept beside the answer's own verdict. |
+| v3.19 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L12. F-191: graded verification with 17 goal checks; only goal_verified reused automatically; F-188's ufw claim corrected; overlay root found to block NFS export (L13 widened). |
