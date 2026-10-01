@@ -3792,6 +3792,24 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 - **Verified live:** threshold set to 2 min and `promtail` stopped on the kiwix VM. One event was raised ("No logs from example-dev-llm-chat-kiwix-01 for 2 minutes …") and the status went red. After promtail restarted, it returned to `watching` within a minute. Default restored.
 - **Tests:** Sentinel 64/64 pass.
 
+### F-198 — The distro's dnsmasq.service is enabled on the hub and fails every start, clashing with CloudCore's own dnsmasq on the lab bridge
+
+**Where:** the hub's `dnsmasq.service` (Ubuntu package default, `/etc/dnsmasq.conf`).
+
+**Symptom:** found while searching for leftovers of the 192.168.0.x to 192.168.1.x network change (F-197). `systemctl` shows `dnsmasq.service` as failed: `failed to create listening socket for 192.168.100.1: Address already in use`, most recently on 2026-09-30 06:40. It is `enabled`, so it fails again on every start.
+
+**Root cause:** CloudCore runs its own dnsmasq instances: DHCP/DNS on `ccbr0` (192.168.100.1) and `api/dns/dnsmasq.conf`. The distro's service, enabled by installing the `dnsmasq` package, tries to bind the same address. It has no role here, and it's unrelated to the network change.
+
+**Fix:** none applied (needs root, the user's call): `sudo systemctl disable --now dnsmasq.service`. CloudCore's own dnsmasq processes are separate and unaffected. Harmless meanwhile: it fails without disturbing CloudCore's.
+
+**Verified by:** the journal entries above, and the six running dnsmasq processes, all CloudCore's (`--interface=ccbr0 …`, `--conf-file=…/api/dns/dnsmasq.conf`).
+
+**The same search found no other live leftovers of the old network:**
+- **Repos:** only the private range `192.168.0.0/16` (correct) and a UI placeholder.
+- **CloudCore DB:** the approved peer is at 192.168.1.177; the four `192.168.0.31` rows are revoked pairings, kept as history.
+- **`/etc` and user config:** commented examples only.
+- **Not readable without root:** `grafana.ini` and the NetworkManager netplan files. The networking works (DHCP, 192.168.1.106), and Grafana reaches Loki at localhost.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3941,3 +3959,4 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 | v3.23 | 2026-10-01 | Paul Scott | Direct request: "commit and push first and then regrade/repair as required". F-195: demotion on a later failure; repaired procedures stored as answers, lab conveniences held for review; 11 pre-L12 runs regraded, all goal-verified. |
 | v3.24 | 2026-10-01 | Paul Scott | Direct request: move CloudCore's storage-hungry data to the new disk. F-196: artifact cache on a dedicated ext4 data disk, paths unchanged; busy-export switch bug fixed; cold Kiwix searches from a spinning disk noted. |
 | v3.25 | 2026-10-01 | Paul Scott | Reported: Grafana-from-Sentinel queries timing out. F-197: Loki's ring held the old LAN address since the network moved; pinned to 127.0.0.1. |
+| v3.26 | 2026-10-01 | Paul Scott | Direct request: log-gap check and a search for old-network leftovers. F-197 updated (log-gap detection); F-198: distro dnsmasq.service failing against CloudCore's own; no other leftovers. |
