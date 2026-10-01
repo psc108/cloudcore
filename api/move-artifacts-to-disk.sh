@@ -40,6 +40,7 @@ LABEL="cloudcore-data"
 FSTAB_TAG="# cloudcore-data (move-artifacts-to-disk.sh)"
 NFS_FSTAB_TAG="# cloudcore-artifacts (setup-artifact-nfs.sh)"
 REPO_UNIT="cloudcore-repo.service"
+NFS_UNIT="nfs-server.service"
 DRY_RUN=0
 
 log() { echo "move-artifacts: $*" >&2; }
@@ -153,21 +154,42 @@ verify() {
 
 fstab_has() { grep -qF "$1" /etc/fstab; }
 
+# On a failed switch: if nothing was moved yet, put the services back;
+# otherwise say how to undo.
+switch_failed() {
+  local rc=$?
+  [[ "${rc}" -ne 0 && "${DRY_RUN}" -eq 0 ]] || return 0
+  if [[ ! -d "${OLD}" ]]; then
+    log "switch failed before anything moved -- restarting what it stopped"
+    mountpoint -q "${NFS_MNT}" || mount "${NFS_MNT}" || true
+    systemctl start "${NFS_UNIT}" "${REPO_UNIT}" || true
+  else
+    log "switch failed part-way -- run: sudo $0 rollback"
+  fi
+}
+
 switch() {
   need_root
   check_data_mounted
   [[ ! -d "${OLD}" ]] || die "switch: already switched (${OLD} exists) -- see rollback/cleanup"
   [[ -n "$(ls -A "${DEST}")" ]] || die "switch: ${DEST} is empty -- run copy and verify first"
+  trap switch_failed EXIT
 
   # Final sync with nothing writing: the repo stopped; the ZIM updater only
   # runs weekly, and a run caught mid-switch would just retry next week.
   run systemctl stop "${REPO_UNIT}"
   run rsync -aHAX --delete "${SRC}/" "${DEST}/"
 
+  # An exported bind that a client has mounted can't be unmounted (found on
+  # the first real switch: "target is busy"); NFS clients' hard mounts wait
+  # out the minute this takes.
+  run systemctl stop "${NFS_UNIT}"
   if mountpoint -q "${NFS_MNT}"; then run umount "${NFS_MNT}"; fi
+  local owner
+  owner="$(owner_of "${SRC}")"
   run mv "${SRC}" "${OLD}"
   run mkdir "${SRC}"
-  run chown "$(owner_of "${OLD}")" "${SRC}"
+  run chown "${owner}" "${SRC}"
 
   local bind="${DEST} ${SRC} none bind,nofail,x-systemd.requires-mounts-for=${DATA_MNT} 0 0"
   if ! fstab_has "${bind}"; then
@@ -186,8 +208,10 @@ ${bind}
   run systemctl daemon-reload
   run mount "${SRC}"
   run mount "${NFS_MNT}"
+  run systemctl start "${NFS_UNIT}"
   run exportfs -ra
   run systemctl start "${REPO_UNIT}"
+  trap - EXIT
   if [[ "${DRY_RUN}" -eq 0 ]]; then
     [[ "$(stat -c %d "${SRC}")" == "$(stat -c %d "${DATA_MNT}")" ]] || die "switch: ${SRC} isn't on ${DATA_MNT}"
     log "switch: done -- ${SRC} and ${NFS_MNT} now on ${DATA_MNT}; old copy kept at ${OLD}"
@@ -199,6 +223,7 @@ rollback() {
   need_root
   [[ -d "${OLD}" ]] || die "rollback: nothing to roll back (${OLD} doesn't exist)"
   run systemctl stop "${REPO_UNIT}"
+  run systemctl stop "${NFS_UNIT}"
   if mountpoint -q "${NFS_MNT}"; then run umount "${NFS_MNT}"; fi
   if mountpoint -q "${SRC}"; then run umount "${SRC}"; fi
   run rmdir "${SRC}"
@@ -206,6 +231,7 @@ rollback() {
   run sed -i "\|^${DEST} ${SRC} none bind|d" /etc/fstab
   run systemctl daemon-reload
   run mount "${NFS_MNT}"
+  run systemctl start "${NFS_UNIT}"
   run exportfs -ra
   run systemctl start "${REPO_UNIT}"
   log "rollback: done -- the cache is back on the root disk; ${DATA_MNT} is still mounted and untouched"
