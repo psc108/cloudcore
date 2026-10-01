@@ -102,6 +102,8 @@ The 7 that still fail, by cause:
 
 So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be tested here, and 2 failed.
 
+**Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The answer's own verdict is what Sentinel stores and promotes, so a repaired procedure isn't reused yet (open). 11 runs graded `lab_verified` before L12 keep that older, weaker grade.
+
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
 
 ## Definitions
