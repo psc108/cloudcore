@@ -3553,6 +3553,64 @@ Each answer's own verdict stayed "failed". Sentinel: 53/53 tests pass, one new f
 
 Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 
+### F-192 — Lab VMs get a real ext4 root and spare disks (L13); interactive sessions, SQL clients and fdisk are handled; a cached-journal trap found on the way
+
+**Where:**
+- `examples/llm-chat/files/microvm.py`: `root="snapshot"`, `spare_disks_mib`, and spares that travel with a reboot.
+- `api/build-firecracker-rootfs.sh`:
+  - `/sbin/snapshot-init`;
+  - the udev names `/dev/sdb` and `/dev/sdc` for the spares;
+  - a 16GB sparse image.
+- `advice_runner.py`:
+  - `_feed_clients`, `_sessions` and `_switch_user`;
+  - scripted fdisk/gdisk keys;
+  - `_program_of` (missing-program repair);
+  - `_fill_fstab_uuids`;
+  - fstab lines recognised as config;
+  - goal checks for mounts, LVM and RAID1, and the fixed Docker check.
+- `verify_proxy.py`: the target factory, and the page's fstab-line rule.
+- Both coordinator cloud-init templates: a sparse unpack.
+- `api/firecracker-kernel-lab.config`: `CONFIG_DM_INIT`, which was tried and kept.
+
+**Symptom:** in L10 and L12, every disk question failed in the lab, as did NFS export, Docker containers, swap files and PostgreSQL setup. None of these were the answers' fault.
+- There were no spare disks.
+- The overlay root can't be NFS-exported, hold Docker's storage or a swap file.
+- An interactive `sudo -i -u postgres` / `psql` / SQL session ran as separate commands, as the wrong user, with the SQL skipped.
+
+**Root cause:** the lab machine wasn't shaped like a real server, and the runner didn't understand interactive sessions.
+
+**Fix:**
+- **Snapshot root:** lab targets boot with `init=/sbin/snapshot-init`. It builds a device-mapper snapshot of the shared read-only image, with the per-VM scratch drive as a *persistent* copy-on-write store (so a reboot keeps changes), mounts it as a real ext4 root, then hands off to systemd. The Terminal and the prober keep the overlay: a full snapshot store invalidates the whole root, while a full overlay only refuses writes.
+- **Spare disks:** two blank 1GB disks, vdc and vdd. udev also names them `/dev/sdb` and `/dev/sdc` (and xvdb/xvdc, partitions included), as answers expect. They move with the scratch drive across a reboot.
+- **Interactive sessions:**
+  - a bare `psql`/`mysql`/`mariadb` followed by SQL blocks becomes one step, with the SQL typed in through a heredoc;
+  - `sudo -i -u X`, `sudo su - X` or `su - X` makes the following steps run as X until the answer's `exit`.
+- **fdisk/gdisk:** the lab types the usual keys for one partition spanning the disk, then waits for the partition device (`udevadm settle`). It says so.
+- **Placeholders and config lines:**
+  - fstab lines are recognised as config, here and on the page;
+  - `UUID=<YOUR_UUID>` gets the real UUID of what is mounted there.
+- **Repair:** a failing program that isn't installed is detected directly (`command -v`), whatever was printed. That covers L10b's `sudo nginx -t` with no output; it's now repaired by the lab without needing the model.
+- **Goal checks:** a filesystem mounted at the path, and listed in fstab with `findmnt --verify` clean; an LVM logical volume; an active RAID1 array. The Docker check now finds "Hello from Docker" anywhere in the output.
+- **Deploy:** the image is unpacked sparsely, about 1.5GB on disk instead of 16GB.
+
+**Found on the way:**
+1. **dm-init refuses `snapshot`:** the kernel's `dm-mod.create=` won't create the snapshot target, so the snapshot is built by a PID 1 script instead.
+2. **Exclusive hold on vda:** the read-only root mount holds `/dev/vda` exclusively, so the origin goes through a read-only loop device.
+3. **The cached-journal trap:** reading through the page cache, that loop saw a *journal checksum error*. The read-only mount updates the journal superblock in memory and can't write it back, so a cached reader sees a half-updated page. `losetup --direct-io=on` reads the true on-disk bytes.
+
+**Verified by:** on the lab coordinator (2026-10-01):
+- **Disk and service questions, all goal_verified:**
+  - partition, format and mount `/data` permanently;
+  - LVM;
+  - a 1GB swap file;
+  - RAID1;
+  - NFS share mounted from another machine;
+  - Docker hello-world;
+  - PostgreSQL database and user.
+- **Before:** all of these failed on the overlay root or for lack of disks.
+- **Regression (22 questions):** 21 end goal_verified, as written or after the lab's repairs. #5 is ran_clean (read-only), and bind9 still fails on its real goal (another machine can't resolve the zone).
+- **Unaffected:** the Terminal and prober boot unchanged on the overlay.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3696,3 +3754,4 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 | v3.17 | 2026-09-30 | Paul Scott | Direct request: "yes" to the harness fixes first. F-189: L10a done; the same 40 answers re-run: 14 verified (was 8, 5 false), 21 failed (was 27), remaining failures itemised. |
 | v3.18 | 2026-10-01 | Paul Scott | Direct request: step-level repair ("a failure to install a package becomes multiple searches and download/install attempts"), then "yes, please". F-190: L10b done; failed steps repaired in place (lab strategies, then the model), repaired procedure kept beside the answer's own verdict. |
 | v3.19 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L12. F-191: graded verification with 17 goal checks; only goal_verified reused automatically; F-188's ufw claim corrected; overlay root found to block NFS export (L13 widened). |
+| v3.20 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L13. F-192: snapshot ext4 root, spare disks, interactive sessions/SQL clients/fdisk; dm-init and cached-journal traps documented. |

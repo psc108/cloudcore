@@ -158,6 +158,19 @@ def _substitute(text: str) -> tuple[str, list[str], set[str]]:
             if new != line:
                 changes.append("example DNS server address -> 127.0.0.1 (this machine)")
             line = new
+        # L13: an interactive fdisk/gdisk session, its keys described in
+        # prose. The lab types the usual ones: one partition, whole disk.
+        m = re.match(r"^(\s*)((?:sudo\s+)?(fdisk|gdisk)\s+(/dev/\w+))\s*$", line)
+        if m:
+            keys = "n\\np\\n1\\n\\n\\nw\\n" if m.group(3) == "fdisk" else "n\\n1\\n\\n\\n\\nw\\ny\\n"
+            # udevadm settle: the new partition's device appears a moment
+            # after fdisk exits -- unnoticeable typing by hand, but the lab's
+            # next command ran first (found in L13: mkfs on /dev/sdb1 "No
+            # such file").
+            line = f"{m.group(1)}printf '{keys}' | {m.group(2)} && sudo udevadm settle"
+            changes.append(f"{m.group(3)} {m.group(4)}: typed the usual keys for one partition using the whole disk "
+                           + ("(n, p, 1, Enter, Enter, w)" if m.group(3) == "fdisk" else "(n, 1, Enter x3, w, y)")
+                           + " and waited for the new partition to appear")
         out_lines.append(line)
     return "\n".join(out_lines), list(dict.fromkeys(changes)), needs
 
@@ -173,6 +186,9 @@ def looks_like_config(code: str) -> bool:
                 # "key = value" with spaces round "=" is never valid shell;
                 # "VAR=1 ./run.sh" is.
                 or re.match(r"^[A-Za-z_][\w.-]*\s+=\s", first)
+                # an fstab line: device, mount point, type (found in L13: it ran as a command)
+                or re.match(r"^(?:/dev/\S+|UUID=\S+|LABEL=\S+|PARTUUID=\S+|[\w.-]+:/\S*|//[\w.-]+/\S+|tmpfs|proc)"
+                            r"\s+(?:/\S*|none|swap)\s+[\w.,-]+(?:\s|$)", first)
                 # a crontab line: five schedule fields (or @daily ...) then a command
                 or re.match(r"^(?:@(?:reboot|yearly|annually|monthly|weekly|daily|midnight|hourly)|"
                             r"(?:[\d*/,-]+\s+){4}[\d*/,-]+)\s+\S", first))
@@ -309,7 +325,109 @@ def parse_steps(answer: str) -> list[Step]:
         if ops:
             steps.append(Step(len(steps) + 1, "prose", tail.strip()[:300], target=pending_editor_target,
                               edit_ops=ops, note="edit described in the text, applied to the file"))
+    _feed_clients(steps)
+    _sessions(steps)
     return steps
+
+
+# -- Interactive sessions in answers (L13) ---------------------------------------------
+#
+# Found in L13 (PostgreSQL): "sudo -i -u postgres", then "psql", then SQL to
+# type, then "\q" and "exit" -- a person's interactive session, which the lab
+# ran as separate commands as the wrong user and skipped the SQL.
+
+_CLIENT_RE = re.compile(r"^\s*(?:sudo\s+(?:-u\s+[\w-]+\s+)?)?(?:psql|mysql|mariadb)\b(?![^\n]*(?:\s-[cef]\b|\s--command|<|\|))"
+                        r"[^\n;&|]*$")
+_SQL_RE = re.compile(r"^\s*(?:CREATE|GRANT|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|FLUSH|USE|SHOW|SET|REVOKE|"
+                     r"\\[a-z]+)\b", re.IGNORECASE)
+_SQL_QUIT_RE = re.compile(r"^\s*(?:\\q|exit;?|quit;?)\s*$", re.IGNORECASE)
+
+
+def _feed_clients(steps: list[Step]) -> None:
+    """A bare psql/mysql step followed by SQL blocks: the SQL is typed into
+    it (a heredoc), and the SQL blocks are marked as part of that step."""
+    for i, s in enumerate(steps):
+        lines = s.source.rstrip().splitlines()
+        if s.kind != "run" or not lines or not _CLIENT_RE.match(lines[-1]):
+            continue
+        sql, used = [], []
+        for nxt in steps[i + 1:]:
+            if nxt.kind not in ("skip", "run") or not _SQL_RE.match(nxt.source.lstrip().splitlines()[0]):
+                break
+            sql += [ln for ln in nxt.source.splitlines() if not _SQL_QUIT_RE.match(ln)]
+            used.append(nxt)
+        if not sql:
+            continue
+        s.source = "\n".join(lines[:-1] + [f"{lines[-1].strip()} <<'LABSQL'"] + sql + ["LABSQL"])
+        s.subs.append(f"typed the SQL from step{'s' if len(used) > 1 else ''} "
+                      + ", ".join(str(u.n) for u in used) + f" into {lines[-1].split()[-1]}")
+        s.note = "the lab filled in: " + ", ".join(s.subs)
+        for u in used:
+            u.kind, u.note = "skip", f"typed into {lines[-1].strip()} in step {s.n}"
+
+
+def _switch_user(line: str) -> str:
+    """The account an interactive "become another user" line switches to
+    (sudo -i -u X, sudo -iu X, sudo -u X -i/-s, sudo su - X, su - X,
+    sudo -i -> root), or ""."""
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        return ""
+    sudo = bool(words) and words[0] == "sudo"
+    words = words[1:] if sudo else words
+    if words and words[0] == "su":
+        rest = [w for w in words[1:] if w not in ("-", "-l", "--login")]
+        return "root" if not rest else (rest[0] if len(rest) == 1 and not rest[0].startswith("-") else "")
+    if not sudo or not words or any(not w.startswith("-") for w in words if w not in _sudo_values(words)):
+        return ""
+    flags = "".join(w.lstrip("-") for w in words if w.startswith("-") and not w.startswith("--"))
+    if "i" not in flags and "s" not in flags:
+        return ""
+    vals = _sudo_values(words)
+    return vals[0] if vals else "root"
+
+
+def _sudo_values(words: list) -> list:
+    out = []
+    for a, b in zip(words, words[1:], strict=False):
+        if a in ("-u", "-iu", "-ui", "-su", "-us"):
+            out.append(b)
+    return out
+
+
+def _sessions(steps: list[Step]) -> None:
+    """Run steps after an interactive user switch run as that user, until
+    the answer's `exit`."""
+    user = ""
+    for s in steps:
+        if s.kind != "run":
+            continue
+        lines = s.source.strip().splitlines()
+        if lines and _switch_user(lines[0]):
+            user = _switch_user(lines[0])
+            rest = "\n".join(lines[1:]).strip()
+            if not rest:
+                s.kind, s.note = "skip", f"switches to the {user} account; the steps after it run as {user}"
+                continue
+            s.source = rest
+        elif user and lines and re.fullmatch(r"\s*(?:exit|logout)\s*", lines[-1]):
+            body = "\n".join(lines[:-1]).strip()
+            if not body:
+                s.kind, s.note = "skip", f"leaves the {user} session"
+                user = ""
+                continue
+            s.source, end = body, True
+        else:
+            end = False
+        if user:
+            # Not `sudo -i`: it backslash-escapes the command's newlines,
+            # which breaks a multi-line step (a heredoc of SQL).
+            s.source = f"sudo -u {user} -H bash -lc {shlex.quote('cd ~ && ' + s.source)}"
+            s.subs.append(f"ran as {user} (the answer switched to that account)")
+            s.note = "the lab filled in: " + ", ".join(s.subs)
+            if end:
+                user = ""
 
 
 # -- Classification -------------------------------------------------------------
@@ -854,11 +972,30 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root) -> 
         if m:
             code, out, _ = sh(f"logrotate -d /etc/logrotate.conf 2>&1 | grep -F {shlex.quote(m.group(1).rstrip('/*'))} | head -3")
             checks.append(_goal(f"logrotate covers {m.group(1)}", bool(out.strip())))
+    # L13: disk advice runs on the spare disks (/dev/sdb, /dev/sdc).
+    m = re.search(r"\bmount(?:ed)?\b.*?\bat\s+(/[\w./-]+)", q)
+    if m:
+        path = m.group(1).rstrip(".")
+        code, out, _ = sh(f"findmnt -n -o SOURCE,FSTYPE {shlex.quote(path)}")
+        checks.append(_goal(f"a filesystem is mounted at {path}", code == 0 and bool(out.strip()), out.strip()))
+        if re.search(r"\b(?:permanent|boot|fstab|persist|automatic)", q):
+            _, line, _ = sh(f"awk '$2 == \"{path}\"' /etc/fstab")
+            vcode, verify, _ = sh("findmnt --verify --tab-file /etc/fstab 2>&1 | tail -3; exit ${PIPESTATUS[0]}")
+            listed = any(ln.split()[1:2] == [path] for ln in line.splitlines())
+            checks.append(_goal(f"{path} is in /etc/fstab, so it mounts at boot", listed and vcode == 0,
+                                ("not listed" if not listed else " ".join(verify.split())[:160])))
+    if re.search(r"\blvm\b|logical volume", q):
+        _, out, _ = sh("lvs --noheadings -o vg_name,lv_name,lv_size 2>&1")
+        checks.append(_goal("an LVM logical volume exists", bool(out.strip()) and "No " not in out, out.strip()[:120]))
+    if re.search(r"\braid\s*1\b|\bmirror", q) and "mdadm" in q + a:
+        _, out, _ = sh("cat /proc/mdstat")
+        ok = bool(re.search(r"\bactive raid1\b", out))
+        checks.append(_goal("a RAID1 array is active", ok, " ".join(out.split())[:160]))
     if "swap" in q:
         _, sw, _ = sh("swapon --show --noheadings")
         checks.append(_goal("swap is active", bool(sw.strip()), sw.strip()[:120]))
     if "docker" in q:
-        code, out, _ = sh("docker run --rm hello-world 2>&1 | tail -3", 180)
+        code, out, _ = sh("docker run --rm hello-world 2>&1 | grep -m1 -e 'Hello from Docker' -e rror", 180)
         checks.append(_goal("a Docker container runs", "Hello from Docker" in out, out.strip()[-160:]))
     if "nfs" in q and prober_root is not None:
         _, exports, _ = sh("exportfs -v 2>/dev/null | awk 'NR==1{print $1}'")
@@ -972,6 +1109,27 @@ _MISSING_PARENT_RE = re.compile(r"(?:cannot create|Can't open|can't create|canno
                                 r"[^\n]*?['\"]?((?:/etc|/var|/opt|/srv|/home|/usr/local)/[\w./-]+)")
 
 
+_SHELL_WORDS = {"cd", "echo", "export", "source", ".", "set", "test", "[", "[[", "true", "false", "if", "for",
+                "while", "then", "do", "exit", "read", "printf", "eval", "exec", "ulimit", "umask", "alias"}
+
+
+def _program_of(command: str) -> str:
+    """The program a shell command line runs, past sudo/env/VAR=... ("" for
+    shell builtins and anything unclear)."""
+    try:
+        words = shlex.split(command.split("|")[0].split("&&")[0].split(";")[0])
+    except ValueError:
+        return ""
+    while words and (words[0] in ("sudo", "env", "nohup", "time", "command") or "=" in words[0]
+                     or (words[0].startswith("-") and len(words) > 1)):
+        # sudo options that take a value (-u postgres, -g staff, ...)
+        if words[0] in ("-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T") and len(words) > 2:
+            words.pop(0)
+        words.pop(0)
+    prog = words[0] if words else ""
+    return "" if not re.fullmatch(r"[\w.+-]+", prog) or prog in _SHELL_WORDS else prog
+
+
 def _repair_candidates(s: Step, out: str, root, already: set, model_fix) -> list[dict]:
     """Fixes worth trying for a failed run step, most specific first. Each is
     {label, pre (commands run first), source (the step, possibly changed),
@@ -989,6 +1147,17 @@ def _repair_candidates(s: Step, out: str, root, already: set, model_fix) -> list
         if pkg:
             cands.append({"label": f"installed '{pkg}', which provides '{quoted[0]}'",
                           "pre": f"sudo apt-get install -y {pkg}", "source": s.source})
+    elif s.cls != "command_not_found":
+        # A failing program that isn't installed, whatever was printed (found
+        # in L13: `sudo nginx -t` with nginx never installed failed with no
+        # output at all, so "command not found" was never seen).
+        m = re.search(r"`([^`]+)` failed", s.detail)
+        prog = _program_of(m.group(1) if m else s.source.strip().splitlines()[0] if s.source.strip() else "")
+        if prog and _exec(root, f"command -v {shlex.quote(prog)}", 10)[0] != 0:
+            pkg = _suggest_package(root, prog, True)
+            if pkg:
+                cands.append({"label": f"installed '{pkg}': '{prog}' wasn't installed",
+                              "pre": f"sudo apt-get install -y {pkg}", "source": s.source})
     if _APT_TRANSIENT_RE.search(out):
         cands.append({"label": "refreshed the package index and tried again",
                       "pre": "while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done; "
@@ -1009,6 +1178,9 @@ def _repair_candidates(s: Step, out: str, root, already: set, model_fix) -> list
         cands.append({"label": f"created the SSH key pair the answer assumes you have (id_{kt})",
                       "pre": f"test -f ~/.ssh/id_{kt} || ssh-keygen -q -t {kt} -N '' -f ~/.ssh/id_{kt}",
                       "source": s.source})
+    if re.search(r"/dev/[\w/-]+[^\n]*(?:No such file|does not exist)", out):
+        cands.append({"label": "waited for the new device to appear (udevadm settle) and tried again",
+                      "pre": "sudo udevadm settle; sleep 1", "source": s.source})
     if _NOT_READY_RE.search(out):
         cands.append({"label": "waited for the service to finish starting and asked again", "pre": "sleep 6",
                       "source": s.source})
@@ -1492,6 +1664,35 @@ def _put_crontab(root_client, target: str, content: str, mode: str) -> tuple[boo
     return bool(old.strip()), code == 0
 
 
+_REAL_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|"
+                           r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}")
+
+
+def _fill_fstab_uuids(root, s: Step, steps: list) -> str:
+    """An fstab line with a placeholder UUID (UUID=<YOUR_UUID>, UUID=your-uuid)
+    gets the real UUID of what the answer mounted there (found in L13: the
+    LVM answer's own `blkid` step printed it, then the line kept the
+    placeholder). Recorded as a substitution."""
+    out = []
+    for line in s.source.split("\n"):
+        m = re.match(r"(\s*UUID=)(\S+)(\s+)(/\S*)", line)
+        if m and not _REAL_UUID_RE.fullmatch(m.group(2)):
+            mp = m.group(4)
+            _, uuid, _ = _exec(root, f"findmnt -n -o UUID {shlex.quote(mp)}", 10)
+            uuid = uuid.strip()
+            if not uuid:
+                earlier = "\n".join(x.final or x.source for x in steps if x.kind == "run" and x.n < s.n)
+                dev = re.findall(r"\bmount\s+(?:-\S+\s+)*(/dev/\S+)\s+" + re.escape(mp) + r"\b", earlier)
+                if dev:
+                    _, uuid, _ = _exec(root, f"blkid -s UUID -o value {shlex.quote(dev[-1])}", 10)
+                    uuid = uuid.strip()
+            if uuid and _REAL_UUID_RE.fullmatch(uuid):
+                s.subs.append(f"UUID={m.group(2)} -> UUID={uuid} (the real UUID of what is mounted at {mp})")
+                line = m.group(1) + uuid + line[m.end(2):]
+        out.append(line)
+    return "\n".join(out)
+
+
 def _put_file(root_client, path: str, content: str, mode: str) -> tuple[bool, bool]:
     """Write/append/prepend `content` to `path` as root. Returns
     (existed_before, ok)."""
@@ -1730,6 +1931,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             elif s.kind in ("write", "append", "prepend", "edit"):
                 how, _, flag = s.note.partition("|")
                 s.note = how
+                if s.target == "/etc/fstab":
+                    s.source = _fill_fstab_uuids(root, s, steps)
                 existed, ok = _put_file(root, s.target, s.source, s.kind)
                 say("# written\n" if ok else f"# could not write {s.target}\n")
                 s.exit = 0 if ok else 1

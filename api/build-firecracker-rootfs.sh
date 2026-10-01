@@ -609,6 +609,16 @@ done
 # lands on its own scratch drive; the golden image is never modified.
 # /overlay and /rom must exist in the image itself -- the root is
 # read-only by the time this runs, so they can't be created at boot.
+# llm-chat-lab-sandbox L13: spare blank disks (vdc, vdd) also answer to the
+# names how-to answers use -- /dev/sdb, /dev/sdc (and xvdb/xvdc), with
+# partitions (/dev/sdb1 ...) -- so disk advice can be tried without touching
+# vdb, the VM's own copy-on-write store.
+cat > /etc/udev/rules.d/60-lab-spare-disks.rules <<\"EOS\"
+KERNEL==\"vdc\", SYMLINK+=\"sdb xvdb\"
+KERNEL==\"vdc[0-9]*\", SYMLINK+=\"sdb%n xvdb%n\"
+KERNEL==\"vdd\", SYMLINK+=\"sdc xvdc\"
+KERNEL==\"vdd[0-9]*\", SYMLINK+=\"sdc%n xvdc%n\"
+EOS
 mkdir -p /overlay /rom
 cat > /sbin/overlay-init <<\"EOS\"
 #!/bin/sh
@@ -624,6 +634,30 @@ pivot_root /mnt /mnt/rom
 exec /sbin/init \"\$@\"
 EOS
 chmod 755 /sbin/overlay-init
+# llm-chat-lab-sandbox L13: the alternative PID 1 for lab targets
+# (init=/sbin/snapshot-init): the root becomes a real ext4 filesystem, a
+# device-mapper snapshot of the read-only image with vdb as its persistent
+# copy-on-write store, so NFS export, Docker storage and swap files work.
+# The kernel's dm-mod.create= can't build it (dm-init refuses the snapshot target).
+# The origin goes through a read-only loop device because the mounted root
+# holds /dev/vda exclusively -- with direct I/O: the read-only mount changes
+# the journal superblock in memory (it can't write it back), and a cached
+# read saw that half-updated page ("JBD2: journal checksum error").
+cat > /sbin/snapshot-init <<\"EOS\"
+#!/bin/sh
+set -e
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+origin=\$(losetup -f --show -r --direct-io=on /dev/vda)
+DM_DISABLE_UDEV=1 dmsetup create labroot \
+  --table \"0 \$(blockdev --getsz /dev/vda) snapshot \$origin /dev/vdb P 8\"
+mount -t ext4 -o noatime /dev/mapper/labroot /mnt
+umount /sys /proc
+pivot_root /mnt /mnt/rom
+exec /sbin/init \"\$@\"
+EOS
+chmod 755 /sbin/snapshot-init
 
 # L2: the full-archive lists stay in the image, so a session can install
 # straight away; the boot refresh above only fetches what changed since.
@@ -646,8 +680,9 @@ BUILDEOF
   # its demo image, avoids a separate mount/copy/unmount dance.
   # 2048, up from 768 for Stage 12's toolchains (Go alone is ~400MB).
   # Costs disk once: the image is shared read-only by every session.
-  # 4096 for L2's baked full-archive package lists and server userland.
-  ROOTFS_SIZE_MB=4096
+  # 16384 (L13): the root is now a device-mapper snapshot of this image, so the
+  # image's size is the root filesystem's size. Sparse, so it costs only what's used.
+  ROOTFS_SIZE_MB=16384
   sudo truncate -s \"\${ROOTFS_SIZE_MB}M\" /tmp/firecracker-rootfs-jammy.ext4
   sudo mkfs.ext4 -q -d \"\$ROOTFS_DIR\" -F /tmp/firecracker-rootfs-jammy.ext4
   sudo e2fsck -fy /tmp/firecracker-rootfs-jammy.ext4 || true

@@ -1910,7 +1910,10 @@ def _advice_worker() -> None:
                              scratch_target_mib=2048, scratch_floor_mib=1024)
 
     def make_target(**kw):
-        return MicroVM("advc", _advice_pool, SANDBOX_BRIDGE, sizing=sizing, boot_timeout_s=90, **kw)
+        # L13: a real ext4 root (device-mapper snapshot) and two blank 1GB
+        # disks (/dev/sdb, /dev/sdc) for disk advice.
+        return MicroVM("advc", _advice_pool, SANDBOX_BRIDGE, sizing=sizing, boot_timeout_s=90,
+                       root="snapshot", spare_disks_mib=(1024, 1024), **kw)
 
     def make_prober(bridge):
         return MicroVM("advp", IpPool(PAIR_SUBNET), bridge, sizing=prober_sizing, isolate=False,
@@ -3834,7 +3837,9 @@ function sendCodeToTerminal() {
 function looksLikeConfigLine(code) {
   const first = code.split('\\n').map(l => l.trim()).find(l => l && !l.startsWith('#')) || '';
   return /^(auth|account|password|session|@include)\\s+\\S/.test(first)
-      || /^[A-Z][A-Za-z0-9]+\\s+\\S/.test(first);
+      || /^[A-Z][A-Za-z0-9]+\\s+\\S/.test(first)
+      // an fstab line (device, mount point, type): never a command
+      || /^(?:\\/dev\\/\\S+|UUID=\\S+|LABEL=\\S+|PARTUUID=\\S+|[\\w.-]+:\\/\\S*|tmpfs|proc)\\s+(?:\\/\\S*|none|swap)\\s+[\\w.,-]+(?:\\s|$)/.test(first);
 }
 
 // The page is usually served over plain HTTP through the LB, where

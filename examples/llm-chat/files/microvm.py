@@ -21,6 +21,14 @@ Two things changed from the Stage 5 launcher this replaces:
    off to systemd. This replaces a full 768MB copy per session, which
    is what makes a microVM per Run (Stage 12) affordable at all.
 
+   root="snapshot" (llm-chat-lab-sandbox L13) keeps the same sharing but
+   makes the root a real ext4 filesystem: the guest's /sbin/snapshot-init
+   builds a device-mapper snapshot of the golden image with the scratch
+   drive as its persistent copy-on-write store, then hands off to systemd. An overlay root can't be NFS-exported, hold Docker's
+   storage or a swap file; a snapshot can. The prober and Terminal keep
+   the overlay: a full snapshot store invalidates the whole root, while
+   a full overlay only refuses writes.
+
 The golden rootfs and kernel must be root-owned and not writable by
 fcrunner: a jailed VMM reaches them through hard links, i.e. the same
 inode, so if fcrunner owned them a compromised VMM could rewrite the
@@ -72,6 +80,10 @@ VMM_OVERHEAD_MIB = 128
 _IN_JAIL_KERNEL = "/vmlinux"
 _IN_JAIL_ROOTFS = "/rootfs.ext4"
 _IN_JAIL_SCRATCH = "/scratch.ext4"
+
+
+def _spare_path(i: int) -> str:
+    return f"/spare{i}.img"
 _IN_JAIL_API_SOCK = "/run/firecracker.socket"
 _IN_JAIL_VSOCK = "/run/control.vsock"
 
@@ -256,7 +268,8 @@ class MicroVM:
                  vcpu_count: int = 1, mem_size_mib: int = 256,
                  scratch_mib: int = 1024, boot_timeout_s: int = 20,
                  extra_boot_args: str = "", sizing: VmSizing | None = None,
-                 isolate: bool = True, pair_bridge: str = "", scratch_from: str = ""):
+                 isolate: bool = True, pair_bridge: str = "", scratch_from: str = "",
+                 root: str = "overlay", spare_disks_mib: tuple[int, ...] = ()):
         """With `sizing`, vcpu_count/mem_size_mib/scratch_mib are only
         placeholders: boot() replaces them with plan_vm_size()'s answer.
 
@@ -264,7 +277,16 @@ class MicroVM:
         eth1, on a private per-run bridge shared only with a prober VM (no
         uplink, no host address); `isolate=False` is for a VM whose only
         NIC is on such a bridge. `scratch_from` boots from a preserved
-        scratch disk instead of a fresh one: a reboot that keeps state."""
+        scratch disk instead of a fresh one: a reboot that keeps state.
+
+        L13: `root="snapshot"` (see the module docstring); `spare_disks_mib`
+        attaches blank sparse disks after the scratch drive (vdc, vdd, ...;
+        the image also names the first two /dev/sdb and /dev/sdc) for disk
+        advice -- partitioning, LVM, RAID -- to work on."""
+        if root not in ("overlay", "snapshot"):
+            raise ValueError(f"root must be 'overlay' or 'snapshot', not {root!r}")
+        self.root = root
+        self.spare_disks_mib = tuple(spare_disks_mib)
         self.owner = owner
         self.sizing = sizing
         self.isolate = isolate
@@ -335,10 +357,22 @@ class MicroVM:
         else:
             with open(scratch, "wb") as f:
                 f.truncate(self.scratch_mib * 1024 * 1024)
-            subprocess.run(["mkfs.ext4", "-q", "-F", scratch], check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if self.root == "overlay":
+                # A snapshot store needs no filesystem: all zeroes is an
+                # empty persistent store.
+                subprocess.run(["mkfs.ext4", "-q", "-F", scratch], check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         os.chown(scratch, uid, gid)
         os.chmod(scratch, 0o600)
+        for i, mib in enumerate(self.spare_disks_mib):
+            spare = self.chroot + _spare_path(i)
+            if self.scratch_from and os.path.exists(self.scratch_from + f".spare{i}"):
+                os.rename(self.scratch_from + f".spare{i}", spare)
+            else:
+                with open(spare, "wb") as f:
+                    f.truncate(mib * 1024 * 1024)
+            os.chown(spare, uid, gid)
+            os.chmod(spare, 0o600)
 
     def boot(self) -> None:
         uid, gid = _jail_ids()
@@ -417,9 +451,9 @@ class MicroVM:
             time.sleep(0.05)
 
         # Firecracker appends "root=/dev/vda ro" itself for a read-only
-        # root drive; init= hands PID 1 to the overlay step first.
+        # root drive; init= hands PID 1 to the overlay or snapshot step first.
         boot_args = (f"console=ttyS0 reboot=k panic=1 pci=off "
-                     f"init=/sbin/overlay-init "
+                     f"init=/sbin/{self.root}-init "
                      f"ip={self.ip}::{self.pool.gateway}:{self.pool.netmask}::eth0:off:{self.pool.gateway}"
                      + (f" {self.extra_boot_args}" if self.extra_boot_args else ""))
         self._api("PUT", "/boot-source", {
@@ -438,6 +472,13 @@ class MicroVM:
             "is_root_device": False,
             "is_read_only": False,
         })
+        for i in range(len(self.spare_disks_mib)):
+            self._api("PUT", f"/drives/spare{i}", {
+                "drive_id": f"spare{i}",
+                "path_on_host": _spare_path(i),
+                "is_root_device": False,
+                "is_read_only": False,
+            })
         # One MAC per VM, derived from its (pool-unique) IP. A fixed MAC
         # shared by every VM made concurrent sessions on one bridge steal
         # each other's frames: the bridge learns the MAC on whichever tap
@@ -576,8 +617,11 @@ class MicroVM:
 
     def take_scratch(self, dest: str) -> None:
         """Move this (stopped) VM's scratch disk -- everything the guest
-        wrote -- to `dest`, for a new VM to boot from (scratch_from)."""
+        wrote -- to `dest`, for a new VM to boot from (scratch_from).
+        Spare disks travel with it as `dest`.spareN."""
         os.rename(self.chroot + _IN_JAIL_SCRATCH, dest)
+        for i in range(len(self.spare_disks_mib)):
+            os.rename(self.chroot + _spare_path(i), dest + f".spare{i}")
 
     def teardown(self) -> None:
         if self.proc is not None and self.proc.poll() is None:

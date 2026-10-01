@@ -493,11 +493,11 @@
     firecracker_archive_name: firecracker-v1.17.0-x86_64.tgz
     firecracker_sha256: 06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
     firecracker_kernel_name: firecracker-vmlinux-6.1.155-lab
-    firecracker_kernel_sha256: 17c738955a6d0d6af05839d02b802b31761c092b55eb14f5e80b28823da13cb7
+    firecracker_kernel_sha256: b732f957d20a892ca6e08404a0c297dbf65ad53a0d5d0bcd48df415e69dcc57e
     # Rebuilt by api/build-firecracker-rootfs.sh — update these two by
     # hand whenever that script is re-run.
     firecracker_rootfs_name: firecracker-rootfs-jammy.ext4.gz
-    firecracker_rootfs_sha256: 76d10d5ac8f7cfe63e7561c54202f6889a9bc30638a258a7fd8b3e25c1f08653
+    firecracker_rootfs_sha256: 7eca8a414195b0c9bd2de9f67c4ab280dc7d702a437a960761a0b5678836b458
     # Deliberately outside both the platform's own real bridge range
     # (192.168.x.0/24) and this example's own fictional declared VPC CIDR
     # (10.91.0.0/16 default) — no overlap with either.

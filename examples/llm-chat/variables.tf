@@ -566,7 +566,7 @@ variable "firecracker_kernel_name" {
 variable "firecracker_kernel_sha256" {
   description = "SHA-256 of firecracker_kernel_name, verified directly against the real downloaded artifact (Firecracker's CI bucket publishes no separate checksums file for this asset)."
   type        = string
-  default     = "17c738955a6d0d6af05839d02b802b31761c092b55eb14f5e80b28823da13cb7"
+  default     = "b732f957d20a892ca6e08404a0c297dbf65ad53a0d5d0bcd48df415e69dcc57e"
 }
 
 # The golden guest rootfs — deliberately NOT Firecracker's own quickstart
@@ -586,7 +586,7 @@ variable "firecracker_rootfs_name" {
 variable "firecracker_rootfs_sha256" {
   description = "SHA-256 of firecracker_rootfs_name — printed by api/build-firecracker-rootfs.sh itself after each build; update this value by hand whenever that script is re-run."
   type        = string
-  default     = "76d10d5ac8f7cfe63e7561c54202f6889a9bc30638a258a7fd8b3e25c1f08653"
+  default     = "7eca8a414195b0c9bd2de9f67c4ab280dc7d702a437a960761a0b5678836b458"
 }
 
 # Deliberately outside both the platform's own real bridge range

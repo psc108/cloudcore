@@ -484,7 +484,9 @@ runcmd:
       sleep 5
     done
     echo '${firecracker_rootfs_sha256}  /tmp/${firecracker_rootfs_name}' | sha256sum -c -
-  - gunzip -c /tmp/${firecracker_rootfs_name} > /opt/firecracker/golden-rootfs.ext4
+  # Sparse (L13): a 16GB image of which ~1.5GB is used; a plain gunzip would
+  # write all 16GB.
+  - gunzip -c /tmp/${firecracker_rootfs_name} | cp --sparse=always /dev/stdin /opt/firecracker/golden-rootfs.ext4
   - rm -f /tmp/${firecracker_rootfs_name}
   # Root-owned and read-only to everyone else, NOT fcrunner-owned: each
   # jailed VMM reaches these through a hard link (same inode), so if
