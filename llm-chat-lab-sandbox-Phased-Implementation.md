@@ -65,6 +65,32 @@ work in advice".
 | L13 | **A spare disk.** Each lab VM gets a blank extra disk for partitioning/LVM/RAID/mkfs advice, with the device names answers use (`/dev/sdb` …) pointed at it, so disk advice can be tried without destroying the VM's own writable layer (`/dev/vdb`) | Done — snapshot root (real ext4), two spare disks as /dev/sdb and /dev/sdc, interactive sessions and SQL clients; all 6 disk/NFS/Docker/swap/PostgreSQL questions goal-verified (F-192) |
 | L14 | **Goal checks by kind, in the order L10 shows.** Candidates: users/groups (`id`, `getent`, sudo rights), systemd units (active and still active after a real reboot), cron (force-run and check its effect), permissions/ACLs (`stat`, access as another user), disks (`lsblk`, `findmnt`, survives reboot), networking (prober reaches the new address/route), and the prober as a real client for NFS/DNS/SSH-between-hosts | Not started |
 
+## Results: the same 40 answers through each stage
+
+The L10 answers are stored (`reports/llm-chat-lab/l10-results.json`) and re-run unchanged, so only the lab changes between columns. Per-run records: `l10a-rerun-same-answers.jsonl`, `l13-rerun-same-answers.jsonl`.
+
+| | L10 (2026-09-30) | L10a | After L10b–L13 (2026-10-01) |
+|---|---|---|---|
+| Verified | 8, 5 of them false or weak | 14 | **19 goal-verified as written**: a check of the goal passed, a stricter test than before |
+| … plus after the lab's repairs | — | — | **23 goal-verified** |
+| Ran clean (nothing to check the goal) | — | — | 4 (5 after repairs) |
+| Read-only, nothing changed (partial) | 6 | 5 | 5 |
+| Failed | 27 | 21 | **12 as written, 7 after repairs** |
+
+The 7 that still fail, by cause:
+
+| # | Question | Cause |
+|---|---|---|
+| 28 | second IP address | **advice**: `nmcli` on "Wired connection 1", but Ubuntu Server uses netplan/networkd, not NetworkManager |
+| 34 | bind9 local domain | **advice**: the zone doesn't load; another machine can't resolve it |
+| 35 | kernel module at boot | **advice**: invents a `load-i2c-dev.service` |
+| 25 | check a filesystem for errors | **lab**: the answer assumes an existing `/dev/sdb1` with a filesystem; the spare disks are blank |
+| 31 | WireGuard server | **lab**: `modprobe` in a microVM (the module is built in); the repairs fixed `sudo` and the directory, but not this |
+| 36 | GRUB kernel parameters | **lab**: a microVM has no bootloader and no `/etc/default/grub` |
+| 37 | NVIDIA drivers | **lab**: no GPU |
+
+So three failures are the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
 ## Definitions
 
 **Step classifications:** `ok`, `package_not_found`, `command_not_found`,

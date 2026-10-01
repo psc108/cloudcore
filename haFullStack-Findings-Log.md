@@ -3611,6 +3611,36 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 - **Regression (22 questions):** 21 end goal_verified, as written or after the lab's repairs. #5 is ran_clean (read-only), and bind9 still fails on its real goal (another machine can't resolve the zone).
 - **Unaffected:** the Terminal and prober boot unchanged on the overlay.
 
+### F-193 — Re-measurement after L10b–L13: the same 40 answers went from 8 verified (5 false) to 19 goal-verified as written, 23 after repairs; 4 of the 7 remaining failures are the lab's limits, still reported as failures
+
+**Where:** `reports/llm-chat-lab/l13-rerun-same-answers.jsonl`; results section in `llm-chat-lab-sandbox-Phased-Implementation.md`.
+
+**Symptom:** a measurement, not a bug: the stored L10 answers were re-run unchanged on the lab coordinator (2026-10-01; 26 minutes for 40 runs), so only the lab changed.
+
+| | L10 | L10a | now |
+|---|---|---|---|
+| Verified | 8 (5 false or weak) | 14 | 19 goal-verified as written; 23 after the lab's repairs |
+| Ran clean | — | — | 4 (5 after repairs) |
+| Partial (read-only) | 6 | 5 | 5 |
+| Failed | 27 | 21 | 12 as written; 7 after repairs |
+
+**Root cause of what remains:**
+- **3 are the advice:**
+  - #28: `nmcli` on a server that uses netplan;
+  - #34: a bind9 zone that doesn't load;
+  - #35: an invented systemd unit.
+- **4 are the lab's limits, but they're labelled "failed":**
+  - #25: fsck of a `/dev/sdb1` assumed to exist with data;
+  - #31: WireGuard's `modprobe` in a microVM;
+  - #36: GRUB with no bootloader;
+  - #37: NVIDIA with no GPU.
+
+  As failures, their steps could become "this doesn't work" facts for advice that is right on real machines.
+
+**Fix:** none in this entry. Next (proposed): classify these runs as *can't be tested here*, with the reason, and keep them out of known-bad facts. Then L11 (try another way) for the advice failures.
+
+**Verified by:** per-run records in the report file. #15, #19, #30 and #33 were repaired to goal_verified, as in F-190. #40 was repaired to ran_clean: it created the example file the answer assumes.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3755,3 +3785,4 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 | v3.18 | 2026-10-01 | Paul Scott | Direct request: step-level repair ("a failure to install a package becomes multiple searches and download/install attempts"), then "yes, please". F-190: L10b done; failed steps repaired in place (lab strategies, then the model), repaired procedure kept beside the answer's own verdict. |
 | v3.19 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L12. F-191: graded verification with 17 goal checks; only goal_verified reused automatically; F-188's ufw claim corrected; overlay root found to block NFS export (L13 widened). |
 | v3.20 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L13. F-192: snapshot ext4 root, spare disks, interactive sessions/SQL clients/fdisk; dm-init and cached-journal traps documented. |
+| v3.21 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to the 40-question re-run. F-193: 19 goal-verified as written (23 after repairs), 7 failed; 4 of those are lab limits. |
