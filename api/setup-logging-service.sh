@@ -50,6 +50,11 @@ server:
   grpc_listen_port: 9096
 
 common:
+  # Single-binary Loki routes every query through its own ring entry, which
+  # by default holds the LAN address it saw at startup. When that address
+  # changed (192.168.0.x -> 192.168.1.x, F-197), every query hung until the
+  # timeout while ingestion carried on. It only ever talks to itself here.
+  instance_addr: 127.0.0.1
   path_prefix: /var/lib/loki
   storage:
     filesystem:

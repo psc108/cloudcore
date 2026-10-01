@@ -3754,6 +3754,21 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 - **New disk:** 215 GB used, 692 GB free.
 - **Root disk:** the old copy is kept until `cleanup --yes`, which frees ~215 GB.
 
+### F-197 — Every Loki query hung after the LAN moved from 192.168.0.x to 192.168.1.x: single-binary Loki routed queries to the address it saw at startup
+
+**Where:** the hub's `/etc/loki/config.yml`, written by `api/setup-logging-service.sh`.
+
+**Symptom:** Grafana links from Sentinel failed with `Get "http://localhost:3100/loki/api/v1/query_range?...": context deadline exceeded` (reported 2026-10-01).
+- Every query hung for the full timeout, not just old ranges: the last 20 minutes too.
+- `/ready` answered in 3 ms, and ingestion carried on.
+- Loki's log has been full of `dial tcp 192.168.0.76:9096: i/o timeout` (scheduler, querier and ingester rate-store) since 2026-09-18 21:20, about 13 days of unqueryable logs.
+
+**Root cause:** single-binary Loki registers itself in its in-memory ring under the LAN address it detects at startup, and routes queries to itself through that entry. Loki started on 2026-09-15 at 192.168.0.76. The home network later moved to 192.168.1.x: the hub is now 192.168.1.106, and the peer's WireGuard endpoint 192.168.1.177. Loki kept dialling an address the hub no longer has.
+
+**Fix:** `common.instance_addr: 127.0.0.1` in the config `setup-logging-service.sh` writes; Loki only ever talks to itself here. The same line goes into the live config, then Loki restarts. A restart alone would only last until the next address change.
+
+**Verified by:** Loki 3.7.7's `-verify-config` accepts the patched config. The live fix needs root (the user runs it); verified below once applied.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3902,3 +3917,4 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 | v3.22 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to can't-be-tested-here and L11. F-194: lab limits as not_testable; try another way with diagnosis; repeated methods refused; 25/40 goal-verified, 2 failed. |
 | v3.23 | 2026-10-01 | Paul Scott | Direct request: "commit and push first and then regrade/repair as required". F-195: demotion on a later failure; repaired procedures stored as answers, lab conveniences held for review; 11 pre-L12 runs regraded, all goal-verified. |
 | v3.24 | 2026-10-01 | Paul Scott | Direct request: move CloudCore's storage-hungry data to the new disk. F-196: artifact cache on a dedicated ext4 data disk, paths unchanged; busy-export switch bug fixed; cold Kiwix searches from a spinning disk noted. |
+| v3.25 | 2026-10-01 | Paul Scott | Reported: Grafana-from-Sentinel queries timing out. F-197: Loki's ring held the old LAN address since the network moved; pinned to 127.0.0.1. |
