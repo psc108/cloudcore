@@ -3787,7 +3787,10 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 - Sentinel's watcher reports `watching` and found notable windows again within a minute;
 - Sentinel tests: 61/61 pass.
 
-**Open:** nothing alerts on a log *gap*. A host-level check (no lines from any host for N minutes while lab VMs are up) would have caught this on day one.
+**Log-gap detection (added the same day):** Sentinel's watcher (`log_gaps.py`) asks CloudCore which instances are running. A running VM that has shipped logs before but has sent nothing for `SENTINEL_LOG_GAP_MINUTES` raises one `log_gap` event and a red "Log gap: …" status, closed when its logs resume or it stops running. VMs that never shipped are ignored, and CloudCore being unreachable never raises a gap.
+- **Default 90 min, measured:** on a quiet day (24 Sep), healthy idle VMs went silent for up to 60 min, with 28 silences over 15 min on one VM. A 15-min threshold would alarm all day.
+- **Verified live:** threshold set to 2 min and `promtail` stopped on the kiwix VM. One event was raised ("No logs from example-dev-llm-chat-kiwix-01 for 2 minutes …") and the status went red. After promtail restarted, it returned to `watching` within a minute. Default restored.
+- **Tests:** Sentinel 64/64 pass.
 
 ## Document History
 
