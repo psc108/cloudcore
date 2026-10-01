@@ -3723,6 +3723,37 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 - **Backfill:** 3 procedures added (SSH keys-only, fail2ban, SSH key login), all held for review. The Sentinel DB was backed up first.
 - **Tests:** Sentinel 59/59 pass, 3 new.
 
+### F-196 — Hub root disk at 90%: the artifact cache moved to a dedicated data disk; the first switch failed on an exported bind, and searches from a spinning disk start cold
+
+**Where:** `api/move-artifacts-to-disk.sh` (new); the hub's `/etc/fstab`; the kiwix VM's NFS mount.
+
+**Symptom:** the hub (Stourport) root filesystem was at 90%: 772 GB used of 913 GB, 95 GB free. The peer had 784 GB free. The 215 GB artifact cache dominated it: Stack Overflow ZIM 115 GB, Wikipedia 53 GB, model files 31.5 GB. At 95 GB free, the weekly ZIM updater (F-173) can never update the two biggest ZIMs: it rightly skips an update without room, so they'd silently go stale. Direct request: "move all storage hungry products of cloudcore to" the newly added disk.
+
+**Root cause:** the artifact cache shares the hub's root disk, and the ZIM library grew to fill it. (`/srv/cloudcore-artifacts` is a read-only bind mount of the same directory, not a second copy.)
+
+**Fix:**
+- **The disk:** a 932 GB USB HDD (Toshiba StorE), reformatted from NTFS to ext4 (label `cloudcore-data`, by-id device path). It's mounted by UUID at `/srv/cloudcore-data` with `nofail`, so a missing USB disk can't stop the host booting.
+  - A 256 GB USB SSD was considered and rejected: the cache would leave 7 GB free, and no ZIM update could fit.
+  - VM disk images (`api/instances`) stay on the NVMe.
+- **Paths unchanged:** the cache's original path is now a bind mount of the new copy, and the NFS bind is ordered after it (`x-systemd.requires-mounts-for`). CloudCore, `cloudcore-repo`, the ZIM updater, setup scripts and the kiwix VM need no configuration changes.
+- **The script** runs in stages, each with `--dry-run`: prepare (refuses any disk with the root filesystem), resumable copy, verify (checksums every file on both sides), switch, rollback, and cleanup (refuses unless the new copy is the one in use).
+
+**Found on the way:**
+1. **The first `switch` failed.** It hit `umount /srv/cloudcore-artifacts: target is busy`: an NFS-exported bind that a client has mounted can't be unmounted, and the failure left `cloudcore-repo` stopped. `switch` now stops `nfs-server` around the unmount; the kiwix VM's hard mount waits it out. On a failure before anything moved, it restarts what it stopped.
+2. **The NFS client must be remounted.** After the switch, the kiwix VM's open files were on the old disk, so its NFS mount needed a remount and a `kiwix-serve` restart.
+3. **Searches start cold.** The first search of a book reads its index from the spinning disk over NFS: 32–37 s, against Linux Help's 8 s Kiwix timeout. Repeats take 0.03–0.3 s, and fresh searches fell from 8.5 s to 3.4 s as the cache filled. The kiwix VM has 15 GB of RAM free, so indexes stay cached; the exposure is the first searches after a `kiwix-serve` restart, which go out without references. A warm-up after start would close it (not done).
+
+**Verified by:** on the hub (2026-10-01):
+- **Copy:** 214 GB (82 files) in 1 h 40 m at ~37 MB/s; verify reported identical.
+- **After the switch:**
+  - both paths resolve to `/dev/sda1[/artifacts]`;
+  - all three fstab entries are in place;
+  - `cloudcore-repo` serves a kernel artifact (HTTP 206);
+  - the NFS export is live, and the kiwix VM sees 81 entries from the new disk;
+  - Linux Help's own `_kiwix_search` returns references.
+- **New disk:** 215 GB used, 692 GB free.
+- **Root disk:** the old copy is kept until `cleanup --yes`, which frees ~215 GB.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3870,3 +3901,4 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 | v3.21 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to the 40-question re-run. F-193: 19 goal-verified as written (23 after repairs), 7 failed; 4 of those are lab limits. |
 | v3.22 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to can't-be-tested-here and L11. F-194: lab limits as not_testable; try another way with diagnosis; repeated methods refused; 25/40 goal-verified, 2 failed. |
 | v3.23 | 2026-10-01 | Paul Scott | Direct request: "commit and push first and then regrade/repair as required". F-195: demotion on a later failure; repaired procedures stored as answers, lab conveniences held for review; 11 pre-L12 runs regraded, all goal-verified. |
+| v3.24 | 2026-10-01 | Paul Scott | Direct request: move CloudCore's storage-hungry data to the new disk. F-196: artifact cache on a dedicated ext4 data disk, paths unchanged; busy-export switch bug fixed; cold Kiwix searches from a spinning disk noted. |
