@@ -2152,8 +2152,9 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
-        if (result.verdict == "failed" and not any(s.cls == "repaired" for s in steps)) or \
-                any(not c["ok"] and c.get("decisive", True) for c in checks):
+        # Every failed run (found in L11: WireGuard runs with a repaired step
+        # got none, and the next attempt was written blind).
+        if result.verdict == "failed":
             result.diagnosis = _diagnose(root, services, steps)
             if result.diagnosis:
                 say("\n# what the machine says about it:\n" + result.diagnosis + "\n")

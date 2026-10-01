@@ -3641,6 +3641,61 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 
 **Verified by:** per-run records in the report file. #15, #19, #30 and #33 were repaired to goal_verified, as in F-190. #40 was repaired to ran_clean: it created the example file the answer assumes.
 
+### F-194 — "Can't be tested here" and try another way (L11): lab limits stop counting as wrong advice, and a failed answer gets up to two different methods in fresh VMs
+
+**Where:**
+- `examples/llm-chat/files/advice_runner.py`:
+  - `_LAB_LIMITS` and `_lab_limit`, and the `not_testable` verdict;
+  - `_disk_needs` (a partition the answer assumes);
+  - the `modprobe` stand-in for built-in modules;
+  - `_diagnose` and `RunResult.diagnosis`;
+  - umount "not mounted", `ping -c`, "# Replace X with your …" examples;
+  - `_fill_wg_keys`, and a WireGuard goal check.
+- `verify_proxy.py`:
+  - `ADVICE_RETRIES`, `_try_other_ways`, `_model_alternative`, `_failure_report`;
+  - `_same_method`, `_standalone`;
+  - the page's attempt blocks.
+- Sentinel: the `diagnosis`, `attempt_of` and `attempt` columns, and the "Can't test here" filter.
+
+**Symptom:** after F-193, 4 of the 7 remaining failures were the lab's limits (GPU, GRUB, kernel modules, a disk assumed to hold a filesystem), recorded as failures. The other 3 were genuine advice failures that simply ended there. Direct request: "If something doesn't work on a lab vm ... it can be noted as failed, create the vm and try another way/method."
+
+**Root cause:** the verdict couldn't tell "the advice is wrong" from "this machine can't do that", and a failure ended the story.
+
+**Fix:**
+- **Lab limits:** a step failing *because of* one becomes `lab_limit`, judged by the failing command and its output only, not the whole step. Covered: loading modules, bootloader/GRUB/initramfs changes, and GPU drivers. Such steps aren't repaired and never become facts. A run whose only problems are limits is `not_testable`, shown as "can't be tested in this lab (…); not judged wrong".
+- **Lab environment:**
+  - a partition the answer uses but never creates is prepared first: ext4, and mounted if the answer unmounts it first. It's said so.
+  - `modprobe` succeeds for modules built into the lab kernel, as on a real machine; it says so in the setup log.
+- **Handled as a person would:**
+  - `umount` of something not mounted is fine;
+  - `ping` gets `-c 4`;
+  - a line marked "# Replace X with your …" is an example to adapt;
+  - WireGuard `PrivateKey`/`PublicKey` placeholders get the generated key and a throwaway peer key.
+- **Another way:** an answer that still fails after the lab's repairs gets up to `ADVICE_RETRIES` (2) new attempts. The model is shown what failed: the steps, their real output, failed checks, and *what the machine reported* (service journals, `named-checkconf -z`, `nginx -t`, …), gathered before the VM goes. It's asked for a different, stand-alone method, which a fresh VM tries. The lab stops at the first that works.
+- **Records:**
+  - each attempt shows under the answer and goes to Sentinel (source `retry`, linked to its run), with a grounding row;
+  - a goal-verified attempt is promoted for reuse.
+
+**Found on the way:**
+1. **Wrong attribution:** a WireGuard step failing at `wg setconf` was blamed on its `modprobe` line, so limits are now judged by the failing command only.
+2. **`blkid` succeeds on any partition** (its PARTUUID), so preparing a filesystem asks for `TYPE`.
+3. **Repeated methods:** the model repeated a failed method word for word, so a near-identical method (≥80% the same commands) isn't run again. The model is asked once more, with more randomness and a nudge; if it repeats again, the lab stops.
+4. **Diagnosis gap:** runs with a repaired step got no diagnosis, so every failed run now gets one.
+5. **References to the failed attempt:** alternatives opened with "It seems the previous method failed…" even when told not to. They're now stripped deterministically. The 10 stored alternatives were cleaned the same way, after a backup of the Sentinel DB.
+
+**Verified by:** on the lab coordinator (2026-10-01):
+- **Lab limits:** #36 GRUB and #37 NVIDIA are `not_testable`.
+- **#25:** the prepared `/dev/sdb1` makes it testable; `fsck` works, and what remains is genuine (`fsck.ntfs` doesn't exist on Ubuntu).
+- **Another way:**
+  - #28 (second IP) goal_verified on attempt 1, promoted to lab_verified in Sentinel;
+  - #34 (bind9) goal_verified on attempt 2 in its second L11 run;
+  - #35 (module at boot) ran_clean via a udev rule, waiting for review;
+  - #31 (WireGuard) failed in all three rounds, on genuine mistakes.
+- **No regressions:** #22, #26 and #21 stay goal_verified.
+- **The 40:** 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be tested here, 2 failed (was 8 verified, 5 of them false, at L10).
+- **Cost:** about 10–15 minutes of model time per attempt, at ~1.5 tokens/s.
+- **Tests:** Sentinel 56/56 pass.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3786,3 +3841,4 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 | v3.19 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L12. F-191: graded verification with 17 goal checks; only goal_verified reused automatically; F-188's ufw claim corrected; overlay root found to block NFS export (L13 widened). |
 | v3.20 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L13. F-192: snapshot ext4 root, spare disks, interactive sessions/SQL clients/fdisk; dm-init and cached-journal traps documented. |
 | v3.21 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to the 40-question re-run. F-193: 19 goal-verified as written (23 after repairs), 7 failed; 4 of those are lab limits. |
+| v3.22 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to can't-be-tested-here and L11. F-194: lab limits as not_testable; try another way with diagnosis; repeated methods refused; 25/40 goal-verified, 2 failed. |

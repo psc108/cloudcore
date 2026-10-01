@@ -1935,19 +1935,55 @@ def _failure_report(result) -> str:
     return "\n".join(lines[:16])
 
 
-def _model_alternative(question: str, answer: str, report: str, search_terms: str) -> str:
+_PREVIOUS_RE = re.compile(r"\b(?:previous|earlier|last|prior|first)\b[^.!?\n]*\b(?:attempt|method|answer|setup|approach|"
+                          r"step|try|configuration|run)|\b(?:failed|did not work|didn't work|encountered)\b|"
+                          r"\b(?:different|another|alternative|new)\s+(?:approach|method|way)\b|\bagain\b|"
+                          r"\b(?:the|this)\s+(?:issue|problem|error)\b",
+                          re.IGNORECASE)
+
+
+def _standalone(alt: str) -> str:
+    """Drop opening-paragraph sentences about the previous attempt: the
+    model doesn't reliably follow "don't mention it" (found in L11:
+    "This method avoids the issue encountered in the previous attempt"),
+    and the answer may be reused for someone who never saw it."""
+    head, sep, rest = alt.partition("\n\n")
+    if "```" in head:
+        return alt
+    kept = [s for s in re.split(r"(?<=[.!?])\s+", head.strip()) if s and not _PREVIOUS_RE.search(s)]
+    return (" ".join(kept) + sep + rest) if kept else rest.lstrip()
+
+
+def _commands_of(answer: str) -> set:
+    """The answer's command lines, normalised, to tell methods apart."""
+    out = set()
+    for block in re.findall(r"```[^\n]*\n(.*?)```", answer, re.DOTALL):
+        for ln in block.splitlines():
+            ln = re.sub(r"\s+", " ", ln.strip().removeprefix("sudo "))
+            if ln and not ln.startswith("#"):
+                out.add(ln)
+    return out
+
+
+def _same_method(a: str, b: str) -> bool:
+    ca, cb = _commands_of(a), _commands_of(b)
+    return bool(ca and cb) and len(ca & cb) / len(ca | cb) >= 0.8
+
+
+def _model_alternative(question: str, answer: str, report: str, search_terms: str,
+                       temperature: float = 0.4, nudge: str = "") -> str:
     """A different answer to `question`, given what failed. "" on failure."""
     payload = {"messages": [
         {"role": "system", "content": LINUX_SYSTEM_MESSAGE},
         {"role": "user", "content": _lab_facts(search_terms) + question},
         {"role": "assistant", "content": answer},
-        {"role": "user", "content": _RETRY_INSTRUCTION + "\n\n" + report}],
-        "max_tokens": 1200, "stream": False, "temperature": 0.4}
+        {"role": "user", "content": _RETRY_INSTRUCTION + (" " + nudge if nudge else "") + "\n\n" + report}],
+        "max_tokens": 1200, "stream": False, "temperature": temperature}
     try:
         req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
                                      data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=3600) as resp:
-            return json.loads(resp.read())["choices"][0]["message"]["content"].strip()
+            return _standalone(json.loads(resp.read())["choices"][0]["message"]["content"].strip())
     except Exception as e:  # noqa: BLE001 -- another way is a bonus; the original result stands
         print(f"verify-proxy: alternative-answer request failed: {e!r}", flush=True)
         return ""
@@ -1974,7 +2010,20 @@ def _try_other_ways(run_id: str, question: str, answer: str, search_terms: str, 
         att = {"n": k, "status": "writing", "id": "", "answer": "", "verdict": "", "summary": "", "lines": []}
         attempts.append(att)
         _set_attempts(run_id, attempts, True)
-        alt = _model_alternative(question, prev_answer, _failure_report(prev), search_terms)
+        report = _failure_report(prev)
+        alt = _model_alternative(question, prev_answer, report, search_terms)
+        tried = [answer] + [a["answer"] for a in attempts if a.get("answer")]
+        if alt and any(_same_method(alt, x) for x in tried):
+            # Found in L11: WireGuard's second attempt was word for word the
+            # first. Ask once more, harder; never spend a lab run re-proving it.
+            alt = _model_alternative(question, prev_answer, report, search_terms, temperature=0.9,
+                                     nudge="Your last reply repeated a method that has already failed in the lab; "
+                                           "use a genuinely different tool or approach.")
+            if alt and any(_same_method(alt, x) for x in tried):
+                att.update(status="done", verdict="", answer=alt,
+                           summary="The model offered a method that had already failed in the lab, so it wasn't run "
+                                   "again.")
+                break
         if not alt:
             att.update(status="done", summary="The model didn't produce another answer.")
             break
