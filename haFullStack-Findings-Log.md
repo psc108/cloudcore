@@ -3767,7 +3767,27 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 
 **Fix:** `common.instance_addr: 127.0.0.1` in the config `setup-logging-service.sh` writes; Loki only ever talks to itself here. The same line goes into the live config, then Loki restarts. A restart alone would only last until the next address change.
 
-**Verified by:** Loki 3.7.7's `-verify-config` accepts the patched config. The live fix needs root (the user runs it); verified below once applied.
+**Worse than queries:** counting what Loki holds per day (`sum(count_over_time({job=~".+"}[1d]))`) shows ingestion stopped too.
+- 17–25 Sep: 4.6k to 2.2M lines a day (20 Sep empty).
+- **26 Sep to 1 Oct: zero.**
+- After the fix: lines arrive again.
+
+The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely when the address change became permanent. Six days of logs, covering most of the llm-chat lab work (F-176 onwards), never reached Loki and can't be recovered from it.
+
+**The silence was Sentinel's too:** `loki_client.fetch_new_lines` caught every `httpx.HTTPError` and returned "no new lines". For 13 days the watcher logged `{'status': 'watching', 'windows': 0, 'notable': 0}`, indistinguishable from a quiet lab. Now:
+- the client raises `LokiUnavailable`;
+- the watcher records "Loki unreachable at … since …" as its status (a red pill in the UI), returns `loki_unavailable`, logs it as a warning, and keeps its checkpoint, so the next good poll resumes where it stopped;
+- two tests cover this.
+
+**Verified by:** applied on the hub (2026-10-01):
+- `-verify-config` reported valid, and Loki restarted;
+- the reported query (worker-01, 25 Sep) returns 1,000 lines in 0.02 s;
+- the last 20 minutes return live coordinator and kiwix lines in 0.006 s;
+- no `i/o timeout` errors since the restart;
+- Sentinel's watcher reports `watching` and found notable windows again within a minute;
+- Sentinel tests: 61/61 pass.
+
+**Open:** nothing alerts on a log *gap*. A host-level check (no lines from any host for N minutes while lab VMs are up) would have caught this on day one.
 
 ## Document History
 
