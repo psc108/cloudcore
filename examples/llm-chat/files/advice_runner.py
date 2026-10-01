@@ -158,6 +158,11 @@ def _substitute(text: str) -> tuple[str, list[str], set[str]]:
             if new != line:
                 changes.append("example DNS server address -> 127.0.0.1 (this machine)")
             line = new
+        # ping runs until Ctrl-C, which is what a person presses.
+        m2 = re.match(r"^(\s*(?:sudo\s+)?ping6?\s+)", line)
+        if m2 and not re.search(r"(?:^|\s)-[a-zA-Z]*c\s*\d", line[m2.end():]):
+            line = m2.group(1) + "-c 4 " + line[m2.end():]
+            changes.append("ping -> ping -c 4 (a person stops it with Ctrl-C)")
         # L13: an interactive fdisk/gdisk session, its keys described in
         # prose. The lab types the usual ones: one partition, whole disk.
         m = re.match(r"^(\s*)((?:sudo\s+)?(fdisk|gdisk)\s+(/dev/\w+))\s*$", line)
@@ -264,7 +269,8 @@ def parse_steps(answer: str) -> list[Step]:
             if editors:
                 pending_editor_target = editors[-1]
             body, subs, needs = _substitute("\n".join(kept).strip())
-            placeholder = _PLACEHOLDER_RE.search(body)
+            placeholder = _PLACEHOLDER_RE.search(body) or re.search(
+                r"#\s*(?:replace|change|substitute)\b[^\n]*\b(?:with|to)\s+(?:your|the)\b[^\n]*", body, re.IGNORECASE)
             if body and placeholder:
                 steps.append(Step(len(steps) + 1, "skip", body,
                                   note=f"example with a placeholder ({placeholder.group(0)}) for you to fill in; "
@@ -327,7 +333,34 @@ def parse_steps(answer: str) -> list[Step]:
                               edit_ops=ops, note="edit described in the text, applied to the file"))
     _feed_clients(steps)
     _sessions(steps)
+    _disk_needs(steps)
     return steps
+
+
+_PART_RE = re.compile(r"/dev/(?:sd|xvd)([bc])(\d+)\b")
+
+
+def _disk_needs(steps: list[Step]) -> None:
+    """A partition on a spare disk the answer uses but never creates (found
+    in F-193: "check a filesystem for errors" on /dev/sdb1) is prepared by
+    the lab first -- a partition, with ext4 unless the answer makes its own
+    filesystem -- and said so."""
+    runs = [s for s in steps if s.kind == "run"]
+    for s in runs:
+        for disk, num in dict.fromkeys(_PART_RE.findall(s.source)):
+            dev = f"/dev/sd{disk}{num}"
+            before = "\n".join(x.source for x in runs if x.n <= s.n)
+            if re.search(r"\b(?:fdisk|gdisk|cfdisk|sfdisk|parted)\b[^\n]*/dev/(?:sd|xvd)" + disk + r"\b", before):
+                continue
+            if any(n.startswith(f"disk:{dev}") for x in runs for n in x.needs):
+                continue
+            fs = not re.search(r"\bmkfs(?:\.\w+)?\b[^\n]*" + re.escape(dev), before)
+            # "umount it first": the answer expects it to be mounted.
+            mounted = fs and bool(re.search(r"\bumount\s+" + re.escape(dev), s.source))
+            s.needs = sorted(set(s.needs) | {f"disk:{dev}:{'ext4' if fs else ''}:{'mounted' if mounted else ''}"})
+            s.subs.append(f"prepared {dev}" + (" with an ext4 filesystem" if fs else "")
+                          + (", mounted at /mnt/labdisk" if mounted else "") + " (the answer assumes it exists)")
+            s.note = "the lab filled in: " + ", ".join(s.subs)
 
 
 # -- Interactive sessions in answers (L13) ---------------------------------------------
@@ -991,6 +1024,10 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root) -> 
         _, out, _ = sh("cat /proc/mdstat")
         ok = bool(re.search(r"\bactive raid1\b", out))
         checks.append(_goal("a RAID1 array is active", ok, " ".join(out.split())[:160]))
+    if "wireguard" in q:
+        code, out, _ = sh("wg show 2>&1 | head -4; ip -br link show type wireguard")
+        up = "interface:" in out and bool(re.search(r"^\S+\s+(?:UP|UNKNOWN)\b", out, re.MULTILINE))
+        checks.append(_goal("a WireGuard interface is up", up, " ".join(out.split())[:160]))
     if "swap" in q:
         _, sw, _ = sh("swapon --show --noheadings")
         checks.append(_goal("swap is active", bool(sw.strip()), sw.strip()[:120]))
@@ -1070,6 +1107,9 @@ def _judge(code, out, timed_out, marks, fullscreen) -> tuple[str, str, str]:
     """(class, detail, benign note) for one execution of a run step."""
     bad = [(st, cmd) for st, cmd in marks if not _benign(cmd, st)]
     benign = [_benign(cmd, st) for st, cmd in marks if _benign(cmd, st)]
+    if bad and all(re.search(r"\bumount\b", cmd) for _, cmd in bad) and re.search(r"\bnot mounted\b", out):
+        # "umount it first" when it wasn't mounted: a person reads that and goes on.
+        bad, benign = [], benign + ["it wasn't mounted, so there was nothing to unmount"]
     if fullscreen and not bad:
         return "ok", "", "full-screen tool: shown for a few seconds, then quit with q"
     if timed_out:
@@ -1085,6 +1125,37 @@ def _judge(code, out, timed_out, marks, fullscreen) -> tuple[str, str, str]:
         cls, detail = classify(code, out, False)
         return cls, detail, ""
     return "ok", "", (benign[0] if benign else "")
+
+
+# -- What this lab can't be ----------------------------------------------------------
+#
+# Found in the L10-L13 re-run (F-193): GPU drivers, GRUB and kernel modules
+# "failed" because a microVM has no GPU, no bootloader and its modules built
+# in -- advice that is right on a real machine. Such a step is a lab_limit,
+# not a failure: it isn't repaired, never becomes a "doesn't work" fact, and
+# a run whose only problems are limits is not_testable.
+
+_LAB_LIMITS = [
+    (re.compile(r"\b(?:modprobe|insmod|rmmod|depmod|dkms)\b|FATAL: Module|Module \S+ not found|"
+                r"/lib/modules/\S+: No such file"),
+     "loading kernel modules: the lab's kernel has the common ones built in and can't load others"),
+    (re.compile(r"\b(?:update-grub|grub-install|grub2?-mkconfig|efibootmgr|update-initramfs|bootctl)\b|"
+                r"/etc/default/grub|/boot/grub"),
+     "bootloader changes: the lab machine starts its kernel directly, with no GRUB or initramfs"),
+    (re.compile(r"\bnvidia|NVIDIA|\bubuntu-drivers\b|\bcuda\b|\bnouveau\b", re.IGNORECASE),
+     "GPU drivers: the lab machine has no GPU or other physical hardware"),
+]
+
+
+def _lab_limit(s: Step) -> str:
+    """Why a failed step can't be tested here, or ""."""
+    # The failing command and what it printed -- not the whole step, which
+    # may mention modprobe in a line that worked (found live: a WireGuard
+    # step failing at `wg setconf` was blamed on its modprobe line).
+    m = re.search(r"`([^`]+)` failed", s.detail or "")
+    failing = m.group(1) if m else (s.source if s.kind == "run" else "")
+    text = "\n".join((failing, s.target or "", (s.output or "")[-2000:]))
+    return next((why for rx, why in _LAB_LIMITS if rx.search(text)), "")
 
 
 # -- Step-level repair (L10b) --------------------------------------------------------
@@ -1263,7 +1334,7 @@ class RunResult:
     vm: dict = field(default_factory=dict)
     steps: list = field(default_factory=list)
     checks: list = field(default_factory=list)
-    verdict: str = ""            # goal_verified | ran_clean | failed | partial | not_runnable
+    verdict: str = ""            # goal_verified | ran_clean | failed | partial | not_testable | not_runnable
     summary: str = ""
     error: str = ""
     # Everything that happened on the lab machine, as a read-only terminal
@@ -1275,6 +1346,10 @@ class RunResult:
     # procedure, what it changed, and the procedure itself. `verdict` above
     # stays the honest verdict on the answer as written.
     repaired: dict = field(default_factory=dict)
+    # L11: on a failed run, what the machine itself said about why (service
+    # journals, validators), gathered before the VM goes -- for the next
+    # attempt and for whoever reads the run.
+    diagnosis: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -1336,6 +1411,26 @@ printf 'APT::Get::Assume-Yes "true";\n' > /etc/apt/apt.conf.d/99lab-assume-yes
 printf 'Defaults env_keep += "PAGER SYSTEMD_PAGER GIT_PAGER LESS SYSTEMD_COLORS MANPAGER"\n' > /etc/sudoers.d/99-lab-env
 chmod 440 /etc/sudoers.d/99-lab-env
 echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+# The lab kernel has its modules built in and no /lib/modules, so the real
+# modprobe fails even for a built-in one -- where a real Ubuntu's succeeds
+# quietly (found live: `modprobe wireguard` stopped a WireGuard answer whose
+# module is built in). This stand-in succeeds for built-ins and defers to
+# the real modprobe otherwise.
+cat > /usr/local/sbin/modprobe <<'EOS'
+#!/bin/sh
+# Stand-in installed by the lab: see advice_runner.py _HARNESS_SETUP.
+for a in "$@"; do case "$a" in -*) ;; *) m=$(echo "$a" | tr - _); break ;; esac; done
+[ -n "$m" ] && [ -e "/sys/module/$m" ] && exit 0
+case "$m" in
+  tun) c=TUN ;; br_netfilter) c=BRIDGE_NETFILTER ;; i2c_dev) c=I2C_CHARDEV ;; nf_tables) c=NF_TABLES ;;
+  loop) c=BLK_DEV_LOOP ;; fuse) c=FUSE_FS ;; bridge) c=BRIDGE ;; 8021q) c=VLAN_8021Q ;; bonding) c=BONDING ;;
+  ip_tables) c=IP_NF_IPTABLES ;; iptable_nat) c=IP_NF_NAT ;; nf_nat) c=NF_NAT ;; veth) c=VETH ;; vxlan) c=VXLAN ;;
+  *) c= ;;
+esac
+[ -n "$c" ] && zcat /proc/config.gz 2>/dev/null | grep -qx "CONFIG_$c=y" && exit 0
+exec /sbin/modprobe "$@"
+EOS
+chmod 755 /usr/local/sbin/modprobe
 """
 
 
@@ -1590,6 +1685,14 @@ def _prepare_needs(root_client, s: Step) -> list[str]:
         else:
             _exec(root_client, f"mkdir -p {shlex.quote(path)}", 15)
         made.append(path)
+    for n in sorted(x for x in needs if x.startswith("disk:")):
+        _, dev, fs, mounted = n.split(":")
+        disk = dev.rstrip("0123456789")
+        _exec(root_client, f"test -e {dev} || {{ echo ',,L' | sfdisk -q {disk}; udevadm settle; }}; "
+                           # blkid alone succeeds on any partition (its PARTUUID); ask for a filesystem type.
+                           + (f"blkid -s TYPE -o value {dev} | grep -q . || mkfs.ext4 -q {dev}; " if fs else "")
+                           + (f"mkdir -p /mnt/labdisk && mount {dev} /mnt/labdisk" if mounted else "true"), 60)
+        made.append(dev + (" (partition with ext4" + (", mounted" if mounted else "") + ")" if fs else " (partition)"))
     long_running = "ExecStart" in s.source or any(
         path in _unit_scripts for path in _STUB_SCRIPT_RE.findall(s.source + "\n" + s.target))
     for path in dict.fromkeys(_STUB_SCRIPT_RE.findall(s.source + "\n" + s.target)):
@@ -1691,6 +1794,32 @@ def _fill_fstab_uuids(root, s: Step, steps: list) -> str:
                 line = m.group(1) + uuid + line[m.end(2):]
         out.append(line)
     return "\n".join(out)
+
+
+_KEY_PLACEHOLDER_RE = re.compile(r"^(\s*(PrivateKey|PublicKey)\s*=\s*)(\S*(?:YOUR|your|<|\.\.\.)\S*)\s*$",
+                                 re.MULTILINE)
+
+
+def _fill_wg_keys(root, s: Step, steps: list) -> str:
+    """WireGuard config placeholders, filled as a person would: PrivateKey
+    with the key file an earlier step generated, a peer's PublicKey with a
+    throwaway key (the lab has no real peer). Recorded as substitutions."""
+    earlier = "\n".join(x.final or x.source for x in steps if x.kind == "run" and x.n < s.n)
+    files = re.findall(r"(?:tee|>)\s*(/etc/wireguard/[\w.-]*priv[\w.-]*)", earlier)
+
+    def fill(m):
+        if m.group(2) == "PrivateKey" and files:
+            _, key, _ = _exec(root, f"cat {shlex.quote(files[0])}", 10)
+            if key.strip():
+                s.subs.append(f"PrivateKey = {m.group(3)} -> the key in {files[0]} (generated by an earlier step)")
+                return m.group(1) + key.strip()
+        if m.group(2) == "PublicKey":
+            _, key, _ = _exec(root, "wg genkey | wg pubkey", 10)
+            if key.strip():
+                s.subs.append(f"PublicKey = {m.group(3)} -> a throwaway peer key (the lab has no real peer)")
+                return m.group(1) + key.strip()
+        return m.group(0)
+    return _KEY_PLACEHOLDER_RE.sub(fill, s.source)
 
 
 def _put_file(root_client, path: str, content: str, mode: str) -> tuple[bool, bool]:
@@ -1821,7 +1950,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         connect()
         say(f"# ready in {time.monotonic() - t_boot:.0f}s: {vm.vcpu_count} vCPU, {vm.mem_size_mib}MB RAM, "
             f"{vm.scratch_mib // 1024}GB disk\n# lab setup: apt and debconf take the defaults, as a person "
-            "following the answer would\n")
+            "following the answer would; modprobe succeeds for modules built into the lab's kernel, as it "
+            "would on a real machine\n")
         _exec(root, _HARNESS_SETUP, 60)
         global _target_clock_offset
         t_a = time.time()
@@ -1914,7 +2044,11 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     s.note = (s.note + "; " if s.note else "") + benign_note
                 s.attempts.append({"by": "answer", "exit": code, "cls": s.cls,
                                    "failed": [m for m in marks if not _benign(m[1], m[0])][:3]})
-                if s.cls != "ok":
+                limit = _lab_limit(s) if s.cls != "ok" else ""
+                if limit:
+                    s.cls, s.detail = "lab_limit", f"can't be tested in this lab -- {limit} ({s.detail or s.cls})"
+                    say(f"# can't be tested here: {limit}\n")
+                elif s.cls != "ok":
                     say(f"# {s.cls.replace('_', ' ')}: {s.detail}\n")
                     if repair:
                         _repair_step(s, student, root, say, budget, model_fix, question)
@@ -1933,11 +2067,16 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 s.note = how
                 if s.target == "/etc/fstab":
                     s.source = _fill_fstab_uuids(root, s, steps)
+                if s.target.startswith("/etc/wireguard/"):
+                    s.source = _fill_wg_keys(root, s, steps)
                 existed, ok = _put_file(root, s.target, s.source, s.kind)
                 say("# written\n" if ok else f"# could not write {s.target}\n")
                 s.exit = 0 if ok else 1
                 if not ok:
                     s.cls, s.detail = "step_failed", f"could not write {s.target}"
+                elif flag == "expects-existing" and not existed and _lab_limit(s):
+                    s.cls = "lab_limit"
+                    s.detail = f"can't be tested in this lab -- {_lab_limit(s)} ({s.target} doesn't exist here)"
                 elif flag == "expects-existing" and not existed:
                     s.cls = "file_missing"
                     s.detail = (f"the answer edits {s.target} as if it already exists, but it didn't at this "
@@ -2013,6 +2152,11 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
+        if (result.verdict == "failed" and not any(s.cls == "repaired" for s in steps)) or \
+                any(not c["ok"] and c.get("decisive", True) for c in checks):
+            result.diagnosis = _diagnose(root, services, steps)
+            if result.diagnosis:
+                say("\n# what the machine says about it:\n" + result.diagnosis + "\n")
         repaired = [s for s in steps if s.cls == "repaired"]
         if repaired:
             twin = RunResult(id=result.id, started_at=result.started_at)
@@ -2072,16 +2216,49 @@ _STATE_CHANGE_RE = re.compile(
     r"dpkg-reconfigure|netplan\s+apply|ip\s+(?:addr|address|route)\s+add|openssl\s+req|ssh-keygen|wg\s+genkey)\b")
 
 
+# Validators that explain *why* a service misbehaves, by what the answer used.
+_DIAGNOSTICS = [
+    (re.compile(r"\bbind9?\b|\bnamed\b"), "named-checkconf -z 2>&1 | grep -v ': loaded serial' | tail -12"),
+    (re.compile(r"\bnginx\b"), "nginx -t 2>&1 | tail -6"),
+    (re.compile(r"\bapache2?\b"), "apache2ctl configtest 2>&1 | tail -6"),
+    (re.compile(r"\bsshd?\b"), "sshd -t 2>&1 | tail -6"),
+    (re.compile(r"\bnetplan\b"), "netplan get 2>&1 | tail -12"),
+]
+
+
+def _diagnose(root, services, steps: list[Step], limit: int = 2400) -> str:
+    """Journals of the services the answer touched and the matching
+    validators' output -- what a person would look at next."""
+    text = "\n".join(s.source + "\n" + (s.target or "") for s in steps)
+    parts = []
+    for rx, cmd in _DIAGNOSTICS:
+        if rx.search(text):
+            _, out, _ = _exec(root, cmd, 30)
+            if out.strip():
+                parts.append(f"$ {cmd.split(' 2>&1')[0]}\n{out.strip()}")
+    for svc in sorted(services)[:4]:
+        _, out, _ = _exec(root, f"journalctl -u {shlex.quote(svc)} -n 12 --no-pager -o cat 2>/dev/null", 30)
+        if out.strip() and "-- No entries --" not in out:
+            parts.append(f"$ journalctl -u {svc} (last lines)\n{out.strip()}")
+    return "\n\n".join(parts)[:limit]
+
+
 def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) -> None:
     acted = [s for s in steps if s.kind in ("run", "write", "append", "prepend", "edit", "prose")]
-    bad = [s for s in acted if s.cls not in ("ok",)]
+    limits = [s for s in acted if s.cls == "lab_limit"]
+    bad = [s for s in acted if s.cls not in ("ok", "lab_limit")]
     failed_checks = [c for c in checks if not c["ok"] and c.get("decisive", True)]
     changed = any(s.kind in ("write", "append", "prepend", "edit", "prose") or _APT_INSTALL_RE.search(s.source)
                   or _SERVICE_RE.search(s.source) or _STATE_CHANGE_RE.search(s.source) for s in acted if s.cls == "ok")
     # L12: a check on what the answer set out to achieve.
     goal = [c for c in checks if c["ok"] and c.get("decisive", True)
             and c["kind"] in ("goal", "login", "http", "cron", "effective")]
-    if not bad and not failed_checks and changed and goal:
+    if limits and not bad and not failed_checks:
+        whys = list(dict.fromkeys(s.detail.split(" -- ", 1)[-1].rsplit(" (", 1)[0] for s in limits))
+        result.verdict = "not_testable"
+        result.summary = ("Can't be tested in this lab: " + "; ".join(whys) + f". The other {len(acted) - len(limits)} "
+                          "steps worked, but the answer as a whole can only be proven on a real machine.")
+    elif not bad and not failed_checks and changed and goal:
         result.verdict = "goal_verified"
         result.summary = (f"All {len(acted)} steps worked in a fresh Ubuntu 22.04 sandbox, and what they were meant to "
                           f"achieve was checked: " + "; ".join(c["subject"] for c in goal[:3])
@@ -2100,7 +2277,7 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
         if lockouts:
             what = ", ".join(c["subject"].split(" (")[0].replace(" still works", "") for c in lockouts)
             parts.append(f"LOCKOUT: following this answer breaks {what}, which worked before it")
-        for s in bad:
+        for s in bad + limits:
             parts.append(f"step {s.n}: {s.detail or s.cls.replace('_', ' ')}"
                          + (" (the lab repaired it)" if s.cls == "repaired" else ""))
         for c in failed_checks:
@@ -2110,7 +2287,7 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
 
 def plain_step_line(step: dict) -> str:
     """One human line per step for the page and the corpus."""
-    icon = {"ok": "✓", "skipped": "–", "": "·", "repaired": "↻"}.get(step["cls"], "✗")
+    icon = {"ok": "✓", "skipped": "–", "": "·", "repaired": "↻", "lab_limit": "⊘"}.get(step["cls"], "✗")
     what = step["target"] and f"{step['kind']} {step['target']}" or step["source"].splitlines()[0][:80]
     extra = step["detail"] or step["note"]
     if step.get("repair"):

@@ -1898,6 +1898,117 @@ def _model_fix(question: str, step: str, output: str) -> str:
     return line[:300]
 
 
+# L11: try another way. When an answer still fails in the lab after the
+# lab's own repairs, the model is shown what actually failed and asked for
+# a different method, which a fresh lab machine then tries -- up to
+# ADVICE_RETRIES times, stopping at the first that works. Direct request:
+# "If something doesn't work on a lab vm ... it can be noted as failed,
+# create the vm and try another way/method."
+ADVICE_RETRIES = int(os.environ.get("ADVICE_RETRIES", "2"))
+_RETRY_INSTRUCTION = (
+    "Your previous answer was tried step by step, exactly as written, on a fresh Ubuntu 22.04 server (a lab "
+    "machine), and it did not work. What happened is below. Answer the question again with a DIFFERENT method "
+    "that avoids what failed -- not the same steps with small changes. Use the same format as before: a short "
+    "explanation, then every command in a fenced bash block, and any file's full contents in a fenced block "
+    "with the file's path named just before it. Write it as a complete answer for someone who never saw the "
+    "previous one: don't mention it, the lab, or what failed (found in L11: a verified alternative reused for "
+    "another student began \"It seems that the nmcli command failed\").")
+
+
+def _failure_report(result) -> str:
+    """What failed in a run, for the model: failing steps with their real
+    output, and failed checks. Lab limits are left out: they're not the
+    answer's fault."""
+    lines = [f"Result: {result.summary}"]
+    for s in result.steps:
+        if s.get("cls") in ("ok", "skipped", "repaired", "lab_limit", "", None):
+            continue
+        first = (s.get("source") or "").strip().splitlines()[:1]
+        lines.append(f"- step {s['n']} `{first[0][:160] if first else s.get('kind')}`: {(s.get('detail') or '')[:240]}"
+                     + (f"\n  its output ended with: {(s.get('output') or '').strip()[-400:]}" if s.get("output") else ""))
+    for c in result.checks:
+        if not c.get("ok") and c.get("decisive", True):
+            lines.append(f"- check failed: {c['subject']}" + (f" ({(c.get('detail') or '')[:200]})" if c.get("detail") else ""))
+    if getattr(result, "diagnosis", ""):
+        lines = lines[:16] + ["What the machine itself reported afterwards:", result.diagnosis]
+        return "\n".join(lines)
+    return "\n".join(lines[:16])
+
+
+def _model_alternative(question: str, answer: str, report: str, search_terms: str) -> str:
+    """A different answer to `question`, given what failed. "" on failure."""
+    payload = {"messages": [
+        {"role": "system", "content": LINUX_SYSTEM_MESSAGE},
+        {"role": "user", "content": _lab_facts(search_terms) + question},
+        {"role": "assistant", "content": answer},
+        {"role": "user", "content": _RETRY_INSTRUCTION + "\n\n" + report}],
+        "max_tokens": 1200, "stream": False, "temperature": 0.4}
+    try:
+        req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
+                                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3600) as resp:
+            return json.loads(resp.read())["choices"][0]["message"]["content"].strip()
+    except Exception as e:  # noqa: BLE001 -- another way is a bonus; the original result stands
+        print(f"verify-proxy: alternative-answer request failed: {e!r}", flush=True)
+        return ""
+
+
+def _set_attempts(run_id: str, attempts: list, retrying: bool) -> None:
+    with _advice_cv:
+        data = _advice_runs.get(run_id)
+        if data is not None:
+            data["attempts"] = [dict(a) for a in attempts]
+            data["retrying"] = retrying
+
+
+def _final_verdict(result) -> str:
+    return (result.repaired or {}).get("verdict") or result.verdict
+
+
+def _try_other_ways(run_id: str, question: str, answer: str, search_terms: str, result, run_one) -> None:
+    attempts: list = []
+    prev_answer, prev = answer, result
+    for k in range(1, ADVICE_RETRIES + 1):
+        if _final_verdict(prev) != "failed":
+            break
+        att = {"n": k, "status": "writing", "id": "", "answer": "", "verdict": "", "summary": "", "lines": []}
+        attempts.append(att)
+        _set_attempts(run_id, attempts, True)
+        alt = _model_alternative(question, prev_answer, _failure_report(prev), search_terms)
+        if not alt:
+            att.update(status="done", summary="The model didn't produce another answer.")
+            break
+        child = uuid.uuid4().hex[:12]
+        att.update(status="running", id=child, answer=alt)
+        _set_attempts(run_id, attempts, True)
+
+        def progress(r, _att=att):
+            import advice_runner
+            _att["lines"] = [advice_runner.plain_step_line(s) for s in r.to_dict()["steps"]]
+            _set_attempts(run_id, attempts, True)
+
+        res = run_one(alt, child, progress)
+        import advice_runner
+        att.update(status="done", verdict=res.verdict, summary=res.summary,
+                   repaired=(res.repaired or {}).get("verdict", ""),
+                   lines=[advice_runner.plain_step_line(s) for s in res.to_dict()["steps"]])
+        _set_attempts(run_id, attempts, k < ADVICE_RETRIES and _final_verdict(res) == "failed")
+        entry = {"id": res.id, "source": "retry", "question": question, "answer": alt,
+                 "search_terms": search_terms, "verdict": res.verdict, "summary": res.summary, "error": res.error,
+                 "vm": res.vm, "steps": res.steps, "checks": res.checks, "repaired": res.repaired,
+                 "attempt_of": run_id, "attempt": k, "diagnosis": res.diagnosis}
+        print("ADVICE_RUN " + json.dumps({k2: v for k2, v in entry.items() if k2 != "answer"}), flush=True)
+        if SENTINEL_HOST:
+            # The alternative is an answer in its own right: logged like an
+            # asked one first, so a goal-verified run can promote it for reuse.
+            _push_grounding_to_sentinel({"endpoint": "/sandbox/linux-ask", "question": question, "answer": alt,
+                                         "search_terms": search_terms, "references": [], "grounded": False,
+                                         "grounding_source": "lab-retry"})
+            _push_advice_run_to_sentinel(entry)
+        prev_answer, prev = alt, res
+    _set_attempts(run_id, attempts, False)
+
+
 def _advice_worker() -> None:
     global _advice_pool
     import advice_runner
@@ -1970,12 +2081,20 @@ def _advice_worker() -> None:
                 if data is not None:
                     data["kept"] = {"expires_at": kept["expires"]}
         entry = {"id": result.id, "source": "auto", "question": question, "answer": answer,
+                 "diagnosis": result.diagnosis,
                  "search_terms": search_terms, "verdict": result.verdict,
                  "summary": result.summary, "error": result.error, "vm": result.vm,
                  "steps": result.steps, "checks": result.checks, "repaired": result.repaired}
         print("ADVICE_RUN " + json.dumps({k: v for k, v in entry.items() if k != "answer"}), flush=True)
         if SENTINEL_HOST:
             _push_advice_run_to_sentinel(entry)
+
+        def run_one(alt, child, progress):
+            return advice_runner.run_advice(
+                alt, make_target, progress=progress, run_id=child, question=question, make_prober=make_prober,
+                pair_bridges=(create_pair_bridge, delete_pair_bridge), model_fix=_model_fix)
+        if ADVICE_RETRIES > 0 and _final_verdict(result) == "failed":
+            _try_other_ways(run_id, question, answer, search_terms, result, run_one)
 
 
 def _start_advice_run(answer: str, question: str, search_terms: str = "") -> tuple[str, str] | None:
@@ -3055,11 +3174,48 @@ function makeAskPanel(cfg) {
   const LAB_VERDICTS = {
     goal_verified: ['ok', 'Verified: every step worked in a fresh Ubuntu 22.04 sandbox, and the result was checked'],
     ran_clean: ['info', 'Every step worked, but nothing checked the result (not reused until reviewed)'],
+    not_testable: ['info', "Can't be tested in this lab (it needs real hardware, a bootloader or kernel modules); not judged wrong"],
     lab_verified: ['ok', 'Verified: every step worked in a fresh Ubuntu 22.04 sandbox'],
     failed: ['bad', 'Tried in a fresh Ubuntu 22.04 sandbox: problems found'],
     partial: ['info', 'Tried in a fresh Ubuntu 22.04 sandbox'],
     not_runnable: ['info', 'Nothing in this answer could be run as a step'],
   };
+
+  // L11: another way, after the answer failed even with the lab's repairs.
+  function labAttemptBlock(a) {
+    const div = document.createElement('div');
+    const v = a.repaired || a.verdict;
+    const good = ['goal_verified', 'lab_verified'].includes(v);
+    div.className = 'labrun-repaired ' + (good ? 'ok' : (a.status !== 'done' || v === 'ran_clean' ? 'info' : 'bad'));
+    const head = document.createElement('div');
+    head.className = 'labrun-head';
+    head.textContent = `Another way (attempt ${a.n}): ` + (
+      a.status === 'writing' ? 'the model is writing a different method, given what failed…'
+      : a.status === 'running' ? `trying it in a fresh sandbox (${a.lines.length} steps so far)…`
+      : good ? 'this worked, and the result was checked'
+      : v === 'ran_clean' ? 'every step worked, but nothing checked the result'
+      : v === 'not_testable' ? "can't be tested in this lab"
+      : (a.summary || 'this did not work either'));
+    div.appendChild(head);
+    for (const l of a.lines) {
+      const d = document.createElement('div');
+      d.className = 'labrun-step';
+      d.textContent = l;
+      div.appendChild(d);
+    }
+    if (a.answer) {
+      const det = document.createElement('details');
+      if (good) det.open = true;
+      const s = document.createElement('summary');
+      s.textContent = 'The answer the lab tried';
+      const pre = document.createElement('pre');
+      pre.textContent = a.answer;
+      det.appendChild(s);
+      det.appendChild(pre);
+      div.appendChild(det);
+    }
+    return div;
+  }
 
   function fillLabRun(box, lab) {
     box.innerHTML = '';
@@ -3154,6 +3310,7 @@ function makeAskPanel(cfg) {
       box.appendChild(rb);
     }
     if (lab && lab.kept) box.appendChild(labKeptBlock(lab));
+    for (const a of (lab && lab.attempts) || []) box.appendChild(labAttemptBlock(a));
     for (const f of (lab && lab.failures) || []) {
       const det = document.createElement('details');
       const s = document.createElement('summary');
@@ -3181,6 +3338,9 @@ function makeAskPanel(cfg) {
         ? data.transcript.slice(0, 6000) + '\\n# ... (middle of the log not kept in this browser) ...\\n' + data.transcript.slice(-18000)
         : (data.transcript || ''),
       kept: data.kept || null,
+      retrying: !!data.retrying,
+      attempts: (data.attempts || []).map(a => ({n: a.n, status: a.status, verdict: a.verdict || '', repaired: a.repaired || '',
+                                                 summary: a.summary || '', answer: a.answer || '', lines: a.lines || []})),
       repaired: data.repaired && data.repaired.verdict ? {
         verdict: data.repaired.verdict, summary: data.repaired.summary || '',
         changes: data.repaired.changes || [], risky: !!data.repaired.risky,
@@ -3267,7 +3427,7 @@ function makeAskPanel(cfg) {
       if (entry) { lab.token = entry.labRun.token; entry.labRun = lab; saveHistory(h); }
       const box = transcriptEl.querySelector(`[data-labrun="${id}"]`);
       if (box) fillLabRun(box, lab);
-      if (['done', 'error', 'unknown'].includes(data.status)) { labPolls.delete(id); return; }
+      if (['done', 'error', 'unknown'].includes(data.status) && !data.retrying) { labPolls.delete(id); return; }
       setTimeout(tick, data.status === 'running' ? 1500 : 3000);
     };
     tick();
@@ -3279,7 +3439,7 @@ function makeAskPanel(cfg) {
     box.dataset.labrun = lab.id;
     fillLabRun(box, lab);
     parentEl.appendChild(box);
-    if (!['done', 'error', 'unknown'].includes(lab.status)) pollLabRun(lab.id);
+    if (!['done', 'error', 'unknown'].includes(lab.status) || lab.retrying) pollLabRun(lab.id);
   }
 
   function renderTranscript() {
