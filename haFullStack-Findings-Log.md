@@ -3696,6 +3696,33 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 - **Cost:** about 10–15 minutes of model time per attempt, at ~1.5 tokens/s.
 - **Tests:** Sentinel 56/56 pass.
 
+### F-195 — Lab grades could only go up, and repaired procedures weren't reusable; the first ones promoted showed lab conveniences aren't advice
+
+**Where:** Sentinel `src/sentinel/advice_runs.py` (`insert_advice_run`, `_keep_repaired_procedure`), with tests.
+
+**Symptom:** follow-ups to the corpus refresh (direct request: "commit and push first and then regrade/repair as required").
+1. **Grades could only go up.** A lab run could promote an answer to `lab_verified`, but a later run of the same answer that failed left the grade in place. Regrading couldn't take anything back.
+2. **Repaired procedures were invisible to reuse.** An answer that failed as written but worked after the lab's repairs was rightly not reused, but neither was the procedure that worked.
+
+**Root cause:** promotion was written for one direction, and only for the answer as written.
+
+**Fix:**
+- **Demotion:** a later run of an answer that isn't goal_verified (failed, ran_clean, partial, not_testable) returns a *lab-given* `lab_verified` to `unreviewed`. Human approvals and rejections are untouched.
+- **Repaired procedures as answers:** when the repaired procedure is goal_verified, it is stored as an answer of its own (`grounding_source` `lab-repaired`), headed "Verified in a fresh Ubuntu 22.04 lab machine" plus what the lab changed. It is not duplicated.
+- **Held for review when:**
+  - a repair was risky;
+  - the lab filled in placeholders (its user names, addresses);
+  - a repair was a *lab convenience*: a stand-in for something the answer assumes you have, or a wait.
+
+  Otherwise it's promoted.
+
+**Found on the way:** the first procedure promoted (SSH keys-only) passed every goal check, but its repair generated the key pair *on the server* "because the answer assumes you have one". That gets the lab through; it isn't advice, since a key pair belongs on the client. That is why conveniences are held for review, and all three procedures backfilled so far are now unreviewed.
+
+**Verified by:**
+- **The 11 pre-L12 `lab_verified` runs,** regraded through the current lab on 2026-10-01: all 11 are goal_verified (nginx reverse proxy, five MFA runs, two nginx installs, logrotate, timezone, Apache). Nothing was demoted.
+- **Backfill:** 3 procedures added (SSH keys-only, fail2ban, SSH key login), all held for review. The Sentinel DB was backed up first.
+- **Tests:** Sentinel 59/59 pass, 3 new.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3842,3 +3869,4 @@ Sentinel 54/54 tests pass, one new: only goal_verified is promoted.
 | v3.20 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to L13. F-192: snapshot ext4 root, spare disks, interactive sessions/SQL clients/fdisk; dm-init and cached-journal traps documented. |
 | v3.21 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to the 40-question re-run. F-193: 19 goal-verified as written (23 after repairs), 7 failed; 4 of those are lab limits. |
 | v3.22 | 2026-10-01 | Paul Scott | Direct request: "yes, please" to can't-be-tested-here and L11. F-194: lab limits as not_testable; try another way with diagnosis; repeated methods refused; 25/40 goal-verified, 2 failed. |
+| v3.23 | 2026-10-01 | Paul Scott | Direct request: "commit and push first and then regrade/repair as required". F-195: demotion on a later failure; repaired procedures stored as answers, lab conveniences held for review; 11 pre-L12 runs regraded, all goal-verified. |
