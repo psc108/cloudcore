@@ -3829,6 +3829,34 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 
 **Open:** the queue lives only in memory, so a service restart drops queued runs. Sentinel's log-gap check (F-197) wouldn't catch a stuck worker either, since the coordinator keeps logging.
 
+### F-200 — Held-out evaluation: on 40 unseen questions the lab proved 3, not the 25/40 seen on the tuning set; most failures are the lab's, in five classes
+
+**Where:** `reports/llm-chat-lab/heldout-*` (questions, harness, asks, results); results section in `llm-chat-lab-sandbox-Phased-Implementation.md`.
+
+**Symptom:** a measurement (direct request: "yes, please" to a held-out evaluation before more building). 40 new questions went through the page's own `/sandbox/linux-ask`.
+- **Lab grades:** 5 goal_verified, 10 ran_clean, 7 read-only or nothing to run, 1 not_testable, 17 failed.
+- **Read by hand:** 3 of the 5 verifications hold (#15, #19, #24). #7 is a false pass (the cron entry deletes only `*.txt`). #11 is unproven (the Docker goal check runs as root).
+- **The tuning set** had reached 25 of 40.
+
+**Root cause:** the lab's fixes were shaped by the 40 tuning answers. Unseen questions exposed five classes (details in the plan's results section):
+- **A. Presumed state** (8 questions): users, installed services, partitions or servers the question assumes exist.
+- **B. Goal checks firing on the wrong thing** (6): keyword triggers like "swap" in "swappiness", a client question checked as a server, a container checked as the host, a source-restricted rule checked from outside the allowed range.
+- **C. Placeholder styles not recognised** (6).
+- **D. Lab limits not recognised** (5).
+- **E. Harness bugs** (6+):
+  - sudoers written with mode 0644;
+  - a placeholder path clashing with the answer's own `mkdir`;
+  - an apt lock from the image's boot-time refresh;
+  - `tail -f` never stops;
+  - the `username` rule rewriting `username=`;
+  - kept labs exhausting memory, so 4 runs never started.
+
+**Reuse:** of 3 stored answers handed to the model, 2 were for a different question (#12, #15).
+
+**Fix:** none in this entry; the classes order the next work. These 40 stop being held out once fixes are made from them, so the next measurement needs fresh questions.
+
+**Verified by:** every one of the 40 runs read, including each goal_verified answer and its checks. 34 runs were re-run through the worker's pipeline after F-199, and 4 (#2–#5) after a capacity error.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3980,3 +4008,4 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 | v3.25 | 2026-10-01 | Paul Scott | Reported: Grafana-from-Sentinel queries timing out. F-197: Loki's ring held the old LAN address since the network moved; pinned to 127.0.0.1. |
 | v3.26 | 2026-10-01 | Paul Scott | Direct request: log-gap check and a search for old-network leftovers. F-197 updated (log-gap detection); F-198: distro dnsmasq.service failing against CloudCore's own; no other leftovers. |
 | v3.27 | 2026-10-02 | Paul Scott | Found during the held-out evaluation (direct request). F-199: a parser bug killed the lab's worker thread; worker now survives a failing run. |
+| v3.28 | 2026-10-02 | Paul Scott | Direct request: held-out evaluation. F-200: 3 of 40 unseen questions truly proven (tuning set 25/40); failures mostly the lab's, in five classes; reuse matched the wrong question 2 of 3 times. |

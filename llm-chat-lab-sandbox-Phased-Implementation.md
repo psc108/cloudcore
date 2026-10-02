@@ -106,6 +106,47 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
 
+## Held-out evaluation (2026-10-01/02)
+
+40 new questions, none used for tuning (`reports/llm-chat-lab/heldout-questions.json`), asked through the page's own endpoint: grounding and reuse, the answer, the lab, repairs, another way. Results: `heldout-asks.jsonl`, `heldout-results.jsonl`. Grading was by reading every run.
+
+| Outcome (best of as-written / repaired / another way) | Held-out | Tuning set (F-193/F-194) |
+|---|---|---|
+| Goal-verified by the lab | 5 | 25 |
+| … still true on reading the run | **3** (#15 root SSH login, #19 RAM disk, #24 iptables 8080) | — |
+| Ran clean | 10 | 6 |
+| Read-only / nothing to run | 7 | 5 |
+| Can't be tested here | 1 | 2 |
+| Failed | 17 | 2 |
+
+**The two weak verifications:**
+- **#7 is a false pass:** the cron entry deletes only `*.txt`, while the check only confirmed an entry exists.
+- **#11 is unproven:** the Docker check runs `docker` as root, so it never tested "without sudo".
+
+**The 17 failures are mostly the lab, not the model.** By class, most-cases first:
+
+| Class | Questions | What happened |
+|---|---|---|
+| A. The question presumes existing state | #6, #8, #11, #13, #20, #27, #38, #39 | users (bob, alice in sudo), installed services (nginx, MariaDB, Docker), a partition, an SSH server to connect to: none exist in a fresh machine |
+| B. Goal check fires on the wrong thing | #12, #28, #39, #40 (and #7, #11) | "swappiness" matched the swap check; a client SSH question checked for a server; the Docker-container timezone checked the host; the ufw rule allowing only 10/8 was checked from a prober outside 10/8 |
+| C. Placeholder styles not recognised | #9, #20, #26, #31, #33, #39 | `$service_name`, `package_name`, `ZOMBIE_PID`, `server_ip_address`, `yourlinuxip`, `your-uuid-here` ran literally |
+| D. Lab limits not recognised | #14, #18, #21, #30, #35 | public domain for Let's Encrypt, a grown disk, SMART, PCI graphics, fan sensors |
+| E. Harness bugs | #6, #10, #16, #17, #26, #2–#5 | sudoers file written 0644 (`visudo` gives 0440); a pre-created placeholder path clashing with the answer's own `mkdir`; apt locked by the image's boot-time index refresh; `tail -f` never stops; the `username` substitution rewrote the mount option `username=`; kept labs used all memory, so 4 runs never started; F-199 (worker crash) |
+
+**Genuine answer mistakes were seen too:** `ufw … port 22/tcp`, a `default.bak` left in nginx's `sites-enabled`, `systemd-resolve` (gone in 22.04), `mysql -p` with SQL on stdin, a Python syntax error, `docker run` without the group.
+
+**Reuse:** the matcher handed the model a stored answer 3 times.
+- **Right question once:** #37 (hostname, a paraphrase).
+- **Different question twice:** #12 got the "SSH, HTTP and HTTPS" ufw answer; #15 got "change the SSH port to 2222".
+- **Missed:** one paraphrase, #36 "London time".
+- **Near-misses:** all three were (correctly) left alone.
+
+**Goal checks miss paraphrases:** they're keyword-triggered, so "rename my server" and "London time" got no hostname or timezone check.
+
+**Time:** answers took a median of 233 s (max 354 s); lab runs with two other-way attempts took up to 43 min.
+
+**What it means:** the 25/40 on the tuning set was overfitted. On unseen questions, the lab proved 3 of 40. The model is not the main limit: most failures are the lab not setting up what a question presumes, and checks or parsing that don't generalise beyond the answers they were written against. **These 40 are no longer held out once fixes are made from them**, so the next measurement needs a fresh set.
+
 ## Definitions
 
 **Step classifications:** `ok`, `package_not_found`, `command_not_found`,

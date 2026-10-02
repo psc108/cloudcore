@@ -1,0 +1,84 @@
+22:04:55 #1 [everyday] How do I find all files in /etc that were modified in the last 24 hours?
+22:06:24   answered in 86s (450 chars, complete=True); grounding=none refs=[]; lab=yes
+22:06:24 #2 [everyday] How do I count the total number of lines in all .py files under a directory?
+22:09:35   answered in 188s (969 chars, complete=True); grounding=kiwix refs=['Using find before wc eliminates total', 'Using find command to set env vars in gi']; lab=yes
+22:09:35 #3 [everyday] How do I see the five processes using the most CPU right now?
+22:10:45   answered in 67s (342 chars, complete=True); grounding=none refs=[]; lab=yes
+22:10:45 #4 [everyday] How do I find out which package installed /usr/bin/curl?
+22:12:16   answered in 88s (334 chars, complete=True); grounding=kiwix refs=['Restore mandb-triggers after unminimizin', 'docker: freeze library dependencies']; lab=yes
+22:12:16 #5 [services] How do I create a systemd timer that runs a script every 15 minutes?
+22:18:08   answered in 349s (2123 chars, complete=True); grounding=kiwix refs=['Create a cron job from script', 'RPi 4 - cant get cron job to work (Pytho']; lab=yes
+22:18:08 #6 [services] How do I let user alice restart nginx with sudo, but nothing else?
+22:21:50   answered in 219s (1271 chars, complete=True); grounding=kiwix refs=["Nginx won't restart. Any ideas?", 'Django deploy Gunicorn and NginX']; lab=yes
+22:21:50 #7 [services] How do I set up a cron job that deletes files in /tmp older than 7 days?
+22:25:46   answered in 233s (1303 chars, complete=True); grounding=kiwix refs=['Cron job to delete all files older than ', 'Cron Job - Delete old files, but keep fi']; lab=yes
+22:25:46 #8 [permissions] How do I give user bob read access to /srv/reports using ACLs?
+22:28:20   answered in 151s (900 chars, complete=True); grounding=kiwix refs=['Managing Apache to Compensate for WebDAV']; lab=yes
+22:28:20 #9 [services] How do I raise the open files limit for a systemd service?
+22:32:47   answered in 264s (1680 chars, complete=True); grounding=kiwix refs=['How to limit the number of open files fo', 'cannot increase open-files-limit in mari']; lab=yes
+22:32:47 #10 [permissions] How do I make a shared directory where everyone can create files but only delete their own?
+22:37:10   answered in 260s (1623 chars, complete=True); grounding=kiwix refs=['facl, setfacl, directory share, why does', 'Symfony2 Capifony deploy setfacl Operati']; lab=yes
+22:37:10 #11 [users] How do I add a user to the docker group so they can run docker without sudo?
+22:39:28   answered in 135s (815 chars, complete=True); grounding=kiwix refs=['How can I manage docker group in freeipa', 'Pulumi on GCP - How to create a Managed ']; lab=yes
+22:39:28 #12 [security] How do I allow SSH only from the 10.0.0.0/8 network using ufw?
+22:43:48   answered in 256s (1000 chars, complete=True); grounding=local_corpus refs=['How do I allow only SSH, HTTP and HTTPS ']; lab=yes
+22:43:48 #13 [web] How do I protect an nginx site with a username and password (basic auth)?
+22:48:21   answered in 270s (1844 chars, complete=True); grounding=kiwix refs=['Cannot get basic auth to work on nginx o', 'Not being able to use Basic Auth in NGIN']; lab=yes
+22:48:21 #14 [web] How do I get a free Let's Encrypt certificate for my nginx site?
+22:52:28   answered in 245s (1508 chars, complete=True); grounding=kiwix refs=["Let's encrypt nginx server tls-sni-01 ch", "How to configure Let's encrypt certifica"]; lab=yes
+22:52:28 #15 [security] How do I stop root from logging in over SSH?
+22:55:52   answered in 200s (1030 chars, complete=True); grounding=local_corpus refs=['How do I change the SSH port to 2222?']; lab=yes
+22:55:52 #16 [security] How do I enable automatic security updates on Ubuntu?
+23:01:38   answered in 343s (2020 chars, complete=True); grounding=kiwix refs=['unattended-upgrades-shutdown.log is no l', 'Variant of "Ansible lineinfile adds dupl']; lab=yes
+23:01:38 #17 [web] How do I install Apache with PHP and check PHP is working?
+23:04:59   answered in 198s (1256 chars, complete=True); grounding=kiwix refs=['How to detect Apache LimitRequestLine fr', 'Apache CURL error SSL: CA certificate se']; lab=yes
+23:04:59 #18 [disks] How do I grow an ext4 filesystem after enlarging the disk it is on?
+23:07:58   answered in 176s (931 chars, complete=True); grounding=kiwix refs=['How to resize / enlarge / grow a non-LVM', 'GCP Compute Engine full disk not resized']; lab=yes
+23:07:58 #19 [disks] How do I create a 512MB RAM disk mounted at /mnt/ramdisk that comes back after reboot?
+23:12:34   answered in 273s (1388 chars, complete=True); grounding=kiwix refs=['Creating ramdisk with recent Raspberry O', 'Error when trying to use tmpfs for MySQL']; lab=yes
+23:12:34 #20 [disks] How do I mount /dev/sdb1 read-only at /mnt/data using its UUID in fstab?
+23:16:51   answered in 254s (1380 chars, complete=True); grounding=kiwix refs=['Changing fstab makes system read-only', 'Changing EC2 Instance Type modified EBS ']; lab=yes
+23:16:51 #21 [hardware] How do I check the SMART health of my hard drive?
+23:20:26   answered in 212s (1319 chars, complete=True); grounding=kiwix refs=['How can I read my hard drive’s SMART sta', 'Get hard drives SMART data with email no']; lab=yes
+23:20:26 #22 [networking] How do I set the DNS servers to 1.1.1.1 and 8.8.8.8 with netplan?
+23:26:00   answered in 331s (1801 chars, complete=True); grounding=kiwix refs=['Netplan, networkd, resolvconf conflicts:', 'How do I configure DNS in ubuntu? Why is']; lab=yes
+23:26:00 #23 [networking] How do I add a permanent static route to 10.20.0.0/16 via 192.168.1.254?
+23:31:57   answered in 354s (1837 chars, complete=True); grounding=kiwix refs=['iptables, wireguard: 2-way routing betwe', 'how to communicate 2 instances inside th']; lab=yes
+23:31:57 #24 [networking] How do I open port 8080 with iptables and keep the rule after a reboot?
+23:35:32   answered in 212s (1169 chars, complete=True); grounding=kiwix refs=['persist port routing from 80 to 8080', "Can't save iptables rule on Google Cloud"]; lab=yes
+23:35:32 #25 [multi-machine] How do I copy a directory to another machine with rsync over SSH?
+23:41:15   answered in 340s (2414 chars, complete=True); grounding=kiwix refs=['Rsyncing directories through ssh tunnel', 'Windows to Linux (Rsync and SSH)']; lab=yes
+23:41:15 #26 [multi-machine] How do I set up a Samba share and access it from another Linux machine?
+23:46:51   answered in 334s (2165 chars, complete=True); grounding=kiwix refs=['Sharing folder from Linux to Mac, Samba ', 'howto to setup a remote share in a stand']; lab=yes
+23:46:51 #27 [multi-machine] How do I allow remote connections to MariaDB from another machine?
+23:52:20   answered in 325s (2075 chars, complete=True); grounding=kiwix refs=['MariaDB Refusing remote connections', 'Remote user is not able to connect to ma']; lab=yes
+23:52:20 #28 [kernel] How do I change vm.swappiness to 10 permanently?
+23:54:46   answered in 143s (760 chars, complete=True); grounding=kiwix refs=['Swappiness setting are ignored in sysctl', 'Ansible lineinfile is not changing file ']; lab=yes
+23:54:46 #29 [kernel] How do I disable IPv6 on Ubuntu 22.04?
+23:57:31   answered in 162s (812 chars, complete=True); grounding=kiwix refs=['ping works but internet connection times', 'k3s networking problems on Ubuntu 22.04:']; lab=yes
+23:57:31 #30 [hardware] How do I check which graphics driver my system is using?
+00:02:54   answered in 319s (2153 chars, complete=True); grounding=kiwix refs=['nvidia-smi works, but glxinfo show OpenG', 'How can I fetch VRAM and GPU cache size ']; lab=yes
+00:02:54 #31 [explanation] What is the difference between apt and apt-get?
+00:05:43   answered in 166s (1386 chars, complete=True); grounding=none refs=[]; lab=yes
+00:05:43 #33 [explanation] What is a zombie process and how do I get rid of one?
+00:10:33   answered in 288s (1913 chars, complete=True); grounding=kiwix refs=['How do I remove a Zombie Process, create', 'How to kill zombie process']; lab=yes
+00:10:33 #34 [other-distro] How do I install and enable the Apache web server on CentOS Stream 9?
+00:12:15   answered in 99s (333 chars, complete=True); grounding=kiwix refs=['OVirt', 'Squid (software)']; lab=yes
+00:12:15 #35 [own-machine] Why does my laptop fan run all the time, and how can I find what is causing it?
+00:16:47   answered in 270s (1941 chars, complete=True); grounding=kiwix refs=['Linux Overheating Issues', 'Programmatically access CPU fan on a lap']; lab=yes
+00:16:47 #36 [reuse-paraphrase] How can I make my server's clock use London time?
+00:19:23   answered in 153s (723 chars, complete=True); grounding=kiwix refs=['Daylight saving option on Linux servers', 'Best server to sync two machines']; lab=yes
+00:19:23 #37 [reuse-paraphrase] How do I rename my Ubuntu server so the new name survives a reboot?
+00:21:32   answered in 127s (669 chars, complete=True); grounding=local_corpus refs=['How do I change the hostname permanently']; lab=yes
+00:21:32 #38 [reuse-near-miss] How do I remove a user from the sudo group?
+00:23:12   answered in 96s (544 chars, complete=True); grounding=kiwix refs=['Remove a users right to use sudo', 'Ansible - remove user from group x if al']; lab=yes
+00:23:12 #39 [reuse-near-miss] How do I connect to an SSH server that listens on port 2222?
+00:25:45   answered in 150s (821 chars, complete=True); grounding=kiwix refs=['Connect SSH to server on port 2222 via t', 'Unable to connect via SSH to linux serve']; lab=yes
+00:25:45 #40 [reuse-near-miss] How do I set the timezone inside a Docker container?
+00:30:40   answered in 293s (1862 chars, complete=True); grounding=kiwix refs=['Docker Container time & timezone (will n', 'Using docker-compose to set containers t']; lab=yes
+00:30:40 all questions asked; waiting for lab runs
+00:30:40   #1: lab partial
+00:30:40   #2: lab partial
+00:30:41   #3: lab partial
+00:30:41   #4: lab partial
+00:30:41   #5: lab partial
