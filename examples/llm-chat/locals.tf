@@ -160,7 +160,7 @@ locals {
   fullvm_source           = file("${path.module}/files/fullvm.py")
 
   # Fixed host-level address, same convention as promtail_config's own
-  # Loki target and the host-level package repo (192.168.100.1:8090) —
+  # Loki target and the host-level package repo (repo.cloudcore.internal:8090) —
   # api/examples_listener.py's own dedicated, always-on bind. Confirmed
   # live this session that this exact address is reachable not just
   # from local guests but across the WireGuard tunnel from a
@@ -168,7 +168,7 @@ locals {
   # in every paired peer's own AllowedIPs — see wireguard.py's
   # render_config), so one fixed address covers both placements with
   # no peer-specific templating needed.
-  examples_api_base = "http://192.168.100.1:8083"
+  examples_api_base = "http://capture.cloudcore.internal:8083"
 
   # CloudCore Dashboard -- LLM Performance page's "live deployments"
   # registry (verify_proxy.py's own register_llm_deployment(), api/

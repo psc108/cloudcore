@@ -10,7 +10,7 @@ apt_preserve_sources_list: true
 bootcmd:
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -312,7 +312,7 @@ write_files:
       Environment=EXAMPLES_API_BASE={{ examples_api_base }}
       Environment=EXAMPLES_API_TOKEN={{ examples_ingestion_token }}
       Environment=LAB_BACKEND={{ lab_backend }}
-      Environment=LABVM_BROKER_URL=http://192.168.100.1:8083
+      Environment=LABVM_BROKER_URL=http://capture.cloudcore.internal:8083
       Environment=LABVM_BROKER_TOKEN={{ labvm_broker_token }}
       Environment=EXAMPLES_MODEL_FILENAME={{ model_filename }}
       Environment=DEPLOYMENT_NAME={{ deployment_name }}
@@ -417,7 +417,7 @@ runcmd:
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /tmp/{{ llama_archive_name }} \
-        http://192.168.100.1:8090/jammy/artifacts/{{ llama_archive_name }} && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/{{ llama_archive_name }} && break
       echo "llama.cpp download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done
@@ -428,7 +428,7 @@ runcmd:
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /opt/llama.cpp/models/{{ model_filename }} \
-        http://192.168.100.1:8090/jammy/artifacts/{{ model_filename }} && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/{{ model_filename }} && break
       echo "model download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done
@@ -449,7 +449,7 @@ runcmd:
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /tmp/{{ firecracker_archive_name }} \
-        http://192.168.100.1:8090/jammy/artifacts/{{ firecracker_archive_name }} && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/{{ firecracker_archive_name }} && break
       echo "firecracker download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done
@@ -471,7 +471,7 @@ runcmd:
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /opt/firecracker/vmlinux \
-        http://192.168.100.1:8090/jammy/artifacts/{{ firecracker_kernel_name }} && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/{{ firecracker_kernel_name }} && break
       echo "firecracker kernel download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done
@@ -481,7 +481,7 @@ runcmd:
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /tmp/{{ firecracker_rootfs_name }} \
-        http://192.168.100.1:8090/jammy/artifacts/{{ firecracker_rootfs_name }} && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/{{ firecracker_rootfs_name }} && break
       echo "firecracker rootfs download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done
@@ -507,7 +507,7 @@ runcmd:
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /tmp/{{ websockets_wheel_name }} \
-        http://192.168.100.1:8090/jammy/artifacts/{{ websockets_wheel_name }} && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/{{ websockets_wheel_name }} && break
       echo "websockets wheel download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done

@@ -17,7 +17,7 @@
 #
 # bootcmd (not runcmd/write_files) — cloud-init's earliest hook, the
 # only one guaranteed to run before the packages: module below.
-# cloudcore-repo (192.168.100.1:8090, haFullStack.md §14) is a
+# cloudcore-repo (repo.cloudcore.internal:8090, haFullStack.md §14) is a
 # host-level, always-on service reachable over plain HTTP — unlike the
 # old per-project NFS repo this replaces, no client package needs
 # installing first, so the "one small bootstrap fetch from the real
@@ -33,7 +33,7 @@ bootcmd:
   # entirely, not just relocated.
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -58,8 +58,8 @@ write_files:
 
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-ca.deb -o /tmp/step-ca.deb
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-ca.deb -o /tmp/step-ca.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "${step_ca_deb_sha256}  /tmp/step-ca.deb" | sha256sum -c -
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-ca.deb /tmp/step-cli.deb || apt-get install -f -y

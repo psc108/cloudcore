@@ -298,8 +298,8 @@
     # host-level, always-on platform capability now
     # (api/setup-logging-service.sh), not a per-example node — every
     # example's own promtail ships to the same fixed address
-    # (192.168.100.1:3100), the same pattern already used for the
-    # host-level package repo (192.168.100.1:8090, §7). This stack used
+    # (logs.cloudcore.internal:3100), the same pattern already used for the
+    # host-level package repo (repo.cloudcore.internal:8090, §7). This stack used
     # to run its own dedicated "logging" node purely so every other
     # tier's promtail had somewhere to point — no longer needed, and
     # removing it drops this stack back to 16 nodes. Genuinely static
@@ -795,4 +795,4 @@
           - "Backend: {{ backend_ips }}"
           - "NFS shared export: {{ nfs_ip }}:/exports/{{ nfs_share }} (mounted at {{ nfs_mount_dir }} on frontend+backend)"
           - "Status pages: http://{{ vip_address }}/{mysql,keystone,rabbitmq,tls}-status.html"
-          - "Grafana: http://192.168.100.1:3000/ (host-level, admin / setup-logging-service.sh's CLOUDCORE_LOGGING_ADMIN_PASSWORD), Loki pre-provisioned as its datasource"
+          - "Grafana: http://grafana.cloudcore.internal:3000/ (host-level, admin / setup-logging-service.sh's CLOUDCORE_LOGGING_ADMIN_PASSWORD), Loki pre-provisioned as its datasource"

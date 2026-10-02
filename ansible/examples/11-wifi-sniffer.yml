@@ -171,7 +171,7 @@
           bootcmd:
             - |
               cat > /etc/apt/sources.list <<'EOF'
-              deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+              deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
               EOF
               echo 'kismet-common kismet-common/install-setuid boolean true' | debconf-set-selections
 
@@ -210,11 +210,11 @@
                   # Fixed address, not a discovered/templated one — Loki is a
                   # host-level, always-on service (api/setup-logging-service.sh,
                   # haFullStack-LLD.md §12), the same platform-capability pattern as
-                  # the host-level package repo (192.168.100.1:8090, §7) rather than a
+                  # the host-level package repo (repo.cloudcore.internal:8090, §7) rather than a
                   # dedicated per-example node. Every example's own promtail ships
                   # here, which is what makes log coverage apply no matter which
                   # example gets built, not just this one.
-                  - url: http://192.168.100.1:3100/loki/api/v1/push
+                  - url: http://logs.cloudcore.internal:3100/loki/api/v1/push
 
                 # __HOSTNAME__ is fixed up at boot (this node's real hostname isn't
                 # known until runtime) via the same sed-substitution idiom this stack
@@ -439,7 +439,7 @@
               for attempt in 1 2 3 4 5; do
                 curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
                   -C - -o /tmp/rtl8812au.tar.gz \
-                  http://192.168.100.1:8090/jammy/artifacts/rtl8812au-{{ rtl8812au_driver_ref }}.tar.gz && break
+                  http://repo.cloudcore.internal:8090/jammy/artifacts/rtl8812au-{{ rtl8812au_driver_ref }}.tar.gz && break
                 echo "rtl8812au download attempt $attempt stalled/failed, retrying..." >&2
                 sleep 5
               done

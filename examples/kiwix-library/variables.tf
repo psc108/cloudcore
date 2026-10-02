@@ -71,7 +71,7 @@ variable "kiwix_tools_url" {
     else) if you bump kiwix_tools_version to something not yet cached.
   EOT
   type        = string
-  default     = "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
+  default     = "http://repo.cloudcore.internal:8090/jammy/artifacts/kiwix-tools.tar.gz"
 }
 
 variable "kiwix_tools_sha256" {
@@ -95,7 +95,7 @@ variable "zim_url" {
     above is pre-cached — and update zim_filename/zim_md5 to match.
   EOT
   type        = string
-  default     = "http://192.168.100.1:8090/jammy/artifacts/wikipedia_en_top_nopic_2026-06.zim"
+  default     = "http://repo.cloudcore.internal:8090/jammy/artifacts/wikipedia_en_top_nopic_2026-06.zim"
 }
 
 variable "zim_filename" {

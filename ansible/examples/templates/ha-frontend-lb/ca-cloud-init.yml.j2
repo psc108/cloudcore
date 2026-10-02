@@ -17,7 +17,7 @@ apt_preserve_sources_list: true
 bootcmd:
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -46,8 +46,8 @@ write_files:
 
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-ca.deb -o /tmp/step-ca.deb
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-ca.deb -o /tmp/step-ca.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "{{ step_ca_deb_sha256 }}  /tmp/step-ca.deb" | sha256sum -c -
       echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-ca.deb /tmp/step-cli.deb || apt-get install -f -y

@@ -37,7 +37,7 @@ apt_preserve_sources_list: true
 bootcmd:
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
     echo 'kismet-common kismet-common/install-setuid boolean true' | debconf-set-selections
 
@@ -197,7 +197,7 @@ runcmd:
     for attempt in 1 2 3 4 5; do
       curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
         -C - -o /tmp/rtl8812au.tar.gz \
-        http://192.168.100.1:8090/jammy/artifacts/rtl8812au-${rtl8812au_driver_ref}.tar.gz && break
+        http://repo.cloudcore.internal:8090/jammy/artifacts/rtl8812au-${rtl8812au_driver_ref}.tar.gz && break
       echo "rtl8812au download attempt $attempt stalled/failed, retrying..." >&2
       sleep 5
     done

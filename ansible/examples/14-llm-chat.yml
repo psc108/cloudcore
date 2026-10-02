@@ -303,10 +303,10 @@
     # playbook -- see examples/llm-chat/variables.tf's own identical
     # sentinel_host/sentinel_port for why this isn't computed like
     # kiwix_host is.
-    sentinel_host: "192.168.100.1"
+    sentinel_host: "sentinel.cloudcore.internal"
     sentinel_port: 8900
     kiwix_tools_version: "3.8.2"
-    kiwix_tools_url: "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
+    kiwix_tools_url: "http://repo.cloudcore.internal:8090/jammy/artifacts/kiwix-tools.tar.gz"
     kiwix_tools_sha256: "b0ae98dd344aa0469a15ab42feff6d5aafb79541a82fb4e2647c74b073123815"
     # The kiwix corpus comes from one manifest shared with the OpenTofu
     # template (llm-chat-kiwix-expansion-Phased-Implementation.md, K2) --
@@ -344,7 +344,7 @@
     # one distinctly keeps both engines' own examples.tf/.yml
     # documentation and behaviour identical). Must match the API host's
     # own CLOUDCORE_API_TOKEN.
-    examples_api_base: "http://192.168.100.1:8083"
+    examples_api_base: "http://capture.cloudcore.internal:8083"
     # F-201: the narrow capture token, never the master token.
     examples_ingestion_token: "{{ lookup('env', 'CLOUDCORE_EXAMPLES_TOKEN') }}"
     # F4: "full" proves answers on CloudCore lab VMs (needs the broker token).

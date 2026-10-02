@@ -21,7 +21,7 @@ apt_preserve_sources_list: true
 bootcmd:
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -162,7 +162,7 @@ runcmd:
   - |
     set -e
     grep -q ' /opt/kiwix/data ' /etc/fstab || \
-      echo '192.168.100.1:/srv/cloudcore-artifacts /opt/kiwix/data nfs4 ro,vers=4.2,nconnect=4,actimeo=3600,nocto,_netdev,nofail 0 0' >> /etc/fstab
+      echo 'artifacts.cloudcore.internal:/srv/cloudcore-artifacts /opt/kiwix/data nfs4 ro,vers=4.2,nconnect=4,actimeo=3600,nocto,_netdev,nofail 0 0' >> /etc/fstab
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
       mountpoint -q /opt/kiwix/data || mount /opt/kiwix/data || true
       mountpoint -q /opt/kiwix/data && break

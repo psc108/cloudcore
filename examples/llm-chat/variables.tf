@@ -799,7 +799,7 @@ variable "kiwix_port" {
 variable "sentinel_host" {
   description = "Host-level Sentinel instance's own bridge-reachable address -- unlike kiwix_host, not a module output, since Sentinel is a fixed, pre-existing host-level service this template doesn't provision itself (confirmed live reachable from the coordinator over the same 192.168.100.1 bridge the host-level package repo already uses). verify_proxy.py's own _log_grounding() pushes every completed ask's search terms + references here; empty disables the push the same way empty kiwix_host disables search."
   type        = string
-  default     = "192.168.100.1"
+  default     = "sentinel.cloudcore.internal"
 }
 
 variable "sentinel_port" {
@@ -816,7 +816,7 @@ variable "kiwix_tools_version" {
 
 variable "kiwix_tools_url" {
   type    = string
-  default = "http://192.168.100.1:8090/jammy/artifacts/kiwix-tools.tar.gz"
+  default = "http://repo.cloudcore.internal:8090/jammy/artifacts/kiwix-tools.tar.gz"
 }
 
 variable "kiwix_tools_sha256" {

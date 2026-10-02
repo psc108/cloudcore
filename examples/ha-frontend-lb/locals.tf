@@ -146,8 +146,8 @@ locals {
   # host-level, always-on platform capability now
   # (api/setup-logging-service.sh), not a per-example node — every
   # example's own promtail ships to the same fixed address
-  # (192.168.100.1:3100), the same pattern already used for the
-  # host-level package repo (192.168.100.1:8090, §7). This stack used
+  # (logs.cloudcore.internal:3100), the same pattern already used for the
+  # host-level package repo (repo.cloudcore.internal:8090, §7). This stack used
   # to run its own dedicated "logging" node purely so every other
   # tier's promtail had somewhere to point — no longer needed, and
   # removing it drops this stack back to 16 nodes.

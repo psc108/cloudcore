@@ -158,6 +158,28 @@ else
 fi
 
 # Stop any existing cloudcore dnsmasq before starting
+# Two-host S2 (cloudcore-two-host-Phased-Implementation.md): guests reach
+# host-level services by name, never by one host's address. Each name is
+# answered here, by this host's own dnsmasq, with the address of whichever
+# host runs that service for this host's guests -- "self" (this bridge's
+# gateway) or another host's address -- from /etc/cloudcore/services.conf
+# (lines like "repo=self" or "logs=192.168.100.1"). Fixed answers, so they
+# don't depend on CloudCore's API being up. Without the file every name is
+# "self". Names: repo (packages, artifacts :8090), logs (Loki :3100),
+# grafana (:3000), capture (examples, lab-VM broker :8083), artifacts (the
+# NFS artifact export), sentinel (:8900).
+SERVICES_CONF=/etc/cloudcore/services.conf
+SERVICE_ADDRESSES=()
+for svc in repo logs grafana capture artifacts sentinel; do
+  target=$(sed -n "s/^${svc}=\(.*\)$/\1/p" "$SERVICES_CONF" 2>/dev/null | tail -1)
+  [[ -z "$target" || "$target" == self ]] && target="$GW"
+  if [[ ! "$target" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    echo "WARNING: $SERVICES_CONF: '$svc=$target' is not an IPv4 address or 'self'; using this host" >&2
+    target="$GW"
+  fi
+  SERVICE_ADDRESSES+=("--address=/${svc}.cloudcore.internal/${target}")
+done
+
 [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null || true
 sleep 0.5
 
@@ -186,6 +208,7 @@ dnsmasq \
   --dhcp-range="${DHCP_START},${DHCP_END},12h" \
   --dhcp-option="option:dns-server,${GW}" \
   --dhcp-option="option:domain-search,instances.cloudcore.internal" \
+  "${SERVICE_ADDRESSES[@]}" \
   --server="/cloudcore.internal/127.0.0.1#5353" \
   --server=8.8.8.8 \
   --server=1.1.1.1 \

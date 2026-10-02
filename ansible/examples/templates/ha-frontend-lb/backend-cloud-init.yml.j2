@@ -22,7 +22,7 @@ apt_preserve_sources_list: true
 bootcmd:
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -55,8 +55,8 @@ write_files:
       #!/bin/bash
       set -euo pipefail
 
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/jasypt-dist.zip -o /tmp/jasypt-dist.zip
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/bcprov.jar -o /tmp/bcprov.jar
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/jasypt-dist.zip -o /tmp/jasypt-dist.zip
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/bcprov.jar -o /tmp/bcprov.jar
       echo "{{ jasypt_dist_zip_sha256 }}  /tmp/jasypt-dist.zip" | sha256sum -c -
       echo "{{ bcprov_jar_sha256 }}  /tmp/bcprov.jar" | sha256sum -c -
 
@@ -92,7 +92,7 @@ write_files:
 
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "{{ step_cli_deb_sha256 }}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 

@@ -30,7 +30,7 @@
 # bootcmd runs, silently overwriting the cloudcore-repo rewrite below
 # with zero error (confirmed directly, F-042, haFullStack-Findings-Log.md).
 # bootcmd points apt at the host-level cloudcore-repo service
-# (192.168.100.1:8090, haFullStack.md §14) instead of the real Ubuntu
+# (repo.cloudcore.internal:8090, haFullStack.md §14) instead of the real Ubuntu
 # mirror; see ca-cloud-init.yaml.tftpl for the full rationale.
 apt_preserve_sources_list: true
 bootcmd:
@@ -42,7 +42,7 @@ bootcmd:
   # entirely, not just relocated.
   - |
     cat > /etc/apt/sources.list <<'EOF'
-    deb [trusted=yes] http://192.168.100.1:8090/jammy/apt-repo ./
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
     EOF
 
 package_update: true
@@ -71,7 +71,7 @@ write_files:
       set -euo pipefail
 
       DEB=/tmp/proxysql.deb
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/proxysql.deb -o "$DEB"
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/proxysql.deb -o "$DEB"
       echo "${proxysql_deb_sha256}  $DEB" | sha256sum -c -
       dpkg -i "$DEB" || apt-get install -f -y
       systemctl enable --now proxysql
@@ -128,7 +128,7 @@ write_files:
 
       LOCAL_IP=$(hostname -I | awk '{print $1}')
 
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 
@@ -234,7 +234,7 @@ write_files:
       #!/bin/bash
       set -euo pipefail
 
-      curl -fsSL http://192.168.100.1:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
+      curl -fsSL http://repo.cloudcore.internal:8090/jammy/artifacts/step-cli.deb -o /tmp/step-cli.deb
       echo "${step_cli_deb_sha256}  /tmp/step-cli.deb" | sha256sum -c -
       dpkg -i /tmp/step-cli.deb || apt-get install -f -y
 
