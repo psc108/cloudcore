@@ -66,6 +66,80 @@ MAX_ACTIVE = 6
 MAX_STUDENT = 2
 REAP_INTERVAL_S = 60
 
+# F4: what each purpose's VM needs at boot, installed by cloud-init while it
+# boots (the image is the stock Ubuntu cloud image).
+PACKAGES = {
+    "proof-target": ["pamtester", "oathtool"],
+    "proof-prober": ["python3-paramiko", "oathtool", "nfs-common", "dnsutils", "curl"],
+    "student": ["pamtester", "oathtool"],
+}
+
+# F4: the lab's own control sshd, on its own port with its own config, so an
+# answer that reconfigures the normal sshd (port, root login, PAM/MFA) can't
+# cut off the runner. Key-only, no PAM (as the microVM's vsock control was).
+_CONTROL_SSHD = """Port 1022
+ListenAddress 0.0.0.0
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+AllowUsers root student labctl
+PidFile /run/sshd-control.pid
+Subsystem sftp /usr/lib/openssh/sftp-server
+X11Forwarding no
+PrintMotd no
+SetEnv PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+"""
+_CONTROL_UNIT = """[Unit]
+Description=Lab control sshd (port 1022)
+After=network.target
+
+[Service]
+ExecStartPre=/bin/mkdir -p /run/sshd
+ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_config_control
+ExecStart=/usr/sbin/sshd -D -f /etc/ssh/sshd_config_control
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def _user_data(purpose: str, pubkey: str) -> str:
+    """The fixed cloud-init template (the caller supplies only the key)."""
+    def block(text: str, indent: int = 6) -> str:
+        return "\n".join(" " * indent + line for line in text.rstrip("\n").split("\n"))
+    pkgs = "".join(f"\n  - {p}" for p in PACKAGES.get(purpose, []))
+    return f"""#cloud-config
+package_update: true
+packages:{pkgs}
+write_files:
+  - path: /etc/ssh/sshd_config_control
+    permissions: "0644"
+    content: |
+{block(_CONTROL_SSHD)}
+  - path: /etc/systemd/system/sshd-control.service
+    permissions: "0644"
+    content: |
+{block(_CONTROL_UNIT)}
+  - path: /root/.ssh/authorized_keys
+    permissions: "0600"
+    content: |
+      {pubkey}
+runcmd:
+  # Not locked ("!"): sshd without PAM refuses locked accounts even for keys.
+  - usermod -p '*' student
+  - usermod -p '*' labctl
+  - echo 'student ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-student && chmod 440 /etc/sudoers.d/90-student
+  - systemctl daemon-reload
+  - systemctl enable --now sshd-control.service
+  # Saved while ufw is inactive, so an answer's "ufw enable" keeps it.
+  - command -v ufw >/dev/null && ufw allow 1022/tcp comment lab-control || true
+"""
+
+
 # F3: blank data disks (GB) per purpose -- /dev/sdb, /dev/sdc in the guest,
 # for partitioning/LVM/RAID answers; the prober needs none.
 DATA_DISKS = {"proof-target": "2,2", "student": "2,2"}
@@ -273,7 +347,9 @@ def create_lab_vm():
                      **({"data_disks": DATA_DISKS[purpose]} if purpose in DATA_DISKS else {})},
             # The control account: key-only, the caller's key. Everything else
             # the guest needs is installed by the advice runner over this.
-            "users": [{"username": "labctl", "sudo": True, "ssh_keys": [pubkey]}],
+            "users": [{"username": "labctl", "sudo": True, "ssh_keys": [pubkey]},
+                      {"username": "student", "sudo": True, "ssh_keys": [pubkey]}],
+            "user_data": _user_data(purpose, pubkey),
         }
         if peer_id:
             req["peer_id"] = peer_id

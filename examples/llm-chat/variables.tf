@@ -878,3 +878,21 @@ variable "kiwix_peer_security_group_id" {
   type        = string
   default     = ""
 }
+
+# --- llm-chat-full-vm F4: proving answers on full VMs -----------------------
+variable "lab_backend" {
+  description = "Where Linux Help answers are proved: \"microvm\" (Firecracker microVMs on the coordinator) or \"full\" (throwaway full VMs from CloudCore's lab-VM broker on the coordinator's own host, which needs api/setup-lab-network.sh there)."
+  type        = string
+  default     = "microvm"
+  validation {
+    condition     = contains(["microvm", "full"], var.lab_backend)
+    error_message = "lab_backend must be \"microvm\" or \"full\"."
+  }
+}
+
+variable "labvm_broker_token" {
+  description = "CloudCore's lab-VM broker token (CLOUDCORE_LABVM_TOKEN), never the master token. CloudCore's own builds pass it automatically; empty disables full-VM proofs."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

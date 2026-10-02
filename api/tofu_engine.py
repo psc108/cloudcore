@@ -502,6 +502,8 @@ def _build_env(var_overrides: dict) -> tuple[dict, Path]:
     # uses this; an explicit override (below) still wins.
     if cc_token.examples_token():
         env["TF_VAR_examples_ingestion_token"] = cc_token.examples_token()
+    if cc_token.labvm_token():
+        env["TF_VAR_labvm_broker_token"] = cc_token.labvm_token()
     if tofurc.exists():
         env["TF_CLI_CONFIG_FILE"] = str(tofurc)
     for k, v in var_overrides.items():

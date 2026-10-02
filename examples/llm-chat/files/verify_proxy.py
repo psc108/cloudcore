@@ -1906,6 +1906,12 @@ def _model_fix(question: str, step: str, output: str) -> str:
 # "If something doesn't work on a lab vm ... it can be noted as failed,
 # create the vm and try another way/method."
 ADVICE_RETRIES = int(os.environ.get("ADVICE_RETRIES", "2"))
+# F4: "full" proves answers on throwaway full VMs from CloudCore's lab-VM
+# broker (its guest-facing address and its own token); anything else keeps
+# the microVM lab.
+LAB_BACKEND = os.environ.get("LAB_BACKEND", "microvm")
+LABVM_BROKER_URL = os.environ.get("LABVM_BROKER_URL", "")
+LABVM_BROKER_TOKEN = os.environ.get("LABVM_BROKER_TOKEN", "")
 _RETRY_INSTRUCTION = (
     "Your previous answer was tried step by step, exactly as written, on a fresh Ubuntu 22.04 server (a lab "
     "machine), and it did not work. What happened is below. Answer the question again with a DIFFERENT method "
@@ -2076,9 +2082,18 @@ def _advice_worker() -> None:
         return MicroVM("advc", _advice_pool, SANDBOX_BRIDGE, sizing=sizing, boot_timeout_s=90,
                        root="snapshot", spare_disks_mib=(1024, 1024), **kw)
 
+
     def make_prober(bridge):
         return MicroVM("advp", IpPool(PAIR_SUBNET), bridge, sizing=prober_sizing, isolate=False,
                        boot_timeout_s=90, extra_boot_args=_RUN_VM_BOOT_ARGS)
+    # F4: proofs on throwaway full VMs from CloudCore's lab-VM broker, when
+    # configured (LAB_BACKEND=full plus the broker's address and token).
+    if LAB_BACKEND == "full" and LABVM_BROKER_URL and LABVM_BROKER_TOKEN:
+        from fullvm import FullVMLabs
+        _labs = FullVMLabs(LABVM_BROKER_URL, LABVM_BROKER_TOKEN)
+        make_target, make_prober = _labs.make_target, _labs.make_prober
+        create_pair_bridge, delete_pair_bridge = _labs.new_run, _labs.end_run
+        print("verify-proxy: lab runs use full VMs via " + LABVM_BROKER_URL, flush=True)
     threading.Thread(target=_kept_reaper, daemon=True).start()
     while True:
         with _advice_cv:
@@ -2097,7 +2112,7 @@ def _advice_worker() -> None:
             _release_kept(rid, "made room for a newer run")
 
         def keep(vm, info, _rid=run_id, _tok=token):
-            if ADVICE_KEEP_MINUTES <= 0 or ADVICE_KEEP_MAX <= 0:
+            if ADVICE_KEEP_MINUTES <= 0 or ADVICE_KEEP_MAX <= 0 or not getattr(vm, "keepable", True):
                 return False
             expires = time.time() + ADVICE_KEEP_MINUTES * 60
             with _kept_lock:

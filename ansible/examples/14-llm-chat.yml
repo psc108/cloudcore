@@ -347,6 +347,9 @@
     examples_api_base: "http://192.168.100.1:8083"
     # F-201: the narrow capture token, never the master token.
     examples_ingestion_token: "{{ lookup('env', 'CLOUDCORE_EXAMPLES_TOKEN') }}"
+    # F4: "full" proves answers on CloudCore lab VMs (needs the broker token).
+    lab_backend: microvm
+    labvm_broker_token: "{{ lookup('env', 'CLOUDCORE_LABVM_TOKEN') }}"
 
     # CloudCore Dashboard -- LLM Performance page's "live deployments"
     # registry (verify_proxy.py's own register_llm_deployment(), api/
@@ -807,6 +810,10 @@
       ansible.builtin.set_fact:
         microvm_source: "{{ lookup('file', 'templates/llm-chat/microvm.py') }}"
 
+    - name: Load fullvm.py source (full-VM F4 proof backend)
+      ansible.builtin.set_fact:
+        fullvm_source: "{{ lookup('file', 'templates/llm-chat/fullvm.py') }}"
+
     - name: Load advice_runner.py source (lab-sandbox L4 Linux Help advice runs)
       ansible.builtin.set_fact:
         advice_runner_source: "{{ lookup('file', 'templates/llm-chat/advice_runner.py') }}"
@@ -878,6 +885,9 @@
           'sandbox_terminal_source': sandbox_terminal_source,
           'microvm_source': microvm_source,
           'advice_runner_source': advice_runner_source,
+          'fullvm_source': fullvm_source,
+          'lab_backend': lab_backend,
+          'labvm_broker_token': labvm_broker_token,
           'terminal_port': terminal_port,
           'terminal_idle_timeout_minutes': terminal_idle_timeout_minutes,
           'terminal_max_session_minutes': terminal_max_session_minutes,

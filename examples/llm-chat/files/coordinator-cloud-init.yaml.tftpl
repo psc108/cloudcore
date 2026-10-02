@@ -90,6 +90,12 @@ write_files:
     content: |
       ${indent(6, advice_runner_source)}
 
+  # llm-chat-full-vm F4 -- proofs on throwaway full VMs from CloudCore's
+  # lab-VM broker, when lab_backend = "full".
+  - path: /opt/llama.cpp/fullvm.py
+    content: |
+      ${indent(6, fullvm_source)}
+
   # Phase 4 — the sandbox's own system prompt (verify_proxy.py's
   # SANDBOX_SYSTEM_MESSAGE_FILE), plain text rather than an
   # Environment= line — see that constant's own comment for why.
@@ -312,6 +318,9 @@ write_files:
       Environment=SENTINEL_PORT=${sentinel_port}
       Environment=EXAMPLES_API_BASE=${examples_api_base}
       Environment=EXAMPLES_API_TOKEN=${examples_ingestion_token}
+      Environment=LAB_BACKEND=${lab_backend}
+      Environment=LABVM_BROKER_URL=http://192.168.100.1:8083
+      Environment=LABVM_BROKER_TOKEN=${labvm_broker_token}
       Environment=EXAMPLES_MODEL_FILENAME=${model_filename}
       Environment=DEPLOYMENT_NAME=${deployment_name}
       Environment=PREVIEW_PORTS=${preview_ports}

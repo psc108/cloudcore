@@ -109,7 +109,8 @@ _PLACEHOLDER_RE = re.compile(r"\byour[_-][a-z_]+|\b(?:username|user|youruser)@|"
                              r"<(?:your[\w -]*|[\w-]*(?:user|name|server|ip|file|path|dir|domain|host|group|"
                              r"password|key|port)[\w-]*)>|\bYOUR_[A-Z_]+\b|\bserver_ip\b", re.IGNORECASE)
 LAB_USER, LAB_GROUP, LAB_DIR = "labuser", "labgroup", "/srv/lab"
-TARGET_PAIR_IP = "172.30.0.2"
+_MICROVM_TARGET_IP = "172.30.0.2"
+TARGET_PAIR_IP = _MICROVM_TARGET_IP
 _SUBSTITUTIONS = [
     # (pattern, replacement or callable, what the lab must create first)
     (re.compile(r"/home/(?:user|username|your[_-]?user(?:name)?|youruser|<user(?:name)?>)/"), "/home/student/", ""),
@@ -119,7 +120,7 @@ _SUBSTITUTIONS = [
     (re.compile(r"\b(?:your[_-]?group(?:name)?|group[_-]?name)\b|<group(?:name)?>", re.IGNORECASE), LAB_GROUP, "group"),
     (re.compile(r"\b(?:your[_-]?server[_-]?ip|server[_-]?ip|your[_-]?ip(?:[_-]?address)?|server[_-]?address|"
                 r"remote[_-]?(?:host|server)|server\.example\.com)\b|<(?:server|host|ip)[\w-]*>", re.IGNORECASE),
-     TARGET_PAIR_IP, ""),
+     lambda m: TARGET_PAIR_IP, ""),
 ]
 
 
@@ -520,8 +521,8 @@ _VALIDATORS = [
 # for real, recording every prompt; checks which ports another machine can
 # reach; fetches what web servers serve. Probes of something the answer
 # changed decide the verdict; the rest are reported as information.
-
-TARGET_PAIR_IP = "172.30.0.2"
+# TARGET_PAIR_IP (defined above) is how the prober reaches the target: the
+# microVM pair bridge's fixed 172.30.0.2, or a full VM's lab address (F4).
 _MFA_RE = re.compile(r"\b(?:mfa|2fa|two[- ]factor|multi[- ]factor|totp|otp|one[- ]time|authenticator|yubikey|"
                      r"pam_google|pam_oath|pam_u2f|verification code)\b", re.I)
 _FIREWALL_RE = re.compile(r"\b(?:ufw|iptables|ip6tables|nft|firewall-cmd)\b")
@@ -1437,7 +1438,10 @@ _REBOOT_RE = re.compile(r"\b(?:reboot|shutdown\s+(?:-\S+\s+)*-r|systemctl\s+rebo
 
 
 _PROMPT_TAIL_RE = re.compile(r"(?:[?:>]|\(y/n\)|\[y/n\]|\[Y/n\]|\[y/N\])\s*$", re.IGNORECASE)
-_YES_NO_RE = re.compile(r"\(y/n\)|\[y/n\]|\[Y/n\]|\[y/N\]|\byes/no\b", re.IGNORECASE)
+# Also "(y|n)" -- ufw's own form (found on full VMs: `ufw enable` asked
+# "Proceed with operation (y|n)?", got Enter, printed "Aborted" and stayed
+# inactive, while the step looked fine).
+_YES_NO_RE = re.compile(r"\(y\s*[/|]\s*n\)|\[y\s*[/|]\s*n\]|\byes\s*[/|]\s*no\b", re.IGNORECASE)
 _NEW_SECRET_RE = re.compile(r"secret key is:?\s*([A-Z2-7]{16,})")
 
 
@@ -1904,6 +1908,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
     is offered the target VM at the end; when it returns True the VM is not
     torn down (the caller now owns it)."""
     result = RunResult(id=run_id or uuid.uuid4().hex[:12], started_at=time.time())
+    global TARGET_PAIR_IP
+    TARGET_PAIR_IP = _MICROVM_TARGET_IP
     steps = parse_steps(answer)
     result.steps = [asdict(s) for s in steps]
     publish = progress or (lambda r: None)
@@ -1927,11 +1933,13 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
     student = root = prober_root = None
     deadline = time.monotonic() + RUN_TIMEOUT_S
 
+    full_vm = bool(getattr(vm, "reboots_in_place", False))
+
     def connect():
         nonlocal root, student
         root = vm.ssh_client("root")
         student = vm.ssh_client("student")
-        if pair:
+        if pair and not full_vm:
             _exec(root, f"ip link set eth1 up && ip addr replace {TARGET_PAIR_IP}/24 dev eth1", 15)
 
     kept = False
@@ -1946,6 +1954,13 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         t_boot = time.monotonic()
         vm.boot()
         result.vm = {"vcpus": vm.vcpu_count, "mem_mib": vm.mem_size_mib, "scratch_mib": vm.scratch_mib}
+        if full_vm and vm.target_addr:
+            # F4: the prober reaches a full VM at its lab address, known only
+            # now; re-apply placeholder substitutions (server_ip -> target).
+            TARGET_PAIR_IP = vm.target_addr
+            steps = parse_steps(answer)
+            result.steps = [asdict(s) for s in steps]
+            result.vm["kind"] = "full"
         connect()
         say(f"# ready in {time.monotonic() - t_boot:.0f}s: {vm.vcpu_count} vCPU, {vm.mem_size_mib}MB RAM, "
             f"{vm.scratch_mib // 1024}GB disk\n# lab setup: apt and debconf take the defaults, as a person "
@@ -2017,7 +2032,16 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 except (OSError, EOFError):
                     pass  # the connection going away is the point
                 say("# the machine is shutting down to reboot...\n", now=True)
-                if vm.wait_exit(90):
+                if full_vm:
+                    # A full VM reboots in place: wait for it, then reconnect.
+                    if vm.wait_exit(90):
+                        connect()
+                        s.exit, s.cls = 0, "ok"
+                        s.note = f"rebooted: the machine came back in {time.monotonic() - t0:.0f}s"
+                        say(f"# back up after the reboot ({time.monotonic() - t0:.0f}s)\n", now=True)
+                    else:
+                        s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not come back after the reboot"
+                elif vm.wait_exit(90):
                     saved = vm.jail_dir + ".scratch"
                     vm.take_scratch(saved)
                     vm.teardown()
@@ -2136,7 +2160,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             checks.append({"kind": "path", "subject": p, "ok": code == 0,
                            "detail": "" if code == 0 else "does not exist after the answer's steps"})
         if prober_root is not None:
-            _exec(root, f"ip link set eth1 up && ip addr replace {TARGET_PAIR_IP}/24 dev eth1", 15)
+            if not full_vm:
+                _exec(root, f"ip link set eth1 up && ip addr replace {TARGET_PAIR_IP}/24 dev eth1", 15)
             # After a reboot the target's eth1 has a new MAC; the prober's ARP
             # entry for it would point at the old one (found live: SSH timed
             # out, a port check seconds later worked).

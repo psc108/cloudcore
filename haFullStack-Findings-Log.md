@@ -4037,6 +4037,51 @@ So security groups can't isolate a VM running model-written commands.
 
 **Open:** the guest didn't show `sdb`'s new size within 3 s. A virtio-scsi capacity change isn't always noticed without a rescan, whereas the root disk was re-read by `growpart`. The runner (F4) rescans after growing a disk (`echo 1 > /sys/class/block/sdX/device/rescan`), as a cloud's own notification would.
 
+### F-205 — Full-VM proof backend (F4); the runner answered ufw's "(y|n)" prompt with Enter, so `ufw enable` aborted while the step looked fine
+
+**Where:**
+- `examples/llm-chat/files/fullvm.py` (new);
+- `advice_runner.py`:
+  - `TARGET_PAIR_IP` set per run, with placeholder substitutions re-applied;
+  - full-VM reboots handled in place;
+  - `_YES_NO_RE`;
+- `verify_proxy.py`: `LAB_BACKEND`, `LABVM_BROKER_URL`, `LABVM_BROKER_TOKEN`; full VMs aren't kept;
+- `api/lab_vm_broker.py`: the fixed cloud-init template, with the control sshd, packages per purpose and the student account;
+- `api/setup-lab-network.sh`: controllers may reach 22 and 1022;
+- deployment:
+  - `coordinator-cloud-init` (tftpl and j2) installs `fullvm.py` and the env;
+  - `variables.tf`: `lab_backend` (default `microvm`), `labvm_broker_token` (sensitive);
+  - `tofu_engine` passes the broker token;
+  - the Ansible playbook.
+
+**Symptom:** a planned stage (F4). The advice runner was written for the microVM: vsock control, the prober reaching the target at a fixed 172.30.0.2 over a pair bridge, and reboots that end the VMM.
+
+**Root cause:** backend assumptions built into the runner.
+
+**Fix:**
+- **`FullVM`** has the same interface as `MicroVM`:
+  - created through the lab-VM broker with a fresh key per VM;
+  - waits for cloud-init, which installs the tools each purpose needs (prober: paramiko, dig, oathtool, NFS client; target: pamtester, oathtool);
+  - logs in on the VM's own **control sshd on port 1022** (key-only, `UsePAM no`, its own config and unit, pre-allowed in ufw). An answer that changes the normal sshd can't cut the runner off.
+- **Accounts:** password fields are set to `*` (not locked), since a no-PAM sshd refuses locked accounts even for keys.
+- **The runner:** takes the prober's target address from the backend after boot, re-applying substitutions so `server_ip` becomes the target's lab address. A full VM reboots in place, and the runner reconnects.
+- **`FullVMLabs`:** starts the prober alongside the target, then pairs them.
+
+**Found on the way:** `ufw enable` asks "Proceed with operation (y|n)?". `_YES_NO_RE` only knew `(y/n)` and `[Y/n]`, so the runner sent Enter: ufw printed "Aborted" and stayed **inactive**, while the step still showed ✓. On the microVM ufw hadn't prompted. Now `(y|n)`, `[y|n]` and `yes|no` forms are answered `y`.
+
+**Verified by:** on the hub (2026-10-02), the runner on full VMs via the broker, without model fixes. Stored L10 answers:
+- **Goal-verified:** #22 (partition and mount on a native `/dev/sdb`), #24 (swap), #7 (sudo user), #8 (systemd unit, at boot and restarting).
+- **#15:** failed as written, goal-verified after the lab's repair (the same as on the microVM).
+- **#17 (ufw):** failed until the prompt fix (8081 reachable, because ufw was inactive), then goal-verified, with 22, 80 and 443 allowed and 8081 blocked from the prober.
+- **Timing:** 151–166 s per run with a sequential prober, and **103 s** with the prober booting in parallel.
+- **Nothing left behind:** no lab VMs remained.
+- **Deployment:** `tofu validate` and `ansible-playbook --syntax-check` pass. The coordinator runs the new code on the microVM backend.
+
+**Open:**
+- **Switching proofs to full VMs** needs the peer updated (the coordinator's host): F-201, F-203 and this ruleset.
+- **Kept labs** for full VMs aren't supported yet.
+- **Disk growth** for "enlarged disk" answers isn't wired into the runner yet (`FullVM.grow_disk` exists; the rescan is noted in F-204).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4193,3 +4238,4 @@ So security groups can't isolate a VM running model-written commands.
 | v3.30 | 2026-10-02 | Paul Scott | Direct request: "lets continue with f1". F-202: full-VM lab broker with its own token; 18 s to SSH; quotas, ownership and reaper verified. F2 (isolation) next. |
 | v3.31 | 2026-10-02 | Paul Scott | Direct request: F2. F-203: isolated lab bridge with internet-only egress, layer-2 pairs, fail-closed placement; verified from inside lab VMs on the hub. Peer to update. |
 | v3.32 | 2026-10-02 | Paul Scott | Direct request: "yes" (peer checklist, then F3). F-204: lab VM data disks as /dev/sdb,/dev/sdc on virtio-scsi; live disk growth verified. |
+| v3.33 | 2026-10-02 | Paul Scott | Direct request: F4. F-205: full-VM proof backend (control sshd 1022, per-run target address, parallel prober); ufw (y|n) prompt fix; six stored answers match microVM verdicts. |

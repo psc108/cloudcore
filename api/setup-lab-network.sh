@@ -12,7 +12,8 @@
 #   lab -> internet          allowed (NAT)
 #   lab -> private/LAN/link-local/CGNAT/loopback ranges   dropped
 #   lab -> this host         DHCP and DNS only
-#   -> lab                   SSH from --controllers only, plus replies
+#   -> lab                   SSH (22, and the lab's control sshd on 1022) from
+#                            --controllers only, plus replies
 #   lab VM <-> lab VM        dropped at layer 2, except registered pairs
 #                            (a run's target and prober), managed by
 #                            /usr/local/sbin/cloudcore-labnet
@@ -84,7 +85,7 @@ table inet cclab {
     oifname "${BRIDGE}" ct state established,related accept
     iifname "${BRIDGE}" ip daddr @blocked drop
     iifname "${BRIDGE}" accept
-    oifname "${BRIDGE}" ip saddr @controllers tcp dport 22 ct state new accept
+    oifname "${BRIDGE}" ip saddr @controllers tcp dport { 22, 1022 } ct state new accept
     oifname "${BRIDGE}" drop
   }
 }
