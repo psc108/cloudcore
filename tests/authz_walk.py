@@ -65,6 +65,17 @@ def main() -> int:
                     failures.append(f"{method} {rule.rule} [{rule.endpoint}] refused {who} ({status}) but allows it")
                 if not passes and not refused:
                     failures.append(f"{method} {rule.rule} [{rule.endpoint}] LET THROUGH {who} ({status})")
+    # F-209: a CORS preflight carries no token and must still get a 2xx, or
+    # the browser never sends the real request ("Failed to fetch").
+    for rule in app.url_map.iter_rules():
+        url = rule.rule
+        for arg in rule.arguments:
+            url = url.replace(f"<{arg}>", "x").replace(f"<path:{arg}>", "x")
+        status = client.open(url, method="OPTIONS", headers={"Origin": "http://localhost:8080",
+                             "Access-Control-Request-Method": "GET"}).status_code
+        counted += 1
+        if not 200 <= status < 300:
+            failures.append(f"OPTIONS {rule.rule} [{rule.endpoint}] preflight got {status}")
     public = sorted(r.endpoint for r in app.url_map.iter_rules() if authz.allowed(r.endpoint) is None)
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"{counted} requests over {len(list(app.url_map.iter_rules()))} routes; public routes: {public}")

@@ -28,6 +28,8 @@ API_TOKEN = cc_token.master_token()
 
 @sg_bp.before_request
 def _require_auth():
+    if request.method == "OPTIONS":
+        return None  # CORS preflight: carries no token; Flask answers it (F-209)
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
     if token and (hmac.compare_digest(token, API_TOKEN) or peers_store.find_peer_by_local_token(token)):

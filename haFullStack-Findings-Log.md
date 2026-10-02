@@ -4189,6 +4189,30 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Peer DNS:** the peer's dnsmasq (`dig @192.168.101.1`) already answers all six names with 192.168.100.1.
 - **Hub re-run:** awaits the user re-running the script on Stourport.
 
+### F-209 — Dashboard "Failed to fetch": the authorization gate refused CORS preflights
+
+**Where:**
+- `api/authz.py` (`gate`);
+- the blueprints' own token checks in `api/sg_routes.py`, `api/labnet_routes.py` and `api/lab_vm_broker.py`;
+- `tests/authz_walk.py`.
+
+**Symptom:** reported by the user on 2026-10-02. Refreshing the dashboard showed "Dashboard refresh failed: Failed to fetch", and the page rendered with no data. The API was up, and the same requests worked with curl.
+
+**Root cause:**
+- **Cross-origin page:** the UI calls `http://127.0.0.1:8080` explicitly (`API_BASE`). When the page is opened under any other origin (e.g. `http://localhost:8080`), each call carries an `Authorization` header and a JSON content type, so the browser first sends a CORS preflight `OPTIONS` request, which never carries credentials.
+- **Gate refused it:** the central authorization gate (auth layer 1, `eb930dd`) treated the preflight as an unauthenticated request to an admin route and answered 401. A browser abandons the real request on any non-2xx preflight and reports only "Failed to fetch".
+- **Second layer did the same:** the blueprints' own checks refused preflights too (security groups, labnet, lab-VM broker).
+- **Why the tests missed it:** `authz_walk.py` skipped `OPTIONS`.
+
+**Fix:**
+- **Preflights pass:** the gate and the three blueprint checks let `OPTIONS` through. Flask answers it itself (`provide_automatic_options`); no route handles `OPTIONS`, which was checked over the whole URL map. So no route code runs and nothing is granted. Every real request still needs its token: a GET with no token still gets 401.
+- **Test added:** `authz_walk.py` now sends a preflight to every route and fails on anything but 2xx. Before the fix it reported 160 failing preflights; after it, OK.
+
+**Verified by:**
+- **Preflight checks:** after an API restart, preflights for `/v1/dashboard`, `/v1/security-groups` and `/v1/nfs-servers` return 200 with CORS headers.
+- **Real requests still gated:** a token-less GET still gets 401.
+- **Walk:** `authz_walk.py` passes.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4349,3 +4373,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.34 | 2026-10-02 | Paul Scott | Direct request: "start the central authorization layer". F-206: default-deny gate, scoped named tokens, audit log; 30 unauthenticated routes and the terminal websocket closed. |
 | v3.35 | 2026-10-02 | Paul Scott | Two-host S1 on the peer. F-207: stale installed unit (API restarts killed the peer's VMs), root-only lab lease file, broker not recognising the coordinator via WireGuard. |
 | v3.36 | 2026-10-02 | Paul Scott | Two-host S2. F-208: setup-network.sh quit silently with no services.conf (pipefail on a missing file). |
+| v3.37 | 2026-10-02 | Paul Scott | F-209: the authorization gate refused CORS preflights, so the dashboard showed "Failed to fetch" when opened under another origin. |

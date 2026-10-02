@@ -196,6 +196,8 @@ def _require_token():
     """Only the broker token. (The master token never reaches the guest-
     facing listener -- server.py refuses it there -- and isn't needed:
     the dashboard has the full instance API.)"""
+    if request.method == "OPTIONS":
+        return None  # CORS preflight: carries no token; Flask answers it (F-209)
     expected = cc_token.labvm_token()
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""

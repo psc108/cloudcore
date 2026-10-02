@@ -163,6 +163,12 @@ def gate():
     """app.before_request: identify the caller and enforce the route's set."""
     if request.endpoint is None:
         return None  # 404/405: Flask answers those itself
+    if request.method == "OPTIONS":
+        # CORS preflight: browsers send it without credentials and abandon
+        # the real request on anything but 2xx (F-209). Flask answers it
+        # itself without running the route -- no route handles OPTIONS --
+        # so letting it through grants nothing.
+        return None
     need = allowed(request.endpoint)
     ident = identify(_request_token())
     g.identity = ident
