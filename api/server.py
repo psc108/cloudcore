@@ -117,6 +117,7 @@ def _cors(response):
 # actually reach these on the executing host, same as instance CRUD
 # already does.
 _PEER_REACHABLE_LOCAL_ENDPOINTS = {
+    "resize_instance_disk",
     "create_instance", "get_instance", "update_instance", "delete_instance",
     "list_vpcs", "list_subnets",
     "create_vpc", "get_vpc", "update_vpc", "delete_vpc",
@@ -1286,6 +1287,37 @@ def reboot_instance(instance_id):
     except Exception as e:
         return problem(500, "Internal Server Error", str(e))
     return jsonify(_instance_dict(instance))
+
+
+@app.post("/v1/instances/<instance_id>/disks/<target>/resize")
+@require_auth
+def resize_instance_disk(instance_id, target):
+    """F3: grow a running instance's disk live (root sda, data sdb...), as
+    "enlarge the volume" would on a cloud. Forwarded to the peer that runs a
+    peer-placed instance."""
+    instance = store.get_instance(instance_id)
+    if not instance:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    body = request.get_json(force=True, silent=True) or {}
+    if instance.host_id:
+        peer = peers_store.get_peer(instance.host_id)
+        if not peer or peer.get("status") != "approved":
+            return problem(502, "Bad Gateway", "the instance's peer is not approved")
+        try:
+            r = peer_client.post(peer["api_url"] + f"/v1/instances/{instance_id}/disks/{target}/resize",
+                                 body, token=peer["remote_token"])
+        except peer_client.PeerUnreachable as e:
+            return problem(502, "Bad Gateway", str(e))
+        return jsonify(r.body), r.status
+    if instance.status != InstanceStatus.RUNNING or not instance.domain_name:
+        return problem(409, "Conflict", f"Instance '{instance_id}' is not running")
+    try:
+        new_bytes = compute.resize_disk(instance, target, int(body.get("size_gb") or 0))
+    except ValueError as e:
+        return problem(400, "Bad Request", str(e))
+    except Exception as e:  # noqa: BLE001 -- libvirt errors reported as-is
+        return problem(500, "Internal Server Error", str(e))
+    return jsonify({"target": target, "size_bytes": new_bytes})
 
 
 @app.get("/v1/instances/<instance_id>/console")

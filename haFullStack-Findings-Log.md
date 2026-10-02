@@ -4013,6 +4013,30 @@ So security groups can't isolate a VM running model-written commands.
 - **Cross-host lab placement** would need WireGuard routes for the lab subnets (not done; placement stays on the caller's host).
 - **Not yet tested:** survival across a host reboot (`cloudcore-labnet.service`).
 
+### F-204 — Lab VM disks (F3): `/dev/sdb`, `/dev/sdc` natively, and live disk growth, so disk answers can be tried as written
+
+**Where:**
+- `api/compute.py`: `_domain_xml_bridge(scsi_disks, data_disks)`, `_data_disk_sizes`, `_create_data_disks`, `resize_disk`;
+- `api/server.py`: `POST /v1/instances/<id>/disks/<target>/resize`, forwarded to the peer for peer-placed instances, and on the peer allowlist;
+- `api/lab_vm_broker.py`: `DATA_DISKS`, `POST /v1/lab-vms/<id>/grow-disk`.
+
+**Symptom:** a planned stage (F3). CloudCore couldn't attach extra disks, so disk answers (partitioning, LVM, RAID) had nothing to work on. The microVM faked this with `/dev/sdb` aliases (F-192), and "grow the filesystem after enlarging the disk" (held-out #18) couldn't be tried at all.
+
+**Root cause:** one virtio root disk per instance, and no resize path.
+
+**Fix:**
+- **Disk layout for lab VMs only** (`network=lab`): a virtio-scsi controller with the root disk as `sda` and blank qcow2 data disks as `sdb`, `sdc`. Sizes come from the instance tag `data_disks` (at most 3 disks of 1–50 GB; invalid values are refused). The broker gives proof targets and student VMs two 2 GB disks. Other instances keep `vda`.
+- **Live growth:** `compute.resize_disk` grows a running disk via libvirt `blockResize`, refusing to shrink. The broker exposes it as `grow-disk` for sda, sdb and sdc.
+
+**Verified by:** on the hub (2026-10-02):
+- **Disks:** a proof target booted on `cclab0` with `sda` 20 GB (root, `/dev/sda1`), `sdb` and `sdc` at 2 GB, and the cloud-init CD-ROM as `sr0`.
+- **Root growth, end to end:** grown live 20→25 GB; then `growpart /dev/sda 1` (CHANGED) and `resize2fs`, and the root filesystem is 25 GB.
+- **Data disk:** `sdb` grew to 4 GB on the host.
+- **Shrink refused:** "sdb is already 4 GB; disks only grow".
+- **Unchanged:** an ordinary instance's XML is unchanged (`vda` on virtio).
+
+**Open:** the guest didn't show `sdb`'s new size within 3 s. A virtio-scsi capacity change isn't always noticed without a rescan, whereas the root disk was re-read by `growpart`. The runner (F4) rescans after growing a disk (`echo 1 > /sys/class/block/sdX/device/rescan`), as a cloud's own notification would.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4168,3 +4192,4 @@ So security groups can't isolate a VM running model-written commands.
 | v3.29 | 2026-10-02 | Paul Scott | Found designing the full-VM broker. F-201 (security): unauthenticated SG writes and default master token on the LAN/lab-reachable peer listener; fix proposed, awaiting decision. |
 | v3.30 | 2026-10-02 | Paul Scott | Direct request: "lets continue with f1". F-202: full-VM lab broker with its own token; 18 s to SSH; quotas, ownership and reaper verified. F2 (isolation) next. |
 | v3.31 | 2026-10-02 | Paul Scott | Direct request: F2. F-203: isolated lab bridge with internet-only egress, layer-2 pairs, fail-closed placement; verified from inside lab VMs on the hub. Peer to update. |
+| v3.32 | 2026-10-02 | Paul Scott | Direct request: "yes" (peer checklist, then F3). F-204: lab VM data disks as /dev/sdb,/dev/sdc on virtio-scsi; live disk growth verified. |

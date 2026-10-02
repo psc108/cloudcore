@@ -55,6 +55,7 @@ LAB_VM_REACHABLE_ENDPOINTS = {
     "lab_vms.touch_lab_vm",
     "lab_vms.delete_lab_vm",
     "lab_vms.pair_lab_vm",
+    "lab_vms.grow_lab_vm_disk",
 }
 
 _API = "http://127.0.0.1:8080"
@@ -64,6 +65,10 @@ LAB_SUBNET, LAB_SUBNET_CIDR = "lab-vms-a", "10.250.0.0/24"
 MAX_ACTIVE = 6
 MAX_STUDENT = 2
 REAP_INTERVAL_S = 60
+
+# F3: blank data disks (GB) per purpose -- /dev/sdb, /dev/sdc in the guest,
+# for partitioning/LVM/RAID answers; the prober needs none.
+DATA_DISKS = {"proof-target": "2,2", "student": "2,2"}
 
 # purpose -> (flavor candidates, largest first; max life; idle limit or None)
 PURPOSES = {
@@ -264,7 +269,8 @@ def create_lab_vm():
             # network=lab: compute attaches it to the isolated cclab0 bridge
             # or refuses to create it (F2).
             "tags": {"lab_vm": "true", "network": "lab", "purpose": purpose, "run_id": run_id,
-                     "ManagedBy": "lab-vm-broker", "Project": "llm-chat", "Environment": "lab"},
+                     "ManagedBy": "lab-vm-broker", "Project": "llm-chat", "Environment": "lab",
+                     **({"data_disks": DATA_DISKS[purpose]} if purpose in DATA_DISKS else {})},
             # The control account: key-only, the caller's key. Everything else
             # the guest needs is installed by the advice runner over this.
             "users": [{"username": "labctl", "sudo": True, "ssh_keys": [pubkey]}],
@@ -372,6 +378,23 @@ def pair_lab_vm(vm_id):
         return _problem(409, "Not Ready", "both VMs need an address first")
     ok, why = _labnet(a["host_id"], "pair", ia, ib)
     return (jsonify({"paired": [ia, ib]}), 201) if ok else _problem(502, "Pair Failed", why)
+
+
+@lab_vms_bp.post("/v1/lab-vms/<vm_id>/grow-disk")
+def grow_lab_vm_disk(vm_id):
+    """F3: enlarge one of the VM's disks (root sda, data sdb/sdc) live, as a
+    person would in their cloud console before following an answer about
+    growing a filesystem."""
+    row = _own(vm_id)
+    if not row or row["deleted_at"]:
+        return _problem(404, "Not Found", "no such lab VM")
+    body = request.get_json(force=True, silent=True) or {}
+    target = str(body.get("target") or "")
+    if target not in ("sda", "sdb", "sdc"):
+        return _problem(400, "Bad Request", "target must be sda, sdb or sdc")
+    status, out = _call("POST", f"/v1/instances/{vm_id}/disks/{target}/resize",
+                        {"size_gb": body.get("size_gb")}, timeout=60)
+    return jsonify(out), status
 
 
 def reap_once(now: datetime | None = None) -> list[str]:

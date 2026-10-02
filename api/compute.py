@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -510,11 +511,24 @@ def _domain_xml_bridge(
     instance_id: str = "",
     usb_hostdev_xml: str = "",
     bridge: str = BRIDGE_NAME,
+    scsi_disks: bool = False,
+    data_disks: tuple = (),
 ) -> str:
     # seclabel type='none' — see _domain_xml_slirp's comment above.
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
     log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
+    # F3 (lab VMs): disks on virtio-scsi, as on a typical server -- root
+    # /dev/sda, blank data disks /dev/sdb, /dev/sdc ... -- so how-to answers'
+    # device names are simply right. (The cloud-init CD-ROM is /dev/sr0 in
+    # the guest either way; 'sdz' is only libvirt's name for it.)
+    if scsi_disks:
+        root_target, cdrom_target = "<target dev='sda' bus='scsi'/>", "sdz"
+        extra = "<controller type='scsi' model='virtio-scsi'/>" + "".join(
+            f"<disk type='file' device='disk'><driver name='qemu' type='qcow2'/><source file='{p}'/>"
+            f"<target dev='sd{chr(ord('b') + i)}' bus='scsi'/></disk>" for i, p in enumerate(data_disks))
+    else:
+        root_target, cdrom_target, extra = "<target dev='vda' bus='virtio'/>", "sda", ""
     return textwrap.dedent(f"""\
         <domain type='kvm'>
           <name>{domain_name}</name>
@@ -531,14 +545,15 @@ def _domain_xml_bridge(
             <disk type='file' device='disk'>
               <driver name='qemu' type='qcow2'/>
               <source file='{disk_path}'/>
-              <target dev='vda' bus='virtio'/>
+              {root_target}
             </disk>
             <disk type='file' device='cdrom'>
               <driver name='qemu' type='raw'/>
               <source file='{iso_path}'/>
-              <target dev='sda' bus='sata'/>
+              <target dev='{cdrom_target}' bus='sata'/>
               <readonly/>
             </disk>
+            {extra}
             <interface type='bridge'>
               <source bridge='{bridge}'/>
               <model type='virtio'/>
@@ -550,6 +565,55 @@ def _domain_xml_bridge(
         </domain>
     """)
 
+
+
+MAX_DATA_DISKS, MAX_DATA_DISK_GB = 3, 50
+
+
+def _data_disk_sizes(instance: Instance) -> list[int]:
+    """Blank data disks a lab VM asked for: the instance tag data_disks,
+    e.g. "2,2" (GB each). Invalid values are refused, not guessed."""
+    raw = str((instance.tags or {}).get("data_disks") or "").strip()
+    if not raw:
+        return []
+    try:
+        sizes = [int(s) for s in raw.split(",")]
+    except ValueError:
+        raise ValueError(f"data_disks must be comma-separated GB sizes, not {raw!r}") from None
+    if len(sizes) > MAX_DATA_DISKS or any(s < 1 or s > MAX_DATA_DISK_GB for s in sizes):
+        raise ValueError(f"data_disks: at most {MAX_DATA_DISKS} disks of 1-{MAX_DATA_DISK_GB} GB")
+    return sizes
+
+
+def _create_data_disks(instance: Instance, instance_dir: Path) -> tuple:
+    paths = []
+    for i, gb in enumerate(_data_disk_sizes(instance)):
+        p = instance_dir / f"data{i}.qcow2"
+        subprocess.run(["qemu-img", "create", "-f", "qcow2", str(p), f"{gb}G"], check=True, capture_output=True)
+        paths.append(p)
+    return tuple(paths)
+
+
+def resize_disk(instance: Instance, target: str, size_gb: int) -> int:
+    """Grow one of a running instance's disks live (root sda, or data sdb...),
+    as a cloud provider's "enlarge volume" would; the guest sees the new size
+    and its own tools (growpart, resize2fs, pvresize) do the rest. Refuses to
+    shrink. Returns the new size in bytes."""
+    if not re.fullmatch(r"(?:sd[a-d]|vda)", target or ""):
+        raise ValueError("target must be sda-sdd (or vda)")
+    if not (1 <= int(size_gb) <= 200):
+        raise ValueError("size_gb must be 1-200")
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(instance.domain_name)
+        current = dom.blockInfo(target)[0]
+        new = int(size_gb) * 1024 ** 3
+        if new <= current:
+            raise ValueError(f"{target} is already {current // 1024 ** 3} GB; disks only grow")
+        dom.blockResize(target, new, libvirt.VIR_DOMAIN_BLOCK_RESIZE_BYTES)
+        return new
+    finally:
+        conn.close()
 
 
 def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instance:
@@ -579,6 +643,7 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
         raise RuntimeError(f"this host has no isolated lab network ({LAB_BRIDGE_NAME}); "
                            "run api/setup-lab-network.sh")
     use_bridge = lab or _bridge_usable()
+    data_disks = _create_data_disks(instance, instance_dir) if lab else ()
 
     # Re-validate USB devices here too, immediately before building XML —
     # never trust that a check done moments earlier (in the API handler)
@@ -597,7 +662,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
         if use_bridge:
             xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path,
                                      instance_id=instance.id, usb_hostdev_xml=usb_hostdev_xml,
-                                     bridge=LAB_BRIDGE_NAME if lab else BRIDGE_NAME)
+                                     bridge=LAB_BRIDGE_NAME if lab else BRIDGE_NAME,
+                                     scsi_disks=lab, data_disks=data_disks)
             instance.ssh_host_port = 0
             instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
