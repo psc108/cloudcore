@@ -3140,7 +3140,7 @@ function openTerminal(instanceId, instanceName, username) {
   _openTerminals[instanceId].fitAddon = fitAddon;
 
   // Connect WebSocket
-  const ws = new WebSocket(`${WS_BASE}/terminal?instance_id=${instanceId}`);
+  const ws = new WebSocket(`${WS_BASE}/terminal?instance_id=${encodeURIComponent(instanceId)}&token=${encodeURIComponent(API_TOKEN)}`);
   _openTerminals[instanceId].ws = ws;
 
   ws.onopen = () => {

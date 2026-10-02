@@ -26,6 +26,7 @@ import websockets.legacy.server
 
 # Import store/compute from the same directory
 sys.path.insert(0, str(Path(__file__).parent))
+import authz
 import db
 import store
 import nfs_store
@@ -33,6 +34,10 @@ import compute
 
 WS_HOST = "127.0.0.1"
 WS_PORT = 8081
+# Layer 1 (cloudcore-auth-Phased-Implementation.md): a browser lets any web
+# page open a websocket to 127.0.0.1 (no CORS for websockets), and this one
+# hands out a shell. So: the dashboard's own origin only, and an admin token.
+ALLOWED_ORIGINS = {"http://127.0.0.1:8080", "http://localhost:8080"}
 _COLS_DEFAULT = 220
 _ROWS_DEFAULT = 50
 
@@ -99,13 +104,18 @@ def _ssh_connect(instance) -> tuple[paramiko.SSHClient, paramiko.Channel, str]:
 async def _terminal_handler(websocket):
     """Handle one WebSocket connection → one SSH shell session."""
     # Parse instance_id from query string
-    path = websocket.path  # e.g. /terminal?instance_id=abc
-    instance_id = ""
-    if "?" in path:
-        qs = path.split("?", 1)[1]
-        for part in qs.split("&"):
-            if part.startswith("instance_id="):
-                instance_id = part.split("=", 1)[1]
+    path = websocket.path  # e.g. /terminal?instance_id=abc&token=...
+    from urllib.parse import parse_qs, urlsplit
+    params = parse_qs(urlsplit(path).query)
+    instance_id = (params.get("instance_id") or [""])[0]
+    origin = websocket.request_headers.get("Origin", "")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await websocket.close(code=1008, reason="origin not allowed")
+        return
+    ident = authz.identify((params.get("token") or [""])[0])
+    if ident is None or ident.scope != "admin":
+        await websocket.close(code=1008, reason="an admin token is required")
+        return
 
     instance = store.get_instance(instance_id)
 

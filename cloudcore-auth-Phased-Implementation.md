@@ -1,6 +1,6 @@
 # CloudCore: central authorization (layer 1) and human logins (layer 2) — Phased Implementation
 
-**Status:** proposed 2026-10-02, for review before building. **Owner:** Paul Scott.
+**Status:** layer 1 built on the hub 2026-10-02 (A1–A4, A6); the peer pending (A5). **Owner:** Paul Scott.
 
 ## Context
 
@@ -20,12 +20,12 @@ Direct request (2026-10-02): "given the security concerns … should we think ab
 
 | # | Stage | Status |
 |---|---|---|
-| A1 | **One check for every request.** An app-wide `before_request` that refuses any route that hasn't declared its scope (a `@scope("…")` decorator or a registry), so a new route is closed until someone decides who may call it. Remove the copied per-blueprint `_auth()` functions. Keep the per-bind gates (peer and examples listeners) as a second layer. | Not started |
-| A2 | **One token table.** `api_tokens`: id, name, scope (`admin`, `peer`, `capture`, `labvm`, `student`), SHA-256 hash, created, expires, revoked, last used. Tokens are shown once at creation. Migrate the existing ones: the master token (as `admin`, still loadable from `api.env`), per-peer tokens, the capture and broker tokens, and the per-student client tokens (`llm_client_tokens`). Each scope maps to an explicit set of routes. | Not started |
-| A3 | **Audit log.** Every state-changing request (POST, PUT, DELETE) is recorded: token id and scope, route, target id, result, time, source address. Visible in the dashboard and shipped to Loki, so Sentinel can watch it. | Not started |
-| A4 | **Token management.** Dashboard and CLI: create (shown once), list, revoke, rotate; expiry warnings. | Not started |
-| A5 | **The peer.** Llwyn-y-Groes runs its own CloudCore; it takes the same code and its own `api.env`. This also brings it up to date with F-201. | Not started |
-| A6 | **Verify.** A test suite that walks every registered route with no token, the wrong scope and the right scope; plus the F-201 checks from the LAN and a lab VM. | Not started |
+| A1 | **One check for every request.** An app-wide `before_request` that refuses any route that hasn't declared its scope (a `@scope("…")` decorator or a registry), so a new route is closed until someone decides who may call it. Remove the copied per-blueprint `_auth()` functions. Keep the per-bind gates (peer and examples listeners) as a second layer. | Done (2026-10-02, F-206): `api/authz.py` gate, after the per-bind gates; 7 public routes, everything unlisted admin-only. The blueprints' own checks are kept as a second layer, not removed. |
+| A2 | **One token table.** `api_tokens`: id, name, scope (`admin`, `peer`, `capture`, `labvm`, `student`), SHA-256 hash, created, expires, revoked, last used. Tokens are shown once at creation. Migrate the existing ones: the master token (as `admin`, still loadable from `api.env`), per-peer tokens, the capture and broker tokens, and the per-student client tokens (`llm_client_tokens`). Each scope maps to an explicit set of routes. | Done (F-206): `api_tokens` table (hashed, scoped admin/capture/labvm, expiry, revocation, last used). Peer and student tokens resolve through their existing stores; the api.env tokens stay valid (break-glass). |
+| A3 | **Audit log.** Every state-changing request (POST, PUT, DELETE) is recorded: token id and scope, route, target id, result, time, source address. Visible in the dashboard and shipped to Loki, so Sentinel can watch it. | Done (F-206): `audit_log` table plus an `AUDIT` log line for every POST/PUT/PATCH/DELETE, with identity, route, status and source. Readable at `GET /v1/auth/audit`. Dashboard view not yet; not yet shipped to Loki (no host promtail). |
+| A4 | **Token management.** Dashboard and CLI: create (shown once), list, revoke, rotate; expiry warnings. | Partly (F-206): `GET/POST /v1/auth/tokens`, `DELETE /v1/auth/tokens/<id>` (create shows the token once). Dashboard UI not yet. |
+| A5 | **The peer.** Llwyn-y-Groes runs its own CloudCore; it takes the same code and its own `api.env`. This also brings it up to date with F-201. | **Pending — the peer hasn't taken the F-201 update yet** (checked 2026-10-02: its 8082 still serves SGs without a token). `peer-update-checklist.md` brings this layer too. |
+| A6 | **Verify.** A test suite that walks every registered route with no token, the wrong scope and the right scope; plus the F-201 checks from the LAN and a lab VM. | Done (F-206): `tests/authz_walk.py` walks all 168 routes (701 requests); refused requests never reach route code. Plus live checks. |
 
 ## Layer 2 — human logins (when the dashboard or llm-chat reaches beyond localhost)
 

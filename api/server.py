@@ -52,6 +52,7 @@ from llm_client_capture import client_capture_bp, CLIENT_REACHABLE_ENDPOINTS
 from hw_routes import hw_bp
 import scheduler
 import cc_token
+import authz
 import lab_vm_broker
 from labnet_routes import LABNET_PEER_REACHABLE, labnet_bp
 from lab_vm_broker import LAB_VM_REACHABLE_ENDPOINTS, lab_vms_bp
@@ -83,6 +84,7 @@ app.register_blueprint(llm_deployments_bp)
 app.register_blueprint(client_capture_bp)
 app.register_blueprint(lab_vms_bp)
 app.register_blueprint(labnet_bp)
+app.register_blueprint(authz.auth_bp)
 API_TOKEN = cc_token.master_token()
 
 
@@ -163,6 +165,19 @@ def _peer_bind_gate():
                                     | CLIENT_REACHABLE_ENDPOINTS | LAB_VM_REACHABLE_ENDPOINTS):
             abort(403)
 
+
+
+# Layer 1 (cloudcore-auth-Phased-Implementation.md): one central, default-deny
+# check after the per-bind gates above -- every route's allowed identities;
+# anything unlisted is admin-only. Plus an audit log of every change.
+authz.configure(
+    peer_endpoints=PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS | LABNET_PEER_REACHABLE,
+    capture_endpoints=EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS,
+    student_endpoints=CLIENT_REACHABLE_ENDPOINTS,
+    labvm_endpoints=LAB_VM_REACHABLE_ENDPOINTS,
+)
+app.before_request(authz.gate)
+app.after_request(authz.audit)
 
 @app.get("/")
 def ui():

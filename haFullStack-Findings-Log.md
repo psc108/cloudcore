@@ -4082,6 +4082,63 @@ So security groups can't isolate a VM running model-written commands.
 - **Kept labs** for full VMs aren't supported yet.
 - **Disk growth** for "enlarged disk" answers isn't wired into the runner yet (`FullVM.grow_disk` exists; the rescan is noted in F-204).
 
+### F-206 — Central authorization (layer 1): 30 of 164 API routes had no authentication, among them file write/delete, reachable from any web page in the operator's browser; the terminal websocket handed out shells with no token or origin check
+
+**Where:**
+- `api/authz.py` (new);
+- `api/server.py`: gate and audit hooks;
+- `api/terminal.py`: token and origin;
+- `ui/src/js/11-terminal.js`;
+- `tests/authz_walk.py` (new).
+
+**Symptom:** found building the central authorization layer (`cloudcore-auth-Phased-Implementation.md`). An inventory of every Flask route found **30 of 164 with no authentication**:
+- **`/v1/editor/file`:** read, write, create and **delete** files;
+- **`/v1/nfs-servers…`:** create shares, **upload and delete** files;
+- **`/v1/help/articles…`:** full create, update, delete;
+- `/v1/about`, `/v1/system/stats`;
+- and the intended public ones.
+
+They listen only on 127.0.0.1:8080, but a web page in the operator's browser can send requests there without reading the replies. A "simple" `text/plain` POST or PUT skips the CORS preflight, and these routes parse any body as JSON (`get_json(force=True)`). So any website could likely make the browser write or delete files. **Not exploited; verified by reading the code and by a live no-token `PUT /v1/editor/file` (with `Content-Type: text/plain`), which reached the route before the fix.**
+
+The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no token and no `Origin` check. Browsers don't apply CORS to websockets, so any page knowing an instance id (a random UUID) could open a shell.
+
+**Root cause:** authentication was per-route and opt-in, so a route without a check was open (also F-201's cause).
+
+**Fix:**
+- **One default-deny gate** (`authz.gate`, an `app.before_request` after the per-bind gates) identifies each caller once, from whichever token it carries:
+  - **admin:** the master token, or a named admin token;
+  - **peer:** an approved peer's own token;
+  - **capture:** the env token or a named capture token;
+  - **labvm:** the env token or a named labvm token;
+  - **student:** an `llm_client_tokens` row.
+- **Allowed sets per route** come from the allowlists the code already keeps (peer, capture, student, broker). **Any unlisted route is admin-only.** Seven routes are public: the dashboard's files, published examples, and the signed pairing handshake.
+- **Query tokens:** `?token=` is accepted only for the two build-log event streams (browsers' EventSource can't send headers).
+- **Named tokens:** `api_tokens`, hashed, with scope, expiry, revocation and last used, managed through `/v1/auth/tokens`. The token is shown once.
+- **Audit log:** every state-changing request goes to `audit_log` and an `AUDIT` log line.
+- **The terminal websocket** requires an admin token and an allowed `Origin` (the dashboard's own); the dashboard sends its token.
+
+**Verified by:** on the hub (2026-10-02):
+- **The route walk:** `tests/authz_walk.py` sent 701 requests over all 168 routes (no token, each identity's token, a bogus token) against a database copy. Every route admitted exactly its declared identities.
+- **Live, previously open routes:** editor, NFS, help and about return 401 without a token and 200 with the admin token. The no-token editor write (the CSRF case) returns 401, recorded in the audit log as `anonymous … 401`.
+- **Clients still working:**
+  - the dashboard page carries its token;
+  - hub→peer stats return 200;
+  - the broker answers with its token;
+  - Sentinel's watcher is polling;
+  - the coordinator registered as **capture** (`POST /v1/llm-deployments/register … capture capture-env 201`).
+- **Terminal websocket:**
+  - no token: closed (1008, "an admin token is required");
+  - a valid token from another origin: closed ("origin not allowed");
+  - the dashboard's origin with the token: connected.
+
+**Open:**
+- **The peer** runs the old code (A5; also F-201 still open there).
+- **Not yet:**
+  - dashboard views for tokens and the audit log;
+  - shipping audit lines to Loki;
+  - removing the blueprints' now-redundant own checks.
+- **Layer 2 (human logins)** when the dashboard leaves localhost.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4239,3 +4296,4 @@ So security groups can't isolate a VM running model-written commands.
 | v3.31 | 2026-10-02 | Paul Scott | Direct request: F2. F-203: isolated lab bridge with internet-only egress, layer-2 pairs, fail-closed placement; verified from inside lab VMs on the hub. Peer to update. |
 | v3.32 | 2026-10-02 | Paul Scott | Direct request: "yes" (peer checklist, then F3). F-204: lab VM data disks as /dev/sdb,/dev/sdc on virtio-scsi; live disk growth verified. |
 | v3.33 | 2026-10-02 | Paul Scott | Direct request: F4. F-205: full-VM proof backend (control sshd 1022, per-run target address, parallel prober); ufw (y|n) prompt fix; six stored answers match microVM verdicts. |
+| v3.34 | 2026-10-02 | Paul Scott | Direct request: "start the central authorization layer". F-206: default-deny gate, scoped named tokens, audit log; 30 unauthenticated routes and the terminal websocket closed. |
