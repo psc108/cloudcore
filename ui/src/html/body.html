@@ -793,6 +793,7 @@
             <option value="build">Generic Build</option>
             <option value="llm_ingest">7B LLM Sentinel Ingest</option>
             <option value="kiwix_update">Kiwix ZIM update check</option>
+            <option value="repo_sync">Package repo sync</option>
           </select>
         </div>
       </div>
@@ -809,6 +810,19 @@
             <select id="sched-kw-git"><option value="push">Commit and push</option><option value="commit">Commit only</option><option value="none">Don't commit</option></select>
           </div>
           <div class="field"><label><input id="sched-kw-dry" type="checkbox"> Dry run (report only)</label></div>
+        </div>
+      </div>
+
+      <div id="sched-repo-fields" style="display:none">
+        <p style="font-size:13px;color:var(--text-muted);margin:4px 0 10px">
+          Keeps two hosts' package repos in step. <em>Index</em> runs on a host others copy from and refreshes its checksum index (only changed files are re-hashed); schedule it after the Kiwix update. <em>Pull</em> runs on a host that copies: it fetches whatever changed from the source's repo, verifies every checksum, and resumes partial downloads.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>Mode</label>
+            <select id="sched-rs-mode" onchange="_schedOnKindChange()"><option value="pull">Pull from another host</option><option value="index">Index this host's repo</option></select>
+          </div>
+          <div class="field" id="sched-rs-source-field"><label>Source repo URL</label><input id="sched-rs-source" type="text" placeholder="http://192.168.100.1:8090"></div>
+          <div class="field" id="sched-rs-prune-field"><label><input id="sched-rs-prune" type="checkbox"> Delete files the source no longer has</label></div>
         </div>
       </div>
 

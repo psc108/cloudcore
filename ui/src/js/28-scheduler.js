@@ -26,7 +26,7 @@ async function loadScheduler() {
       tbody.innerHTML = data.items.map(s => `
         <tr>
           <td><strong>${_esc(s.name)}</strong></td>
-          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
+          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : s.kind === 'repo_sync' ? `Package repo sync (${_esc((s.var_overrides || {}).mode || '')})` : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
           <td class="mono">${s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—'}</td>
           <td>${s.last_run_at ? new Date(s.last_run_at).toLocaleString() + ' ' + badge(s.last_status || 'pending') : '—'}</td>
           <td>${s.enabled ? '✅' : '⏸️'}</td>
@@ -48,6 +48,10 @@ function _schedOnKindChange() {
   document.getElementById('sched-build-fields').style.display = kind === 'build' ? '' : 'none';
   document.getElementById('sched-llm-fields').style.display = kind === 'llm_ingest' ? '' : 'none';
   document.getElementById('sched-kiwix-fields').style.display = kind === 'kiwix_update' ? '' : 'none';
+  document.getElementById('sched-repo-fields').style.display = kind === 'repo_sync' ? '' : 'none';
+  const rsPull = document.getElementById('sched-rs-mode').value === 'pull';
+  document.getElementById('sched-rs-source-field').style.display = rsPull ? '' : 'none';
+  document.getElementById('sched-rs-prune-field').style.display = rsPull ? '' : 'none';
   if (kind === 'llm_ingest') _schedLoadPeerPicker();
 }
 
@@ -219,6 +223,13 @@ async function schedCreate() {
       git: document.getElementById('sched-kw-git').value,
       dry_run: document.getElementById('sched-kw-dry').checked,
     };
+  } else if (kind === 'repo_sync') {
+    const mode = document.getElementById('sched-rs-mode').value;
+    payload.var_overrides = { mode };
+    if (mode === 'pull') {
+      payload.var_overrides.source = document.getElementById('sched-rs-source').value.trim();
+      payload.var_overrides.prune = document.getElementById('sched-rs-prune').checked;
+    }
   } else {
     const checked = Array.from(document.querySelectorAll('.sched-peer-cb:checked')).map(cb => cb.value);
     if (!checked.length) {

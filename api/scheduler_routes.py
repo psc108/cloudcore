@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 
 import build_engine
 import croncalc
+import repo_sync
 import scheduler
 import tofu_engine
 import cc_token
@@ -62,9 +63,9 @@ def create_schedule():
     kind = body.get("kind")
     if not name:
         return jsonify({"status": 400, "title": "Bad Request", "detail": "name is required"}), 400
-    if kind not in ("build", "llm_ingest", "kiwix_update"):
+    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync"):
         return jsonify({"status": 400, "title": "Bad Request",
-                         "detail": "kind must be 'build', 'llm_ingest' or 'kiwix_update'"}), 400
+                         "detail": "kind must be 'build', 'llm_ingest', 'kiwix_update' or 'repo_sync'"}), 400
     recurrence = body.get("recurrence")
     if not recurrence or "mode" not in recurrence:
         return jsonify({"status": 400, "title": "Bad Request",
@@ -81,6 +82,11 @@ def create_schedule():
     elif kind == "kiwix_update":
         # Not a build: engine/template are unused but the table requires them.
         engine, template = "tofu", "llm-chat"
+    elif kind == "repo_sync":
+        err = repo_sync.validate(body.get("var_overrides") or {})
+        if err:
+            return jsonify({"status": 400, "title": "Bad Request", "detail": err}), 400
+        engine, template = "tofu", "package-repo"
     else:
         engine = body.get("engine")
         template = body.get("template")
@@ -112,9 +118,14 @@ def get_schedule(schedule_id):
 def update_schedule(schedule_id):
     err = _auth()
     if err: return err
-    if not scheduler.get_schedule(schedule_id):
+    existing = scheduler.get_schedule(schedule_id)
+    if not existing:
         return jsonify({"status": 404, "title": "Not Found"}), 404
     body = request.get_json(force=True) or {}
+    if existing["kind"] == "repo_sync" and "var_overrides" in body:
+        err = repo_sync.validate(body["var_overrides"] or {})
+        if err:
+            return jsonify({"status": 400, "title": "Bad Request", "detail": err}), 400
     fields = {}
     if "name" in body:
         fields["name"] = body["name"]

@@ -70,7 +70,7 @@ def get_schedule(schedule_id: str) -> dict | None:
 def create_schedule(*, name: str, kind: str, engine: str, template: str,
                      var_overrides: dict, recurrence: dict,
                      created_by: str = "ui") -> dict:
-    if kind not in ("build", "llm_ingest", "kiwix_update"):
+    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync"):
         raise ValueError(f"unknown schedule kind: {kind!r}")
 
     recurrence_type, run_at, cron_expr = _resolve_recurrence(recurrence)
@@ -281,6 +281,10 @@ def _run_schedule(schedule_id: str) -> None:
             # Weekly ZIM refresh: api/kiwix_updates.py's own docstring has the rules.
             import kiwix_updates
             status, summary, log = kiwix_updates.run(schedule.get("var_overrides") or {})
+        elif schedule["kind"] == "repo_sync":
+            # Two hosts' package repos kept in step: api/repo_sync.py.
+            import repo_sync
+            status, summary, log = repo_sync.run(schedule.get("var_overrides") or {})
         else:
             status, summary, log = "failed", f"unknown kind {schedule['kind']!r}", []
     except Exception as e:
