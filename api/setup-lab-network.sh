@@ -219,7 +219,12 @@ apply() {
   }
 
   if [[ -f "${PIDFILE}" ]]; then run kill "$(cat "${PIDFILE}")" 2>/dev/null || true; sleep 0.5; fi
+  # CloudCore's API (an ordinary user) reads lease files to find each lab
+  # VM's address, so the mode is set explicitly rather than left to root's
+  # umask (found on the peer: a stricter umask made it root-only and every
+  # status request for a lab VM failed with a 500).
   run touch "${LEASE_FILE}"
+  run chmod 0644 "${LEASE_FILE}"
   # DNS goes straight to public resolvers: lab VMs never see this host's or
   # the LAN's own names.
   run dnsmasq --interface="${BRIDGE}" --bind-interfaces --except-interface=lo \

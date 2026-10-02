@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -105,6 +106,8 @@ def _allocate_slirp_ip(vpc_id: str, vpc_cidr: str) -> str:
 # needing "the CIDR real bridged instances are actually reachable on"
 # (e.g. nfs.py's "vpc" share-client shorthand, F-041) should use this,
 # not a VPC's cidr_block.
+log = logging.getLogger(__name__)
+
 BRIDGE_NAME = "ccbr0"
 # llm-chat lab VMs (F2, api/setup-lab-network.sh): an isolated bridge with its
 # own DHCP, selected by the instance tag network=lab. Never ccbr0 instead.
@@ -826,8 +829,15 @@ def get_instance_ip(domain_name: str) -> str:
             return "10.0.2.15"
         mac = mac_el.get("address", "").lower()
         for lease_file in LEASE_FILES:
-            if lease_file.exists():
-                for line in lease_file.read_text().splitlines():
+            try:
+                leases = lease_file.read_text() if lease_file.exists() else ""
+            except OSError as e:
+                # An unreadable lease file must not fail the whole request
+                # (found on the peer: the lab lease file was root-only).
+                log.warning("can't read %s: %s", lease_file, e)
+                continue
+            if leases:
+                for line in leases.splitlines():
                     parts = line.split()
                     # dnsmasq lease format: expiry mac ip hostname clientid
                     if len(parts) >= 3 and parts[1].lower() == mac:
