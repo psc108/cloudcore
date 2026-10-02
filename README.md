@@ -47,8 +47,8 @@ install script should do unattended on your behalf. Before building anything
 that installs packages (most of `examples/`), run it once:
 
 ```bash
-CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \
-  bash api/build-package-repo.sh jammy
+# the script reads the API token from ~/.config/cloudcore/api.env
+CLOUDCORE_API_URL=http://127.0.0.1:8080 bash api/build-package-repo.sh jammy
 ```
 
 Takes 15-20+ minutes. Only needs re-running when the target Ubuntu release
@@ -366,7 +366,7 @@ silently OOM-killing partway through model load.
 
 | Setting | Value |
 |---|---|
-| API token | `dev-token` |
+| API tokens | `~/.config/cloudcore/api.env` (mode 0600, random per install, created by `scripts/install.sh`). The master token is accepted only on `127.0.0.1:8080`; guests get a separate examples token. |
 | UI URL | `http://127.0.0.1:8080` |
 | API base | `http://127.0.0.1:8080/v1/` |
 
@@ -498,13 +498,13 @@ Configure via environment variables or a provider block:
 ```hcl
 provider "cloudcore" {
   api_url   = "http://127.0.0.1:8080"
-  api_token = "dev-token"
+  # api_token omitted: read from the CLOUDCORE_API_TOKEN environment variable
 }
 ```
 
 ```bash
 export CLOUDCORE_API_URL=http://127.0.0.1:8080
-export CLOUDCORE_API_TOKEN=dev-token
+set -a; . ~/.config/cloudcore/api.env; set +a   # exports CLOUDCORE_API_TOKEN
 ```
 
 ### Modules

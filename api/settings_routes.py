@@ -12,10 +12,11 @@ from flask import Blueprint, jsonify, request
 import settings_store
 import discovery
 import peer_listener
+import cc_token
 
 settings_bp = Blueprint("settings", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 _SETUP_NETWORK_SH = Path(__file__).parent / "setup-network.sh"
 _TEARDOWN_NETWORK_SH = Path(__file__).parent / "teardown-network.sh"

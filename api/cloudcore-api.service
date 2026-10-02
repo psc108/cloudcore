@@ -5,7 +5,9 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/home/scottp/IdeaProjects/CloudProject/api
-Environment=CLOUDCORE_API_TOKEN=dev-token
+# F-201: tokens live in ~/.config/cloudcore/api.env (mode 0600), created by
+# scripts/install.sh -- never in this file.
+EnvironmentFile=%h/.config/cloudcore/api.env
 # ansible-playbook/ansible-galaxy (pip --user, not apt-installed — see
 # scripts/install.sh) live in ~/.local/bin, invoked by build_engine.py's
 # subprocess calls by bare name. A systemd --user unit's default PATH

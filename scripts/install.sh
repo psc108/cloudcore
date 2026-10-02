@@ -230,6 +230,19 @@ for SVC in cloudcore-api cloudcore-terminal; do
 done
 
 systemctl --user daemon-reload
+# F-201: the API's tokens, random per install, private, never in the repo.
+# cloudcore-api.service reads this via EnvironmentFile and refuses to start
+# without it.
+CC_ENV="${HOME}/.config/cloudcore/api.env"
+if [[ ! -s "${CC_ENV}" ]]; then
+    echo "==> Creating ${CC_ENV} (API tokens)" >&2
+    (umask 077 && mkdir -p "$(dirname "${CC_ENV}")" && python3 -c "
+import secrets
+print('# CloudCore API tokens (F-201). Keep private: mode 0600, never commit.')
+print('CLOUDCORE_API_TOKEN=cc_' + secrets.token_urlsafe(32))
+print('CLOUDCORE_EXAMPLES_TOKEN=ccx_' + secrets.token_urlsafe(32))" > "${CC_ENV}")
+fi
+chmod 600 "${CC_ENV}"
 systemctl --user enable cloudcore-api.service
 systemctl --user enable --now cloudcore-terminal.service
 
@@ -267,7 +280,7 @@ systemctl --user restart cloudcore-api.service
 echo ""
 echo "==> Waiting for API to start..."
 for i in $(seq 1 10); do
-    if curl -sf -H "Authorization: Bearer dev-token" http://127.0.0.1:8080/v1/dashboard > /dev/null 2>&1; then
+    if curl -sf -H "Authorization: Bearer $(sed -n 's/^CLOUDCORE_API_TOKEN=//p' "${CC_ENV}")" http://127.0.0.1:8080/v1/dashboard > /dev/null 2>&1; then
         echo "==> API is up."
         break
     fi
@@ -279,12 +292,11 @@ echo "==> Done. CloudCore is running."
 echo ""
 echo "    UI:  http://127.0.0.1:8080"
 echo "    API: http://127.0.0.1:8080/v1/"
-echo "    Token: dev-token  (set CLOUDCORE_API_TOKEN in the service to change)"
+echo "    Tokens: ${CC_ENV} (mode 0600; the dashboard gets its token automatically)"
 echo ""
-echo "    To change the API token:"
-echo "      systemctl --user edit cloudcore-api.service"
-echo "      # Add: [Service]"
-echo "      #      Environment=CLOUDCORE_API_TOKEN=your-token"
+echo "    To use the API or the build scripts from a shell:"
+echo "      set -a; . ${CC_ENV}; set +a"
+echo "    To change a token: edit ${CC_ENV}, then"
 echo "      systemctl --user restart cloudcore-api.service"
 echo ""
 echo "    Service logs:"
@@ -293,7 +305,7 @@ echo "      journalctl --user -u cloudcore-terminal -f"
 echo ""
 echo "    Package repo (cloudcore-repo.service) is running but empty —"
 echo "    populate it before building anything that needs packages:"
-echo "      CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \\"
+echo "      set -a; . ${CC_ENV}; set +a; CLOUDCORE_API_URL=http://127.0.0.1:8080 \\"
 echo "        bash api/build-package-repo.sh jammy"
 echo "    Takes 15-20+ minutes and several GB of real downloads — one-time"
 echo "    per clone, not run automatically by this script."

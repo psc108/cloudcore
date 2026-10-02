@@ -7,10 +7,11 @@ import os
 from flask import Blueprint, jsonify, request
 
 import hw_info
+import cc_token
 
 hw_bp = Blueprint("hw", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 
 def _auth():

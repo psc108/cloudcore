@@ -85,7 +85,9 @@ esac
 # override either by exporting the env var first if your CloudCore
 # instance uses a different API URL or token.
 CLOUDCORE_API_URL="${CLOUDCORE_API_URL:-http://127.0.0.1:8080}"
-CLOUDCORE_API_TOKEN="${CLOUDCORE_API_TOKEN:-dev-token}"
+# F-201: no default token -- from the environment or ~/.config/cloudcore/api.env.
+CLOUDCORE_API_TOKEN="${CLOUDCORE_API_TOKEN:-$(sed -n 's/^CLOUDCORE_API_TOKEN=//p' "${HOME}/.config/cloudcore/api.env" 2>/dev/null)}"
+[[ -n "${CLOUDCORE_API_TOKEN}" ]] || { echo "CLOUDCORE_API_TOKEN not set and ${HOME}/.config/cloudcore/api.env not found" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEY="$SCRIPT_DIR/keys/cloudcore_ed25519"

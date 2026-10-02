@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import traceback
 import urllib.error
@@ -10,7 +11,10 @@ from datetime import datetime
 from pathlib import Path
 
 API_BASE    = "http://127.0.0.1:8080"
-API_TOKEN   = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+# F-201: no default token -- the environment or ~/.config/cloudcore/api.env.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "api"))
+import cc_token  # noqa: E402
+API_TOKEN   = cc_token.master_token()
 RESULTS_DIR = Path(__file__).parent.parent / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 

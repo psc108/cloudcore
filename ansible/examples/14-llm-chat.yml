@@ -345,7 +345,8 @@
     # documentation and behaviour identical). Must match the API host's
     # own CLOUDCORE_API_TOKEN.
     examples_api_base: "http://192.168.100.1:8083"
-    examples_ingestion_token: "dev-token"
+    # F-201: the narrow capture token, never the master token.
+    examples_ingestion_token: "{{ lookup('env', 'CLOUDCORE_EXAMPLES_TOKEN') }}"
 
     # CloudCore Dashboard -- LLM Performance page's "live deployments"
     # registry (verify_proxy.py's own register_llm_deployment(), api/

@@ -28,10 +28,12 @@ from flask import Blueprint, jsonify, request
 
 import llm_deployments_store
 import store
+import cc_token
+import hmac
 
 llm_deployments_bp = Blueprint("llm_deployments", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 # Named here (not inline in server.py) so server.py's own before_request
 # gate can import a stable set, same convention as
@@ -56,12 +58,15 @@ def _admin_auth():
 
 
 def _register_auth() -> bool:
-    """Coordinator guests authenticate with the same shared token every
-    template's cloudcore_api_token variable already carries — not a new
-    secret to provision. Same as llm_examples_routes.py's own
-    _ingest_auth."""
+    """Coordinator guests authenticate with the examples capture token.
+    Same as llm_examples_routes.py's own _ingest_auth."""
     auth = request.headers.get("Authorization", "")
-    return auth == f"Bearer {API_TOKEN}"
+    # F-201: guests use their own capture token (cc_token.examples_token),
+    # never the master token -- which the examples listener refuses anyway.
+    token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+    examples = cc_token.examples_token()
+    return bool(token) and (hmac.compare_digest(token, API_TOKEN)
+                            or (bool(examples) and hmac.compare_digest(token, examples)))
 
 
 def _poll_live(deployment: dict) -> dict:

@@ -3857,7 +3857,7 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 
 **Verified by:** every one of the 40 runs read, including each goal_verified answer and its checks. 34 runs were re-run through the worker's pipeline after F-199, and 4 (#2–#5) after a capacity error.
 
-### F-201 — Security: the hub's peer listener exposes security-group writes with no authentication, and instance/VPC/SG control to CloudCore's default master token
+### F-201 — Security: the hub's peer listener exposes security-group writes with no authentication, and instance/VPC/SG control to CloudCore's default master token (fixed on the hub; peer to update)
 
 **Where:**
 - `api/sg_routes.py` (`list_sgs`, `create_sg`, `get_sg`, `update_sg`, `delete_sg`, lines ~59–232);
@@ -3880,10 +3880,42 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 - **Anything that can reach port 8082** (the home LAN, any lab VM) can likely create, change or delete security groups on the hub. In bridge mode SGs enforce egress, so this can open or cut instances' outbound traffic.
 - **With `Bearer dev-token`,** it can likely also create and delete instances, VPCs and subnets.
 
-**Fix (proposed; changes auth, so awaiting the user):**
-1. The SG routes require auth, the same check as instance CRUD (a peer token or the master token).
-2. On the peer listener, accept only peer tokens, never the master token. Legitimate peering uses per-peer tokens; verify against the live peer before and after.
-3. Replace `dev-token` with a random secret kept out of the repo, and give the coordinator a narrow example-capture token instead (the `llm_client_tokens` pattern: hashed, revocable).
+**Fix** (user approved, 2026-10-02):
+1. **SG routes require auth:** a `before_request` on the SG blueprint requires the master token or an approved peer's own token, the same as `require_auth`.
+2. **The network-facing binds refuse the master token:** the peer listener (8082) and the examples listener (8083) answer a request carrying it with 403. Peers use per-peer tokens; guests use the examples token or per-student client tokens.
+3. **`dev-token` retired:**
+   - **The tokens:** a random master token and a separate examples capture token live in `~/.config/cloudcore/api.env` (mode 0600, never in the repo; `scripts/install.sh` creates it). The user units read it via `EnvironmentFile=`.
+   - **`api/cc_token.py`** is the one source for every module. It **refuses to start** with no token or `dev-token`; an empty token would match a bare `Bearer `.
+   - **The dashboard** gets its token injected when `ui()` serves it on 127.0.0.1:8080, instead of hard-coded JS.
+   - **The capture routes** (`ingest_example`, `register`) accept the examples token. The coordinator now holds only that token, and tofu builds pass it as `TF_VAR_examples_ingestion_token`.
+   - **Tools:** Ansible, the build scripts and the test framework read the token from the environment or the file, with no default.
+   - **Docs:** README updated.
+
+**Verified by:**
+- **Before:** an unauthenticated SG list on 8082 returned 200 from the coordinator.
+- **After, from the coordinator, on 8082 via the lab bridge and via the home-LAN address:**
+  - SG list with no token: 401;
+  - SG list with the master token: 403;
+  - instance GET with the master token: 403.
+- **On the hub:**
+  - SG list with no token: 401; with the master token: 200;
+  - old `dev-token`: 401; new master token: 200;
+  - the examples token on master routes: 401.
+- **Peering both ways:** hub→peer SG listing, peer stats and the peer-placed coordinator refresh all return 200.
+- **Services:**
+  - the SG integration suite passes 31/31, before and after the token change;
+  - the dashboard page carries the injected token;
+  - Sentinel's watcher lists instances;
+  - the coordinator registers with the examples token (201), and `dev-token` gets 401 on 8083;
+  - `tofu validate` passes; the build env carries the master token from the file and the capture token.
+
+**Open: the peer (Llwyn-y-Groes) runs its own CloudCore checkout,** with the same unauthenticated SG routes and `dev-token` default, until it's updated:
+1. `git pull`;
+2. create its own `~/.config/cloudcore/api.env` (its own random tokens);
+3. switch its unit to `EnvironmentFile=`;
+4. restart.
+
+Hub↔peer calls use per-peer tokens, so that change doesn't affect the hub.
 
 **Also found (design facts for the full-VM plan, not vulnerabilities):**
 - **Ingress isn't enforced:** in bridge mode, SG *ingress* rules are accepted but not enforced (`sg.apply_bridge` filters egress only). An instance with an SG but no egress rules drops even reply packets, since there's no ESTABLISHED rule.

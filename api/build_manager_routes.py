@@ -9,10 +9,11 @@ import json
 import build_engine
 import capacity_gate
 import layer_split
+import cc_token
 
 bm = Blueprint("build_manager", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 
 def _auth():

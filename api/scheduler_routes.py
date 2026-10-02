@@ -11,10 +11,11 @@ import build_engine
 import croncalc
 import scheduler
 import tofu_engine
+import cc_token
 
 scheduler_bp = Blueprint("scheduler", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 
 def _auth():

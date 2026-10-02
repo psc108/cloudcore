@@ -12,6 +12,7 @@ import os
 from flask import Blueprint, request, jsonify, abort
 
 import usb
+import cc_token
 
 usb_bp = Blueprint("usb", __name__)
 
@@ -24,7 +25,7 @@ usb_bp = Blueprint("usb", __name__)
 # Note: nfs_routes.py and sg_routes.py (and build_manager_routes.py,
 # editor_routes.py, about_routes.py, tofu_routes.py) don't apply auth at
 # all today — a pre-existing gap, not something to replicate here.
-_API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+_API_TOKEN = cc_token.master_token()
 
 
 def require_auth(f):

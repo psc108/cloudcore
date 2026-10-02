@@ -12,6 +12,8 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
+
+import cc_token
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -276,7 +278,7 @@ def extract_template_vars(dir_name: str) -> dict:
 def _connection_vars() -> dict:
     return {
         "cloudcore_api_url":   {"default": "http://127.0.0.1:8080", "derived": False, "required": False, "type": "string"},
-        "cloudcore_api_token": {"default": "dev-token",             "derived": False, "required": False, "type": "string"},
+        "cloudcore_api_token": {"default": cc_token.master_token(), "derived": False, "required": False, "type": "string"},
     }
 
 
@@ -376,7 +378,7 @@ def _run_build(build_id: str, var_overrides: dict, idle_timeout_minutes: int | N
     build["status"] = "running"
     build["started_at"] = datetime.now(timezone.utc).isoformat()
 
-    api_token = var_overrides.get("cloudcore_api_token", "dev-token")
+    api_token = var_overrides.get("cloudcore_api_token") or cc_token.master_token()
     try:
         snapshot_before = _snapshot(api_token)
     except Exception:
@@ -424,7 +426,7 @@ def _start_idle_watcher(build: dict, var_overrides: dict, idle_timeout_minutes: 
             return
         lb = json.loads(urllib.request.urlopen(
             urllib.request.Request(f"http://127.0.0.1:8080/v1/load-balancers/{lb_entry['id']}",
-                                    headers={"Authorization": f"Bearer {var_overrides.get('cloudcore_api_token', 'dev-token')}"}),
+                                    headers={"Authorization": f"Bearer {var_overrides.get('cloudcore_api_token') or cc_token.master_token()}"}),
             timeout=10).read())
         tg = next((t for t in (lb.get("target_groups") or []) if t.get("port") == http_port), None)
         if not tg:
@@ -486,7 +488,7 @@ def _find_tofu() -> str:
 def _build_env(var_overrides: dict) -> tuple[dict, Path]:
     """Return (env dict, tofurc path) for running tofu commands."""
     api_url   = var_overrides.get("cloudcore_api_url",   os.environ.get("CLOUDCORE_API_URL",   "http://127.0.0.1:8080"))
-    api_token = var_overrides.get("cloudcore_api_token", os.environ.get("CLOUDCORE_API_TOKEN", "dev-token"))
+    api_token = var_overrides.get("cloudcore_api_token") or cc_token.master_token()
     tofurc = Path.home() / ".tofurc"
     env = {
         **os.environ,
@@ -495,6 +497,11 @@ def _build_env(var_overrides: dict) -> tuple[dict, Path]:
         "TF_INPUT":            "0",
         "TF_IN_AUTOMATION":    "1",
     }
+    # F-201: llm-chat coordinators get the narrow capture token, never the
+    # master token. Only a template that declares examples_ingestion_token
+    # uses this; an explicit override (below) still wins.
+    if cc_token.examples_token():
+        env["TF_VAR_examples_ingestion_token"] = cc_token.examples_token()
     if tofurc.exists():
         env["TF_CLI_CONFIG_FILE"] = str(tofurc)
     for k, v in var_overrides.items():

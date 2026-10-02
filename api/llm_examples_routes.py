@@ -27,10 +27,12 @@ import os
 from flask import Blueprint, Response, jsonify, request
 
 import llm_examples_store
+import cc_token
+import hmac
 
 examples_bp = Blueprint("llm_examples", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 # Named here (not inline in server.py) so server.py's own before_request
 # gate can import a stable set, same convention as peers_routes.py's
@@ -50,12 +52,16 @@ def _admin_auth():
 
 
 def _ingest_auth() -> bool:
-    """Coordinator guests authenticate with the same shared token every
-    template's cloudcore_api_token variable already carries (threaded
-    into verify_proxy.py's own environment at cloud-init time) — not a
-    new secret to provision."""
+    """Coordinator guests authenticate with the examples capture token
+    (examples_ingestion_token in the llm-chat templates, threaded into
+    verify_proxy.py's environment at cloud-init time)."""
     auth = request.headers.get("Authorization", "")
-    return auth == f"Bearer {API_TOKEN}"
+    # F-201: guests use their own capture token (cc_token.examples_token),
+    # never the master token -- which the examples listener refuses anyway.
+    token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+    examples = cc_token.examples_token()
+    return bool(token) and (hmac.compare_digest(token, API_TOKEN)
+                            or (bool(examples) and hmac.compare_digest(token, examples)))
 
 
 # llm-chat Stage 12's own language keys (verify_proxy.py's LANGUAGES).

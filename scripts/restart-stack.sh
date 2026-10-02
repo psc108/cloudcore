@@ -68,7 +68,7 @@ if systemctl list-unit-files loki.service &>/dev/null; then
 elif ! compgen -G "$REPO_DIR/api/package-repo/*/apt-repo/grafana_*.deb" >/dev/null \
   || ! compgen -G "$REPO_DIR/api/package-repo/*/apt-repo/loki_*.deb" >/dev/null; then
     echo "    The host-level package repo hasn't cached grafana/loki yet:"
-    echo "      CLOUDCORE_API_URL=http://127.0.0.1:8080 CLOUDCORE_API_TOKEN=dev-token \\"
+    echo "      set -a; . ~/.config/cloudcore/api.env; set +a; CLOUDCORE_API_URL=http://127.0.0.1:8080 \\"
     echo "        bash api/build-package-repo.sh jammy"
     echo "    Takes 15-20+ minutes (one-time, real downloads) -- not something to"
     echo "    fold into a routine restart, so this step is skipped for now."

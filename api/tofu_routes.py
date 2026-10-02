@@ -10,10 +10,11 @@ import capacity_gate
 import idle_watcher
 import layer_split
 import tofu_engine
+import cc_token
 
 tofu_bp = Blueprint("tofu", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 
 def _auth():

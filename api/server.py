@@ -4,7 +4,9 @@ import functools
 import os
 import threading
 import time
-from flask import Flask, request, jsonify, abort, send_from_directory, g
+import json
+from pathlib import Path
+from flask import Flask, request, jsonify, abort, send_from_directory, g, make_response
 
 import store
 import compute
@@ -49,6 +51,7 @@ import llm_client_capture
 from llm_client_capture import client_capture_bp, CLIENT_REACHABLE_ENDPOINTS
 from hw_routes import hw_bp
 import scheduler
+import cc_token
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -75,7 +78,7 @@ app.register_blueprint(scheduler_bp)
 app.register_blueprint(examples_bp)
 app.register_blueprint(llm_deployments_bp)
 app.register_blueprint(client_capture_bp)
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 
 @app.after_request
@@ -131,6 +134,12 @@ def _peer_bind_gate():
     # SERVER_PORT comes from the accepting socket, not anything a
     # client can influence.
     if request.environ.get("SERVER_PORT") == str(discovery.peer_listener_port()):
+        # F-201: the master token is for this host's own clients on
+        # 127.0.0.1:8080. Peers authenticate with their own per-peer tokens,
+        # so on the network-facing peer bind the master token is refused
+        # outright -- it otherwise unlocked instance/VPC/SG CRUD there.
+        if request.headers.get("Authorization", "") == f"Bearer {API_TOKEN}":
+            abort(403)
         if request.endpoint not in (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS):
             abort(403)
     # Same mechanism, second always-on bind (examples_listener.py, not
@@ -140,6 +149,10 @@ def _peer_bind_gate():
     # as the peer bind above. llm-chat Stage 13 adds the two local-capture
     # client routes, which carry their own per-student token auth.
     if request.environ.get("SERVER_PORT") == str(examples_listener.PORT):
+        # F-201: as on the peer bind -- guests here use the examples token
+        # or their per-student client tokens, never the master token.
+        if request.headers.get("Authorization", "") == f"Bearer {API_TOKEN}":
+            abort(403)
         if request.endpoint not in (EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
                                     | CLIENT_REACHABLE_ENDPOINTS):
             abort(403)
@@ -157,7 +170,13 @@ def ui():
     # re-fetched it. send_from_directory's default Cache-Control let
     # that happen; explicitly disabling it here means a normal refresh
     # (not a hard-refresh) always picks up the latest dashboard.
-    resp = send_from_directory(UI_DIR, "index.html")
+    # F-201: the dashboard's token is injected here, not baked into the JS.
+    # This route is only reachable on 127.0.0.1:8080 -- the peer and
+    # examples binds refuse anything outside their allowlists.
+    html = (Path(UI_DIR) / "index.html").read_text()
+    inject = f"<script>window.CLOUDCORE_API_TOKEN = {json.dumps(API_TOKEN)};</script>\n</head>"
+    resp = make_response(html.replace("</head>", inject, 1))
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp

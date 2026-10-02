@@ -19,8 +19,9 @@ import yaml
 import random
 import db
 import failure_queue
+import cc_token
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 # In-memory cache for running builds (log lines appended live)
 # Completed builds are read back from SQLite
@@ -157,7 +158,7 @@ def extract_template_vars(filename: str) -> dict[str, Any]:
     schema["default_project"]      = {"default": group_defaults.get("default_project",      "cloudcore-examples"),       "derived": False}
     schema["default_environment"]  = {"default": group_defaults.get("default_environment",  "dev"),                      "derived": False}
     schema["cloudcore_api_url"]    = {"default": group_defaults.get("cloudcore_api_url",    "http://127.0.0.1:8080"),    "derived": False}
-    schema["cloudcore_api_token"]  = {"default": group_defaults.get("cloudcore_api_token",  "dev-token"),                "derived": False}
+    schema["cloudcore_api_token"]  = {"default": group_defaults.get("cloudcore_api_token") or cc_token.master_token(),                "derived": False}
     schema["build_suffix"]         = {"default": _new_suffix(),                                                           "derived": False}
 
     return schema
@@ -292,7 +293,7 @@ def _run_build(build_id: str, var_overrides: dict) -> None:
     build["status"] = "running"
     build["started_at"] = datetime.now(timezone.utc).isoformat()
 
-    api_token = var_overrides.get("cloudcore_api_token") or _load_group_defaults().get("cloudcore_api_token", "dev-token")
+    api_token = var_overrides.get("cloudcore_api_token") or _load_group_defaults().get("cloudcore_api_token") or cc_token.master_token()
     try:
         snapshot_before = _snapshot(api_token)
     except Exception:

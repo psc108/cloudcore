@@ -42,12 +42,13 @@ import llm_examples_store
 import store
 from llm_examples_routes import KNOWN_LANGUAGES
 from models import now_iso
+import cc_token
 
 log = logging.getLogger(__name__)
 
 client_capture_bp = Blueprint("llm_client_capture", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 CLIENT_REACHABLE_ENDPOINTS = {
     "llm_client_capture.submit",

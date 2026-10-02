@@ -1,6 +1,9 @@
 """Security group API routes — /v1/security-groups"""
 from __future__ import annotations
 
+import hmac
+import os
+
 from flask import Blueprint, request, jsonify
 
 import peer_client
@@ -8,10 +11,28 @@ import peers_store
 import sg_store
 import store as resource_store
 from models import SecurityGroup, SecurityGroupStatus, now_iso
+import cc_token
 
 sg_bp = Blueprint("sg", __name__)
 
 _VALID_PROTOCOLS = {"tcp", "udp", "icmp", "-1"}
+
+
+# F-201: these routes had no auth at all and are on the peer listener's
+# allowlist (peers proxy SGs to each other), so anything that could reach
+# that port -- the home LAN, any lab VM -- could create, change or delete
+# security groups. Same acceptance as server.py's require_auth: the master
+# token, or an approved peer's own token (how a peer's proxied calls arrive).
+API_TOKEN = cc_token.master_token()
+
+
+@sg_bp.before_request
+def _require_auth():
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+    if token and (hmac.compare_digest(token, API_TOKEN) or peers_store.find_peer_by_local_token(token)):
+        return None
+    return _problem(401, "Unauthorized", "a CloudCore API token or an approved peer's token is required")
 
 
 def _problem(status, title, detail):

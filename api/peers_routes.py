@@ -38,10 +38,11 @@ import peers_store
 import settings_store
 import wireguard
 from models import now_iso
+import cc_token
 
 peers_bp = Blueprint("peers", __name__)
 
-API_TOKEN = os.environ.get("CLOUDCORE_API_TOKEN", "dev-token")
+API_TOKEN = cc_token.master_token()
 
 # Endpoints reachable via the peer-facing bind (api/peer_listener.py).
 # Everything else 403s there regardless of any token presented — see
