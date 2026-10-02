@@ -171,7 +171,7 @@ fi
 SERVICES_CONF=/etc/cloudcore/services.conf
 SERVICE_ADDRESSES=()
 for svc in repo logs grafana capture artifacts sentinel; do
-  target=$(sed -n "s/^${svc}=\(.*\)$/\1/p" "$SERVICES_CONF" 2>/dev/null | tail -1)
+  target=$(sed -n "s/^${svc}=\(.*\)$/\1/p" "$SERVICES_CONF" 2>/dev/null | tail -1 || true)
   [[ -z "$target" || "$target" == self ]] && target="$GW"
   if [[ ! "$target" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
     echo "WARNING: $SERVICES_CONF: '$svc=$target' is not an IPv4 address or 'self'; using this host" >&2

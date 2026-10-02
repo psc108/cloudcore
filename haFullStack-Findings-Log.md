@@ -4168,6 +4168,27 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **From the coordinator via the broker:** a target and prober booted on the peer's `cclab0` in 59 s (`standard.large`). From inside the target, DNS and HTTPS work, and all 11 private destinations are blocked: the router, both hosts on the LAN, the peer's 8082/8083, the lab gateway's 22/8080, the coordinator, Stourport over WireGuard, the transit address, metadata. The paired prober reaches its target, and nothing was left behind.
 - **KillMode** awaits the user's step 9.
 
+### F-208 — Two-host S2: setup-network.sh quit silently on a host with no services.conf
+
+**Where:** `api/setup-network.sh` (the service-name block added in two-host S2, `d2ec27b`).
+
+**Symptom:** found 2026-10-02.
+- On Stourport, the host meant to run with no `/etc/cloudcore/services.conf` so every name answers with itself, `sudo bash api/setup-network.sh 100` printed nothing and exited, without restarting dnsmasq. The hub's guests got none of the new names.
+- On Llwyn-y-Groes, which has the file, the same command worked.
+
+**Root cause:**
+- The script reads each name with `target=$(sed ... "$SERVICES_CONF" 2>/dev/null | tail -1)`.
+- With no file, `sed` exits 2, so under `pipefail` the assignment fails and `set -e` ends the script.
+- `2>/dev/null` hid the only clue.
+- The pre-commit test of the block used a conf file, so the default "no file" path was never run.
+
+**Fix:** `|| true` on that pipeline, so a missing file means every name is "self", as documented. Nothing broke meanwhile: the steps before the block are idempotent, and the hub's existing dnsmasq kept running.
+
+**Verified by:**
+- **No conf file:** the block, run alone under `set -euo pipefail` with no conf file, gives all six names as the gateway and exits 0.
+- **Peer DNS:** the peer's dnsmasq (`dig @192.168.101.1`) already answers all six names with 192.168.100.1.
+- **Hub re-run:** awaits the user re-running the script on Stourport.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4327,3 +4348,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.33 | 2026-10-02 | Paul Scott | Direct request: F4. F-205: full-VM proof backend (control sshd 1022, per-run target address, parallel prober); ufw (y|n) prompt fix; six stored answers match microVM verdicts. |
 | v3.34 | 2026-10-02 | Paul Scott | Direct request: "start the central authorization layer". F-206: default-deny gate, scoped named tokens, audit log; 30 unauthenticated routes and the terminal websocket closed. |
 | v3.35 | 2026-10-02 | Paul Scott | Two-host S1 on the peer. F-207: stale installed unit (API restarts killed the peer's VMs), root-only lab lease file, broker not recognising the coordinator via WireGuard. |
+| v3.36 | 2026-10-02 | Paul Scott | Two-host S2. F-208: setup-network.sh quit silently with no services.conf (pipefail on a missing file). |
