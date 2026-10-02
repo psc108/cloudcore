@@ -3963,6 +3963,56 @@ So full lab VMs can't rely on SGs or VPCs for isolation; F2 needs its own (a ded
 
 **Open:** lab VMs share the peer bridge, with no egress fence yet. F2 (lab network isolation) must come before any model-written command runs on them.
 
+### F-203 — Lab network (F2): full lab VMs run on an isolated bridge with internet-only egress, verified from inside
+
+**Where:**
+- `api/setup-lab-network.sh` (new; installs `/usr/local/sbin/cloudcore-labnet`, a sudoers entry for that helper only, and `cloudcore-labnet.service`);
+- `api/labnet_routes.py` (new);
+- `api/compute.py`: the lab bridge, and both lease files;
+- `api/host_stats.py`: `lab_network`;
+- `api/lab_vm_broker.py`: caller-host placement, the `network=lab` tag, pair/unpair.
+
+**Symptom:** a planned stage (F2). Measured first:
+- **Bridge traffic bypasses iptables:** on `ccbr0`, bridge-netfilter isn't loaded, so VM-to-VM traffic never reaches iptables.
+- **Security groups don't cover it:** they only filter routed egress, and traffic to the host's own services (INPUT) isn't touched by them.
+- **VPCs separate nothing.**
+
+So security groups can't isolate a VM running model-written commands.
+
+**Root cause:** CloudCore had one shared bridge, with no filtering at layer 2.
+
+**Fix:**
+- **A per-host bridge,** `cclab0`, 10.250.N.0/24 (N being the host's `ccbr0` third octet), with its own dnsmasq (DNS goes to public resolvers only) and NAT.
+- **nftables tables scoped to that bridge only** (no global bridge-netfilter):
+  - lab→internet allowed; lab→private, link-local, CGNAT, loopback or multicast ranges dropped;
+  - lab→host: only DHCP and DNS;
+  - into the lab: only SSH from the configured controller subnets, plus replies; IPv6 dropped;
+  - lab↔lab dropped at layer 2 except registered pairs.
+- **Pairs:** a run's target and prober. They're managed by a root helper that validates both addresses are lab addresses; CloudCore reaches it through a `/v1/labnet/pairs` route (master or peer token) on the host the VMs run on.
+- **Compute:**
+  - a VM tagged `network=lab` attaches to `cclab0`, or creation **fails** ("this host has no isolated lab network"), never falling back to `ccbr0` or SLIRP;
+  - addresses come from either lease file.
+- **The broker:**
+  - places lab VMs on the caller's own host, only if its stats report `lab_network`;
+  - adds `POST /v1/lab-vms/<id>/pair` for two VMs of the same run on the same host;
+  - unpairs on delete.
+
+**Verified by:** on the hub (2026-10-02):
+- **Before setup:** the broker refused with 503 "No Lab Network" (fail closed).
+- **Setup and boot:** after the user ran the setup script, a target and prober booted on `cclab0` (10.250.100.185 and .108) and were reachable over SSH from the host within 37 s.
+- **From inside the target:**
+  - **allowed:** DNS, HTTP 200 from archive.ubuntu.com, HTTPS 200 from google.com;
+  - **blocked (all 14):** the home router; Stourport and Llwyn-y-Groes on the LAN; the hub's ports 8082, 8083, 8090, 3100 and 8900; the host via the lab gateway (22 and 8080); the coordinator (192.168.101.239:8620); the WireGuard transit address; Docker's bridge; link-local metadata;
+  - **the unpaired prober:** blocked (SSH and ping).
+- **After pairing through the broker:** prober↔target SSH and ping work both ways, and the prober is still blocked from the hub's 8083.
+- **Clean-up:** deleting both VMs left the pair set empty and only the coordinator and kiwix instances.
+- **Before root:** the ruleset and the helper were tested in a throwaway network namespace.
+
+**Open:**
+- **The peer (where the coordinator runs)** needs current code and `setup-lab-network.sh` before proof runs can use full VMs. Until then the broker refuses lab VMs there.
+- **Cross-host lab placement** would need WireGuard routes for the lab subnets (not done; placement stays on the caller's host).
+- **Not yet tested:** survival across a host reboot (`cloudcore-labnet.service`).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4117,3 +4167,4 @@ So full lab VMs can't rely on SGs or VPCs for isolation; F2 needs its own (a ded
 | v3.28 | 2026-10-02 | Paul Scott | Direct request: held-out evaluation. F-200: 3 of 40 unseen questions truly proven (tuning set 25/40); failures mostly the lab's, in five classes; reuse matched the wrong question 2 of 3 times. |
 | v3.29 | 2026-10-02 | Paul Scott | Found designing the full-VM broker. F-201 (security): unauthenticated SG writes and default master token on the LAN/lab-reachable peer listener; fix proposed, awaiting decision. |
 | v3.30 | 2026-10-02 | Paul Scott | Direct request: "lets continue with f1". F-202: full-VM lab broker with its own token; 18 s to SSH; quotas, ownership and reaper verified. F2 (isolation) next. |
+| v3.31 | 2026-10-02 | Paul Scott | Direct request: F2. F-203: isolated lab bridge with internet-only egress, layer-2 pairs, fail-closed placement; verified from inside lab VMs on the hub. Peer to update. |

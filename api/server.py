@@ -53,6 +53,7 @@ from hw_routes import hw_bp
 import scheduler
 import cc_token
 import lab_vm_broker
+from labnet_routes import LABNET_PEER_REACHABLE, labnet_bp
 from lab_vm_broker import LAB_VM_REACHABLE_ENDPOINTS, lab_vms_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
@@ -81,6 +82,7 @@ app.register_blueprint(examples_bp)
 app.register_blueprint(llm_deployments_bp)
 app.register_blueprint(client_capture_bp)
 app.register_blueprint(lab_vms_bp)
+app.register_blueprint(labnet_bp)
 API_TOKEN = cc_token.master_token()
 
 
@@ -143,7 +145,7 @@ def _peer_bind_gate():
         # outright -- it otherwise unlocked instance/VPC/SG CRUD there.
         if request.headers.get("Authorization", "") == f"Bearer {API_TOKEN}":
             abort(403)
-        if request.endpoint not in (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS):
+        if request.endpoint not in (PEER_REACHABLE_ENDPOINTS | _PEER_REACHABLE_LOCAL_ENDPOINTS | LABNET_PEER_REACHABLE):
             abort(403)
     # Same mechanism, second always-on bind (examples_listener.py, not
     # gated by discovery.enabled) — restricted to exactly the llm-chat

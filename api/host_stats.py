@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import shutil
 
+from pathlib import Path
+
 import compute
 import store
 from models import now_iso
@@ -91,6 +93,16 @@ def _instance_stats() -> dict:
     return {"count": len(instances), "running": running}
 
 
+def _lab_network_ready() -> bool:
+    if not Path(f"/sys/class/net/{compute.LAB_BRIDGE_NAME}").exists():
+        return False
+    try:
+        lines = Path("/etc/qemu/bridge.conf").read_text().splitlines()
+    except OSError:
+        return False
+    return any(l.strip() in (f"allow {compute.LAB_BRIDGE_NAME}", "allow all") for l in lines)
+
+
 def collect() -> dict:
     """This host's own current stats — safe to call often, every number
     here is a cheap local read (no subprocess, no network)."""
@@ -99,6 +111,8 @@ def collect() -> dict:
         "memory": _memory_stats(),
         "disk": _disk_stats(),
         "instances": _instance_stats(),
+        # F2: can this host run isolated lab VMs? (a sysfs read, no subprocess)
+        "lab_network": _lab_network_ready(),
         "collected_at": now_iso(),
     }
 

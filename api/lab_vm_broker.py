@@ -22,6 +22,7 @@ Reachable from guests on the examples listener (192.168.100.1:8083).
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 import re
@@ -35,8 +36,13 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
 
+import capacity_gate
 import cc_token
+import compute
 import db
+import labnet_routes
+import peer_client
+import peers_store
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +54,7 @@ LAB_VM_REACHABLE_ENDPOINTS = {
     "lab_vms.get_lab_vm",
     "lab_vms.touch_lab_vm",
     "lab_vms.delete_lab_vm",
+    "lab_vms.pair_lab_vm",
 }
 
 _API = "http://127.0.0.1:8080"
@@ -163,6 +170,47 @@ def _ensure_network(peer_id: str | None) -> tuple[str, str]:
     return vpc["id"], subnet["id"]
 
 
+def _caller_host(ip: str) -> str | None:
+    """"" for this host, a peer id for a peer's bridge, None otherwise."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if addr.is_loopback or addr in ipaddress.ip_network(compute.bridge_cidr()):
+        return ""
+    for peer in peers_store.list_peers(status="approved"):
+        subnet = peer.get("wg_bridge_subnet")
+        if subnet and addr in ipaddress.ip_network(subnet, strict=False):
+            return peer["id"]
+    return None
+
+
+def _host_stats(peer_id: str | None) -> dict:
+    status, stats = _call("GET", f"/v1/peers/{peer_id}/stats" if peer_id else "/v1/system/stats")
+    if status != 200:
+        return {}
+    return stats.get("stats", stats) if isinstance(stats, dict) else {}
+
+
+def _labnet(peer_id: str | None, method: str, a: str, b: str = "") -> tuple[bool, str]:
+    """Pair/unpair on the host the VMs run on: the local helper, or the
+    peer's /v1/labnet/pairs with that peer's token."""
+    if not peer_id:
+        return labnet_routes.helper(*(["pair", "add", a, b] if method == "pair" else ["unpair", a]))
+    peer = peers_store.get_peer(peer_id)
+    if not peer or peer.get("status") != "approved":
+        return False, "peer not approved"
+    try:
+        if method == "pair":
+            r = peer_client.post(peer["api_url"] + "/v1/labnet/pairs", {"a": a, "b": b}, token=peer["remote_token"])
+        else:
+            r = peer_client.delete(peer["api_url"] + "/v1/labnet/pairs?ip=" + urllib.parse.quote(a),
+                                   token=peer["remote_token"])
+    except peer_client.PeerUnreachable as e:
+        return False, str(e)
+    return r.status in (200, 201, 204), str(r.body)
+
+
 def _row_dict(r) -> dict:
     return {k: r[k] for k in r.keys()}
 
@@ -189,12 +237,21 @@ def create_lab_vm():
             return _problem(429, "Too Many Lab VMs", f"{len(active)} lab VMs already exist (limit {MAX_ACTIVE})")
         if purpose == "student" and sum(r["purpose"] == "student" for r in active) >= MAX_STUDENT:
             return _problem(429, "Too Many Lab VMs", f"{MAX_STUDENT} student machines already exist")
-        status, rec = _call("GET", "/v1/peers/recommend-placement?" + urllib.parse.urlencode(
-            {"flavor_candidates": ",".join(flavors)}))
-        best = (rec or {}).get("recommended") if status == 200 else None
-        if not best or not best.get("flavor"):
-            return _problem(503, "No Capacity", "no host can afford a lab VM right now")
-        peer_id = best.get("peer_id")
+        # F2: on the caller's own host -- lab traffic never crosses the
+        # WireGuard link, and lab VMs only go where an isolated lab
+        # network exists. Not a named host: it follows the coordinator.
+        host = _caller_host(request.remote_addr or "")
+        if host is None:
+            return _problem(403, "Forbidden", "the caller isn't on a CloudCore host's bridge")
+        peer_id = host or None
+        stats = _host_stats(peer_id)
+        if not stats.get("lab_network"):
+            return _problem(503, "No Lab Network",
+                            "the caller's host has no isolated lab network (run api/setup-lab-network.sh there)")
+        flavor = next((f for f in flavors if capacity_gate.affords(stats, f)), None)
+        if not flavor:
+            return _problem(503, "No Capacity", "the caller's host can't afford a lab VM right now")
+        best = {"flavor": flavor, "hostname": "this host" if not peer_id else peer_id}
         try:
             vpc_id, subnet_id = _ensure_network(peer_id)
         except RuntimeError as e:
@@ -204,8 +261,10 @@ def create_lab_vm():
         now = _now()
         req = {
             "name": name, "image_id": IMAGE_ID, "flavor": best["flavor"], "vpc_id": vpc_id, "subnet_id": subnet_id,
-            "tags": {"lab_vm": "true", "purpose": purpose, "run_id": run_id, "ManagedBy": "lab-vm-broker",
-                     "Project": "llm-chat", "Environment": "lab"},
+            # network=lab: compute attaches it to the isolated cclab0 bridge
+            # or refuses to create it (F2).
+            "tags": {"lab_vm": "true", "network": "lab", "purpose": purpose, "run_id": run_id,
+                     "ManagedBy": "lab-vm-broker", "Project": "llm-chat", "Environment": "lab"},
             # The control account: key-only, the caller's key. Everything else
             # the guest needs is installed by the advice runner over this.
             "users": [{"username": "labctl", "sudo": True, "ssh_keys": [pubkey]}],
@@ -272,6 +331,12 @@ def touch_lab_vm(vm_id):
 
 
 def _delete(vm_id: str, reason: str) -> tuple[bool, str]:
+    row = _conn().execute("SELECT * FROM lab_vms WHERE id = ?", (vm_id,)).fetchone()
+    ip = _describe(vm_id).get("ip") if row and row["deleted_at"] is None else ""
+    if ip:
+        ok, why = _labnet(row["host_id"], "unpair", ip)
+        if not ok:
+            log.warning("lab VM %s: unpairing %s failed: %s", vm_id, ip, why)
     status, body = _call("DELETE", f"/v1/instances/{vm_id}", timeout=60)
     if status in (200, 204, 404):
         conn = _conn()
@@ -291,6 +356,22 @@ def delete_lab_vm(vm_id):
         return "", 204
     ok, why = _delete(vm_id, "requested")
     return ("", 204) if ok else _problem(502, "Delete Failed", why)
+
+
+@lab_vms_bp.post("/v1/lab-vms/<vm_id>/pair")
+def pair_lab_vm(vm_id):
+    """Let two lab VMs of the same run (target and prober) reach each other."""
+    other = str((request.get_json(force=True, silent=True) or {}).get("with") or "")
+    a, b = _own(vm_id), _own(other)
+    if not a or not b or a["deleted_at"] or b["deleted_at"] or vm_id == other:
+        return _problem(404, "Not Found", "both must be existing lab VMs")
+    if a["run_id"] != b["run_id"] or (a["host_id"] or "") != (b["host_id"] or ""):
+        return _problem(409, "Conflict", "only VMs of the same run on the same host can be paired")
+    ia, ib = _describe(vm_id).get("ip"), _describe(other).get("ip")
+    if not ia or not ib:
+        return _problem(409, "Not Ready", "both VMs need an address first")
+    ok, why = _labnet(a["host_id"], "pair", ia, ib)
+    return (jsonify({"paired": [ia, ib]}), 201) if ok else _problem(502, "Pair Failed", why)
 
 
 def reap_once(now: datetime | None = None) -> list[str]:

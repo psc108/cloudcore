@@ -105,6 +105,10 @@ def _allocate_slirp_ip(vpc_id: str, vpc_cidr: str) -> str:
 # (e.g. nfs.py's "vpc" share-client shorthand, F-041) should use this,
 # not a VPC's cidr_block.
 BRIDGE_NAME = "ccbr0"
+# llm-chat lab VMs (F2, api/setup-lab-network.sh): an isolated bridge with its
+# own DHCP, selected by the instance tag network=lab. Never ccbr0 instead.
+LAB_BRIDGE_NAME = "cclab0"
+LEASE_FILES = (Path("/var/lib/misc/cloudcore-dnsmasq.leases"), Path("/var/lib/misc/cloudcore-lab-dnsmasq.leases"))
 
 
 def bridge_cidr() -> str:
@@ -393,16 +397,16 @@ ssh_authorized_keys:
     )
 
 
-def _bridge_usable() -> bool:
-    """Return True only if ccbr0 exists AND /etc/qemu/bridge.conf permits it."""
-    r = subprocess.run(["ip", "link", "show", BRIDGE_NAME], capture_output=True)
+def _bridge_usable(name: str = BRIDGE_NAME) -> bool:
+    """Return True only if the bridge exists AND /etc/qemu/bridge.conf permits it."""
+    r = subprocess.run(["ip", "link", "show", name], capture_output=True)
     if r.returncode != 0:
         return False
     conf = Path("/etc/qemu/bridge.conf")
     if not conf.exists():
         return False
     return any(
-        line.strip() in (f"allow {BRIDGE_NAME}", "allow all")
+        line.strip() in (f"allow {name}", "allow all")
         for line in conf.read_text().splitlines()
         if not line.strip().startswith("#")
     )
@@ -505,6 +509,7 @@ def _domain_xml_bridge(
     iso_path: Path,
     instance_id: str = "",
     usb_hostdev_xml: str = "",
+    bridge: str = BRIDGE_NAME,
 ) -> str:
     # seclabel type='none' — see _domain_xml_slirp's comment above.
     memory_kib = memory_mb * 1024
@@ -535,7 +540,7 @@ def _domain_xml_bridge(
               <readonly/>
             </disk>
             <interface type='bridge'>
-              <source bridge='{BRIDGE_NAME}'/>
+              <source bridge='{bridge}'/>
               <model type='virtio'/>
             </interface>
             <serial type='pty'>{log_elem}<target port='0'/></serial>
@@ -567,7 +572,13 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
     )
 
     iso_path = _cloud_init_iso(instance_dir, instance.name, instance.image_id, instance.user_data, instance.users)
-    use_bridge = _bridge_usable()
+    # F2: a lab VM goes on the isolated lab bridge or nowhere -- never on
+    # ccbr0, and never SLIRP, where it would reach everything ccbr0 does.
+    lab = (instance.tags or {}).get("network") == "lab"
+    if lab and not _bridge_usable(LAB_BRIDGE_NAME):
+        raise RuntimeError(f"this host has no isolated lab network ({LAB_BRIDGE_NAME}); "
+                           "run api/setup-lab-network.sh")
+    use_bridge = lab or _bridge_usable()
 
     # Re-validate USB devices here too, immediately before building XML —
     # never trust that a check done moments earlier (in the API handler)
@@ -585,7 +596,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
     with _port_lock:
         if use_bridge:
             xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path,
-                                     instance_id=instance.id, usb_hostdev_xml=usb_hostdev_xml)
+                                     instance_id=instance.id, usb_hostdev_xml=usb_hostdev_xml,
+                                     bridge=LAB_BRIDGE_NAME if lab else BRIDGE_NAME)
             instance.ssh_host_port = 0
             instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
@@ -747,13 +759,13 @@ def get_instance_ip(domain_name: str) -> str:
         if mac_el is None:
             return "10.0.2.15"
         mac = mac_el.get("address", "").lower()
-        lease_file = Path("/var/lib/misc/cloudcore-dnsmasq.leases")
-        if lease_file.exists():
-            for line in lease_file.read_text().splitlines():
-                parts = line.split()
-                # dnsmasq lease format: expiry mac ip hostname clientid
-                if len(parts) >= 3 and parts[1].lower() == mac:
-                    return parts[2]
+        for lease_file in LEASE_FILES:
+            if lease_file.exists():
+                for line in lease_file.read_text().splitlines():
+                    parts = line.split()
+                    # dnsmasq lease format: expiry mac ip hostname clientid
+                    if len(parts) >= 3 and parts[1].lower() == mac:
+                        return parts[2]
         # Bridge instance with no lease yet (called right after boot,
         # before DHCP completes) — return falsy so callers checking
         # `if not instance.private_ip` retry on a later poll instead of
