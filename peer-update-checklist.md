@@ -40,6 +40,17 @@ systemctl --user is-active cloudcore-api.service
 
 If the `grep` shows no `EnvironmentFile=` line, add `EnvironmentFile=%h/.config/cloudcore/api.env` under `[Service]` by hand, then reload and restart as above.
 
+## 3b. Make sure an API restart can't kill the host's VMs
+
+An installed unit is a copy, so `git pull` doesn't update it. Units installed before 17 Sep 2026 lack `KillMode=process`, and without it every restart of `cloudcore-api` kills every VM it started (F-207). This doesn't restart anything:
+
+```bash
+grep -q '^KillMode=process' ~/.config/systemd/user/cloudcore-api.service || \
+    sed -i '/^\[Service\]/a KillMode=process' ~/.config/systemd/user/cloudcore-api.service
+systemctl --user daemon-reload
+systemctl --user show cloudcore-api -p KillMode     # expect KillMode=process
+```
+
 ## 4. Check the API locally
 
 ```bash

@@ -4139,6 +4139,35 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
   - removing the blueprints' now-redundant own checks.
 - **Layer 2 (human logins)** when the dashboard leaves localhost.
 
+### F-207 — Bringing the peer up to date (two-host S1): API restarts killed the peer's VMs (stale installed unit), its lab lease file was root-only, and the broker didn't recognise the coordinator
+
+**Where:**
+- the peer's installed `~/.config/systemd/user/cloudcore-api.service`;
+- `api/setup-lab-network.sh`, `api/compute.py` (`get_instance_ip`);
+- `api/lab_vm_broker.py` (`_caller_host`);
+- `peer-update-checklist.md`.
+
+**Symptom:** found while doing S1 of `cloudcore-two-host-Phased-Implementation.md` (2026-10-02). The user ran the checklist on Llwyn-y-Groes and Claude verified from Stourport.
+1. **The coordinator wasn't recognised:** the broker refused the coordinator's lab-VM requests ("the caller isn't on a CloudCore host's bridge").
+2. **"Unreachable" lab VMs:** once created on the peer, lab VMs showed "unreachable" on the hub and the boot timed out. The peer's API answered every status request for them with HTTP 500 (`PermissionError: /var/lib/misc/cloudcore-lab-dnsmasq.leases`).
+3. **The coordinator VM was hard-killed twice:** its journal ends abruptly at 20:17 and 20:46 UTC, and new boots at 20:30 and 20:55 UTC line up with the user's two `systemctl --user restart cloudcore-api` on the peer.
+
+**Root cause:**
+1. **Masquerading:** the peer masquerades its guests' traffic into WireGuard, so the coordinator's requests reach the hub from the peer's transit address `10.99.101.1`, not its bridge address.
+2. **Root's umask:** the setup script created the lease file with a plain `touch` as root; on the peer, root's stricter umask made it root-only.
+3. **A stale unit:** the peer's installed unit predates `KillMode=process`, the 2026-09-17 fix (`5765e83`) for an API restart SIGTERM-ing every guest in the service's cgroup. `git pull` updates the repo's copy, not the installed unit.
+
+**Fix:**
+1. **Transit address:** `_caller_host` also maps a peer's transit address, via `wireguard.peer_transit_ip`, to that peer (`27da700`).
+2. **Lease file:** the setup script sets the lease file to `0644` explicitly, and `get_instance_ip` logs and skips an unreadable lease file instead of failing the request (`8c9f8a9`).
+3. **KillMode:** the peer adds `KillMode=process` with a `daemon-reload` and **no restart**, which would kill its VMs a third time. The checklist now includes it (step 3b).
+
+**Verified by:**
+- **F-201 closed on the peer:** security groups with no token or `dev-token` → 401 on 192.168.101.1:8082 and 192.168.1.177:8082.
+- **Peer state:** `lab_network: true`; hub→peer calls work.
+- **From the coordinator via the broker:** a target and prober booted on the peer's `cclab0` in 59 s (`standard.large`). From inside the target, DNS and HTTPS work, and all 11 private destinations are blocked: the router, both hosts on the LAN, the peer's 8082/8083, the lab gateway's 22/8080, the coordinator, Stourport over WireGuard, the transit address, metadata. The paired prober reaches its target, and nothing was left behind.
+- **KillMode** awaits the user's step 9.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4297,3 +4326,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.32 | 2026-10-02 | Paul Scott | Direct request: "yes" (peer checklist, then F3). F-204: lab VM data disks as /dev/sdb,/dev/sdc on virtio-scsi; live disk growth verified. |
 | v3.33 | 2026-10-02 | Paul Scott | Direct request: F4. F-205: full-VM proof backend (control sshd 1022, per-run target address, parallel prober); ufw (y|n) prompt fix; six stored answers match microVM verdicts. |
 | v3.34 | 2026-10-02 | Paul Scott | Direct request: "start the central authorization layer". F-206: default-deny gate, scoped named tokens, audit log; 30 unauthenticated routes and the terminal websocket closed. |
+| v3.35 | 2026-10-02 | Paul Scott | Two-host S1 on the peer. F-207: stale installed unit (API restarts killed the peer's VMs), root-only lab lease file, broker not recognising the coordinator via WireGuard. |
