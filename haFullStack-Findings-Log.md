@@ -3857,6 +3857,42 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 
 **Verified by:** every one of the 40 runs read, including each goal_verified answer and its checks. 34 runs were re-run through the worker's pipeline after F-199, and 4 (#2–#5) after a capacity error.
 
+### F-201 — Security: the hub's peer listener exposes security-group writes with no authentication, and instance/VPC/SG control to CloudCore's default master token
+
+**Where:**
+- `api/sg_routes.py` (`list_sgs`, `create_sg`, `get_sg`, `update_sg`, `delete_sg`, lines ~59–232);
+- `api/server.py` (`require_auth` 177–195, `_peer_bind_gate` 119–145, `API_TOKEN` default line 78);
+- `api/peers_routes.py` (`PEER_REACHABLE_ENDPOINTS`);
+- the llm-chat coordinator's environment (`EXAMPLES_API_TOKEN`).
+
+**Symptom:** found while designing the full-VM lab broker (`llm-chat-full-vm-Phased-Implementation.md`, F1), 2026-10-02.
+- **The listener:** the hub's peer listener on port 8082 binds `0.0.0.0`. It's reachable from the home LAN (192.168.1.106) and, over WireGuard, from lab VMs (verified from the llm-chat coordinator).
+- **Security groups need no token:** a `GET /v1/security-groups` there **with no token at all** returned HTTP 200 and the full catalogue. The create, update and delete routes in the same blueprint carry no auth check either, and all five are on the peer listener's allowlist.
+- **The master token is guessable:** `require_auth` accepts CloudCore's master token on every listener, and the master token defaults to `dev-token`. That listener's allowlist includes `create_instance`, `update_instance`, `delete_instance` and VPC/subnet CRUD.
+- **The coordinator holds it:** the llm-chat coordinator, a guest, has `EXAMPLES_API_TOKEN=dev-token` in its environment.
+
+**Root cause:**
+- **Peer-only routes, not peer-only tokens:** the peer listener's gate limits *which routes* are reachable, but not *which tokens* it accepts.
+- **The SG blueprint skips auth:** it never got the per-blueprint `_auth()` check that the others have.
+- **Master token reused:** the master token is a default value, and it was reused as the example-capture token handed to a guest.
+
+**Impact (by reading the code and a read-only check; no write was attempted):**
+- **Anything that can reach port 8082** (the home LAN, any lab VM) can likely create, change or delete security groups on the hub. In bridge mode SGs enforce egress, so this can open or cut instances' outbound traffic.
+- **With `Bearer dev-token`,** it can likely also create and delete instances, VPCs and subnets.
+
+**Fix (proposed; changes auth, so awaiting the user):**
+1. The SG routes require auth, the same check as instance CRUD (a peer token or the master token).
+2. On the peer listener, accept only peer tokens, never the master token. Legitimate peering uses per-peer tokens; verify against the live peer before and after.
+3. Replace `dev-token` with a random secret kept out of the repo, and give the coordinator a narrow example-capture token instead (the `llm_client_tokens` pattern: hashed, revocable).
+
+**Also found (design facts for the full-VM plan, not vulnerabilities):**
+- **Ingress isn't enforced:** in bridge mode, SG *ingress* rules are accepted but not enforced (`sg.apply_bridge` filters egress only). An instance with an SG but no egress rules drops even reply packets, since there's no ESTABLISHED rule.
+- **VPCs don't isolate:** every bridge-mode instance shares `ccbr0`, whatever its VPC.
+
+So full lab VMs can't rely on SGs or VPCs for isolation; F2 needs its own (a dedicated bridge or per-VM filtering).
+
+**Verified by:** the code at the lines above; `curl http://192.168.100.1:8082/v1/security-groups` with no `Authorization` header from the coordinator returned 200 with the catalogue; `GET /v1/instances` with no token on the same port returned 403 (not allowlisted).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4009,3 +4045,4 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 | v3.26 | 2026-10-01 | Paul Scott | Direct request: log-gap check and a search for old-network leftovers. F-197 updated (log-gap detection); F-198: distro dnsmasq.service failing against CloudCore's own; no other leftovers. |
 | v3.27 | 2026-10-02 | Paul Scott | Found during the held-out evaluation (direct request). F-199: a parser bug killed the lab's worker thread; worker now survives a failing run. |
 | v3.28 | 2026-10-02 | Paul Scott | Direct request: held-out evaluation. F-200: 3 of 40 unseen questions truly proven (tuning set 25/40); failures mostly the lab's, in five classes; reuse matched the wrong question 2 of 3 times. |
+| v3.29 | 2026-10-02 | Paul Scott | Found designing the full-VM broker. F-201 (security): unauthenticated SG writes and default master token on the LAN/lab-reachable peer listener; fix proposed, awaiting decision. |
