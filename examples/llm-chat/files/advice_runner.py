@@ -436,6 +436,7 @@ def _sessions(steps: list[Step]) -> None:
     for s in steps:
         if s.kind != "run":
             continue
+        end = False  # found in the held-out run: unset when a switch line had more after it
         lines = s.source.strip().splitlines()
         if lines and _switch_user(lines[0]):
             user = _switch_user(lines[0])
@@ -451,8 +452,6 @@ def _sessions(steps: list[Step]) -> None:
                 user = ""
                 continue
             s.source, end = body, True
-        else:
-            end = False
         if user:
             # Not `sudo -i`: it backslash-escapes the command's newlines,
             # which breaks a multi-line step (a heredoc of SQL).

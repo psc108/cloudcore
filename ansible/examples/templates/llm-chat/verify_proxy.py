@@ -68,6 +68,7 @@ import sys
 import tempfile
 import termios
 import threading
+import traceback
 import time
 import urllib.error
 import urllib.parse
@@ -2118,10 +2119,21 @@ def _advice_worker() -> None:
                     data["_kept_info"] = old["_kept_info"]
             _advice_store(result.id, data)
 
-        result = advice_runner.run_advice(
-            answer, make_target, progress=publish, run_id=run_id, question=question,
-            make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge),
-            keep_vm=keep, model_fix=_model_fix)
+        try:
+            result = advice_runner.run_advice(
+                answer, make_target, progress=publish, run_id=run_id, question=question,
+                make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge),
+                keep_vm=keep, model_fix=_model_fix)
+        except Exception as e:  # noqa: BLE001 -- one broken run must never stop the queue
+            # Found in the held-out run: a parser bug on one answer killed this
+            # thread, and every later run sat "waiting to start" for 11 hours.
+            traceback.print_exc()
+            with _advice_cv:
+                data = _advice_runs.get(run_id)
+                if data is not None:
+                    data.update(status="error", verdict="", error=f"{type(e).__name__}: {e}"[:300],
+                                summary="The lab couldn't run this answer (an internal error, not the answer's fault).")
+            continue
         with _kept_lock:
             kept = _kept_labs.get(run_id)
         if kept is not None:

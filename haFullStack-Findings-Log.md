@@ -3810,6 +3810,25 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 - **`/etc` and user config:** commented examples only.
 - **Not readable without root:** `grafana.ini` and the NetworkManager netplan files. The networking works (DHCP, 192.168.1.106), and Grafana reaches Loki at localhost.
 
+### F-199 — One answer crashed the lab's only worker thread; every later lab run waited "to start" for 11 hours, unreported
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_sessions`, from L13); `verify_proxy.py` (`_advice_worker`).
+
+**Symptom:** found during the held-out evaluation (2026-10-01/02). All 40 questions were answered by 00:30, but only 6 lab runs ever finished; the other 34 stayed `queued`. At 21:21 UTC the coordinator logged `Exception in thread Thread-1111 (_advice_worker): UnboundLocalError: local variable 'end' referenced before assignment`. The page kept showing "waiting to start", and nothing else noticed.
+
+**Root cause:** two faults compound.
+1. **The parser bug:** `_sessions` (interactive user switches, F-192) set `end` only on some branches. An answer whose block began with a switch line *and* had more lines after it (#6, "let alice restart nginx with sudo": `sudo su -` then more commands) hit the unset variable. The 40 tuning answers never had that shape.
+2. **The worker:** a single thread with no per-run error handling, so one exception ended it for good.
+
+**Fix:**
+- `end` is set at the top of each loop iteration.
+- The worker wraps each run: a run that raises is marked `error` ("The lab couldn't run this answer (an internal error, not the answer's fault)") with its reason, the traceback goes to the log, and the worker moves on.
+- The 34 lost runs were re-run through the worker's own pipeline (lab, repairs, Sentinel, another way) from a script, since restarting the service to load the fix emptied its in-memory queue.
+
+**Verified by:** all 40 held-out answers now parse, #6 included, and the fixed service was deployed and restarted. The held-out run's lab results are reported with the evaluation (F-200).
+
+**Open:** the queue lives only in memory, so a service restart drops queued runs. Sentinel's log-gap check (F-197) wouldn't catch a stuck worker either, since the coordinator keeps logging.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -3960,3 +3979,4 @@ The errors began, intermittently, on 18 Sep; nothing arrived from 26 Sep, likely
 | v3.24 | 2026-10-01 | Paul Scott | Direct request: move CloudCore's storage-hungry data to the new disk. F-196: artifact cache on a dedicated ext4 data disk, paths unchanged; busy-export switch bug fixed; cold Kiwix searches from a spinning disk noted. |
 | v3.25 | 2026-10-01 | Paul Scott | Reported: Grafana-from-Sentinel queries timing out. F-197: Loki's ring held the old LAN address since the network moved; pinned to 127.0.0.1. |
 | v3.26 | 2026-10-01 | Paul Scott | Direct request: log-gap check and a search for old-network leftovers. F-197 updated (log-gap detection); F-198: distro dnsmasq.service failing against CloudCore's own; no other leftovers. |
+| v3.27 | 2026-10-02 | Paul Scott | Found during the held-out evaluation (direct request). F-199: a parser bug killed the lab's worker thread; worker now survives a failing run. |
