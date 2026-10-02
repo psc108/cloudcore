@@ -1,6 +1,6 @@
 # llm-chat: full VMs for proving answers and for the student — Phased Implementation
 
-**Status:** decisions made 2026-10-02; F1 in progress. **Owner:** Paul Scott.
+**Status:** F1 done 2026-10-02; F2 next. **Owner:** Paul Scott.
 
 ## Context
 
@@ -33,7 +33,7 @@ Direct requests (2026-10-02):
 
 | # | Stage | Status |
 |---|---|---|
-| F1 | **Lab-VM broker on CloudCore (security first).** The coordinator is itself a lab VM that runs model-written commands, so it must never hold CloudCore's master API token. A narrow endpoint set on the hub (`/v1/lab-vms`: create from a fixed template, list its own, destroy its own), with its own scoped token stored in SSM-style settings, not in files. Fixed template: the Ubuntu 22.04 image, a lab-only VPC/subnet, a security group, cloud-init with the run's control key and harness prerequisites. Quotas: max concurrent lab VMs, a hard TTL, and an idle reaper on the hub, so a crashed coordinator can't leak VMs. Placement: `recommend-placement` from free resources across peers. | Not started |
+| F1 | **Lab-VM broker on CloudCore (security first).** The coordinator is itself a lab VM that runs model-written commands, so it must never hold CloudCore's master API token. A narrow endpoint set on the hub (`/v1/lab-vms`: create from a fixed template, list its own, destroy its own), with its own scoped token stored in SSM-style settings, not in files. Fixed template: the Ubuntu 22.04 image, a lab-only VPC/subnet, a security group, cloud-init with the run's control key and harness prerequisites. Quotas: max concurrent lab VMs, a hard TTL, and an idle reaper on the hub, so a crashed coordinator can't leak VMs. Placement: `recommend-placement` from free resources across peers. | Done — `/v1/lab-vms` broker with its own token; proof VM boot to SSH in 18 s; quotas, ownership and idle reaping verified (F-202). **No model-written commands on these VMs until F2 isolates them.** |
 | F2 | **Lab network.** A lab VPC/subnet on the chosen peer. Per-run security group: egress to the internet only (no hub, LAN or other lab ranges); ingress only from the coordinator (control) and from the run's own prober. Target and prober share the run's group, replacing the microVM pair bridge. Measure boot-to-SSH time. | Not started |
 | F3 | **Disks.** CloudCore can't attach extra disks today. Add optional blank data disks to the instance template on a **virtio-scsi** bus, so a guest sees `/dev/sdb` and `/dev/sdc` natively (no aliases), plus a resize call so "grow the filesystem after enlarging the disk" becomes testable. | Not started |
 | F4 | **`FullVM` backend for the advice runner.** Same interface as `MicroVM`: boot, `ssh_client(user)`, the address the prober uses, reboot that keeps state, teardown. The control channel is a separate key-only sshd on its own port, installed by cloud-init (as on the microVM, which used vsock). Sized from the peer's free resources. The microVM-only workarounds don't apply on this backend. | Not started |

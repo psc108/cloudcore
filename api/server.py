@@ -52,6 +52,8 @@ from llm_client_capture import client_capture_bp, CLIENT_REACHABLE_ENDPOINTS
 from hw_routes import hw_bp
 import scheduler
 import cc_token
+import lab_vm_broker
+from lab_vm_broker import LAB_VM_REACHABLE_ENDPOINTS, lab_vms_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -78,6 +80,7 @@ app.register_blueprint(scheduler_bp)
 app.register_blueprint(examples_bp)
 app.register_blueprint(llm_deployments_bp)
 app.register_blueprint(client_capture_bp)
+app.register_blueprint(lab_vms_bp)
 API_TOKEN = cc_token.master_token()
 
 
@@ -154,7 +157,7 @@ def _peer_bind_gate():
         if request.headers.get("Authorization", "") == f"Bearer {API_TOKEN}":
             abort(403)
         if request.endpoint not in (EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
-                                    | CLIENT_REACHABLE_ENDPOINTS):
+                                    | CLIENT_REACHABLE_ENDPOINTS | LAB_VM_REACHABLE_ENDPOINTS):
             abort(403)
 
 
@@ -2119,6 +2122,7 @@ if __name__ == "__main__":
     reconcile()
     dns_server.start()
     scheduler.start()
+    lab_vm_broker.start()
     # threaded=True: an NFS file upload (api/nfs.py's upload_file) holds
     # its request open for as long as the transfer takes — without this,
     # Werkzeug's single-threaded dev server would stall every other

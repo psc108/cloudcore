@@ -3925,6 +3925,44 @@ So full lab VMs can't rely on SGs or VPCs for isolation; F2 needs its own (a ded
 
 **Verified by:** the code at the lines above; `curl http://192.168.100.1:8082/v1/security-groups` with no `Authorization` header from the coordinator returned 200 with the catalogue; `GET /v1/instances` with no token on the same port returned 403 (not allowlisted).
 
+### F-202 — Full-VM lab broker (F1): llm-chat gets throwaway full VMs through a narrow `/v1/lab-vms` API, never CloudCore's master token
+
+**Where:**
+- `api/lab_vm_broker.py` (new);
+- `api/cc_token.py` (`labvm_token`);
+- `api/server.py`: blueprint and reaper registration; the broker routes added to the examples-listener allowlist.
+
+**Symptom:** a planned stage (`llm-chat-full-vm-Phased-Implementation.md`, F1). Direct requests: "would we be better, during the proving, that we use a full vm not a micro vm?" and "lets continue with f1".
+
+**Root cause:** the coordinator needs to create and destroy VMs. It is itself a lab VM running model-written commands, so it must never hold the master token (F-201).
+
+**Fix:** a broker on the hub, its own token `CLOUDCORE_LABVM_TOKEN` (in `~/.config/cloudcore/api.env`).
+- **What a caller can ask for:** a purpose (`proof-target`, `proof-prober`, `student`), a run id, and one OpenSSH public key for a key-only `labctl` sudo account.
+- **What the broker decides:**
+  - **image:** Ubuntu 22.04;
+  - **size:** flavour candidates per purpose, placed by `recommend-placement` from free resources across this host and its peers;
+  - **network:** a `lab-vms` VPC/subnet on that host, created once and found by name;
+  - **tags.**
+- **Calls:** it drives CloudCore's own API on localhost with the master token, so peer placement and teardown are unchanged.
+- **Ownership:** list, get, touch and delete work only on VMs in its own `lab_vms` table.
+- **Quotas:** 6 lab VMs, at most 2 student VMs.
+- **The reaper,** on the hub and independent of the coordinator: proofs live at most 2 h; students 30 min idle, 4 h at most.
+
+**Verified by:** on the hub (2026-10-02):
+- **Access:** without a token, or with the master token, `/v1/lab-vms` returns 401; with the broker token it returns 200. The broker token on the general instance API: 401 locally, 403 on the guest port.
+- **A proof VM:**
+  - created via the broker and placed on Llwyn-y-Groes as `standard.large`;
+  - **SSH as `labctl` 18 s after the request**: Ubuntu 22.04.5, kernel 5.15, 4 vCPU, 3.9 GB, 39 GB disk, sudo working.
+- **From the coordinator over 192.168.100.1:8083:**
+  - GET of its own lab VM: 200;
+  - deleting the coordinator's own instance through the broker: 404;
+  - deleting its own lab VM: 204, and CloudCore then returns 404 for it.
+- **Quota:** a third student VM was refused with 429.
+- **Reaper:** a student VM marked idle for 31 min was deleted within 48 s ("idle limit reached").
+- **Nothing left behind:** only the coordinator and kiwix instances remain.
+
+**Open:** lab VMs share the peer bridge, with no egress fence yet. F2 (lab network isolation) must come before any model-written command runs on them.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4078,3 +4116,4 @@ So full lab VMs can't rely on SGs or VPCs for isolation; F2 needs its own (a ded
 | v3.27 | 2026-10-02 | Paul Scott | Found during the held-out evaluation (direct request). F-199: a parser bug killed the lab's worker thread; worker now survives a failing run. |
 | v3.28 | 2026-10-02 | Paul Scott | Direct request: held-out evaluation. F-200: 3 of 40 unseen questions truly proven (tuning set 25/40); failures mostly the lab's, in five classes; reuse matched the wrong question 2 of 3 times. |
 | v3.29 | 2026-10-02 | Paul Scott | Found designing the full-VM broker. F-201 (security): unauthenticated SG writes and default master token on the LAN/lab-reachable peer listener; fix proposed, awaiting decision. |
+| v3.30 | 2026-10-02 | Paul Scott | Direct request: "lets continue with f1". F-202: full-VM lab broker with its own token; 18 s to SSH; quotas, ownership and reaper verified. F2 (isolation) next. |

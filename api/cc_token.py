@@ -52,6 +52,12 @@ def master_token() -> str:
     return token
 
 
+def labvm_token() -> str:
+    """The lab-VM broker's token (CLOUDCORE_LABVM_TOKEN); "" disables the
+    broker (every request 401) rather than opening it."""
+    return _get("CLOUDCORE_LABVM_TOKEN")
+
+
 def examples_token() -> str:
     """The coordinator guests' capture token; "" if not configured (then
     only the master token is accepted on those routes, i.e. none from a
