@@ -1,0 +1,45 @@
+# CloudCore: central authorization (layer 1) and human logins (layer 2) — Phased Implementation
+
+**Status:** proposed 2026-10-02, for review before building. **Owner:** Paul Scott.
+
+## Context
+
+F-201 found security-group routes with no authentication, reachable from the home LAN and lab VMs, and a default master token (`dev-token`) that unlocked instance and VPC control on the network-facing peer listener. The holes are fixed, but the cause remains:
+- **No central check:** each blueprint checks tokens its own way (copied `_auth()` functions, `require_auth`, per-route checks), and a route with no check is open by default.
+- **Five kinds of token, each handled differently:** master, peer, examples capture, lab-VM broker, per-student client tokens. There's no common expiry, use record or revocation.
+- **No audit trail** of who created or deleted what, which matters now that lab VMs create VMs.
+- **No people in the model:** the dashboard is protected only by being localhost-only; llm-chat students are identified mostly by IP.
+
+Direct request (2026-10-02): "given the security concerns … should we think about creating a login/user security facility around cloudcore". Agreed order:
+1. F2 (lab network);
+2. **layer 1**, before the full-VM plan's F6, since student machines need a student identity;
+3. F3–F8;
+4. **layer 2** when needed.
+
+## Layer 1 — central, default-deny authorization (recommended now)
+
+| # | Stage | Status |
+|---|---|---|
+| A1 | **One check for every request.** An app-wide `before_request` that refuses any route that hasn't declared its scope (a `@scope("…")` decorator or a registry), so a new route is closed until someone decides who may call it. Remove the copied per-blueprint `_auth()` functions. Keep the per-bind gates (peer and examples listeners) as a second layer. | Not started |
+| A2 | **One token table.** `api_tokens`: id, name, scope (`admin`, `peer`, `capture`, `labvm`, `student`), SHA-256 hash, created, expires, revoked, last used. Tokens are shown once at creation. Migrate the existing ones: the master token (as `admin`, still loadable from `api.env`), per-peer tokens, the capture and broker tokens, and the per-student client tokens (`llm_client_tokens`). Each scope maps to an explicit set of routes. | Not started |
+| A3 | **Audit log.** Every state-changing request (POST, PUT, DELETE) is recorded: token id and scope, route, target id, result, time, source address. Visible in the dashboard and shipped to Loki, so Sentinel can watch it. | Not started |
+| A4 | **Token management.** Dashboard and CLI: create (shown once), list, revoke, rotate; expiry warnings. | Not started |
+| A5 | **The peer.** Llwyn-y-Groes runs its own CloudCore; it takes the same code and its own `api.env`. This also brings it up to date with F-201. | Not started |
+| A6 | **Verify.** A test suite that walks every registered route with no token, the wrong scope and the right scope; plus the F-201 checks from the LAN and a lab VM. | Not started |
+
+## Layer 2 — human logins (when the dashboard or llm-chat reaches beyond localhost)
+
+**Don't hand-write password and session handling.** Use a proven component in front of CloudCore and the llm-chat page: Authelia, or oauth2-proxy with an identity provider. Either brings logins, sessions and MFA. CloudCore trusts the identity header those components set, but only on a socket only they can reach, and maps users and groups onto layer 1's scopes and roles: admin, instructor, student.
+
+| # | Stage | Status |
+|---|---|---|
+| H1 | Choose the identity component (Authelia vs oauth2-proxy + IdP) | Not started |
+| H2 | Put it in front of the dashboard; CloudCore maps identities to roles | Not started |
+| H3 | llm-chat students log in; student VMs, quotas and the corpus attribute to a person | Not started |
+
+## Risks
+
+- **Locking ourselves out:** keep the `api.env` admin token working on 127.0.0.1 throughout, as the break-glass path.
+- **Peering during migration:** peers keep their tokens; migrate them first and verify both directions before removing any old check.
+
+Methodology unchanged: build and verify live, log findings as F-NNN.
