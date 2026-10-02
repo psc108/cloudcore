@@ -43,6 +43,7 @@ import db
 import labnet_routes
 import peer_client
 import peers_store
+import wireguard
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +261,11 @@ def _caller_host(ip: str) -> str | None:
     for peer in peers_store.list_peers(status="approved"):
         subnet = peer.get("wg_bridge_subnet")
         if subnet and addr in ipaddress.ip_network(subnet, strict=False):
+            return peer["id"]
+        # A peer masquerades its guests' traffic into the WireGuard link, so
+        # their requests arrive from that peer's transit address (found live:
+        # the coordinator's arrived as 10.99.101.1, not 192.168.101.239).
+        if subnet and ip == wireguard.peer_transit_ip(subnet):
             return peer["id"]
     return None
 
