@@ -242,9 +242,13 @@ class Step:
 _OUTPUT_LINE_RE = re.compile(r"^\s*(?:/dev/\S+:\s+[A-Z_]+=|[-dlcbps][rwxsStT-]{9}[.+@]?\s+\d+\s)")
 
 
+def _drop_output_lines(code: str) -> str:
+    return "\n".join(ln for ln in code.splitlines() if not _OUTPUT_LINE_RE.match(ln))
+
+
 def _strip_console(code: str) -> str:
     """A `console` block mixes "$ command" lines with output: keep the commands."""
-    code = "\n".join(ln for ln in code.splitlines() if not _OUTPUT_LINE_RE.match(ln))
+    code = _drop_output_lines(code)
     lines = code.splitlines()
     if not any(ln.lstrip().startswith(("$ ", "# ")) for ln in lines):
         return code
@@ -272,7 +276,7 @@ def parse_steps(answer: str) -> list[Step]:
             steps.append(Step(len(steps) + 1, "skip", code, note="example output, not a step"))
             continue
         if tag in RUNNABLE_TAGS and not looks_like_config(code):
-            code = _strip_console(code) if tag == "console" else code
+            code = _strip_console(code) if tag == "console" else _drop_output_lines(code)
             # Prose edits for the file an earlier editor step opened.
             if pending_editor_target:
                 ops = _prose_edits(before)
@@ -1779,7 +1783,9 @@ def _prepare_needs(root_client, s: Step) -> list[str]:
         made.append(f"group '{LAB_GROUP}'")
     for n in sorted(x for x in needs if x.startswith("path:")):
         path = n[5:]
-        if re.search(rf"\b(?:mkdir|install\s+-d)\b[^\n]*{re.escape(path)}(?:/|\s|$)", s.source):
+        spellings = [re.escape(path)] + ([r"~/" + re.escape(path[len("/home/student/"):])]
+                                         if path.startswith("/home/student/") else [])
+        if any(re.search(rf"\b(?:mkdir|install\s+-d)\b[^\n]*{sp}(?:/|\s|$)", s.source) for sp in spellings):
             continue  # F-200 #10: the answer makes it; pre-creating it made its mkdir fail
         if "." in path.rsplit("/", 1)[-1]:
             _exec(root_client, f"mkdir -p {shlex.quote(path.rsplit('/', 1)[0])}; test -e {shlex.quote(path)} || "
@@ -1966,6 +1972,11 @@ def _put_file(root_client, path: str, content: str, mode: str) -> tuple[bool, bo
             new = old + ("" if not old or old.endswith("\n") else "\n") + body
         with sftp.open(path, "w") as f:
             f.write(new.encode())
+        if path == "/etc/sudoers" or path.startswith("/etc/sudoers.d/"):
+            # As visudo writes it: sudo ignores a sudoers file that is group-
+            # or world-writable, and our default 0644 failed the validator on
+            # a correct answer (F-200 class E).
+            sftp.chmod(path, 0o440)
         return existed, True
     except OSError:
         return False, False

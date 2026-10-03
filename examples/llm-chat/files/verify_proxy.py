@@ -1907,6 +1907,12 @@ _PRESUME_SYSTEM = (
     "`sudo setfacl -m u:maria:rwX /var/www/html` and `ssh maria@your_server_ip`. Reply: "
     '{"setup":[{"action":"user","name":"maria"},{"action":"dir","path":"/var/www/html"}],'
     '"placeholders":[{"token":"your_server_ip","kind":"this_machine_ip"}]}\n'
+    "Second example. Question: \"How do I let the web server read files in /srv/app?\" Answer runs "
+    "`sudo chgrp -R www-data /srv/app` and `sudo systemctl reload nginx`, never installing nginx. Reply: "
+    '{"setup":[{"action":"package","name":"nginx","running":true},{"action":"dir","path":"/srv/app"}],'
+    '"placeholders":[]}\n'
+    "Software the question names or the answer relies on (a web server, a database, Docker, Samba ...) "
+    "is presumed installed unless the answer installs it.\n"
     'If nothing applies, reply {"setup":[],"placeholders":[]}.')
 
 
