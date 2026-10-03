@@ -67,13 +67,13 @@ Expect `200` for the new token, then `401` for `dev-token`. If the dashboard is 
 sudo api/setup-lab-network.sh --controllers 192.168.100.0/24,192.168.101.0/24
 ```
 
-## 5b. Accept the lab-VM token every host's guests carry (two-host S5)
+## 5b. Accept the guest tokens every host's guests carry (two-host S5, S7)
 
-A guest asks its own host's lab-VM broker, using the token from whichever host built it, so every host's broker shares one token. Run this **on the hub**; it never prints the token:
+A guest asks its own host's lab-VM broker, using the token from whichever host built it, so every host shares the lab-VM and capture tokens. Run this **on the hub**; it never prints the token:
 
 ```bash
-grep '^CLOUDCORE_LABVM_TOKEN=' ~/.config/cloudcore/api.env \
-  | ssh <you>@<peer LAN address> 'bash ~/IdeaProjects/cloudcore/api/import-labvm-token.sh'
+grep -E '^CLOUDCORE_(LABVM|EXAMPLES)_TOKEN=' ~/.config/cloudcore/api.env \
+  | ssh <you>@<peer LAN address> 'bash ~/IdeaProjects/cloudcore/api/import-shared-tokens.sh'
 ```
 
 Then on the peer: `systemctl --user restart cloudcore-api` (safe once step 3b is done).

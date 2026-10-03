@@ -47,7 +47,7 @@ Methodology unchanged: build and verify live, log findings as F-NNN, tear down a
 | S2 | 2026-10-02 | Six names, `repo`, `logs`, `grafana`, `capture`, `artifacts`, `sentinel` (`.cloudcore.internal`), replace 207 references in 69 files; each host's dnsmasq answers them from `/etc/cloudcore/services.conf` (F-208) |
 | S3 | 2026-10-03 | Peer holds a checksum-verified copy of the repo (203 files, 212.5 GB) via `api/sync-package-repo.py`; `repo_sync` jobs keep it in step daily; peer guests use their own host's repo and NFS export |
 | S4 | 2026-10-03 | Loki and Grafana on both hosts; guests ship to their own host's Loki (`logs`); each Grafana has a datasource per peer Loki (`api/setup-loki-datasources.sh`); Sentinel reads every host's Loki, found from CloudCore's peer list (F-210) |
-| S5 | 2026-10-03 | Guests use their own host's lab-VM broker (`broker`); hosts share the broker token (`api/import-labvm-token.sh`). With Stourport's API stopped, a proof target booted through Llwyn-y-Groes's broker in 36 s and was deleted. Capture stays on one home host |
+| S5 | 2026-10-03 | Guests use their own host's lab-VM broker (`broker`); hosts share the broker token (`api/import-shared-tokens.sh`). With Stourport's API stopped, a proof target booted through Llwyn-y-Groes's broker in 36 s and was deleted. Capture stays on one home host |
 | S6 | 2026-10-03 | Nightly backups each way (`host_backup` jobs, 02:00 and 02:30 UTC), with consistent snapshots and checksums, confined on the receiving host by rrsync (no shell or port forwarding, verified on the real hosts). Verified restores and a runbook for moving Sentinel or capture |
 
 ## Service names
@@ -61,7 +61,7 @@ Guests reach host-level services by name. Each host's dnsmasq answers each name 
 | `logs` | Loki (:3100) |
 | `grafana` | Grafana (:3000) |
 | `capture` | examples, LLM deployment registration and student submissions (:8083). One home host for both: it's a record, kept in one database |
-| `broker` | lab-VM broker (:8083), always the guest's own host. Every host's broker accepts the same lab-VM token (`api/import-labvm-token.sh`) |
+| `broker` | lab-VM broker (:8083), always the guest's own host. Every host's broker accepts the same lab-VM token (`api/import-shared-tokens.sh`) |
 | `sentinel` | Sentinel (:8900) |
 
 Create the file readable by everyone. On a host whose root has a strict umask, a plain `sudo tee` leaves it root-only:
