@@ -116,7 +116,13 @@ def cmd_sentinel(args) -> int:
             Path(str(target) + suffix).unlink(missing_ok=True)
     shutil.copy2(d / "sentinel" / "sentinel.db", target)
     if (d / "sentinel" / "models").is_dir():
-        shutil.copytree(d / "sentinel" / "models", SENTINEL_DIR / "models", symlinks=True, dirs_exist_ok=True)
+        # Set the old models aside like the database: copying symlinks over
+        # existing ones fails (EEXIST), and stale files mustn't mix in.
+        models, aside = SENTINEL_DIR / "models", SENTINEL_DIR / "models.before-restore"
+        if models.exists():
+            shutil.rmtree(aside, ignore_errors=True)
+            os.replace(models, aside)
+        shutil.copytree(d / "sentinel" / "models", models, symlinks=True)
     log(f"Sentinel database and models from {args.host} {d.name} are in {SENTINEL_DIR}")
     return 0
 
