@@ -28,8 +28,11 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-GRAFANA_DEB=$(ls "$REPO_DIR"/grafana_*.deb 2>/dev/null | head -1 || true)
-LOKI_DEB=$(ls "$REPO_DIR"/loki_*.deb 2>/dev/null | head -1 || true)
+# The newest of each: a repo copied from another host can also hold older
+# .debs, and `ls | head -1` picked grafana 13.2.1 over 13.2.2 (two-host S4).
+newest_deb() { find "$REPO_DIR" -maxdepth 1 -name "$1_*.deb" -printf '%f\n' 2>/dev/null | sort -V | tail -1; }
+GRAFANA_DEB=$(newest_deb grafana); GRAFANA_DEB=${GRAFANA_DEB:+$REPO_DIR/$GRAFANA_DEB}
+LOKI_DEB=$(newest_deb loki); LOKI_DEB=${LOKI_DEB:+$REPO_DIR/$LOKI_DEB}
 if [ -z "$GRAFANA_DEB" ] || [ -z "$LOKI_DEB" ]; then
   echo "grafana/loki .debs not found in $REPO_DIR — run" >&2
   echo "  bash api/build-package-repo.sh $CODENAME" >&2
@@ -165,10 +168,14 @@ systemctl enable --now loki
 systemctl enable --now grafana-server
 systemctl restart grafana-server
 
+# Every approved peer's Loki as a further datasource (two-host S4).
+bash "$SCRIPT_DIR/setup-loki-datasources.sh"
+
 echo ""
 echo "cloudcore-logging is running:"
-echo "  Loki:    http://192.168.100.1:3100/ (every example's own promtail ships here)"
-echo "  Grafana: http://192.168.100.1:3000/ — opens straight to Explore/dashboards,"
+echo "  Loki:    port 3100 on this host's bridge gateway; guests ship to it as"
+echo "           logs.cloudcore.internal when services.conf says logs=self"
+echo "  Grafana: port 3000 (grafana.cloudcore.internal) — opens straight to Explore/dashboards,"
 echo "           no login screen (anonymous Editor access — required for Explore"
 echo "           to work at all in this version, see setup-logging-service.sh's"
 echo "           own comment). Log in as admin / \$CLOUDCORE_LOGGING_ADMIN_PASSWORD"
