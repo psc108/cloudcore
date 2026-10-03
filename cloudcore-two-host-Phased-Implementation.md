@@ -47,6 +47,7 @@ Methodology unchanged: build and verify live, log findings as F-NNN, tear down a
 | S2 | 2026-10-02 | Six names, `repo`, `logs`, `grafana`, `capture`, `artifacts`, `sentinel` (`.cloudcore.internal`), replace 207 references in 69 files; each host's dnsmasq answers them from `/etc/cloudcore/services.conf` (F-208) |
 | S3 | 2026-10-03 | Peer holds a checksum-verified copy of the repo (203 files, 212.5 GB) via `api/sync-package-repo.py`; `repo_sync` jobs keep it in step daily; peer guests use their own host's repo and NFS export |
 | S4 | 2026-10-03 | Loki and Grafana on both hosts; guests ship to their own host's Loki (`logs`); each Grafana has a datasource per peer Loki (`api/setup-loki-datasources.sh`); Sentinel reads every host's Loki, found from CloudCore's peer list (F-210) |
+| S5 | 2026-10-03 | Guests use their own host's lab-VM broker (`broker`); hosts share the broker token (`api/import-labvm-token.sh`). With Stourport's API stopped, a proof target booted through Llwyn-y-Groes's broker in 36 s and was deleted. Capture stays on one home host |
 
 ## Service names
 
