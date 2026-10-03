@@ -38,3 +38,33 @@ Every host runs the full set of services, and guests use their own host's copy. 
 The full-VM switch (F5) waits for S1, S2 and S5, so the coordinator doesn't get more tied to Stourport.
 
 Methodology unchanged: build and verify live, log findings as F-NNN, tear down after.
+
+## Progress
+
+| # | Done | Result |
+|---|---|---|
+| S1 | 2026-10-02 | Peer on current code; F-201 closed there; lab network verified (F-207) |
+| S2 | 2026-10-02 | Six names, `repo`, `logs`, `grafana`, `capture`, `artifacts`, `sentinel` (`.cloudcore.internal`), replace 207 references in 69 files; each host's dnsmasq answers them from `/etc/cloudcore/services.conf` (F-208) |
+| S3 | 2026-10-03 | Peer holds a checksum-verified copy of the repo (203 files, 212.5 GB) via `api/sync-package-repo.py`; `repo_sync` jobs keep it in step daily; peer guests use their own host's repo and NFS export |
+
+## Service names
+
+Guests reach host-level services by name. Each host's dnsmasq answers each name with an address from `/etc/cloudcore/services.conf`, one `name=self` or `name=<IPv4>` line per service. `self` is the host's own bridge gateway, and a missing line or file means `self`. After editing the file, re-run `sudo bash api/setup-network.sh <octet>`, which restarts only dnsmasq. Never restart `cloudcore-bridge.service`: its stop step deletes the bridge.
+
+| Name | Service |
+|---|---|
+| `repo` | package repo and artifact cache (:8090) |
+| `artifacts` | read-only NFS export of the artifact cache |
+| `logs` | Loki (:3100) |
+| `grafana` | Grafana (:3000) |
+| `capture` | examples capture and lab-VM broker (:8083) |
+| `sentinel` | Sentinel (:8900) |
+
+Create the file readable by everyone. On a host whose root has a strict umask, a plain `sudo tee` leaves it root-only:
+
+```bash
+sudo install -d -m 755 /etc/cloudcore
+printf 'repo=self\nartifacts=self\nlogs=192.168.100.1\n' | sudo install -m 644 /dev/stdin /etc/cloudcore/services.conf
+```
+
+The peer copies the repo from another host with `python3 api/sync-package-repo.py pull --from http://<host>:8090`; the host it copies from needs a fresh `sync-package-repo.py checksums`. Both run daily as `repo_sync` scheduler jobs, `index` mode on the host being copied and `pull` mode on the peer.
