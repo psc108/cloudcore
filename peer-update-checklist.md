@@ -67,6 +67,17 @@ Expect `200` for the new token, then `401` for `dev-token`. If the dashboard is 
 sudo api/setup-lab-network.sh --controllers 192.168.100.0/24,192.168.101.0/24
 ```
 
+## 5b. Accept the lab-VM token every host's guests carry (two-host S5)
+
+A guest asks its own host's lab-VM broker, using the token from whichever host built it, so every host's broker shares one token. Run this **on the hub**; it never prints the token:
+
+```bash
+grep '^CLOUDCORE_LABVM_TOKEN=' ~/.config/cloudcore/api.env \
+  | ssh <you>@<peer LAN address> 'bash ~/IdeaProjects/cloudcore/api/import-labvm-token.sh'
+```
+
+Then on the peer: `systemctl --user restart cloudcore-api` (safe once step 3b is done).
+
 ## 6. Tell Claude
 
 The hub-side checks are then:

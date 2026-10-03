@@ -166,11 +166,13 @@ fi
 # (lines like "repo=self" or "logs=192.168.100.1"). Fixed answers, so they
 # don't depend on CloudCore's API being up. Without the file every name is
 # "self". Names: repo (packages, artifacts :8090), logs (Loki :3100),
-# grafana (:3000), capture (examples, lab-VM broker :8083), artifacts (the
-# NFS artifact export), sentinel (:8900).
+# grafana (:3000), capture (examples, deployments, student submissions
+# :8083 -- one home host, it's a record), broker (the lab-VM broker :8083,
+# always the guest's own host), artifacts (the NFS artifact export),
+# sentinel (:8900).
 SERVICES_CONF=/etc/cloudcore/services.conf
 SERVICE_ADDRESSES=()
-for svc in repo logs grafana capture artifacts sentinel; do
+for svc in repo logs grafana capture broker artifacts sentinel; do
   target=$(sed -n "s/^${svc}=\(.*\)$/\1/p" "$SERVICES_CONF" 2>/dev/null | tail -1 || true)
   [[ -z "$target" || "$target" == self ]] && target="$GW"
   if [[ ! "$target" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then

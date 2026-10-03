@@ -31,7 +31,7 @@ Every host runs the full set of services, and guests use their own host's copy. 
 | S2 | **One service name instead of Stourport's address:** each host's DNS answers it with its own gateway; the 209 references move to the name | Claude |
 | S3 | **Packages and artifacts on both hosts:** repo service on the peer, 215 GB artifact store copied and checksum-verified, kept in step | Both |
 | S4 | **Logging on both hosts:** Loki per host; Grafana and Sentinel read both | Both |
-| S5 | **Broker and capture local to each host:** the coordinator asks its own host | Claude |
+| S5 | **Broker local to each host:** the coordinator asks its own host's lab-VM broker (`broker`); capture stays on one home host because it's a record (S6 makes it movable) | Claude |
 | S6 | **Sentinel and builds movable:** database backup to the other host, a runbook, builds from either host | Both |
 | S7 | **Prove it:** build and run llm-chat on Llwyn-y-Groes with Stourport's services stopped | Both |
 
@@ -58,7 +58,8 @@ Guests reach host-level services by name. Each host's dnsmasq answers each name 
 | `artifacts` | read-only NFS export of the artifact cache |
 | `logs` | Loki (:3100) |
 | `grafana` | Grafana (:3000) |
-| `capture` | examples capture and lab-VM broker (:8083) |
+| `capture` | examples, LLM deployment registration and student submissions (:8083). One home host for both: it's a record, kept in one database |
+| `broker` | lab-VM broker (:8083), always the guest's own host. Every host's broker accepts the same lab-VM token (`api/import-labvm-token.sh`) |
 | `sentinel` | Sentinel (:8900) |
 
 Create the file readable by everyone. On a host whose root has a strict umask, a plain `sudo tee` leaves it root-only:
