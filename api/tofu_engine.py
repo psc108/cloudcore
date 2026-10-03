@@ -378,7 +378,7 @@ def _run_build(build_id: str, var_overrides: dict, idle_timeout_minutes: int | N
     build["status"] = "running"
     build["started_at"] = datetime.now(timezone.utc).isoformat()
 
-    api_token = var_overrides.get("cloudcore_api_token") or cc_token.master_token()
+    api_token = _api_token(var_overrides)
     try:
         snapshot_before = _snapshot(api_token)
     except Exception:
@@ -426,7 +426,7 @@ def _start_idle_watcher(build: dict, var_overrides: dict, idle_timeout_minutes: 
             return
         lb = json.loads(urllib.request.urlopen(
             urllib.request.Request(f"http://127.0.0.1:8080/v1/load-balancers/{lb_entry['id']}",
-                                    headers={"Authorization": f"Bearer {var_overrides.get('cloudcore_api_token') or cc_token.master_token()}"}),
+                                    headers={"Authorization": f"Bearer {_api_token(var_overrides)}"}),
             timeout=10).read())
         tg = next((t for t in (lb.get("target_groups") or []) if t.get("port") == http_port), None)
         if not tg:
@@ -485,10 +485,18 @@ def _find_tofu() -> str:
     )
 
 
+def _api_token(var_overrides: dict) -> str:
+    """The token tofu's provider uses: an explicit override, unless it's the
+    retired dev-token that builds made before F-201 stored (F-211) -- their
+    destroy would otherwise be refused by this very API."""
+    token = var_overrides.get("cloudcore_api_token") or ""
+    return token if token and not cc_token.is_retired(token) else cc_token.master_token()
+
+
 def _build_env(var_overrides: dict) -> tuple[dict, Path]:
     """Return (env dict, tofurc path) for running tofu commands."""
     api_url   = var_overrides.get("cloudcore_api_url",   os.environ.get("CLOUDCORE_API_URL",   "http://127.0.0.1:8080"))
-    api_token = var_overrides.get("cloudcore_api_token") or cc_token.master_token()
+    api_token = _api_token(var_overrides)
     tofurc = Path.home() / ".tofurc"
     env = {
         **os.environ,
@@ -507,6 +515,8 @@ def _build_env(var_overrides: dict) -> tuple[dict, Path]:
     if tofurc.exists():
         env["TF_CLI_CONFIG_FILE"] = str(tofurc)
     for k, v in var_overrides.items():
+        if k.endswith("_token") and isinstance(v, str) and cc_token.is_retired(v):
+            continue  # F-211: keep the injected token, not the stored dev-token
         if k not in ("cloudcore_api_url", "cloudcore_api_token"):
             # A plain str is passed through raw (Terraform's own
             # TF_VAR_x handling treats it as a literal string value for

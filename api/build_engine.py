@@ -293,7 +293,10 @@ def _run_build(build_id: str, var_overrides: dict) -> None:
     build["status"] = "running"
     build["started_at"] = datetime.now(timezone.utc).isoformat()
 
-    api_token = var_overrides.get("cloudcore_api_token") or _load_group_defaults().get("cloudcore_api_token") or cc_token.master_token()
+    # F-211: skip a stored retired dev-token (builds made before F-201).
+    api_token = next((t for t in (var_overrides.get("cloudcore_api_token"),
+                                  _load_group_defaults().get("cloudcore_api_token"))
+                      if t and not cc_token.is_retired(t)), None) or cc_token.master_token()
     try:
         snapshot_before = _snapshot(api_token)
     except Exception:

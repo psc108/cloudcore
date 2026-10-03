@@ -43,6 +43,12 @@ def _get(name: str) -> str:
     return (os.environ.get(name) or _from_file(name)).strip()
 
 
+def is_retired(token: str) -> bool:
+    """The old shared default. Builds made before F-201 stored it in their
+    var_overrides; it must never be sent anywhere again (F-211)."""
+    return token in _RETIRED
+
+
 def master_token() -> str:
     token = _get("CLOUDCORE_API_TOKEN")
     if not token or (token in _RETIRED and os.environ.get("CLOUDCORE_ALLOW_DEV_TOKEN") != "1"):

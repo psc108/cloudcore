@@ -4231,6 +4231,28 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Sentinel:** Stourport's Sentinel recorded it within a second, under that Loki's own checkpoint.
 - **Grafana:** Stourport's Grafana read it back through the `loki-llywyn-y-groes` datasource.
 
+### F-211 — Builds made before F-201 couldn't be destroyed: their stored dev-token was replayed
+
+**Where:**
+- `api/tofu_engine.py` (`_build_env`, the idle watcher);
+- `api/build_engine.py` (`_run_build`);
+- `api/cc_token.py`.
+
+**Symptom:** found 2026-10-03 while preparing F5, before anything failed. The live llm-chat build (2026-09-30) stored `cloudcore_api_token = dev-token` and `examples_ingestion_token = dev-token` in its var_overrides. Destroying a build re-runs tofu with the stored overrides. The provider would then authenticate with `dev-token`, which this API has refused since F-201, so the destroy would fail. Every pre-F-201 build was undestroyable from the dashboard, and re-submitting its overrides would build a coordinator holding the retired capture token.
+
+**Root cause:** `_build_env` and the Ansible engine took `cloudcore_api_token` from the stored overrides whenever it was set. The loop also passed every override as `TF_VAR_*`, so a stored `dev-token` beat the tokens injected from `api.env`. F-201 retired the value, but nothing stopped it being replayed.
+
+**Fix:**
+- **`cc_token.is_retired()`:** tells the engines when a token is the retired default.
+- **Provider token:** `tofu_engine._api_token()` uses the master token when the stored one is missing or retired. The idle watcher and the Ansible engine do the same.
+- **`*_token` overrides:** a stored override whose value is retired is skipped, so the injected capture and broker tokens win.
+- **Explicit tokens kept:** an explicit real token override is still honoured.
+
+**Verified by:**
+- **Retired values:** `_build_env` with the old overrides gives the master token to the provider and the current capture token to the template. Other overrides pass through unchanged.
+- **Real override:** an explicit token is kept.
+- **Live destroy:** the destroy of build 2a570597 is the live test, recorded with F5.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4393,3 +4415,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.36 | 2026-10-02 | Paul Scott | Two-host S2. F-208: setup-network.sh quit silently with no services.conf (pipefail on a missing file). |
 | v3.37 | 2026-10-02 | Paul Scott | F-209: the authorization gate refused CORS preflights, so the dashboard showed "Failed to fetch" when opened under another origin. |
 | v3.38 | 2026-10-03 | Paul Scott | Two-host S4. F-210: re-running the logging setup left the old Loki running on its old config (`enable --now` doesn't restart). |
+| v3.39 | 2026-10-03 | Paul Scott | F-211: builds made before F-201 replayed their stored dev-token, so they couldn't be destroyed. |
