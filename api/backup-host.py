@@ -104,11 +104,16 @@ def build_snapshot(day_dir: Path, prev_dir: Path | None) -> dict:
         snapshot_db(SENTINEL_DIR / "sentinel.db", day_dir / "sentinel" / "sentinel.db")
         dedupe(day_dir / "sentinel" / "sentinel.db", prev("sentinel/sentinel.db"))
         for f in sorted((SENTINEL_DIR / "models").rglob("*")):
-            if f.is_file():
-                rel = "sentinel/" + f.relative_to(SENTINEL_DIR).as_posix()
+            rel = "sentinel/" + f.relative_to(SENTINEL_DIR).as_posix()
+            if f.is_symlink():
+                # Hugging Face's cache points snapshots at blobs; following
+                # the links stored every model twice.
+                (day_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(os.readlink(f), day_dir / rel)
+            elif f.is_file():
                 link_or_copy(f, day_dir / rel, prev(rel))
     for f in sorted(day_dir.rglob("*")):
-        if f.is_file() and f.name != "MANIFEST.json":
+        if f.is_file() and not f.is_symlink() and f.name != "MANIFEST.json":
             files[f.relative_to(day_dir).as_posix()] = {"size": f.stat().st_size, "sha256": sha256(f)}
     manifest = {"host": socket.gethostname(), "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "files": files}

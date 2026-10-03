@@ -116,7 +116,7 @@ def cmd_sentinel(args) -> int:
             Path(str(target) + suffix).unlink(missing_ok=True)
     shutil.copy2(d / "sentinel" / "sentinel.db", target)
     if (d / "sentinel" / "models").is_dir():
-        shutil.copytree(d / "sentinel" / "models", SENTINEL_DIR / "models", dirs_exist_ok=True)
+        shutil.copytree(d / "sentinel" / "models", SENTINEL_DIR / "models", symlinks=True, dirs_exist_ok=True)
     log(f"Sentinel database and models from {args.host} {d.name} are in {SENTINEL_DIR}")
     return 0
 
