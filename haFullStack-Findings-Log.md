@@ -4275,6 +4275,33 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Backups:** a backup with the new path succeeded: 569 MB sent to Llwyn-y-Groes.
 - **Llwyn-y-Groes:** its own key is moved the same way during S7.
 
+### F-213 — Moving Sentinel: its knowledge base doubled, then a racing migration deleted it
+
+**Where:**
+- `sentinel/src/sentinel/kb/store.py` (the findings key);
+- `sentinel/src/sentinel/db.py` (`_merge_findings_by_doc_name`).
+
+**Symptom:** found 2026-10-03 during two-host S7, moving Sentinel to Llwyn-y-Groes.
+1. **Doubled:** after restoring Stourport's database there, `install.sh` re-seeded the knowledge base from Llwyn-y-Groes's checkout, and it reported "KB now holds 424 total": every finding twice.
+2. **Deleted:** Claude's first fix, a migration merging the duplicates, ran when Sentinel restarted. It left **1 finding of 212**, and 50,171 of 50,172 suggestions then pointed at deleted findings.
+
+**Root cause:**
+1. **The key:** findings were keyed by the log's absolute path (`source_doc`). The same log is `~/IdeaProjects/CloudProject/…` on Stourport and `~/IdeaProjects/cloudcore/…` on Llwyn-y-Groes, so the second ingest inserted new rows.
+2. **The race:** the merge migration runs on every connect, and Sentinel's watcher and UI are two processes started together. Without a lock, both read the same path-keyed rows. When process A renamed a row to the file-name key, process B, still holding its old list, looked up that key, found the renamed row, took it for its own duplicate and deleted it. Every finding went the same way. The test for the migration had used one process.
+
+**Fix:**
+- **Key by file name:** findings are keyed by the log's file name (`doc_key`), for ingest and for suggestion imports (`b41483a`… `95297ae`).
+- **The merge (`fa2ca25`):**
+  - runs under `BEGIN IMMEDIATE`, so one process at a time;
+  - reads the rows only after taking the lock;
+  - never merges a row into itself;
+  - skips the lock entirely when there is nothing to merge.
+- **Recovery:** Sentinel on Llwyn-y-Groes was stopped, and its database restored from the S6 backup with `restore-from-backup.py sentinel stourport --force`. The damaged copy is kept as `sentinel.db.damaged-F-213`. The S6 backup and Stourport's stopped original were both intact.
+
+**Verified by:**
+- **The race test** runs four processes migrating 400 duplicate findings with suggestions at once. It fails against the old migration and passes against the new one, 8 of 8 runs. 74 tests pass.
+- **On Llwyn-y-Groes after recovery:** 212 findings under one key, 50,172 suggestions, none orphaned, identical to Stourport's original. Re-ingesting the log there stays at 212. Sentinel is watching both hosts' Lokis.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4439,3 +4466,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.38 | 2026-10-03 | Paul Scott | Two-host S4. F-210: re-running the logging setup left the old Loki running on its old config (`enable --now` doesn't restart). |
 | v3.39 | 2026-10-03 | Paul Scott | F-211: builds made before F-201 replayed their stored dev-token, so they couldn't be destroyed. |
 | v3.40 | 2026-10-03 | Paul Scott | F-212: the backup key in ~/.ssh was loaded by desktop SSH agents and hijacked ordinary logins to the other host. |
+| v3.41 | 2026-10-03 | Paul Scott | Two-host S7. F-213: moving Sentinel doubled its KB (path-keyed findings); the first fix's unlocked migration raced and deleted it (recovered from the S6 backup). |
