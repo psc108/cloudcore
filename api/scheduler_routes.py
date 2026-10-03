@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 
 import build_engine
 import croncalc
+import host_backup
 import repo_sync
 import scheduler
 import tofu_engine
@@ -63,9 +64,9 @@ def create_schedule():
     kind = body.get("kind")
     if not name:
         return jsonify({"status": 400, "title": "Bad Request", "detail": "name is required"}), 400
-    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync"):
+    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync", "host_backup"):
         return jsonify({"status": 400, "title": "Bad Request",
-                         "detail": "kind must be 'build', 'llm_ingest', 'kiwix_update' or 'repo_sync'"}), 400
+                         "detail": "kind must be 'build', 'llm_ingest', 'kiwix_update', 'repo_sync' or 'host_backup'"}), 400
     recurrence = body.get("recurrence")
     if not recurrence or "mode" not in recurrence:
         return jsonify({"status": 400, "title": "Bad Request",
@@ -87,6 +88,11 @@ def create_schedule():
         if err:
             return jsonify({"status": 400, "title": "Bad Request", "detail": err}), 400
         engine, template = "tofu", "package-repo"
+    elif kind == "host_backup":
+        err = host_backup.validate(body.get("var_overrides") or {})
+        if err:
+            return jsonify({"status": 400, "title": "Bad Request", "detail": err}), 400
+        engine, template = "tofu", "host-backup"
     else:
         engine = body.get("engine")
         template = body.get("template")
@@ -122,8 +128,9 @@ def update_schedule(schedule_id):
     if not existing:
         return jsonify({"status": 404, "title": "Not Found"}), 404
     body = request.get_json(force=True) or {}
-    if existing["kind"] == "repo_sync" and "var_overrides" in body:
-        err = repo_sync.validate(body["var_overrides"] or {})
+    validator = {"repo_sync": repo_sync, "host_backup": host_backup}.get(existing["kind"])
+    if validator and "var_overrides" in body:
+        err = validator.validate(body["var_overrides"] or {})
         if err:
             return jsonify({"status": 400, "title": "Bad Request", "detail": err}), 400
     fields = {}

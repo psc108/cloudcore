@@ -70,7 +70,7 @@ def get_schedule(schedule_id: str) -> dict | None:
 def create_schedule(*, name: str, kind: str, engine: str, template: str,
                      var_overrides: dict, recurrence: dict,
                      created_by: str = "ui") -> dict:
-    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync"):
+    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync", "host_backup"):
         raise ValueError(f"unknown schedule kind: {kind!r}")
 
     recurrence_type, run_at, cron_expr = _resolve_recurrence(recurrence)
@@ -285,6 +285,10 @@ def _run_schedule(schedule_id: str) -> None:
             # Two hosts' package repos kept in step: api/repo_sync.py.
             import repo_sync
             status, summary, log = repo_sync.run(schedule.get("var_overrides") or {})
+        elif schedule["kind"] == "host_backup":
+            # Nightly copy of this host's state to another: api/host_backup.py.
+            import host_backup
+            status, summary, log = host_backup.run(schedule.get("var_overrides") or {})
         else:
             status, summary, log = "failed", f"unknown kind {schedule['kind']!r}", []
     except Exception as e:

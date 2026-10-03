@@ -32,7 +32,7 @@ Every host runs the full set of services, and guests use their own host's copy. 
 | S3 | **Packages and artifacts on both hosts:** repo service on the peer, 215 GB artifact store copied and checksum-verified, kept in step | Both |
 | S4 | **Logging on both hosts:** Loki per host; Grafana and Sentinel read both | Both |
 | S5 | **Broker local to each host:** the coordinator asks its own host's lab-VM broker (`broker`); capture stays on one home host because it's a record (S6 makes it movable) | Claude |
-| S6 | **Sentinel and builds movable:** database backup to the other host, a runbook, builds from either host | Both |
+| S6 | **Capture, Sentinel and build state movable:** nightly backups to the other host, verified restores, a runbook | Both |
 | S7 | **Prove it:** build and run llm-chat on Llwyn-y-Groes with Stourport's services stopped | Both |
 
 The full-VM switch (F5) waits for S1, S2 and S5, so the coordinator doesn't get more tied to Stourport.
@@ -71,3 +71,46 @@ printf 'repo=self\nartifacts=self\nlogs=192.168.100.1\n' | sudo install -m 644 /
 ```
 
 The peer copies the repo from another host with `python3 api/sync-package-repo.py pull --from http://<host>:8090`; the host it copies from needs a fresh `sync-package-repo.py checksums`. Both run daily as `repo_sync` scheduler jobs, `index` mode on the host being copied and `pull` mode on the peer.
+
+## Backups and moving a service (S6)
+
+Each host sends a nightly backup to the other: `host_backup` scheduler job, `api/backup-host.py`.
+
+**What's in a backup:**
+- **The CloudCore database.** It holds the capture record: examples, LLM deployments, student tokens and submissions.
+- **Every example's OpenTofu state.**
+- **Sentinel's database and models,** if Sentinel runs on that host.
+
+**How it's made and kept:**
+- **Consistent copies:** databases are copied with SQLite's online backup and integrity-checked. `MANIFEST.json` lists every file's sha256.
+- **Retention:** each host keeps 7 days, and unchanged files are hard-linked.
+- **Where:** they land in `~/cloudcore-backups/<sending host>/<date>/` on the other host.
+- **Confinement:** the sending host's key can only write there. Its `authorized_keys` entry runs it through `rrsync`, with `restrict`.
+
+**Set up, once per direction,** on the host being backed up:
+
+```bash
+bash api/setup-backup-key.sh | ssh <user>@<other host> bash     # asks for the password once
+python3 api/backup-host.py --to <user>@<other host>              # first backup, by hand
+```
+
+Then add a "Back up this host to another" schedule in the dashboard (daily).
+
+### Run Sentinel on the other host
+
+For example, if Stourport is lost. On the surviving host:
+
+1. **Check the backup:** `python3 api/restore-from-backup.py list`, then `... verify <host>`.
+2. **Install Sentinel** if it isn't installed: clone the sentinel repo next to CloudCore's and run its `install.sh`.
+3. **Restore its data** with Sentinel stopped: `python3 api/restore-from-backup.py sentinel <host>`. Add `--force` if a database is already there; the old one is kept as `sentinel.db.before-restore`.
+4. **Start Sentinel.** It finds every host's Loki from this host's peer list (S4). On each host, point `sentinel=` in `/etc/cloudcore/services.conf` at this host, then re-run `setup-network.sh`.
+
+### Make another host capture's home
+
+1. **Merge the record in:** `python3 api/restore-from-backup.py capture <host> --dry-run`, then without `--dry-run`. Rows have UUID keys, so this host's own rows are untouched. Student tokens come across as hashes, so students keep theirs.
+2. **Point the name at it:** on every host, set `capture=` in `services.conf` to the new home (`self` there), then re-run `setup-network.sh`. The capture token must also be the same on both hosts (as for the broker in S5) before guests built elsewhere can post.
+
+### Build state
+
+`tfstate/<template>.tfstate` in a backup is the state of a build made on that host. To manage that build from the other host, copy the file into `examples/<template>/terraform.tfstate` there. Its resources must be reachable from that host's API (for example, peer-placed instances).
+

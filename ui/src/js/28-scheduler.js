@@ -26,7 +26,7 @@ async function loadScheduler() {
       tbody.innerHTML = data.items.map(s => `
         <tr>
           <td><strong>${_esc(s.name)}</strong></td>
-          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : s.kind === 'repo_sync' ? `Package repo sync (${_esc((s.var_overrides || {}).mode || '')})` : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
+          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : s.kind === 'host_backup' ? `Host backup (to ${_esc((s.var_overrides || {}).to || '')})` : s.kind === 'repo_sync' ? `Package repo sync (${_esc((s.var_overrides || {}).mode || '')})` : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
           <td class="mono">${s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—'}</td>
           <td>${s.last_run_at ? new Date(s.last_run_at).toLocaleString() + ' ' + badge(s.last_status || 'pending') : '—'}</td>
           <td>${s.enabled ? '✅' : '⏸️'}</td>
@@ -49,6 +49,7 @@ function _schedOnKindChange() {
   document.getElementById('sched-llm-fields').style.display = kind === 'llm_ingest' ? '' : 'none';
   document.getElementById('sched-kiwix-fields').style.display = kind === 'kiwix_update' ? '' : 'none';
   document.getElementById('sched-repo-fields').style.display = kind === 'repo_sync' ? '' : 'none';
+  document.getElementById('sched-backup-fields').style.display = kind === 'host_backup' ? '' : 'none';
   const rsPull = document.getElementById('sched-rs-mode').value === 'pull';
   document.getElementById('sched-rs-source-field').style.display = rsPull ? '' : 'none';
   document.getElementById('sched-rs-prune-field').style.display = rsPull ? '' : 'none';
@@ -222,6 +223,11 @@ async function schedCreate() {
       reserve_gb: parseInt(document.getElementById('sched-kw-reserve').value || '20', 10),
       git: document.getElementById('sched-kw-git').value,
       dry_run: document.getElementById('sched-kw-dry').checked,
+    };
+  } else if (kind === 'host_backup') {
+    payload.var_overrides = {
+      to: document.getElementById('sched-bk-to').value.trim(),
+      keep: parseInt(document.getElementById('sched-bk-keep').value || '7', 10),
     };
   } else if (kind === 'repo_sync') {
     const mode = document.getElementById('sched-rs-mode').value;

@@ -794,6 +794,7 @@
             <option value="llm_ingest">7B LLM Sentinel Ingest</option>
             <option value="kiwix_update">Kiwix ZIM update check</option>
             <option value="repo_sync">Package repo sync</option>
+            <option value="host_backup">Back up this host to another</option>
           </select>
         </div>
       </div>
@@ -823,6 +824,16 @@
           </div>
           <div class="field" id="sched-rs-source-field"><label>Source repo URL</label><input id="sched-rs-source" type="text" placeholder="http://192.168.100.1:8090"></div>
           <div class="field" id="sched-rs-prune-field"><label><input id="sched-rs-prune" type="checkbox"> Delete files the source no longer has</label></div>
+        </div>
+      </div>
+
+      <div id="sched-backup-fields" style="display:none">
+        <p style="font-size:13px;color:var(--text-muted);margin:4px 0 10px">
+          Copies this host's CloudCore database (including the capture record), build state and, if it runs here, Sentinel's database to another host over SSH, confined there to one directory. Set the key up first with <code>api/setup-backup-key.sh</code>. Restore with <code>api/restore-from-backup.py</code>.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>Send to (user@host)</label><input id="sched-bk-to" type="text" placeholder="scottp@192.168.1.177"></div>
+          <div class="field"><label>Days kept</label><input id="sched-bk-keep" type="number" min="1" max="60" value="7"></div>
         </div>
       </div>
 
