@@ -48,6 +48,7 @@ Methodology unchanged: build and verify live, log findings as F-NNN, tear down a
 | S3 | 2026-10-03 | Peer holds a checksum-verified copy of the repo (203 files, 212.5 GB) via `api/sync-package-repo.py`; `repo_sync` jobs keep it in step daily; peer guests use their own host's repo and NFS export |
 | S4 | 2026-10-03 | Loki and Grafana on both hosts; guests ship to their own host's Loki (`logs`); each Grafana has a datasource per peer Loki (`api/setup-loki-datasources.sh`); Sentinel reads every host's Loki, found from CloudCore's peer list (F-210) |
 | S5 | 2026-10-03 | Guests use their own host's lab-VM broker (`broker`); hosts share the broker token (`api/import-labvm-token.sh`). With Stourport's API stopped, a proof target booted through Llwyn-y-Groes's broker in 36 s and was deleted. Capture stays on one home host |
+| S6 | 2026-10-03 | Nightly backups each way (`host_backup` jobs, 02:00 and 02:30 UTC), with consistent snapshots and checksums, confined on the receiving host by rrsync (no shell or port forwarding, verified on the real hosts). Verified restores and a runbook for moving Sentinel or capture |
 
 ## Service names
 
