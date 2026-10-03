@@ -1879,6 +1879,80 @@ _MODEL_FIX_SYSTEM = (
     "code fences. If nothing sensible would fix it, reply exactly NONE.")
 
 
+# L16/L17: before an answer is tried, the model says what the question takes
+# for granted on the machine and which tokens are placeholders. The lab acts
+# on this only through a fixed menu (advice_runner.plan_setup), so a wrong
+# reading can at worst create a harmless user, file or package.
+_PRESUME_SYSTEM = (
+    "You read a Linux how-to question and the answer given to it, before the answer is tried on a FRESH "
+    "Ubuntu 22.04 server that has nothing extra installed and only the user 'student'. Reply with ONLY a JSON "
+    "object, no prose, no code fences:\n"
+    '{"setup": [...], "placeholders": [...]}\n'
+    "\"setup\" lists what the QUESTION treats as ALREADY existing before the answer starts, which a fresh "
+    "server lacks. Each item is one of:\n"
+    '  {"action":"user","name":"..."}\n'
+    '  {"action":"group","name":"...","members":["..."]}\n'
+    '  {"action":"package","name":"<apt package>","running":true|false}\n'
+    '  {"action":"service","name":"...","running":true|false}\n'
+    '  {"action":"dir","path":"/...","owner":"..."}\n'
+    '  {"action":"file","path":"/...","owner":"..."}\n'
+    "NEVER list what the question asks to create, install or configure -- that is the answer's job. Only "
+    "list what must be there for the answer to make sense (an existing user it modifies, a server it "
+    "configures but does not install, a file or directory it reads).\n"
+    "\"placeholders\" lists tokens in the ANSWER's commands that stand for a value the reader must fill "
+    "in, each as {\"token\": \"<exact text as written>\", \"kind\": K} with K one of: user, group, "
+    "this_machine_ip, other_machine_ip, uuid, pid, service, package, path, domain. Only invented "
+    "stand-ins, never real names like nginx, eth0, /etc/hosts or root.\n"
+    "Example. Question: \"How do I let user maria edit files in the web root?\" Answer uses "
+    "`sudo setfacl -m u:maria:rwX /var/www/html` and `ssh maria@your_server_ip`. Reply: "
+    '{"setup":[{"action":"user","name":"maria"},{"action":"dir","path":"/var/www/html"}],'
+    '"placeholders":[{"token":"your_server_ip","kind":"this_machine_ip"}]}\n'
+    'If nothing applies, reply {"setup":[],"placeholders":[]}.')
+
+
+def _answer_code(answer: str, limit: int = 3000) -> str:
+    """The answer's fenced blocks, each with the line before it (which names
+    a file's path): what the lab will run. The 14B model on CPU spends most
+    of a call reading its input, and the prose adds nothing here."""
+    lines, out, i = answer.splitlines(), [], 0
+    while i < len(lines):
+        if lines[i].lstrip().startswith("```"):
+            j = i + 1
+            while j < len(lines) and not lines[j].lstrip().startswith("```"):
+                j += 1
+            if i > 0 and lines[i - 1].strip():
+                out.append(lines[i - 1].strip())
+            out.extend(lines[i:j + 1])
+            i = j + 1
+        else:
+            i += 1
+    return ("\n".join(out) or answer)[:limit]
+
+
+def _model_presumptions(question: str, answer: str) -> dict:
+    """L16/L17: the model's reading of what the question presumes and which
+    tokens are placeholders. {} on any failure: the run goes on without it."""
+    payload = {"messages": [
+        {"role": "system", "content": _PRESUME_SYSTEM},
+        {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
+        "max_tokens": 400, "stream": False, "temperature": 0.0}
+    try:
+        req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
+                                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            text = json.loads(resp.read())["choices"][0]["message"]["content"]
+    except Exception as e:  # noqa: BLE001 -- an aid, never a hard dependency
+        print(f"verify-proxy: presumptions request failed: {e!r}", flush=True)
+        return {}
+    start, end = text.find("{"), text.rfind("}")
+    try:
+        data = json.loads(text[start:end + 1]) if start >= 0 < end else {}
+    except ValueError:
+        print(f"verify-proxy: presumptions reply wasn't JSON: {text[:200]!r}", flush=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _model_fix(question: str, step: str, output: str) -> str:
     """L10b: the model's one-line fix for one failed step (the lab's own
     repair strategies having failed). "" on any failure."""
@@ -2138,7 +2212,7 @@ def _advice_worker() -> None:
             result = advice_runner.run_advice(
                 answer, make_target, progress=publish, run_id=run_id, question=question,
                 make_prober=make_prober, pair_bridges=(create_pair_bridge, delete_pair_bridge),
-                keep_vm=keep, model_fix=_model_fix)
+                keep_vm=keep, model_fix=_model_fix, presume=_model_presumptions)
         except Exception as e:  # noqa: BLE001 -- one broken run must never stop the queue
             # Found in the held-out run: a parser bug on one answer killed this
             # thread, and every later run sat "waiting to start" for 11 hours.
@@ -2160,7 +2234,8 @@ def _advice_worker() -> None:
                  "diagnosis": result.diagnosis,
                  "search_terms": search_terms, "verdict": result.verdict,
                  "summary": result.summary, "error": result.error, "vm": result.vm,
-                 "steps": result.steps, "checks": result.checks, "repaired": result.repaired}
+                 "steps": result.steps, "checks": result.checks, "repaired": result.repaired,
+                 "setup": result.setup}
         print("ADVICE_RUN " + json.dumps({k: v for k, v in entry.items() if k != "answer"}), flush=True)
         if SENTINEL_HOST:
             _push_advice_run_to_sentinel(entry)
@@ -2168,7 +2243,8 @@ def _advice_worker() -> None:
         def run_one(alt, child, progress):
             return advice_runner.run_advice(
                 alt, make_target, progress=progress, run_id=child, question=question, make_prober=make_prober,
-                pair_bridges=(create_pair_bridge, delete_pair_bridge), model_fix=_model_fix)
+                pair_bridges=(create_pair_bridge, delete_pair_bridge), model_fix=_model_fix,
+                presume=_model_presumptions)
         if ADVICE_RETRIES > 0 and _final_verdict(result) == "failed":
             _try_other_ways(run_id, question, answer, search_terms, result, run_one)
 

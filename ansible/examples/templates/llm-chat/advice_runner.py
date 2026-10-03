@@ -35,12 +35,14 @@ import base64
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
 import re
 import secrets
 import struct
 import shlex
 import textwrap
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -115,7 +117,8 @@ _SUBSTITUTIONS = [
     # (pattern, replacement or callable, what the lab must create first)
     (re.compile(r"/home/(?:user|username|your[_-]?user(?:name)?|youruser|<user(?:name)?>)/"), "/home/student/", ""),
     (re.compile(r"(?<![\w/.-])/path/to/([\w./-]*[\w-])"), lambda m: f"{LAB_DIR}/{m.group(1).split('/')[-1]}", "path"),
-    (re.compile(r"\b(?:your[_-]?user(?:name)?|user[_-]name|new[_-]?user(?:name)?|youruser|username)\b|<user(?:name)?>",
+    # Not a key in key=value (F-200 #26: the cifs mount option username=).
+    (re.compile(r"\b(?:your[_-]?user(?:name)?|user[_-]name|new[_-]?user(?:name)?|youruser|username)\b(?!=)|<user(?:name)?>",
                 re.IGNORECASE), LAB_USER, "user"),
     (re.compile(r"\b(?:your[_-]?group(?:name)?|group[_-]?name)\b|<group(?:name)?>", re.IGNORECASE), LAB_GROUP, "group"),
     (re.compile(r"\b(?:your[_-]?server[_-]?ip|server[_-]?ip|your[_-]?ip(?:[_-]?address)?|server[_-]?address|"
@@ -128,6 +131,8 @@ _SUBSTITUTIONS = [
 # so a bare account named "user" (User=user, chown user:user) is the same
 # placeholder (found in L10: a unit with User=user failed with 217/USER).
 _placeholder_account = False
+# Set per run: a full VM has a bootloader and loads modules (L18).
+_full_vm_run = False
 _ACCOUNT_USER_RE = re.compile(r"(?<=\bUser=)user\b|(?<=\bGroup=)user\b|\buser:user\b|(?<=-u )user\b")
 
 
@@ -159,6 +164,15 @@ def _substitute(text: str) -> tuple[str, list[str], set[str]]:
             if new != line:
                 changes.append("example DNS server address -> 127.0.0.1 (this machine)")
             line = new
+        # F-200 #11: `newgrp G` alone opens a new interactive shell (and asks
+        # for a group password without a terminal). It only makes the group
+        # active now; the lab's later logins and checks are fresh, so they
+        # have it already.
+        mg = re.match(r"^\s*(?:sudo\s+)?newgrp\s+([\w-]+)\s*$", line)
+        if mg:
+            line = "true"
+            changes.append(f"newgrp {mg.group(1)}: skipped -- it only opens a new shell with the group; "
+                           "the lab's next logins have it")
         # ping runs until Ctrl-C, which is what a person presses.
         m2 = re.match(r"^(\s*(?:sudo\s+)?ping6?\s+)", line)
         if m2 and not re.search(r"(?:^|\s)-[a-zA-Z]*c\s*\d", line[m2.end():]):
@@ -223,8 +237,14 @@ class Step:
     final: str = ""       # L10b: the commands that worked (for the repaired procedure)
 
 
+# F-200 #20: example output pasted into a command block (blkid's
+# "/dev/sdb1: UUID=... TYPE=...", ls -l's "drwxr-xr-x 2 root ...").
+_OUTPUT_LINE_RE = re.compile(r"^\s*(?:/dev/\S+:\s+[A-Z_]+=|[-dlcbps][rwxsStT-]{9}[.+@]?\s+\d+\s)")
+
+
 def _strip_console(code: str) -> str:
     """A `console` block mixes "$ command" lines with output: keep the commands."""
+    code = "\n".join(ln for ln in code.splitlines() if not _OUTPUT_LINE_RE.match(ln))
     lines = code.splitlines()
     if not any(ln.lstrip().startswith(("$ ", "# ")) for ln in lines):
         return code
@@ -927,7 +947,13 @@ def _goal(subject: str, ok: bool, detail: str = "") -> dict:
     return {"kind": "goal", "subject": subject, "ok": ok, "detail": detail, "decisive": True}
 
 
-def _goal_checks(question: str, answer: str, steps: list, root, prober_root) -> list[dict]:
+# L19: questions where this machine is the client, not the server.
+_CLIENT_Q_RE = re.compile(r"\b(?:connect|log ?in|ssh|copy|mount)\b[^?]*\b(?:to|into|on|from)\b[^?]*\b(?:server|machine|host)\b",
+                          re.IGNORECASE)
+_SERVER_Q_RE = re.compile(r"\b(?:change|set|make|configure|run|listen|move|enable)\b", re.IGNORECASE)
+
+
+def _goal_checks(question: str, answer: str, steps: list, root, prober_root, prober_ip: str = "") -> list[dict]:
     q, a = question.lower(), answer
     ran = "\n".join(s.final or s.source for s in steps if s.cls in ("ok", "repaired"))
     checks = []
@@ -938,15 +964,32 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root) -> 
     if prober_root is not None and re.search(r"\b(?:ufw|firewall|iptables|nft)\b", q):
         wanted = {p for w, p in _PORT_WORDS.items() if re.search(r"\b" + w + r"\b", q)}
         wanted |= {int(n) for n in re.findall(r"\bport\s+(\d{2,5})\b", q)}
+        # L19 (F-200 #12): a rule allowing a port only from some network is
+        # checked as such -- the prober should get in if its address is in
+        # that network, and be kept out if it isn't.
+        src = re.search(r"\bfrom\s+(?:the\s+)?(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})", q)
+        inside = True
+        if src and prober_ip:
+            try:
+                inside = ipaddress.ip_address(prober_ip) in ipaddress.ip_network(src.group(1), strict=False)
+            except ValueError:
+                src = None
         for port in sorted(wanted):
             st = _port_state(prober_root, port)
-            checks.append(_goal(f"port {port} is allowed through the firewall (from another machine)",
-                                st != "filtered", f"connection {st}"))
+            if src and prober_ip and not inside:
+                checks.append(_goal(f"port {port} is closed to a machine outside {src.group(1)} ({prober_ip})",
+                                    st == "filtered", f"connection {st}"))
+            else:
+                where = f" (from {prober_ip}, inside {src.group(1)})" if src and prober_ip else " (from another machine)"
+                checks.append(_goal(f"port {port} is allowed through the firewall{where}", st != "filtered",
+                                    f"connection {st}"))
         if wanted and re.search(r"\bonly\b", q):
             st = _port_state(prober_root, 8081)
             checks.append(_goal("a port the question didn't ask for (8081) is blocked", st == "filtered",
                                 f"connection {st}" + ("" if st == "filtered" else ": the firewall let it through")))
     m = re.search(r"\bssh\b.*?\bport\b.*?\b(\d{2,5})\b", q)
+    if m and _CLIENT_Q_RE.search(question) and not _SERVER_Q_RE.search(question):
+        m = None  # L19 (F-200 #39): this machine is the client; there's no server here to check
     if m and prober_root is not None:
         port = m.group(1)
         _, banner, _ = _exec(prober_root, f"timeout 4 bash -c 'exec 3<>/dev/tcp/{TARGET_PAIR_IP}/{port}; "
@@ -1028,12 +1071,21 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root) -> 
         code, out, _ = sh("wg show 2>&1 | head -4; ip -br link show type wireguard")
         up = "interface:" in out and bool(re.search(r"^\S+\s+(?:UP|UNKNOWN)\b", out, re.MULTILINE))
         checks.append(_goal("a WireGuard interface is up", up, " ".join(out.split())[:160]))
-    if "swap" in q:
+    if re.search(r"\bswap\b", q):  # L19 (F-200 #28): not "swappiness"
         _, sw, _ = sh("swapon --show --noheadings")
         checks.append(_goal("swap is active", bool(sw.strip()), sw.strip()[:120]))
-    if "docker" in q:
-        code, out, _ = sh("docker run --rm hello-world 2>&1 | grep -m1 -e 'Hello from Docker' -e rror", 180)
-        checks.append(_goal("a Docker container runs", "Hello from Docker" in out, out.strip()[-160:]))
+    # L19 (F-200 #11, #40): a question about something inside a container
+    # isn't checked on the host; "without sudo" is checked as that user.
+    if "docker" in q and not re.search(r"\b(?:inside|in|within)\s+(?:a|the|my)?\s*(?:docker\s+)?container", q):
+        user = ""
+        if re.search(r"without\s+(?:using\s+)?sudo|non-?root|as (?:a )?(?:normal|regular) user", q):
+            mu = re.search(r"usermod\s+(?:-\S+\s+)*-a?G\s+\S*docker\S*\s+(\S+)|gpasswd\s+-a\s+(\S+)\s+docker", ran)
+            user = (mu.group(1) or mu.group(2)).strip("'\"") if mu else ""
+            user = user if _NAME_OK.match(user) else ""
+        run = (f"su - {user} -c 'docker run --rm hello-world' 2>&1" if user else "docker run --rm hello-world 2>&1")
+        code, out, _ = sh(f"{run} | grep -m1 -e 'Hello from Docker' -e rror -e denied", 180)
+        checks.append(_goal(f"a Docker container runs{' as ' + user + ' (no sudo)' if user else ''}",
+                            "Hello from Docker" in out, out.strip()[-160:]))
     if "nfs" in q and prober_root is not None:
         _, exports, _ = sh("exportfs -v 2>/dev/null | awk 'NR==1{print $1}'")
         path = exports.strip()
@@ -1135,16 +1187,56 @@ def _judge(code, out, timed_out, marks, fullscreen) -> tuple[str, str, str]:
 # not a failure: it isn't repaired, never becomes a "doesn't work" fact, and
 # a run whose only problems are limits is not_testable.
 
-_LAB_LIMITS = [
+# Limits of a microVM only: a full VM (F4/F5) has a bootloader and loads
+# modules, so there these are real failures.
+_MICROVM_LIMITS = [
     (re.compile(r"\b(?:modprobe|insmod|rmmod|depmod|dkms)\b|FATAL: Module|Module \S+ not found|"
                 r"/lib/modules/\S+: No such file"),
      "loading kernel modules: the lab's kernel has the common ones built in and can't load others"),
     (re.compile(r"\b(?:update-grub|grub-install|grub2?-mkconfig|efibootmgr|update-initramfs|bootctl)\b|"
                 r"/etc/default/grub|/boot/grub"),
      "bootloader changes: the lab machine starts its kernel directly, with no GRUB or initramfs"),
+]
+# L18: limits of any virtual lab machine -- physical hardware it doesn't
+# have, and identities on the public internet it can't hold. Matched on the
+# failing command and its output, by category, not on particular answers.
+_LAB_LIMITS = [
     (re.compile(r"\bnvidia|NVIDIA|\bubuntu-drivers\b|\bcuda\b|\bnouveau\b", re.IGNORECASE),
      "GPU drivers: the lab machine has no GPU or other physical hardware"),
+    (re.compile(r"\bsmartctl\b|\bnvme\s+smart-log\b|SMART support is:\s*Unavailable|"
+                r"does not support (?:Self Test|SMART)", re.IGNORECASE),
+     "disk health (SMART): the lab's disks are virtual and report no SMART data"),
+    (re.compile(r"\bsensors(?:-detect)?\b|No sensors found|\bfancontrol\b|/sys/class/(?:thermal|hwmon)"),
+     "temperature and fan sensors: the lab machine has none"),
+    (re.compile(r"\b(?:iw|iwconfig|iwlist|wpa_cli|bluetoothctl|hciconfig|rfkill)\b|\bwlan\d|\bwlp\w+|"
+                r"nmcli\s+(?:dev(?:ice)?\s+)?wifi"),
+     "Wi-Fi and Bluetooth: the lab machine has no radios"),
+    (re.compile(r"\bcertbot\b|\bacme\.sh\b|Some challenges have failed|urn:ietf:params:acme|"
+                r"Let'?s ?Encrypt", re.IGNORECASE),
+     "a certificate from a public CA: that needs a real domain whose DNS points at this machine from the "
+     "internet, which a lab machine can't have"),
 ]
+# Questions that are about such things outright: the lab says so before
+# booting anything (and never asks a public CA for a certificate for a
+# domain it doesn't own).
+_QUESTION_LIMITS = [
+    (re.compile(r"\bSMART\b|\b(?:disk|drive|ssd|hdd|nvme)\b[^?]*\b(?:health|wear|bad sectors)\b", re.IGNORECASE),
+     "disk health (SMART): the lab's disks are virtual and report no SMART data"),
+    (re.compile(r"\b(?:fans?|temperatures?|overheat\w*|thermal)\b", re.IGNORECASE),
+     "temperature and fan sensors: the lab machine has none"),
+    (re.compile(r"\b(?:wi-?fi|wireless|wlan|bluetooth)\b", re.IGNORECASE),
+     "Wi-Fi and Bluetooth: the lab machine has no radios"),
+    (re.compile(r"\b(?:graphics (?:card|driver)s?|gpus?|nvidia)\b", re.IGNORECASE),
+     "graphics hardware: the lab machine has no GPU"),
+    (re.compile(r"let'?s ?encrypt|\bcertbot\b", re.IGNORECASE),
+     "a certificate from a public CA: that needs a real domain whose DNS points at this machine from the "
+     "internet, which a lab machine can't have"),
+]
+
+
+def question_limit(question: str) -> str:
+    """L18: why the question as a whole can't be tried in a lab, or ""."""
+    return next((why for rx, why in _QUESTION_LIMITS if rx.search(question)), "")
 
 
 def _lab_limit(s: Step) -> str:
@@ -1155,7 +1247,8 @@ def _lab_limit(s: Step) -> str:
     m = re.search(r"`([^`]+)` failed", s.detail or "")
     failing = m.group(1) if m else (s.source if s.kind == "run" else "")
     text = "\n".join((failing, s.target or "", (s.output or "")[-2000:]))
-    return next((why for rx, why in _LAB_LIMITS if rx.search(text)), "")
+    rules = _LAB_LIMITS + ([] if _full_vm_run else _MICROVM_LIMITS)
+    return next((why for rx, why in rules if rx.search(text)), "")
 
 
 # -- Step-level repair (L10b) --------------------------------------------------------
@@ -1350,6 +1443,10 @@ class RunResult:
     # journals, validators), gathered before the VM goes -- for the next
     # attempt and for whoever reads the run.
     diagnosis: str = ""
+    # L16/L17: what the lab set up because the question presumes it, which
+    # placeholders it filled (and couldn't), and what the model suggested
+    # that the lab refused.
+    setup: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -1682,6 +1779,8 @@ def _prepare_needs(root_client, s: Step) -> list[str]:
         made.append(f"group '{LAB_GROUP}'")
     for n in sorted(x for x in needs if x.startswith("path:")):
         path = n[5:]
+        if re.search(rf"\b(?:mkdir|install\s+-d)\b[^\n]*{re.escape(path)}(?:/|\s|$)", s.source):
+            continue  # F-200 #10: the answer makes it; pre-creating it made its mkdir fail
         if "." in path.rsplit("/", 1)[-1]:
             _exec(root_client, f"mkdir -p {shlex.quote(path.rsplit('/', 1)[0])}; test -e {shlex.quote(path)} || "
                                f"echo 'stand-in file created by the lab' > {shlex.quote(path)}", 15)
@@ -1897,16 +1996,279 @@ def _collect_facts(steps: list[Step]) -> tuple[list[str], list[str], list[str]]:
     return pkgs, services, paths
 
 
+# -- L16/L17: the setup stage and placeholders by kind ---------------------------------
+#
+# F-200 class A: a question often presumes things a fresh machine doesn't
+# have -- user bob, nginx already installed, /srv/reports, a server to
+# connect to. Class C: answers leave placeholders (ZOMBIE_PID,
+# server_ip_address, your-uuid-here) that ran literally. The fixed rules in
+# _SUBSTITUTIONS and _prepare_needs only knew the cases already seen, so
+# they didn't generalise. Here the model reads the question and answer once
+# (while the lab VM boots) and says what is presumed and which tokens are
+# placeholders; the lab acts only through a fixed menu, never running
+# anything the model wrote, and never sets up what the answer itself is
+# meant to do.
+
+_SETUP_ACTIONS = ("user", "group", "package", "service", "dir", "file")
+_PLACEHOLDER_KINDS = ("user", "group", "this_machine_ip", "other_machine_ip", "uuid", "pid", "service",
+                      "package", "path", "domain")
+_NAME_OK = re.compile(r"^[a-z_][a-z0-9_.+-]{0,62}$")
+_PATH_OK = re.compile(r"^/(?:[\w.@+-]+/)*[\w.@+-]+/?$")
+_PATH_NEVER = re.compile(r"^/(?:proc|sys|dev|boot|run|usr|bin|sbin|lib\w*|snap)(?:/|$)|^/etc/?$|^/root/?$|/\.\.")
+# A token only counts as a placeholder if it looks like one: the model
+# sometimes calls a real name (nginx, eth0) a placeholder.
+_PLACEHOLDER_SHAPE = re.compile(
+    r"^[<$\[{]|your|_here\b|^[A-Z][A-Z0-9]*_[A-Z0-9_]+$|^/path/to/|^(?:a\.b\.c\.d|x\.x\.x\.x|1\.2\.3\.4)$|"
+    r"(?:^|[_-])(?:name|ip|addr|address|id|path|dir|file|pid|uuid|user|host|hostname|domain|server)$|"
+    r"^(?:user|username|hostname|server|ip|ipaddress|ip_address|domain|example\.com|uuid)$", re.IGNORECASE)
+_PUBLIC_DOMAIN_STANDIN = "lab.example"
+_PACKAGE_STANDIN = "tree"
+_SERVICE_STANDIN = "labapp"
+
+
+_USERADD_ARG_OPTS = {"-s", "--shell", "-d", "--home", "--home-dir", "-g", "--gid", "-G", "--groups", "-c",
+                     "--comment", "--gecos", "-u", "--uid", "-e", "--expiredate", "-k", "--skel", "-p",
+                     "--password", "--ingroup", "-f", "--inactive"}
+
+
+def _plain_args(text: str, arg_opts: set[str]) -> list[str]:
+    """Positional arguments of a command, skipping options and their values."""
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = text.split()
+    out, skip = [], False
+    for w in words:
+        if skip:
+            skip = False
+        elif w in arg_opts:
+            skip = True
+        elif not w.startswith("-"):
+            out.append(w)
+    return out
+
+
+def _creates(answer: str) -> dict[str, set[str]]:
+    """What the answer itself creates or installs, so setup never does it."""
+    made: dict[str, set[str]] = {k: set() for k in ("user", "group", "package", "path", "member")}
+    for m in re.finditer(r"\b(useradd|adduser)\b([^\n;&|]*)", answer):
+        words = _plain_args(m.group(2), _USERADD_ARG_OPTS)
+        if m.group(1) == "adduser" and len(words) == 2:  # adduser USER GROUP adds a member
+            made["member"].add(f"{words[0]}:{words[1]}")
+        elif words:
+            made["user"].add(words[-1])
+    for m in re.finditer(r"\b(?:groupadd|addgroup)\b([^\n;&|]*)", answer):
+        made["group"].update(w for w in m.group(1).split() if not w.startswith("-"))
+    for m in re.finditer(r"\busermod\s+[^\n;&|]*-a?G\s+(\S+)\s+(\S+)", answer):
+        for g in m.group(1).split(","):
+            made["member"].add(f"{m.group(2)}:{g}")
+    for m in re.finditer(r"\bgpasswd\s+-a\s+(\S+)\s+(\S+)", answer):
+        made["member"].add(f"{m.group(1)}:{m.group(2)}")
+    for m in re.finditer(r"\b(?:apt-get|apt|snap|dnf|yum)\s+(?:-\S+\s+)*install\b([^\n;&|]*)", answer):
+        made["package"].update(w for w in m.group(1).split() if not w.startswith("-"))
+    for m in re.finditer(r"\b(?:mkdir|touch|install\s+-d)\b([^\n;&|]*)", answer):
+        made["path"].update(w.rstrip("/") for w in m.group(1).split() if w.startswith("/"))
+    for m in re.finditer(r"(?:>>?|\btee(?:\s+-a)?)\s+(/[\w./@+-]+)", answer):
+        made["path"].add(m.group(1).rstrip("/"))
+    return made
+
+
+def _asked_to_create(question: str, name: str) -> bool:
+    """The question itself asks for this to be created or installed."""
+    q, n = question.lower(), re.escape(name.lower())
+    return bool(re.search(rf"\b(?:create|add|set up|setup)\s+(?:a\s+|an\s+)?(?:new\s+)?"
+                          rf"(?:user|group|account|directory|folder|file)?\s*(?:called\s+|named\s+)?['\"]?{n}\b", q)
+                or re.search(rf"\binstall\s+(?:and\s+\w+\s+)?(?:the\s+)?{n}\b", q))
+
+
+def plan_setup(raw: dict, question: str, answer: str) -> tuple[list[dict], list[dict], list[str]]:
+    """Validate the model's reply against the menu. Returns (setup actions,
+    placeholders, what was dropped and why)."""
+    setup, placeholders, dropped = [], [], []
+    made = _creates(answer)
+    for item in (raw.get("setup") or [])[:12]:
+        if not isinstance(item, dict) or item.get("action") not in _SETUP_ACTIONS:
+            dropped.append(f"{item!r}: not a setup action the lab has")
+            continue
+        a = item["action"]
+        name = str(item.get("path" if a in ("dir", "file") else "name") or "").strip()
+        ok = _PATH_OK.match(name) and not _PATH_NEVER.search(name) if a in ("dir", "file") else _NAME_OK.match(name)
+        if not ok:
+            dropped.append(f"{a} {name!r}: not a safe name")
+            continue
+        if (a in made and name in made[a]) or (a in ("dir", "file") and name.rstrip("/") in made["path"]):
+            dropped.append(f"{a} {name}: the answer creates it")
+            continue
+        if _asked_to_create(question, name.rsplit("/", 1)[-1]):
+            dropped.append(f"{a} {name}: the question asks for it")
+            continue
+        # F-200 #26/#38: the model sometimes lists a placeholder ("username",
+        # "your_group") as a real user or group; it is the lab's own.
+        if a == "user" and _PLACEHOLDER_SHAPE.search(name):
+            name = LAB_USER
+        if a == "group" and _PLACEHOLDER_SHAPE.search(name):
+            name = LAB_GROUP
+        clean = {"action": a, ("path" if a in ("dir", "file") else "name"): name.rstrip("/") if a != "dir" else name}
+        if a == "group":
+            members = [LAB_USER if _PLACEHOLDER_SHAPE.search(str(m)) else str(m) for m in (item.get("members") or [])]
+            members = [m for m in members if _NAME_OK.match(m)]
+            members = [m for m in members if f"{m}:{name}" not in made["member"]]
+            clean["members"] = members[:5]
+        if a in ("package", "service"):
+            clean["running"] = bool(item.get("running", a == "service"))
+        if a in ("dir", "file") and item.get("owner") and _NAME_OK.match(str(item["owner"])):
+            clean["owner"] = str(item["owner"])
+        setup.append(clean)
+    for item in (raw.get("placeholders") or [])[:12]:
+        if not isinstance(item, dict):
+            continue
+        token, kind = str(item.get("token") or "").strip(), item.get("kind")
+        if kind not in _PLACEHOLDER_KINDS or len(token) < 3 or token not in answer:
+            continue
+        if not _PLACEHOLDER_SHAPE.search(token.strip("<>{}[]$")) and not _PLACEHOLDER_SHAPE.search(token):
+            dropped.append(f"placeholder {token!r}: doesn't look like one")
+            continue
+        placeholders.append({"token": token, "kind": kind})
+    return setup, placeholders, dropped
+
+
+def apply_setup(root_client, setup: list[dict], say) -> list[str]:
+    """Carry out validated setup actions. Returns what was done, in words."""
+    done = []
+    order = {"package": 0, "user": 1, "group": 2, "service": 3, "dir": 4, "file": 5}
+    for item in sorted(setup, key=lambda i: order[i["action"]]):
+        a = item["action"]
+        if a == "user":
+            n = item["name"]
+            code, _, _ = _exec(root_client, f"id {n} >/dev/null 2>&1 || useradd -m -s /bin/bash {n} && "
+                                            f"echo '{n}:{_lab_password}' | chpasswd", 30)
+            if code == 0:
+                done.append(f"user {n}")
+        elif a == "group":
+            n = item["name"]
+            cmd = f"getent group {n} >/dev/null || groupadd {n}"
+            for m in item.get("members", []):
+                cmd += f"; id {m} >/dev/null 2>&1 || useradd -m -s /bin/bash {m}; usermod -aG {n} {m}"
+            code, _, _ = _exec(root_client, cmd, 30)
+            if code == 0:
+                done.append(f"group {n}" + (f" with {', '.join(item['members'])} in it" if item.get("members") else ""))
+        elif a == "package":
+            n = item["name"]
+            say(f"# setup: installing {n} (the question assumes it is installed)\n", now=True)
+            code, _, _ = _exec(root_client, f"DEBIAN_FRONTEND=noninteractive apt-get install -y -q {n} >/tmp/setup-{n}.log 2>&1", 300)
+            if code == 0:
+                if item.get("running"):
+                    _exec(root_client, f"systemctl enable --now {n} >/dev/null 2>&1 || true", 60)
+                done.append(f"{n} installed" + (" and running" if item.get("running") else ""))
+            else:
+                say(f"# setup: couldn't install {n}; the answer runs without it\n")
+        elif a == "service":
+            n = item["name"]
+            code, _, _ = _exec(root_client, f"systemctl cat {n} >/dev/null 2>&1", 15)
+            if code != 0:
+                unit = (f"[Unit]\nDescription=Stand-in service created by the lab\n[Service]\n"
+                        f"ExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n")
+                _exec(root_client, f"printf %s {shlex.quote(unit)} > /etc/systemd/system/{n}.service && "
+                                   "systemctl daemon-reload", 30)
+            if item.get("running"):
+                _exec(root_client, f"systemctl enable --now {n} >/dev/null 2>&1 || true", 60)
+            done.append(f"service {n}" + (" (a stand-in)" if code != 0 else "") + (" running" if item.get("running") else ""))
+        elif a in ("dir", "file"):
+            path = item["path"]
+            q = shlex.quote(path)
+            cmd = (f"mkdir -p {q}" if a == "dir" else
+                   f"mkdir -p $(dirname {q}) && {{ test -e {q} || echo 'stand-in file created by the lab' > {q}; }}")
+            if item.get("owner"):
+                cmd += f" && chown -R {item['owner']}: {q}"
+            code, _, _ = _exec(root_client, cmd, 30)
+            if code == 0:
+                done.append(f"{'directory' if a == 'dir' else 'file'} {path}")
+    return done
+
+
+def lab_facts(root_client, kinds: set[str], target_ip: str, other_ip: str) -> dict[str, str]:
+    """Values for placeholder kinds, from the lab itself."""
+    facts = {"user": LAB_USER, "group": LAB_GROUP, "this_machine_ip": target_ip, "domain": _PUBLIC_DOMAIN_STANDIN,
+             "package": _PACKAGE_STANDIN, "service": _SERVICE_STANDIN, "path": LAB_DIR + "/example.txt"}
+    if other_ip:
+        facts["other_machine_ip"] = other_ip
+    if "user" in kinds:
+        _exec(root_client, f"id {LAB_USER} >/dev/null 2>&1 || useradd -m -s /bin/bash {LAB_USER}; "
+                           f"echo '{LAB_USER}:{_lab_password}' | chpasswd", 30)
+    if "group" in kinds:
+        _exec(root_client, f"getent group {LAB_GROUP} >/dev/null || groupadd {LAB_GROUP}", 15)
+    if "path" in kinds:
+        _exec(root_client, f"mkdir -p {LAB_DIR} && echo 'stand-in file created by the lab' > {LAB_DIR}/example.txt", 15)
+    if "service" in kinds:
+        apply_setup(root_client, [{"action": "service", "name": _SERVICE_STANDIN, "running": True}], lambda *a, **k: None)
+    if "pid" in kinds:
+        # The student's own process: the answer's kill runs as the student (F-200 #33).
+        _, out, _ = _exec(root_client, "su student -c 'nohup sleep 3600 >/dev/null 2>&1 & echo $!'", 15)
+        if out.strip().isdigit():
+            facts["pid"] = out.strip()
+    if "uuid" in kinds:
+        # The spare disk (L13), with one ext4 partition, as the answer's disk.
+        _exec(root_client, "test -e /dev/sdb1 || { echo ',,L' | sfdisk -q /dev/sdb; udevadm settle; }; "
+                           "blkid -s TYPE -o value /dev/sdb1 | grep -q . || mkfs.ext4 -q /dev/sdb1", 90)
+        _, out, _ = _exec(root_client, "blkid -s UUID -o value /dev/sdb1", 15)
+        if re.fullmatch(r"[0-9a-fA-F-]{8,}", out.strip()):
+            facts["uuid"] = out.strip()
+    return facts
+
+
+def fill_placeholders(answer: str, placeholders: list[dict], facts: dict[str, str]) -> tuple[str, list[str], list[str]]:
+    """(answer with placeholders filled, what changed, what couldn't be)."""
+    changes, unfilled = [], []
+    for p in sorted(placeholders, key=lambda p: -len(p["token"])):  # longest first: $service vs $service_name
+        value = facts.get(p["token"]) or facts.get(p["kind"], "")
+        if not value:
+            unfilled.append(f"{p['token']} ({p['kind'].replace('_', ' ')})")
+            continue
+        answer = answer.replace(p["token"], value)
+        changes.append(f"{p['token']} -> {value} ({p['kind'].replace('_', ' ')})")
+    return answer, changes, unfilled
+
+
+PRESUME_TIMEOUT_S = 240
+
+
+def _setup_stage(result, root, presumed: dict, question: str, answer: str, other_ip: str, say):
+    """L16/L17: set up what the question presumes and fill placeholders.
+    Returns the answer as the lab will follow it, and its steps."""
+    if not presumed or presumed.get("error"):
+        result.setup = {"note": "no reading from the model" + (f": {presumed['error']}" if presumed.get("error") else "")}
+        return answer, parse_steps(answer)
+    setup, placeholders, dropped = plan_setup(presumed, question, answer)
+    done = apply_setup(root, setup, say) if setup else []
+    facts = lab_facts(root, {p["kind"] for p in placeholders}, TARGET_PAIR_IP, other_ip) if placeholders else {}
+    for p in placeholders:  # /path/to/<name>: the lab's directory, keeping the answer's name for it
+        if p["kind"] == "path" and p["token"].startswith("/path/to/"):
+            facts[p["token"]] = LAB_DIR + "/" + p["token"].rstrip("/").rsplit("/", 1)[-1]
+    filled, changes, unfilled = fill_placeholders(answer, placeholders, facts)
+    result.setup = {"done": done, "placeholders": changes, "unfilled": unfilled, "refused": dropped}
+    if done:
+        say(f"# setup: the lab created {', '.join(done)} -- the question assumes they already exist\n", now=True)
+    if changes:
+        say(f"# setup: placeholders filled from this lab: {'; '.join(changes)}\n")
+    if unfilled:
+        say(f"# setup: placeholders the lab has no value for (left as written): {', '.join(unfilled)}\n")
+    steps = parse_steps(filled)
+    result.steps = [asdict(s) for s in steps]
+    return filled, steps
+
+
 def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: str = "",
                make_prober=None, pair_bridges=None, keep_vm=None, repair: bool = True,
-               model_fix=None) -> RunResult:
+               model_fix=None, presume=None) -> RunResult:
     """Run `answer` in a VM from make_vm(**kw) (an un-booted microvm.MicroVM;
     kw may carry pair_bridge and scratch_from). With make_prober(bridge)
     and pair_bridges=(create, delete), goal probes run from a second VM at
     the end (L8). `progress(result)` is called after each step, and at most
     once a second while output streams. keep_vm(vm, info) -> bool, if given,
     is offered the target VM at the end; when it returns True the VM is not
-    torn down (the caller now owns it)."""
+    torn down (the caller now owns it). presume(question, answer) -> dict, if
+    given, is the model's reading of what the question presumes (L16/L17);
+    it runs while the VM boots."""
     result = RunResult(id=run_id or uuid.uuid4().hex[:12], started_at=time.time())
     global TARGET_PAIR_IP
     TARGET_PAIR_IP = _MICROVM_TARGET_IP
@@ -1920,6 +2282,14 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         if now or time.monotonic() - last_pub[0] > 1.0:
             last_pub[0] = time.monotonic()
             publish(result)
+    limit = question_limit(question)
+    if limit:
+        result.status, result.verdict = "done", "not_testable"
+        result.summary = (f"Can't be tested in this lab: {limit}. The answer can only be proven on a real machine; "
+                          "the lab didn't try it.")
+        result.finished_at = time.time()
+        publish(result)
+        return result
     if not any(s.kind in ("run", "write", "append", "prepend", "edit", "prose") for s in steps):
         result.status, result.verdict = "done", "not_runnable"
         result.summary = "Nothing in this answer could be run as a step."
@@ -1934,6 +2304,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
     deadline = time.monotonic() + RUN_TIMEOUT_S
 
     full_vm = bool(getattr(vm, "reboots_in_place", False))
+    global _full_vm_run
+    _full_vm_run = full_vm
 
     def connect():
         nonlocal root, student
@@ -1949,6 +2321,16 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
     _lab_password = "Lab-" + secrets.token_hex(6)
     _unit_scripts = {p for line in answer.splitlines() if "ExecStart" in line
                      for p in _STUB_SCRIPT_RE.findall(_substitute(line)[0])}
+    presumed: dict = {}
+    presume_thread = None
+    if presume:
+        def _ask() -> None:
+            try:
+                presumed.update(presume(question, answer) or {})
+            except Exception as e:  # noqa: BLE001 -- setup is an aid; the run goes on without it
+                presumed["error"] = repr(e)[:200]
+        presume_thread = threading.Thread(target=_ask, daemon=True)
+        presume_thread.start()
     try:
         say("# booting a fresh Ubuntu 22.04 lab machine...\n", now=True)
         t_boot = time.monotonic()
@@ -2002,6 +2384,12 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     baseline[f"pam:{svc}"] = login_prober.pam(svc)
                     say(f"# baseline -- '{svc}' login (PAM): "
                         f"{'works' if baseline[f'pam:{svc}']['ok'] else 'fails'}\n")
+        if presume_thread is not None:
+            presume_thread.join(timeout=PRESUME_TIMEOUT_S)
+            answer, steps = _setup_stage(result, root, presumed, question, answer,
+                                         (prober.ip or "") if prober is not None else "", say)
+            _unit_scripts = {p for line in answer.splitlines() if "ExecStart" in line
+                             for p in _STUB_SCRIPT_RE.findall(_substitute(line)[0])}
         say("# now following the answer, step by step\n", now=True)
 
         for s in steps:
@@ -2172,7 +2560,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 checks += _login_probes(steps, login_prober, baseline, question, answer, sshd_changed)
             checks += _network_probes(steps, root, prober_root, answer, services_started, pkgs)
         say("# checking what the question asked for...\n", True)
-        checks += _goal_checks(question, answer, steps, root, prober_root)
+        checks += _goal_checks(question, answer, steps, root, prober_root,
+                               (prober.ip or "") if prober is not None else "")
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)

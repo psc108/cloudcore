@@ -53,6 +53,8 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--only", default="")
     ap.add_argument("--backends", default="full,microvm")
+    ap.add_argument("--presume", action="store_true", help="L16/L17: with the setup stage (model reading)")
+    ap.add_argument("--tag", default="", help="suffix for the backend label, e.g. +setup")
     args = ap.parse_args()
     only = {int(x) for x in args.only.split(",") if x}
     asks = [json.loads(line) for line in open(args.asks)]
@@ -65,25 +67,27 @@ def main() -> int:
     with open(args.out, "a") as out:
         for backend in args.backends.split(","):
             make_target, make_prober, bridges = makers[backend]()
+            label = backend + args.tag
             for a in asks:
                 n = int(a["n"])
-                if (only and n not in only) or (n, backend) in done:
+                if (only and n not in only) or (n, label) in done:
                     continue
                 t0 = time.time()
                 try:
                     res = advice_runner.run_advice(a["answer"], make_target, question=a["q"], make_prober=make_prober,
-                                                   pair_bridges=bridges, model_fix=verify_proxy._model_fix)
-                    rec = {"n": n, "backend": backend, "kind": a.get("kind", ""), "question": a["q"],
-                           "verdict": res.verdict, "summary": res.summary,
+                                                   pair_bridges=bridges, model_fix=verify_proxy._model_fix,
+                                                   presume=verify_proxy._model_presumptions if args.presume else None)
+                    rec = {"n": n, "backend": label, "kind": a.get("kind", ""), "question": a["q"],
+                           "verdict": res.verdict, "summary": res.summary, "setup": res.setup,
                            "repaired": (res.repaired or {}).get("verdict", ""),
                            "goals": [[c["subject"], c["ok"]] for c in res.checks if c["kind"] == "goal"],
                            "secs": round(time.time() - t0)}
                 except Exception as e:  # one broken run must not end the measurement
-                    rec = {"n": n, "backend": backend, "kind": a.get("kind", ""), "question": a["q"],
+                    rec = {"n": n, "backend": label, "kind": a.get("kind", ""), "question": a["q"],
                            "verdict": "error", "summary": repr(e)[:300], "secs": round(time.time() - t0)}
                 out.write(json.dumps(rec) + "\n")
                 out.flush()
-                print(f"#{n} {backend} {rec['verdict']}"
+                print(f"#{n} {label} {rec['verdict']}"
                       + (f" -> {rec.get('repaired')}" if rec.get("repaired") else "")
                       + f" ({rec['secs']}s) {rec['question'][:60]}", flush=True)
     return 0
