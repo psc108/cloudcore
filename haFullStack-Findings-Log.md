@@ -4213,6 +4213,24 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Real requests still gated:** a token-less GET still gets 401.
 - **Walk:** `authz_walk.py` passes.
 
+### F-210 — Re-running setup-logging-service.sh left the old Loki running on its old config
+
+**Where:** `api/setup-logging-service.sh`.
+
+**Symptom:** found 2026-10-03 during two-host S4. On Llwyn-y-Groes, the user re-ran `sudo bash api/setup-logging-service.sh`. It reported "Installing grafana_13.2.2_amd64.deb and loki_3.7.8_amd64.deb" and wrote the current Loki config. Afterwards Grafana was on 13.2.2, but Loki's `/loki/api/v1/status/buildinfo` still said 3.7.7, and `/config` lacked the F-197 `instance_addr: 127.0.0.1` pin.
+
+**Root cause:**
+- **Loki never restarted:** the script ends with `systemctl enable --now loki`. `--now` starts a stopped unit and does nothing to a running one, and the loki package's postinst doesn't restart it either. So on any re-run the old process keeps running on the old binary and config until something restarts it.
+- **Grafana unaffected:** Grafana got an explicit `systemctl restart grafana-server`.
+- **Why it wasn't seen before:** the first install never hits this, and Stourport's F-197 fix was applied with a manual restart.
+
+**Fix:** `systemctl enable loki` followed by `systemctl restart loki`. Loki's data on disk (`/var/lib/loki`) is kept across the restart.
+
+**Verified by:** awaits the user restarting Loki on Llwyn-y-Groes. Expect buildinfo 3.7.8 and `instance_addr: 127.0.0.1` in `/config`. The S4 shipping path was already verified before the restart:
+- **Shipping by name:** a line pushed from the coordinator to `logs.cloudcore.internal` landed in Llwyn-y-Groes's Loki.
+- **Sentinel:** Stourport's Sentinel recorded it within a second, under that Loki's own checkpoint.
+- **Grafana:** Stourport's Grafana read it back through the `loki-llywyn-y-groes` datasource.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4374,3 +4392,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.35 | 2026-10-02 | Paul Scott | Two-host S1 on the peer. F-207: stale installed unit (API restarts killed the peer's VMs), root-only lab lease file, broker not recognising the coordinator via WireGuard. |
 | v3.36 | 2026-10-02 | Paul Scott | Two-host S2. F-208: setup-network.sh quit silently with no services.conf (pipefail on a missing file). |
 | v3.37 | 2026-10-02 | Paul Scott | F-209: the authorization gate refused CORS preflights, so the dashboard showed "Failed to fetch" when opened under another origin. |
+| v3.38 | 2026-10-03 | Paul Scott | Two-host S4. F-210: re-running the logging setup left the old Loki running on its old config (`enable --now` doesn't restart). |

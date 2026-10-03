@@ -164,7 +164,10 @@ with open('/etc/grafana/grafana.ini', 'w') as f:
 PYEOF
 
 systemctl daemon-reload
-systemctl enable --now loki
+# restart, not `enable --now`: on a re-run Loki is already running, and
+# `--now` leaves the old binary on the old config (F-210).
+systemctl enable loki
+systemctl restart loki
 systemctl enable --now grafana-server
 systemctl restart grafana-server
 
