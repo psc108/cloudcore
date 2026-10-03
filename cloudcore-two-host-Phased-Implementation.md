@@ -1,6 +1,6 @@
 # CloudCore on two equal hosts — Phased Implementation
 
-**Status:** planned 2026-10-02. **Owner:** Paul Scott.
+**Status:** done 2026-10-03: S1–S7 complete; Llwyn-y-Groes ran everything alone. **Owner:** Paul Scott.
 **Live tracker:** https://claude.ai/artifact/5QPbFhinqaALvyUgca2ZMp (private). It shows each stage's status, checklist, results and next step, updated as the work goes.
 
 ## Context
@@ -49,6 +49,7 @@ Methodology unchanged: build and verify live, log findings as F-NNN, tear down a
 | S4 | 2026-10-03 | Loki and Grafana on both hosts; guests ship to their own host's Loki (`logs`); each Grafana has a datasource per peer Loki (`api/setup-loki-datasources.sh`); Sentinel reads every host's Loki, found from CloudCore's peer list (F-210) |
 | S5 | 2026-10-03 | Guests use their own host's lab-VM broker (`broker`); hosts share the broker token (`api/import-shared-tokens.sh`). With Stourport's API stopped, a proof target booted through Llwyn-y-Groes's broker in 36 s and was deleted. Capture stays on one home host |
 | S6 | 2026-10-03 | Nightly backups each way (`host_backup` jobs, 02:00 and 02:30 UTC), with consistent snapshots and checksums, confined on the receiving host by rrsync (no shell or port forwarding, verified on the real hosts). Verified restores and a runbook for moving Sentinel or capture |
+| S7 | 2026-10-03 | **Proven.** With all of Stourport's services stopped (repo, Loki, Grafana, NFS, API and broker, Sentinel), Llwyn-y-Groes built llm-chat itself (19 resources, 43 s) and proved 3 of 3 Linux Help answers on full VMs from its own broker. Capture, Sentinel, Loki and Grafana all worked there. Capture and Sentinel now live on Llwyn-y-Groes (Sentinel UI http://192.168.1.177:8900/). Found on the way: F-212 to F-215 |
 
 ## Service names
 

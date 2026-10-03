@@ -4314,6 +4314,26 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Verified by:** the same build, resubmitted, applied 19 resources in 43 s. llm-chat then ran on Llwyn-y-Groes alone, with Stourport's services stopped, and proved 3 of 3 Linux Help answers on full VMs.
 
+### F-215 — Stourport's Loki config had held a duplicate key since the F-197 fix; it only failed on the next restart
+
+**Where:** Stourport's `/etc/loki/config.yml`, as edited by hand for F-197.
+
+**Symptom:** found 2026-10-03 at the end of two-host S7. After the test, `systemctl start loki` on Stourport left Loki "activating" in a restart loop, 86 restarts in two minutes, logging `failed parsing config … line 9: field instance_addr already set in type common.Config`.
+
+**Root cause:**
+- **The duplicate:** the F-197 fix (2026-10-01 21:22) added `instance_addr: 127.0.0.1` under `common:` with a hand-run `sed` insert, which isn't idempotent. The file ended up with the line twice.
+- **Why nobody noticed:** Loki only reads its config at startup, and the restart done for F-197 happened between the two inserts. The running Loki was fine, and the broken file sat unnoticed until S7 stopped and started Loki: two days of a config that couldn't survive a reboot.
+- **Not affected:** setup-logging-service.sh writes the whole file, so hosts set up by it (Llwyn-y-Groes, F-210) never had this.
+
+**Fix:** remove repeats, keeping the first, with `sed -i '0,/^  instance_addr: 127.0.0.1$/b; /^  instance_addr: 127.0.0.1$/d'`. This is idempotent: tested twice on a copy, and `loki -verify-config` reports "config is valid". Then restart Loki.
+
+**Verified by:**
+- **Loki:** ready, with 0 restarts since.
+- **Sentinel on Llwyn-y-Groes:** back to "watching" both hosts' Lokis.
+- **Data:** nothing was lost, because no guest was shipping to Stourport while its Loki was down.
+
+**Lesson:** a config edit made by hand needs a restart in the same step, or a `-verify-config` run, so a broken file can't wait for the next reboot.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4480,3 +4500,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.40 | 2026-10-03 | Paul Scott | F-212: the backup key in ~/.ssh was loaded by desktop SSH agents and hijacked ordinary logins to the other host. |
 | v3.41 | 2026-10-03 | Paul Scott | Two-host S7. F-213: moving Sentinel doubled its KB (path-keyed findings); the first fix's unlocked migration raced and deleted it (recovered from the S6 backup). |
 | v3.42 | 2026-10-03 | Paul Scott | Two-host S7. F-214: the peer's OpenTofu provider was a stale build (git pull doesn't rebuild it); checklist step 3c. |
+| v3.43 | 2026-10-03 | Paul Scott | Two-host S7 done. F-215: Stourport's hand-edited Loki config held a duplicate key since F-197 and failed on its first restart. |
