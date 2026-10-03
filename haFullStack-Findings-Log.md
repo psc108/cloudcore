@@ -4226,7 +4226,7 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Fix:** `systemctl enable loki` followed by `systemctl restart loki`. Loki's data on disk (`/var/lib/loki`) is kept across the restart.
 
-**Verified by:** awaits the user restarting Loki on Llwyn-y-Groes. Expect buildinfo 3.7.8 and `instance_addr: 127.0.0.1` in `/config`. The S4 shipping path was already verified before the restart:
+**Verified by:** after the user ran `sudo systemctl restart loki` on Llwyn-y-Groes, buildinfo reports 3.7.8 and `/config` has `instance_addr: 127.0.0.1`. The coordinator's earlier test line survived the restart, and Sentinel stayed watching both Lokis. The S4 shipping path was verified before the restart:
 - **Shipping by name:** a line pushed from the coordinator to `logs.cloudcore.internal` landed in Llwyn-y-Groes's Loki.
 - **Sentinel:** Stourport's Sentinel recorded it within a second, under that Loki's own checkpoint.
 - **Grafana:** Stourport's Grafana read it back through the `loki-llywyn-y-groes` datasource.
