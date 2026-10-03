@@ -2,8 +2,8 @@
 # setup-backup-key.sh -- let this host send its backups to another host, and
 # nothing more (two-host S6, cloudcore-two-host-Phased-Implementation.md).
 #
-# Creates ~/.ssh/cloudcore-backup (ed25519, no passphrase: the nightly job
-# runs unattended) if it doesn't exist, then prints a small script for the
+# Creates ~/.config/cloudcore/backup-key (ed25519, no passphrase: the nightly
+# job runs unattended) if it doesn't exist, then prints a small script for the
 # OTHER host. Pipe it there over SSH; it creates
 # ~/cloudcore-backups/<this host> and adds the key to authorized_keys,
 # confined by rrsync to that one directory (no shell, no port forwarding,
@@ -14,7 +14,10 @@
 #   bash api/setup-backup-key.sh --help
 set -euo pipefail
 
-KEY="${HOME}/.ssh/cloudcore-backup"
+# Not in ~/.ssh: desktop SSH agents load every key there and would offer this
+# confined key on ordinary logins to the other host (F-212).
+KEY="${HOME}/.config/cloudcore/backup-key"
+OLD_KEY="${HOME}/.ssh/cloudcore-backup"
 
 log() { echo "setup-backup-key: $*" >&2; }
 
@@ -24,8 +27,13 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 [[ $# -eq 0 ]] || { log "unknown argument: $1 (see --help)"; exit 2; }
 
+install -d -m 700 "$(dirname "${KEY}")"
+if [[ -f "${OLD_KEY}" && ! -f "${KEY}" ]]; then
+  mv "${OLD_KEY}" "${KEY}" && mv "${OLD_KEY}.pub" "${KEY}.pub"
+  ssh-add -d "${KEY}.pub" >/dev/null 2>&1 || true
+  log "moved the key out of ~/.ssh to ${KEY} (F-212); restart your session's SSH agent if it still offers it"
+fi
 if [[ ! -f "${KEY}" ]]; then
-  install -d -m 700 "${HOME}/.ssh"
   ssh-keygen -q -t ed25519 -N "" -C "cloudcore-backup@$(hostname -s)" -f "${KEY}"
   log "created ${KEY}"
 fi

@@ -4253,6 +4253,28 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Real override:** an explicit token is kept.
 - **Live destroy:** the destroy of build 2a570597 is the live test, recorded with F5.
 
+### F-212 — The rrsync-confined backup key, kept in ~/.ssh, hijacked ordinary SSH logins to the other host
+
+**Where:** `api/setup-backup-key.sh`, `api/backup-host.py` (two-host S6).
+
+**Symptom:** found 2026-10-03. On Stourport the user ran `ssh-copy-id -i ~/.ssh/id_ed25519.pub scottp@192.168.1.177` to give Claude SSH access to Llwyn-y-Groes for S7. Instead of a password prompt, it printed `rrsync error: SSH_ORIGINAL_COMMAND does not run rsync` and installed nothing.
+
+**Root cause:**
+- **Key location:** `setup-backup-key.sh` created the backup key as `~/.ssh/cloudcore-backup`.
+- **The desktop SSH agents** (GNOME Keyring, `/run/user/1000/keyring/ssh`, and gcr, `/run/user/1000/gcr/ssh`) load every key pair in `~/.ssh`, so both agents held `cloudcore-backup@stourport`.
+- **What happened on login:** every ordinary `ssh` to Llwyn-y-Groes offered that key. The other host accepted it and ran its forced `rrsync` command, so the login landed in the rsync-only lock instead of falling through to the user's key or password.
+- **The lock itself held:** nothing could be done with the key beyond rsync into its directory.
+
+**Fix:**
+- **New location:** the key lives at `~/.config/cloudcore/backup-key`, which agents don't load. `setup-backup-key.sh` moves an existing `~/.ssh/cloudcore-backup` there.
+- **No agent for backups:** `backup-host.py` passes `-o IdentityAgent=none`, so backups never use an agent's keys.
+- **Authorization unchanged:** the key is the same one, so the other host's `authorized_keys` entry stays valid.
+
+**Verified by:**
+- **Agents:** after the move on Stourport, neither agent lists the key.
+- **Backups:** a backup with the new path succeeded: 569 MB sent to Llwyn-y-Groes.
+- **Llwyn-y-Groes:** its own key is moved the same way during S7.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4416,3 +4438,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.37 | 2026-10-02 | Paul Scott | F-209: the authorization gate refused CORS preflights, so the dashboard showed "Failed to fetch" when opened under another origin. |
 | v3.38 | 2026-10-03 | Paul Scott | Two-host S4. F-210: re-running the logging setup left the old Loki running on its old config (`enable --now` doesn't restart). |
 | v3.39 | 2026-10-03 | Paul Scott | F-211: builds made before F-201 replayed their stored dev-token, so they couldn't be destroyed. |
+| v3.40 | 2026-10-03 | Paul Scott | F-212: the backup key in ~/.ssh was loaded by desktop SSH agents and hijacked ordinary logins to the other host. |

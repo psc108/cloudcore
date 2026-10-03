@@ -41,7 +41,9 @@ REPO_DIR = API_DIR.parent
 STAGING = Path(os.environ.get("CLOUDCORE_BACKUP_STAGING")
                or Path.home() / ".local" / "share" / "cloudcore-backup")
 SENTINEL_DIR = Path(os.environ.get("SENTINEL_DATA_DIR") or Path.home() / ".local" / "share" / "sentinel")
-KEY = Path(os.environ.get("CLOUDCORE_BACKUP_KEY") or Path.home() / ".ssh" / "cloudcore-backup")
+# Not in ~/.ssh: desktop SSH agents (GNOME Keyring, gcr) load every key there,
+# and then offer this rrsync-confined key on ordinary logins (F-212).
+KEY = Path(os.environ.get("CLOUDCORE_BACKUP_KEY") or Path.home() / ".config" / "cloudcore" / "backup-key")
 
 
 def log(msg: str) -> None:
@@ -160,7 +162,7 @@ def main() -> int:
     # The trailing slash and rrsync's fixed root: this host's tree lands in the
     # one directory the key is allowed to write.
     cmd = ["rsync", "-a", "-H", "--delete", "--partial", "--stats",
-           "-e", f"ssh -i {KEY} -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15",
+           "-e", f"ssh -i {KEY} -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o ConnectTimeout=15",
            f"{STAGING}/", f"{args.to}:"]
     if args.dry_run:
         cmd.insert(1, "--dry-run")
