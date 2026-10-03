@@ -51,6 +51,14 @@ systemctl --user daemon-reload
 systemctl --user show cloudcore-api -p KillMode     # expect KillMode=process
 ```
 
+## 3c. Rebuild the OpenTofu provider
+
+The provider tofu uses is a binary built from `provider/`, so `git pull` doesn't update it. A stale one fails every build at plan time with "Unsupported argument" (F-214). Rebuilding needs Go and doesn't affect running VMs:
+
+```bash
+bash scripts/build-provider.sh
+```
+
 ## 4. Check the API locally
 
 ```bash

@@ -4302,6 +4302,18 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **The race test** runs four processes migrating 400 duplicate findings with suggestions at once. It fails against the old migration and passes against the new one, 8 of 8 runs. 74 tests pass.
 - **On Llwyn-y-Groes after recovery:** 212 findings under one key, 50,172 suggestions, none orphaned, identical to Stourport's original. Re-ingesting the log there stays at 212. Sentinel is watching both hosts' Lokis.
 
+### F-214 — Llwyn-y-Groes's OpenTofu provider was a stale build, so llm-chat couldn't be built there
+
+**Where:** the peer's `~/.local/share/opentofu/plugins/.../terraform-provider-cloudcore`, built by `scripts/build-provider.sh`; `peer-update-checklist.md`.
+
+**Symptom:** found 2026-10-03 during two-host S7. The first llm-chat build submitted to Llwyn-y-Groes's own API failed in about a second, before creating anything: `Error: Unsupported argument … modules/vpc/main.tf line 7 … An argument named "peer_id" is not expected here.`
+
+**Root cause:** the provider is a compiled binary in the user's OpenTofu plugin directory. `git pull` updates `provider/` but not the binary, as with the installed systemd unit in F-207. The peer's binary was built on 16 Sep, but `provider/` last changed on 23 Sep, which added `peer_id` to VPCs. Every build on the hub had run on its own up-to-date binary, so nothing showed this until a build ran on the peer.
+
+**Fix:** rebuilt on the peer with `bash scripts/build-provider.sh`; Go 1.26 is installed there. `peer-update-checklist.md` now has step 3c, which rebuilds the provider after a pull.
+
+**Verified by:** the same build, resubmitted, applied 19 resources in 43 s. llm-chat then ran on Llwyn-y-Groes alone, with Stourport's services stopped, and proved 3 of 3 Linux Help answers on full VMs.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4467,3 +4479,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.39 | 2026-10-03 | Paul Scott | F-211: builds made before F-201 replayed their stored dev-token, so they couldn't be destroyed. |
 | v3.40 | 2026-10-03 | Paul Scott | F-212: the backup key in ~/.ssh was loaded by desktop SSH agents and hijacked ordinary logins to the other host. |
 | v3.41 | 2026-10-03 | Paul Scott | Two-host S7. F-213: moving Sentinel doubled its KB (path-keyed findings); the first fix's unlocked migration raced and deleted it (recovered from the S6 backup). |
+| v3.42 | 2026-10-03 | Paul Scott | Two-host S7. F-214: the peer's OpenTofu provider was a stale build (git pull doesn't rebuild it); checklist step 3c. |
