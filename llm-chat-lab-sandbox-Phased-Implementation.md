@@ -69,7 +69,7 @@ work in advice".
 | L17 | **Placeholders by kind** (class C, 8 F5 failures). General detection (`your-…`, `…_here`, `<…>`, `ALL_CAPS_WORD` where a value goes, `server_ip_address`-style names, undefined `$vars`), plus the model call above classifying each by kind: user, IP of the other machine, UUID, PID, service, package, path, domain. Filled from real lab facts (the prober's address, `blkid` of the spare disk, a real PID, the setup stage's user). Unfillable placeholders are reported, not run literally | Built 2026-10-04 (results below) |
 | L18 | **Lab limits before running** (class D, 4 F5 failures). Categories, not commands: physical hardware (SMART/NVMe health, sensors and fans, GPUs, Wi-Fi radios, USB devices, firmware) and public-internet identity (certificates for real domains, public DNS, a public IP). Marked "can't be tested here" with the reason, before the run where the question makes it clear | Built 2026-10-04 (results below) |
 | L19 | **Goal-check precision** (class B and L14's first candidates): checks fire on what the question asks, not keywords ("swappiness" isn't swap); client questions are checked as clients; source-restricted firewall rules are checked from inside and outside the allowed range | Built 2026-10-04 (results below) |
-| L20 | **Measure once with the sealed set** (also F8 in the full-VM plan), through `/sandbox/linux-ask` on full VMs, graded by reading every run. Compare with F-200's held-out result (3/40 proven) | Not started |
+| L20 | **Measure once with the sealed set** (also F8 in the full-VM plan), through `/sandbox/linux-ask` on full VMs, graded by reading every run. Compare with F-200's held-out result (3/40 proven) | Done 2026-10-04 (results below) |
 
 ## Results: the same 40 answers through each stage
 
@@ -111,6 +111,36 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 **Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The 11 runs graded `lab_verified` before L12 were regraded the same way: all 11 are goal-verified (F-195). A goal-verified repaired procedure is now stored as an answer of its own; it's reused automatically only when its repairs are real corrections (F-195).
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
+## L20: the sealed set (2026-10-04)
+
+The 40 questions sealed before L16–L19 (`sealed-questions-2026-10-03.json`, sha256 `c2ad4982…`, unchanged), asked through `/sandbox/linux-ask` on a coordinator rebuilt from the L16–L19 code, with proofs on full VMs.
+- **Results:** `sealed-asks.jsonl`, `sealed-labs.jsonl`.
+- **Re-runs:** 13 lab runs never started because the lab network had run out of DHCP addresses (F-217). After the fix they were re-run on the **same recorded answers**, with no new model answers: `sealed-rerun.jsonl`, through the setup stage and repairs but without "try another way".
+- **Grading:** every run was read.
+
+| Grade, by reading the answer and its run | Count | Questions |
+|---|---|---|
+| Correct, and it ran in the lab (read-only commands, or changes nothing checked) | 21 | 2 3 4 5 6 7 9 10 12 14 20 23 27 28 31 35 36 37 38 39 40 |
+| Wrong or weak as written, which the lab showed | 8 | 1 (a placeholder path, not `~`), 8 (`backup` is an Ubuntu system user), 11 (`network.target`, not `network-online.target`), 13 (cron for a one-off, not `at`), 15 (shadow format, not `chage -d 0`), 17 (default site left in place), 18 (locks SSH out), 30 (`ifdown eth0` on 22.04) |
+| Ran, but correctness unclear or unchecked | 3 | 19 (interactive `mysql_secure_installation`), 25 (quota needs kernel support), 34 (Postgres from another machine, unchecked) |
+| Can't be tested here, said so | 2 | 21 (Let's Encrypt), 26 (NVMe health) |
+| Lab gap: a correct answer couldn't be tried properly | 4 | 16 (server block appended, not replacing the default), 24 (presumed LVM volume group), 29 (hosts line run as a command), 33 (a remote machine to mount) |
+| Lab error, no verdict | 2 | 22, 32 |
+| **Goal-verified** | **1** | 18, its "another way" attempt, after the original locked SSH out |
+
+**Against F-200** (the held-out set before L16–L19): lab-caused failures fell from about 13 of 17 to 6 of 40. Most answers now run as the student would run them, and the lab catches real mistakes (#8, #15, #18, #30). But **goal verification barely generalises:** 1 of 40, against F-200's 3. On the sealed set:
+- **Read-only questions:** most changes-nothing questions (7 everyday, 2 explanations, most kernel/boot) have nothing to verify.
+- **No check for the topic:** for most that change state, no goal check exists. Checks are keyword-triggered per topic, as F-200 found, so carol in sudo (#9), Postgres reachable (#34), the ufw block (#28) and boot-to-text (#37) went unchecked.
+
+**Next, from this:**
+- **L21, goal checks the same way as the setup stage.** The model proposes what to check from the question, on a fixed menu run by the lab: user in group, file contains a line, service active and enabled, a port reachable or blocked from the prober, a default target, a command's output contains something.
+- **Smaller gaps:**
+  - a config block after an editor command should replace a whole default file (#16);
+  - lines in a bash block that are file contents, like a hosts entry (#29) or a shadow line (#15), shouldn't run;
+  - `systemctl set-default` counts as a change;
+  - presumed LVM and remote machines need setup actions;
+  - the harness should record a run's `error`.
 
 ## L16–L19 on the 40 held-out answers (2026-10-04)
 
