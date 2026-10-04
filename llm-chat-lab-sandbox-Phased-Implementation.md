@@ -71,7 +71,7 @@ work in advice".
 | L19 | **Goal-check precision** (class B and L14's first candidates): checks fire on what the question asks, not keywords ("swappiness" isn't swap); client questions are checked as clients; source-restricted firewall rules are checked from inside and outside the allowed range | Built 2026-10-04 (results below) |
 | L20 | **Measure once with the sealed set** (also F8 in the full-VM plan), through `/sandbox/linux-ask` on full VMs, graded by reading every run. Compare with F-200's held-out result (3/40 proven) | Done 2026-10-04 (results below) |
 | L21 | **Goal checks from the model's reading, run by the lab** (from L20: 1/40 verified). The setup stage's model call also proposes what success means for the question, as checks from a fixed menu: user exists/in group/shell, path exists/owner/mode, file contains, service active/enabled/disabled, port listening or open/closed from the prober, default target, sysctl, read-only command output (allowlisted programs, no shell syntax). Each is run before the answer and after; only a **false→true** change proves the answer, and a failing model check is "not confirmed", never a failure. Fresh set sealed first: `sealed-questions-2026-10-04.json` (8e1c52d) | Built 2026-10-04 (659adf5); development run on the 2026-10-03 answers |
-| L22 | **Measure L21 once with the 2026-10-04 sealed set**, as L20 | Not started |
+| L22 | **Measure L21 once with the 2026-10-04 sealed set**, as L20 | Done 2026-10-05 (results below) |
 
 ## Results: the same 40 answers through each stage
 
@@ -113,6 +113,24 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 **Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The 11 runs graded `lab_verified` before L12 were regraded the same way: all 11 are goal-verified (F-195). A goal-verified repaired procedure is now stored as an answer of its own; it's reused automatically only when its repairs are real corrections (F-195).
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
+## L22: L21 on a fresh sealed set (2026-10-05)
+
+The 40 questions sealed before L21 (`sealed-questions-2026-10-04.json`, sha256 `846d6179…`, unchanged), asked through `/sandbox/linux-ask` on a coordinator rebuilt from cf1b850, with proofs on full VMs (`sealed2-asks.jsonl`, `sealed2-labs.jsonl`). 39 runs completed; #17 errored. Every "verified" was read.
+
+| | L20 sealed (before L21) | L22 sealed (with L21) |
+|---|---|---|
+| Goal-verified, as graded by the lab | 1 | 8 |
+| **… still true on reading** | **1** | **6** (#9 frank in adm, #14 gina's shell, #16 Apache answering on 8080 from another machine, #22 swap active and in fstab, #23 XFS mounted and in fstab via another way, #29 IPv4 forwarding on) |
+| False passes found by reading | 0 | 2 |
+
+**The two false passes:**
+- **#19, SSH idle disconnect,** was "verified" by `sshd_config` containing the line the answer wrote. But `ClientAliveCountMax 0` *disables* the disconnect on OpenSSH ≥ 8.2, so the answer doesn't work.
+- **#13, an environment variable for all users,** was "verified" by "SSH and PAM logins still work", which are regression guards, not evidence for the question.
+
+Both are fixed for the next measurement (no re-run of this set):
+- a `file_contains` check of text the answer itself wrote is never decisive;
+- "… still works" login checks can fail a run but never verify one.
 
 ## L20: the sealed set (2026-10-04)
 

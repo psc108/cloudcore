@@ -2479,7 +2479,7 @@ def _prober_is_source(prober_ip: str, sources: list[str]) -> bool:
 
 
 def model_goal_checks(root, prober_root, planned: list[dict], before: dict, question: str = "",
-                      prober_ip: str = "") -> list[dict]:
+                      prober_ip: str = "", answer: str = "") -> list[dict]:
     """Run the planned checks after the answer and grade them against the
     baseline taken before it."""
     out = []
@@ -2500,6 +2500,13 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
         elif ok and c["kind"] in _EXISTENCE_CHECKS and not existence_ok:
             out.append({"kind": "goal", "subject": subject + " (shows it exists, not that the question's change "
                         "was made)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
+        elif ok and c["kind"] == "file_contains" and " ".join(c["text"].split()) in " ".join(answer.split()):
+            # L22 #19: a file containing what the answer wrote into it was
+            # always going to pass -- and ClientAliveCountMax 0 does the
+            # opposite of what was asked on OpenSSH >= 8.2.
+            out.append({"kind": "goal", "subject": subject + " (the answer wrote this itself; that shows it was "
+                        "written, not that it works)", "ok": True, "detail": seen, "decisive": False,
+                        "source": "model"})
         elif ok and from_elsewhere and not c["kind"].endswith("_from_other"):
             out.append({"kind": "goal", "subject": subject + " (a step towards it; the question is about another "
                         "machine reaching this one)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
@@ -2867,7 +2874,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                                (prober.ip or "") if prober is not None else "")
         if planned_checks:
             checks += model_goal_checks(root, prober_root, planned_checks, checks_before, question,
-                                        (prober.ip or "") if prober is not None else "")
+                                        (prober.ip or "") if prober is not None else "", answer)
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
@@ -2971,8 +2978,12 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
     changed = any(s.kind in ("write", "append", "prepend", "edit", "prose") or _APT_INSTALL_RE.search(s.source)
                   or _SERVICE_RE.search(s.source) or _STATE_CHANGE_RE.search(s.source) for s in acted if s.cls == "ok")
     # L12: a check on what the answer set out to achieve.
+    # "... still works" logins guard against a lockout; they can fail a run but
+    # never show the question's goal was met (L22 #13: an environment-variable
+    # answer was "verified" by SSH still working).
     goal = [c for c in checks if c["ok"] and c.get("decisive", True)
-            and c["kind"] in ("goal", "login", "http", "cron", "effective")]
+            and c["kind"] in ("goal", "login", "http", "cron", "effective")
+            and not (c["kind"] == "login" and "still works" in c["subject"])]
     if limits and not bad and not failed_checks:
         whys = list(dict.fromkeys(s.detail.split(" -- ", 1)[-1].rsplit(" (", 1)[0] for s in limits))
         result.verdict = "not_testable"

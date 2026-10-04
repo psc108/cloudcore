@@ -1,0 +1,122 @@
+17:48:12 #1 [everyday] How do I find the ten largest files under /home?
+17:53:48   answered in 332s (912 chars, complete=True); grounding=kiwix refs=['Finding files that use the most disk spa', 'List files over a specific size in curre']; lab=yes
+17:53:48 #2 [everyday] How do I show the last 20 lines of the system log and keep watching it?
+18:00:13   answered in 382s (591 chars, complete=True); grounding=kiwix refs=['How to watch a file, whenever it changes', 'Remember the Monsters?']; lab=yes
+18:00:13 #3 [everyday] How do I count how many files are in /etc, including subdirectories?
+18:04:04   answered in 228s (799 chars, complete=True); grounding=kiwix refs=["When counting lines with wc, don't print", 'How can I count the number of configurat']; lab=yes
+18:04:04 #4 [everyday] How do I see how much RAM each running process is using, sorted by memory?
+18:05:56   answered in 110s (603 chars, complete=True); grounding=kiwix refs=['Linux high memory usage (top total misma', 'overall CPU usage and Memory(RAM) usage ']; lab=yes
+18:05:56 #5 [everyday] How do I make a directory and all its missing parent directories in one command?
+18:15:19   answered in 560s (675 chars, complete=True); grounding=kiwix refs=['Why mkdir -p /Local/Foo/Bar/Wah not work', 'Cross compilation errors: linux kernel f']; lab=yes
+18:15:19 #6 [everyday] How do I search my shell history for commands containing 'apt'?
+18:17:29   answered in 126s (422 chars, complete=True); grounding=kiwix refs=['Finding an old command in the shell hist', 'Selectively storing command history to a']; lab=yes
+18:17:29 #7 [everyday] How do I check which Ubuntu release this machine is running?
+18:19:30   answered in 118s (319 chars, complete=True); grounding=kiwix refs=['how to upgrade from unsupported Ubuntu v', 'How do I update my GCP vm to the latest ']; lab=yes
+18:19:30 #8 [services] How do I add a user called erin and set her password?
+18:22:09   answered in 156s (871 chars, complete=True); grounding=kiwix refs=['useradd: cannot open /etc/passwd', 'How to add user with out using useradd o']; lab=yes
+18:22:09 #9 [services] How do I add the existing user frank to the adm group so he can read logs?
+18:24:11   answered in 119s (650 chars, complete=True); grounding=kiwix refs=['When gpasswd vs usermod/deluser?', 'Am I trying to connect to a TLS-enabled ']; lab=yes
+18:24:11 #10 [services] How do I make a systemd service that runs /usr/local/bin/backup.sh every night at 1am using a timer?
+18:43:59   answered in 1185s (1944 chars, complete=True); grounding=kiwix refs=['systemctl cannot access service file, Pe', "systemctl failing with unknown section '"]; lab=yes
+18:43:59 #11 [services] How do I stop the cron service from starting at boot?
+18:47:18   answered in 196s (545 chars, complete=True); grounding=kiwix refs=['how to disable systemd service start/sto', 'MongoDB unregistered authentication erro']; lab=yes
+18:47:18 #12 [services] How do I let members of the group webteam edit files in /var/www without sudo?
+18:54:26   answered in 425s (1096 chars, complete=True); grounding=kiwix refs=['Ramil Safarov']; lab=yes
+18:54:26 #13 [services] How do I set an environment variable for all users at login?
+19:06:53   answered in 743s (2180 chars, complete=True); grounding=kiwix refs=['Debian ignores PAM env variables (while ', 'how to access ssh UserEnvironment var in']; lab=yes
+19:06:53 #14 [services] How do I change the default shell of user gina to zsh?
+19:10:58   answered in 242s (479 chars, complete=True); grounding=kiwix refs=['How can I change shell in Ubuntu?', 'linux new user with sftp to specific fol']; lab=yes
+19:10:58 #15 [services] How do I make sure user henry's account expires on 31 December 2026?
+19:14:57   answered in 236s (681 chars, complete=True); grounding=kiwix refs=['How can I create automatically expiring ', 'Using sed to print content of files in c']; lab=yes
+19:14:57 #16 [logins-web] How do I install Apache and make it listen on port 8080 instead of 80?
+19:21:22   answered in 382s (1717 chars, complete=True); grounding=kiwix refs=['How do I make Apache Web Server listen o', 'Unable to activate Apache']; lab=yes
+19:21:22 #17 [logins-web] How do I allow only HTTPS and SSH through the firewall with ufw and block everything else?
+19:28:23   answered in 418s (1225 chars, complete=True); grounding=local_corpus refs=['How do I allow only SSH, HTTP and HTTPS ']; lab=yes
+19:28:23 #18 [logins-web] How do I change the message users see after they log in over SSH?
+19:34:05   answered in 338s (947 chars, complete=True); grounding=kiwix refs=['how to solve the "open failed: administr', 'Why are connections to GitHub over SSH t']; lab=yes
+19:34:05 #19 [logins-web] How do I make SSH disconnect idle sessions after 10 minutes?
+19:39:20   answered in 313s (1033 chars, complete=True); grounding=local_corpus refs=['How do I stop root from logging in over ']; lab=yes
+19:39:20 #20 [logins-web] How do I install Redis and make it listen only on localhost?
+19:45:36   answered in 373s (1407 chars, complete=True); grounding=kiwix refs=['Ubuntu 22.04 Desktop: on restart, some s', 'why can redis bind to this port, but I c']; lab=yes
+19:45:36 #21 [logins-web] How do I serve a directory of static files with nginx on port 8000?
+19:54:59   answered in 560s (2594 chars, complete=True); grounding=kiwix refs=['Why gunicorn is not serving static files', 'Serving static files with Ngnix, Django ']; lab=yes
+19:54:59 #22 [disks] How do I create a 2GB swap file and make it permanent?
+20:09:45   answered in 883s (1666 chars, complete=True); grounding=kiwix refs=['Swap file creation success/failure?', 'Disabling buffer-specific swap file crea']; lab=yes
+20:09:45 #23 [disks] How do I format /dev/sdb as XFS and mount it at /srv/xfs permanently?
+20:17:27   answered in 459s (761 chars, complete=True); grounding=local_corpus refs=['How do I set up an NFS share and mount i']; lab=yes
+20:17:27 #24 [disks] How do I see which processes have files open on /var?
+20:23:54   answered in 384s (549 chars, complete=True); grounding=kiwix refs=['/var/log/rgc main.log very large file pr', 'Node.js lsof - many open DB connections']; lab=yes
+20:23:54 #25 [disks] How do I create a compressed backup of /etc with today's date in the file name?
+20:32:36   answered in 519s (847 chars, complete=True); grounding=kiwix refs=['Cron Jobs stopped running', 'Which algorithm is used in standard ZIP?']; lab=yes
+20:32:36 #26 [disks] How do I mount an ISO image so I can read its files?
+20:39:13   answered in 394s (1146 chars, complete=True); grounding=kiwix refs=['`mount -o loop` changes mounted ISO imag', 'Mount disk image on WSL (Windows subsyst']; lab=yes
+20:39:13 #27 [networking] How do I make this machine resolve example.internal to 10.1.2.3 without a DNS server?
+20:45:37   answered in 381s (993 chars, complete=True); grounding=kiwix refs=['Local DNS Resolution Between Host Guest', 'How to configure hostname resolution to ']; lab=yes
+20:45:37 #28 [networking] How do I check if port 443 on google.com is reachable from this machine?
+20:54:21   answered in 521s (923 chars, complete=True); grounding=kiwix refs=['What is the best way to continuously tes', 'Netcat - how to get connection time?']; lab=yes
+20:54:21 #29 [networking] How do I forward IPv4 traffic through this machine (enable routing) permanently?
+20:58:25   answered in 241s (695 chars, complete=True); grounding=kiwix refs=['How to make IP forwarding permanent?', 'Ansible sysctl tries to reload ipv6, eve']; lab=yes
+20:58:25 #30 [networking] How do I open port 3000 with ufw for one IP address only, 192.0.2.10?
+21:02:58   answered in 270s (499 chars, complete=True); grounding=kiwix refs=['OpenSSH/Print version']; lab=yes
+21:02:58 #31 [networking] How do I see all current network connections and which process owns each?
+21:10:25   answered in 444s (986 chars, complete=True); grounding=kiwix refs=["`lsof` doesn't display PID that `netstat", 'How to identify what application is usin']; lab=yes
+21:10:25 #32 [multi-machine] How do I run a command on another server over SSH without logging in interactively?
+21:25:25   answered in 897s (2535 chars, complete=True); grounding=kiwix refs=['ssh command and non-interactive, non-log', 'What is the difference between interacti']; lab=yes
+21:25:25 #33 [multi-machine] How do I set up an NFS export of /srv/share that only one client 192.0.2.20 can mount?
+21:45:40   answered in 1212s (2456 chars, complete=True); grounding=kiwix refs=['configuration.nix: NixOS system configur']; lab=yes
+21:45:40 #34 [multi-machine] How do I let another machine connect to MySQL on this server as user app?
+22:02:20   answered in 997s (2112 chars, complete=True); grounding=kiwix refs=['xampp - can access control panel, cannot', 'How to Grant Network Service permission ']; lab=yes
+22:02:20 #35 [kernel-boot] How do I make a sysctl setting like net.ipv4.tcp_syncookies=1 permanent?
+22:08:52   answered in 389s (918 chars, complete=True); grounding=kiwix refs=['better alternative for tcp_syncookies in', 'Ansible sysctl tries to reload ipv6, eve']; lab=yes
+22:08:52 #36 [kernel-boot] How do I see the messages from the last boot?
+22:13:27   answered in 272s (362 chars, complete=True); grounding=kiwix refs=['What is the difference between dmesg and', 'CentOS 7 is starting >70000 processes af']; lab=yes
+22:13:27 #37 [kernel-boot] How do I find out why the system took so long to boot?
+22:27:05   answered in 815s (1643 chars, complete=True); grounding=kiwix refs=['Lubuntu very slow boot with an SSD for a', 'Slow boot on Fedora 24, possibly caused ']; lab=yes
+22:27:05 #38 [kernel-boot] How do I see which kernel modules are loaded right now?
+22:30:49   answered in 221s (723 chars, complete=True); grounding=kiwix refs=['On petalinux, lsmod does not work', 'How to list names and descriptions of al']; lab=yes
+22:30:49 #39 [explanation] What is the difference between /etc/profile and ~/.bashrc?
+22:38:48   answered in 476s (1476 chars, complete=True); grounding=kiwix refs=['How to source correct startup scripts on', '.bashrc and various linux startup script']; lab=yes
+22:38:48 #40 [explanation] What does 'nohup' do and when would I use it?
+22:46:30   answered in 459s (1336 chars, complete=True); grounding=kiwix refs=['Guide to Unix/Commands/Process Managemen', 'How to manage nohup.out file in Tornado?']; lab=yes
+22:46:30 all questions asked; waiting for lab runs
+22:46:31   #1: lab partial
+22:46:31   #2: lab failed -> attempts ['failed', '']
+22:46:31   #3: lab partial
+22:46:31   #4: lab not_runnable
+22:46:31   #5: lab failed -> repaired ran_clean
+22:46:31   #6: lab partial
+22:46:31   #7: lab partial
+22:46:31   #8: lab ran_clean
+22:46:31   #9: lab goal_verified
+22:46:31   #10: lab ran_clean
+22:46:31   #11: lab partial
+22:46:31   #12: lab failed -> repaired ran_clean
+22:46:31   #13: lab goal_verified
+22:46:31   #14: lab goal_verified
+22:46:31   #15: lab partial
+22:46:31   #16: lab goal_verified
+22:46:31   #17: lab partial
+22:46:31   #18: lab ran_clean
+22:46:31   #19: lab goal_verified
+22:46:31   #20: lab ran_clean
+22:46:31   #21: lab failed -> attempts ['']
+22:46:31   #22: lab goal_verified
+22:46:31   #23: lab failed -> attempts ['goal_verified']
+22:46:31   #24: lab partial
+22:46:31   #25: lab failed -> repaired partial
+22:46:31   #26: lab failed -> attempts ['failed', 'failed']
+22:46:31   #27: lab failed -> attempts ['failed', 'failed']
+22:46:31   #28: lab failed -> attempts ['partial']
+22:46:31   #29: lab goal_verified
+22:46:31   #30: lab failed -> attempts ['failed', 'failed']
+22:46:31   #31: lab partial
+22:46:31   #32: lab not_runnable
+23:21:36   #33: lab failed -> attempts ['partial']
+00:07:42   #34: lab failed -> attempts ['failed', 'failed']
+00:08:42   #35: lab ran_clean
+00:10:43   #36: lab failed -> repaired partial
+00:12:43   #37: lab failed -> repaired partial
+00:13:43   #38: lab partial
+00:13:43   #39: lab not_runnable
+00:13:43   #40: lab not_runnable
+00:13:43 ALL DONE
