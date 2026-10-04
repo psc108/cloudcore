@@ -242,6 +242,9 @@ class Step:
 _OUTPUT_LINE_RE = re.compile(r"^\s*(?:/dev/\S+:\s+[A-Z_]+=|[-dlcbps][rwxsStT-]{9}[.+@]?\s+\d+\s)")
 
 
+_HOSTS_LINE_RE = re.compile(r"^\s*\d{1,3}(?:\.\d{1,3}){3}\s+[A-Za-z0-9][\w.-]*(?:\s+[A-Za-z0-9][\w.-]*)*\s*$")
+
+
 def _drop_output_lines(code: str) -> str:
     return "\n".join(ln for ln in code.splitlines() if not _OUTPUT_LINE_RE.match(ln))
 
@@ -277,6 +280,15 @@ def parse_steps(answer: str) -> list[Step]:
             continue
         if tag in RUNNABLE_TAGS and not looks_like_config(code):
             code = _strip_console(code) if tag == "console" else _drop_output_lines(code)
+            # L20 #29: a "bash" block of hosts entries is what to put in
+            # /etc/hosts (usually after `sudo nano /etc/hosts`), not commands.
+            entries = [ln for ln in code.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+            if entries and all(_HOSTS_LINE_RE.match(ln) for ln in entries):
+                target = pending_editor_target if pending_editor_target.endswith("/hosts") else "/etc/hosts"
+                steps.append(Step(len(steps) + 1, "append", "\n".join(entries), target=target,
+                                  note="append|hosts entries, added to the file rather than run"))
+                last_config_target, pending_editor_target = target, ""
+                continue
             # Prose edits for the file an earlier editor step opened.
             if pending_editor_target:
                 ops = _prose_edits(before)
@@ -2251,6 +2263,204 @@ def fill_placeholders(answer: str, placeholders: list[dict], facts: dict[str, st
     return answer, changes, unfilled
 
 
+# -- L21: goal checks the model proposes, from a fixed menu ----------------------
+#
+# The hand-written goal checks are keyword-triggered per topic, and on the
+# sealed set (L20) they verified 1 answer of 40. Here the model's reading
+# (the same call as the setup stage) also says what success means for the
+# QUESTION, as checks from this menu, which the lab runs itself. A check only
+# proves the answer if it was false before the answer ran and true after; a
+# check that fails is recorded as "not confirmed" and never fails the run --
+# the model may have proposed the wrong check.
+
+_SHELL_META = re.compile(r"[;&|`$<>(){}\\\n]")
+# Read-only programs a command_output check may run.
+_READONLY_PROGRAMS = {"getent", "id", "groups", "cat", "grep", "ls", "stat", "systemctl", "ss", "sysctl", "findmnt",
+                      "mount", "swapon", "lsblk", "blkid", "timedatectl", "hostnamectl", "crontab", "ufw", "iptables",
+                      "nft", "chage", "passwd", "readlink", "realpath", "df", "exportfs", "showmount", "ip",
+                      "resolvectl", "getfacl", "test", "env", "printenv", "head", "tail", "wc", "file", "which",
+                      "dpkg", "apt-cache", "uname", "who", "last", "journalctl", "atq", "lsof", "netstat"}
+# systemctl/ufw subcommands that only read.
+_READONLY_SUB = {"systemctl": {"is-active", "is-enabled", "is-failed", "show", "status", "cat", "get-default",
+                               "list-timers", "list-units", "list-unit-files"},
+                 "ufw": {"status"}, "passwd": {"-S"}, "chage": {"-l"}, "crontab": {"-l"}, "iptables": {"-S", "-L"},
+                 "nft": {"list"}, "ip": {"addr", "a", "route", "r", "link"}, "dpkg": {"-l", "-s"}}
+
+_CHECK_PARAMS = {
+    "user_exists": ("user",), "user_in_group": ("user", "group"), "user_shell": ("user", "shell"),
+    "path_exists": ("path",), "path_owner": ("path", "owner"), "path_mode": ("path", "mode"),
+    "file_contains": ("path", "text"), "service_active": ("unit",), "service_enabled": ("unit",),
+    "service_disabled": ("unit",), "port_listening": ("port",), "port_open_from_other": ("port",),
+    "port_closed_from_other": ("port",), "default_target": ("target",), "sysctl": ("key", "value"),
+    "command_output": ("command", "contains"),
+}
+
+
+def _check_ok_value(kind: str, key: str, v) -> bool:
+    v = str(v)
+    if key in ("user", "group", "owner"):
+        return bool(_NAME_OK.match(v.split(":")[0]))
+    if key in ("path", "shell"):
+        return bool(_PATH_OK.match(v.replace("~/", "/home/student/")))
+    if key == "unit":
+        return bool(re.fullmatch(r"[\w@.:-]{1,80}", v))
+    if key == "port":
+        return v.isdigit() and 0 < int(v) < 65536
+    if key == "mode":
+        return bool(re.fullmatch(r"[0-7]{3,4}|[+]?[rwxstST-]{1,10}|sticky|setgid|setuid", v))
+    if key == "target":
+        return bool(re.fullmatch(r"[\w.-]+\.target", v))
+    if key == "key":
+        return bool(re.fullmatch(r"[\w./-]{1,100}", v))
+    if key in ("text", "value", "contains"):
+        return 0 < len(v) <= 200 and "\n" not in v
+    if key == "command":
+        words = v.split()
+        if not words or _SHELL_META.search(v) or words[0] not in _READONLY_PROGRAMS:
+            return False
+        sub = _READONLY_SUB.get(words[0])
+        return sub is None or (len(words) > 1 and words[1] in sub)
+    return False
+
+
+# Close spellings the model uses for kinds on the menu (seen in L21 probes).
+_CHECK_ALIASES = {"path_contains": "file_contains", "file_has": "file_contains", "contains": "file_contains",
+                  "service_running": "service_active", "unit_active": "service_active",
+                  "unit_enabled": "service_enabled", "port_reachable": "port_open_from_other",
+                  "group_member": "user_in_group", "in_group": "user_in_group"}
+
+
+def plan_checks(raw: dict) -> tuple[list[dict], list[str]]:
+    """Validate the model's proposed checks against the menu."""
+    checks, refused = [], []
+    for item in (raw.get("checks") or [])[:8]:
+        if isinstance(item, dict) and item.get("kind") in _CHECK_ALIASES:
+            item = {**item, "kind": _CHECK_ALIASES[item["kind"]]}
+            if item["kind"] == "file_contains" and "text" not in item:
+                item["text"] = item.get("contains") or item.get("value") or ""
+        if isinstance(item, dict) and str(item.get("command", "")).startswith("sudo "):
+            item = {**item, "command": item["command"][5:].strip()}  # checks run as root anyway
+        if not isinstance(item, dict) or item.get("kind") not in _CHECK_PARAMS:
+            refused.append(f"check {item!r}: not one the lab has")
+            continue
+        kind = item["kind"]
+        params = {k: str(item.get(k, "")).strip() for k in _CHECK_PARAMS[kind]}
+        bad = [k for k, v in params.items() if not _check_ok_value(kind, k, v)]
+        if bad:
+            refused.append(f"check {kind}: unsafe or missing {', '.join(bad)}")
+            continue
+        if "path" in params:
+            params["path"] = params["path"].replace("~/", "/home/student/")
+        checks.append({"kind": kind, **params})
+    return checks, refused
+
+
+def _describe_check(c: dict) -> str:
+    k = c["kind"]
+    return {
+        "user_exists": f"user {c.get('user')} exists",
+        "user_in_group": f"{c.get('user')} is in group {c.get('group')}",
+        "user_shell": f"{c.get('user')}'s login shell is {c.get('shell')}",
+        "path_exists": f"{c.get('path')} exists",
+        "path_owner": f"{c.get('path')} is owned by {c.get('owner')}",
+        "path_mode": f"{c.get('path')} has mode {c.get('mode')}",
+        "file_contains": f"{c.get('path')} contains '{c.get('text')}'",
+        "service_active": f"{c.get('unit')} is running",
+        "service_enabled": f"{c.get('unit')} starts at boot",
+        "service_disabled": f"{c.get('unit')} does not start at boot",
+        "port_listening": f"something listens on port {c.get('port')}",
+        "port_open_from_other": f"port {c.get('port')} is reachable from another machine",
+        "port_closed_from_other": f"port {c.get('port')} is blocked for another machine",
+        "default_target": f"the machine boots to {c.get('target')}",
+        "sysctl": f"{c.get('key')} = {c.get('value')}",
+        "command_output": f"`{c.get('command')}` shows '{c.get('contains')}'",
+    }[k]
+
+
+def run_check(root, prober_root, c: dict) -> tuple[bool | None, str]:
+    """(passed, what was seen). None: can't be run here (no prober)."""
+    q = shlex.quote
+    k = c["kind"]
+
+    def sh(cmd: str, t: int = 20) -> tuple[int | None, str]:
+        code, out, _ = _exec(root, cmd, t)
+        return code, out.strip()
+
+    if k == "user_exists":
+        code, out = sh(f"getent passwd {q(c['user'])}")
+        return code == 0, out[:120]
+    if k == "user_in_group":
+        _, out = sh(f"id -nG {q(c['user'])} 2>&1")
+        return c["group"] in out.split(), out[:120]
+    if k == "user_shell":
+        _, out = sh(f"getent passwd {q(c['user'])} | cut -d: -f7")
+        return out in (c["shell"], c["shell"].rsplit("/", 1)[-1]) or out.endswith("/" + c["shell"]), out
+    if k == "path_exists":
+        code, out = sh(f"stat -c '%F' {q(c['path'])} 2>&1")
+        return code == 0, out[:120]
+    if k == "path_owner":
+        _, out = sh(f"stat -c '%U:%G' {q(c['path'])} 2>&1")
+        want = c["owner"]
+        return out == want or out.split(":")[0] == want.split(":")[0] and ":" not in want, out
+    if k == "path_mode":
+        _, out = sh(f"stat -c '%a %A' {q(c['path'])} 2>&1")
+        octal, sym = (out.split() + ["", ""])[:2]
+        m = c["mode"]
+        if m in ("sticky", "setgid", "setuid"):
+            pos = {"sticky": 9, "setgid": 6, "setuid": 3}[m]
+            return len(sym) == 10 and sym[pos] in ("tT" if m == "sticky" else "sS"), out
+        return (octal.lstrip("0") == m.lstrip("0")) if m.isdigit() else m.lstrip("+") in sym, out
+    if k == "file_contains":
+        code, out = sh(f"grep -nF -- {q(c['text'])} {q(c['path'])} 2>&1 | head -3")
+        return code == 0 and bool(out), out[:160]
+    if k in ("service_active", "service_enabled", "service_disabled"):
+        verb = "is-active" if k == "service_active" else "is-enabled"
+        _, out = sh(f"systemctl {verb} {q(c['unit'])} 2>&1")
+        if k == "service_disabled":
+            return out.split()[:1] in (["disabled"], ["masked"]), out
+        return out.split()[:1] == (["active"] if k == "service_active" else ["enabled"]), out
+    if k == "port_listening":
+        _, out = sh(f"ss -Hltnu 'sport = :{int(c['port'])}'")
+        return bool(out), out[:160]
+    if k in ("port_open_from_other", "port_closed_from_other"):
+        if prober_root is None:
+            return None, "no second machine in this run"
+        st = _port_state(prober_root, int(c["port"]))
+        return (st != "filtered") if k == "port_open_from_other" else (st == "filtered"), f"connection {st}"
+    if k == "default_target":
+        _, out = sh("systemctl get-default")
+        return out == c["target"], out
+    if k == "sysctl":
+        _, out = sh(f"sysctl -n {q(c['key'])} 2>&1")
+        return " ".join(out.split()) == " ".join(c["value"].split()), out[:120]
+    if k == "command_output":
+        code, out = sh(" ".join(q(w) for w in c["command"].split()) + " 2>&1 | head -50", 30)
+        return c["contains"] in out, out[-160:]
+    return None, "unknown check"
+
+
+def model_goal_checks(root, prober_root, planned: list[dict], before: dict) -> list[dict]:
+    """Run the planned checks after the answer and grade them against the
+    baseline taken before it."""
+    out = []
+    for i, c in enumerate(planned):
+        ok, seen = run_check(root, prober_root, c)
+        if ok is None:
+            continue
+        was = before.get(i)
+        subject = _describe_check(c)
+        if ok and was:
+            out.append({"kind": "goal", "subject": subject + " (already true before the answer)", "ok": True,
+                        "detail": seen, "decisive": False, "source": "model"})
+        elif ok:
+            out.append({"kind": "goal", "subject": subject, "ok": True, "detail": seen, "decisive": True,
+                        "source": "model"})
+        else:
+            out.append({"kind": "goal", "subject": subject + " (not confirmed)", "ok": False, "detail": seen,
+                        "decisive": False, "source": "model"})
+    return out
+
+
 PRESUME_TIMEOUT_S = 240
 
 
@@ -2345,6 +2555,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                      for p in _STUB_SCRIPT_RE.findall(_substitute(line)[0])}
     presumed: dict = {}
     presume_thread = None
+    planned_checks: list[dict] = []
+    checks_before: dict = {}
     if presume:
         def _ask() -> None:
             try:
@@ -2410,6 +2622,16 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             presume_thread.join(timeout=PRESUME_TIMEOUT_S)
             answer, steps = _setup_stage(result, root, presumed, question, answer,
                                          (prober.ip or "") if prober is not None else "", say)
+            # L21: the checks of what success means, and how things stand
+            # before the answer runs.
+            planned_checks, refused_checks = plan_checks(presumed)
+            checks_before = {i: run_check(root, prober_root, c)[0] for i, c in enumerate(planned_checks)}
+            if isinstance(result.setup, dict):
+                result.setup["checks"] = [_describe_check(c) for c in planned_checks]
+                result.setup["refused"] = result.setup.get("refused", []) + refused_checks
+            if planned_checks:
+                say("# what the lab will check afterwards: " + "; ".join(_describe_check(c) for c in planned_checks)
+                    + "\n")
             _unit_scripts = {p for line in answer.splitlines() if "ExecStart" in line
                              for p in _STUB_SCRIPT_RE.findall(_substitute(line)[0])}
         say("# now following the answer, step by step\n", now=True)
@@ -2584,6 +2806,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         say("# checking what the question asked for...\n", True)
         checks += _goal_checks(question, answer, steps, root, prober_root,
                                (prober.ip or "") if prober is not None else "")
+        if planned_checks:
+            checks += model_goal_checks(root, prober_root, planned_checks, checks_before)
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
@@ -2645,7 +2869,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
 # Commands that change the system (found in L10: `hostnamectl set-hostname`
 # was graded "nothing changed").
 _STATE_CHANGE_RE = re.compile(
-    r"\b(?:hostnamectl\s+set-|timedatectl\s+set-|useradd|usermod|userdel|adduser|deluser|groupadd|gpasswd|passwd|"
+    r"\b(?:hostnamectl\s+set-|timedatectl\s+set-|systemctl\s+set-default|useradd|usermod|userdel|adduser|deluser|groupadd|gpasswd|passwd|"
     r"chmod|chown|chgrp|setfacl|ln\s+-s|mkdir|touch|tee|sed\s+-i|sysctl\s+-w|ufw\s+(?:allow|deny|enable|default|limit)|"
     r"iptables\s+-[AIDPt]|nft\s+add|crontab|mount|swapon|mkfs|mdadm\s+--create|pvcreate|vgcreate|lvcreate|"
     r"tar\s+-?[a-z]*x|unzip|git\s+clone|pip3?\s+install|npm\s+install|update-alternatives|locale-gen|"

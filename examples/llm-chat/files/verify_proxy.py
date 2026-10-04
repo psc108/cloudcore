@@ -1887,7 +1887,7 @@ _PRESUME_SYSTEM = (
     "You read a Linux how-to question and the answer given to it, before the answer is tried on a FRESH "
     "Ubuntu 22.04 server that has nothing extra installed and only the user 'student'. Reply with ONLY a JSON "
     "object, no prose, no code fences:\n"
-    '{"setup": [...], "placeholders": [...]}\n'
+    '{"setup": [...], "placeholders": [...], "checks": [...]}\n'
     "\"setup\" lists what the QUESTION treats as ALREADY existing before the answer starts, which a fresh "
     "server lacks. Each item is one of:\n"
     '  {"action":"user","name":"..."}\n'
@@ -1913,7 +1913,20 @@ _PRESUME_SYSTEM = (
     '"placeholders":[]}\n'
     "Software the question names or the answer relies on (a web server, a database, Docker, Samba ...) "
     "is presumed installed unless the answer installs it.\n"
-    'If nothing applies, reply {"setup":[],"placeholders":[]}.')
+    "\"checks\" (L21) says how to confirm, on this machine after the answer has run, that what the "
+    "QUESTION asked for was achieved. Use names and paths from the answer. Only for questions that change "
+    "the machine; for questions that only look at something, or explain something, give []. Each is one of:\n"
+    '  {"kind":"user_exists","user":"..."}  {"kind":"user_in_group","user":"...","group":"..."}\n'
+    '  {"kind":"user_shell","user":"...","shell":"/bin/..."}  {"kind":"path_exists","path":"/..."}\n'
+    '  {"kind":"path_owner","path":"/...","owner":"user[:group]"}  {"kind":"path_mode","path":"/...","mode":"755|sticky|setgid"}\n'
+    '  {"kind":"file_contains","path":"/...","text":"<a line or part of one>"}\n'
+    '  {"kind":"service_active","unit":"..."}  {"kind":"service_enabled","unit":"..."}  {"kind":"service_disabled","unit":"..."}\n'
+    '  {"kind":"port_listening","port":N}  {"kind":"port_open_from_other","port":N}  {"kind":"port_closed_from_other","port":N}\n'
+    '  {"kind":"default_target","target":"....target"}  {"kind":"sysctl","key":"...","value":"..."}\n'
+    '  {"kind":"command_output","command":"<one read-only command, no pipes>","contains":"..."}\n'
+    "Prefer the most direct check of the goal (for \"let maria edit /var/www/html\": user_in_group or path_owner, "
+    "not file_contains). At most 4 checks.\n"
+    'If nothing applies, reply {"setup":[],"placeholders":[],"checks":[]}.')
 
 
 def _answer_code(answer: str, limit: int = 3000) -> str:
@@ -1941,7 +1954,7 @@ def _model_presumptions(question: str, answer: str) -> dict:
     payload = {"messages": [
         {"role": "system", "content": _PRESUME_SYSTEM},
         {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
-        "max_tokens": 400, "stream": False, "temperature": 0.0}
+        "max_tokens": 600, "stream": False, "temperature": 0.0}
     try:
         req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
                                      data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})

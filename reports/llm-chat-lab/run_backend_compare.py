@@ -78,7 +78,7 @@ def main() -> int:
                                                    pair_bridges=bridges, model_fix=verify_proxy._model_fix,
                                                    presume=verify_proxy._model_presumptions if args.presume else None)
                     rec = {"n": n, "backend": label, "kind": a.get("kind", ""), "question": a["q"],
-                           "verdict": res.verdict, "summary": res.summary, "setup": res.setup,
+                           "verdict": res.verdict, "summary": res.summary, "setup": res.setup, "error": res.error,
                            "repaired": (res.repaired or {}).get("verdict", ""),
                            "goals": [[c["subject"], c["ok"]] for c in res.checks if c["kind"] == "goal"],
                            "secs": round(time.time() - t0)}
