@@ -2078,7 +2078,8 @@ def _creates(answer: str) -> dict[str, set[str]]:
     for m in re.finditer(r"\b(?:apt-get|apt|snap|dnf|yum)\s+(?:-\S+\s+)*install\b([^\n;&|]*)", answer):
         made["package"].update(w for w in m.group(1).split() if not w.startswith("-"))
     for m in re.finditer(r"\b(?:mkdir|touch|install\s+-d)\b([^\n;&|]*)", answer):
-        made["path"].update(w.rstrip("/") for w in m.group(1).split() if w.startswith("/"))
+        made["path"].update(("/home/student/" + w[2:] if w.startswith("~/") else w).rstrip("/")
+                            for w in m.group(1).split() if w.startswith(("/", "~/")))
     for m in re.finditer(r"(?:>>?|\btee(?:\s+-a)?)\s+(/[\w./@+-]+)", answer):
         made["path"].add(m.group(1).rstrip("/"))
     return made
