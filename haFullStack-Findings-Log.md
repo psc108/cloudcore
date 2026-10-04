@@ -4334,6 +4334,26 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Lesson:** a config edit made by hand needs a restart in the same step, or a `-verify-config` run, so a broken file can't wait for the next reboot.
 
+### F-216 — Placeholder filling replaced substrings, rewriting words that only contained a placeholder
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`fill_placeholders`, L17).
+
+**Symptom:** found 2026-10-04 in the 40-answer regression run of L16–L19. Held-out #25, rsync to another machine, went from ran_clean (F5) to failed. The model had called the token `user` a placeholder, and the run log showed it filled everywhere, including inside other words. In the same run `destination`, a host in `user@destination:`, was refused as "doesn't look like a placeholder", and `/path/to/source` was created as a real directory by the setup stage.
+
+**Root cause:**
+- **Substring replacement:** `fill_placeholders` used `str.replace`, which also hits the token inside longer words and paths.
+- **Shape filter too strict for hosts:** the placeholder-shape filter (against the model calling real names placeholders) had no notion of a host slot.
+- **Setup and fill disagreed:** setup didn't map `/path/to/…` the way the fill does.
+
+**Fix:**
+- **Whole tokens only:** tokens are replaced only where not preceded by a word character, `/` or `-`, and not followed by a word character or `-`.
+- **Host slots:** a token after `user@` counts as a host placeholder, whatever its shape.
+- **`/path/to/` in setup:** maps to the lab's directory, as the fill does.
+
+**Verified by:**
+- **The #25 case offline:** `user` → `labuser` only as a whole word, while `username` and `/home/users` stay. `destination` → the other machine's address in `labuser@destination:` and `ssh destination`, but not inside `/path/to/destination/`. `/path/to/source` → `/srv/lab/source` in both setup and fill.
+- **Regression run:** the 40-answer run with these fixes follows.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4501,3 +4521,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.41 | 2026-10-03 | Paul Scott | Two-host S7. F-213: moving Sentinel doubled its KB (path-keyed findings); the first fix's unlocked migration raced and deleted it (recovered from the S6 backup). |
 | v3.42 | 2026-10-03 | Paul Scott | Two-host S7. F-214: the peer's OpenTofu provider was a stale build (git pull doesn't rebuild it); checklist step 3c. |
 | v3.43 | 2026-10-03 | Paul Scott | Two-host S7 done. F-215: Stourport's hand-edited Loki config held a duplicate key since F-197 and failed on its first restart. |
+| v3.44 | 2026-10-04 | Paul Scott | L16-L19 testing. F-216: placeholder filling replaced substrings (`user` inside other words). |

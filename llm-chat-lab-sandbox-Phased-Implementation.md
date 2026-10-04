@@ -65,10 +65,10 @@ work in advice".
 | L13 | **A spare disk.** Each lab VM gets a blank extra disk for partitioning/LVM/RAID/mkfs advice, with the device names answers use (`/dev/sdb` …) pointed at it, so disk advice can be tried without destroying the VM's own writable layer (`/dev/vdb`) | Done — snapshot root (real ext4), two spare disks as /dev/sdb and /dev/sdc, interactive sessions and SQL clients; all 6 disk/NFS/Docker/swap/PostgreSQL questions goal-verified (F-192) |
 | L14 | **Goal checks by kind, in the order L10 shows.** Candidates: users/groups (`id`, `getent`, sudo rights), systemd units (active and still active after a real reboot), cron (force-run and check its effect), permissions/ACLs (`stat`, access as another user), disks (`lsblk`, `findmnt`, survives reboot), networking (prober reaches the new address/route), and the prober as a real client for NFS/DNS/SSH-between-hosts | Not started |
 | L15 | **Seal a fresh question set** before the fixes below, so they can't be shaped by it: 40 new questions, same mix as L10 (`reports/llm-chat-lab/sealed-questions-2026-10-03.json`, committed 983f43d). Not run, read for tuning or used in tests until L20 | Done 2026-10-03 |
-| L16 | **Setup stage** (F-200 class A, 8 of the F5 failures). Before running, find what the question and answer presume exists: users and groups, installed or running services, files and directories, a second machine. The lab creates it from a **fixed menu** of setup actions (create user/group, add to group, install package from the repo, start service, make file/dir with stand-in content, make a partition), never shell from the model. The existing rules stay as the fast path; one model call returns the rest as JSON, validated against the menu. Every action is reported ("The lab set up user bob because the question assumes him") | Not started |
-| L17 | **Placeholders by kind** (class C, 8 F5 failures). General detection (`your-…`, `…_here`, `<…>`, `ALL_CAPS_WORD` where a value goes, `server_ip_address`-style names, undefined `$vars`), plus the model call above classifying each by kind: user, IP of the other machine, UUID, PID, service, package, path, domain. Filled from real lab facts (the prober's address, `blkid` of the spare disk, a real PID, the setup stage's user). Unfillable placeholders are reported, not run literally | Not started |
-| L18 | **Lab limits before running** (class D, 4 F5 failures). Categories, not commands: physical hardware (SMART/NVMe health, sensors and fans, GPUs, Wi-Fi radios, USB devices, firmware) and public-internet identity (certificates for real domains, public DNS, a public IP). Marked "can't be tested here" with the reason, before the run where the question makes it clear | Not started |
-| L19 | **Goal-check precision** (class B and L14's first candidates): checks fire on what the question asks, not keywords ("swappiness" isn't swap); client questions are checked as clients; source-restricted firewall rules are checked from inside and outside the allowed range | Not started |
+| L16 | **Setup stage** (F-200 class A, 8 of the F5 failures). Before running, find what the question and answer presume exists: users and groups, installed or running services, files and directories, a second machine. The lab creates it from a **fixed menu** of setup actions (create user/group, add to group, install package from the repo, start service, make file/dir with stand-in content, make a partition), never shell from the model. The existing rules stay as the fast path; one model call returns the rest as JSON, validated against the menu. Every action is reported ("The lab set up user bob because the question assumes him") | Built 2026-10-04 (results below) |
+| L17 | **Placeholders by kind** (class C, 8 F5 failures). General detection (`your-…`, `…_here`, `<…>`, `ALL_CAPS_WORD` where a value goes, `server_ip_address`-style names, undefined `$vars`), plus the model call above classifying each by kind: user, IP of the other machine, UUID, PID, service, package, path, domain. Filled from real lab facts (the prober's address, `blkid` of the spare disk, a real PID, the setup stage's user). Unfillable placeholders are reported, not run literally | Built 2026-10-04 (results below) |
+| L18 | **Lab limits before running** (class D, 4 F5 failures). Categories, not commands: physical hardware (SMART/NVMe health, sensors and fans, GPUs, Wi-Fi radios, USB devices, firmware) and public-internet identity (certificates for real domains, public DNS, a public IP). Marked "can't be tested here" with the reason, before the run where the question makes it clear | Built 2026-10-04 (results below) |
+| L19 | **Goal-check precision** (class B and L14's first candidates): checks fire on what the question asks, not keywords ("swappiness" isn't swap); client questions are checked as clients; source-restricted firewall rules are checked from inside and outside the allowed range | Built 2026-10-04 (results below) |
 | L20 | **Measure once with the sealed set** (also F8 in the full-VM plan), through `/sandbox/linux-ask` on full VMs, graded by reading every run. Compare with F-200's held-out result (3/40 proven) | Not started |
 
 ## Results: the same 40 answers through each stage
@@ -111,6 +111,27 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 **Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The 11 runs graded `lab_verified` before L12 were regraded the same way: all 11 are goal-verified (F-195). A goal-verified repaired procedure is now stored as an answer of its own; it's reused automatically only when its repairs are real corrections (F-195).
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
+## L16–L19 on the 40 held-out answers (2026-10-04)
+
+The 40 held-out answers, as recorded (no new model answers), on full VMs with the setup stage, placeholders by kind, lab limits and goal-check precision (`reports/llm-chat-lab/l16-all-heldout.jsonl`). These answers were used while building L16–L19, so this is a development result, not a measurement; L20's sealed set is the measurement.
+
+| Final verdict | F5, full VMs | L16–L19 |
+|---|---|---|
+| goal_verified | 4 | 5 |
+| ran_clean | 5 | 10 |
+| partial (nothing to verify) | 6 | 6 |
+| not_testable (lab limit, said before or during the run) | 0 | 4 |
+| not_runnable | 2 | 2 |
+| failed | 23 | **13** |
+
+**Changes from F5:**
+- **Fixed by the setup stage:** #6 (alice and nginx set up, sudoers written 0440), #8 (bob, /srv/reports), #20 (a real UUID: now goal-verified), #33 (a real PID owned by the student), #36, #38 (placeholder user mapped to the lab's).
+- **Fixed by goal-check precision:** #28, where "swappiness" no longer checks swap.
+- **Now recognised as lab limits:** #14 (Let's Encrypt, recognised before booting), #21 (SMART), #30 (graphics), #35 (fans).
+- **One regression:** #25, rsync to another machine. It exposed F-216, since fixed.
+
+The remaining failures are mostly genuine answer mistakes (#9, #13, #27, #40), or setup that needs another machine prepared (an SSH server or rsync target on the prober: #25, #39) or a reachable gateway (#23). Median run time: 94 s (F5: 83 s), as the model's reading mostly overlaps the VM boot.
 
 ## Held-out evaluation (2026-10-01/02)
 

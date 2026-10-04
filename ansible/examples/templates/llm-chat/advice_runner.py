@@ -2118,6 +2118,8 @@ def plan_setup(raw: dict, question: str, answer: str) -> tuple[list[dict], list[
         # "your_group") as a real user or group; it is the lab's own.
         if a == "user" and _PLACEHOLDER_SHAPE.search(name):
             name = LAB_USER
+        if a in ("dir", "file") and name.startswith("/path/to/"):
+            name = LAB_DIR + "/" + name.rstrip("/").rsplit("/", 1)[-1]  # as the placeholder fill names it
         if a == "group" and _PLACEHOLDER_SHAPE.search(name):
             name = LAB_GROUP
         clean = {"action": a, ("path" if a in ("dir", "file") else "name"): name.rstrip("/") if a != "dir" else name}
@@ -2137,7 +2139,9 @@ def plan_setup(raw: dict, question: str, answer: str) -> tuple[list[dict], list[
         token, kind = str(item.get("token") or "").strip(), item.get("kind")
         if kind not in _PLACEHOLDER_KINDS or len(token) < 3 or token not in answer:
             continue
-        if not _PLACEHOLDER_SHAPE.search(token.strip("<>{}[]$")) and not _PLACEHOLDER_SHAPE.search(token):
+        # A token in a host slot (user@TOKEN) is a host whatever it looks like.
+        host_slot = kind.endswith("machine_ip") and re.search(rf"@{re.escape(token)}(?![\w.-])", answer)
+        if not host_slot and not _PLACEHOLDER_SHAPE.search(token.strip("<>{}[]$")) and not _PLACEHOLDER_SHAPE.search(token):
             dropped.append(f"placeholder {token!r}: doesn't look like one")
             continue
         placeholders.append({"token": token, "kind": kind})
@@ -2236,7 +2240,13 @@ def fill_placeholders(answer: str, placeholders: list[dict], facts: dict[str, st
         if not value:
             unfilled.append(f"{p['token']} ({p['kind'].replace('_', ' ')})")
             continue
-        answer = answer.replace(p["token"], value)
+        # Whole tokens only (F-216): "user" as a placeholder must not rewrite
+        # "username" or "/home/users".
+        rx = re.compile(rf"(?<![\w/-]){re.escape(p['token'])}(?![\w-])")
+        new = rx.sub(lambda _m: value, answer)
+        if new == answer:
+            continue
+        answer = new
         changes.append(f"{p['token']} -> {value} ({p['kind'].replace('_', ' ')})")
     return answer, changes, unfilled
 
