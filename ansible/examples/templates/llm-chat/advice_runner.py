@@ -2444,6 +2444,8 @@ def run_check(root, prober_root, c: dict) -> tuple[bool | None, str]:
 # and change the root password" was "verified" by mysql running).
 _FIREWALL_CHANGE_RE = re.compile(r"\bufw\s+(?:enable|default|deny|reject|limit|allow)|\biptables\s+-[AIP]|"
                                  r"\bnft\s+(?:add|insert|flush)|\bfirewall-cmd\b")
+_REACH_Q_RE = re.compile(r"\b(?:another|other|remote)\s+(?:machine|server|host|computer|client)s?\b|\bremote(?:ly)?\s+"
+                         r"(?:connections?|access)\b|\bfrom\s+(?:outside|elsewhere|the network)\b", re.IGNORECASE)
 _EXISTENCE_CHECKS = {"user_exists", "path_exists", "service_active", "service_enabled", "port_listening"}
 _EXISTENCE_Q_RE = re.compile(r"^\s*how (?:do|can) i\s+(?:install|enable|start|create|add|set up|run)\b", re.IGNORECASE)
 _SECOND_GOAL_RE = re.compile(r"\b(?:and|so (?:that|it)|then|to)\b\s+(?:\w+\s+){0,3}?(?:make|change|set|configure|serve|enable|start|mount|activate|"
@@ -2483,6 +2485,9 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
     out = []
     existence_ok = _existence_question(question)
     sources = _named_sources(question)
+    # "let another machine reach X on this one": only a check made from the
+    # other machine proves it (L21 dev run #34: a config line "verified" it).
+    from_elsewhere = bool(_REACH_Q_RE.search(question)) and not _CLIENT_Q_RE.search(question)
     for i, c in enumerate(planned):
         ok, seen = run_check(root, prober_root, c)
         if ok is None:
@@ -2495,6 +2500,9 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
         elif ok and c["kind"] in _EXISTENCE_CHECKS and not existence_ok:
             out.append({"kind": "goal", "subject": subject + " (shows it exists, not that the question's change "
                         "was made)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
+        elif ok and from_elsewhere and not c["kind"].endswith("_from_other"):
+            out.append({"kind": "goal", "subject": subject + " (a step towards it; the question is about another "
+                        "machine reaching this one)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
         elif ok and c["kind"].endswith("_from_other") and sources and not _prober_is_source(prober_ip, sources):
             out.append({"kind": "goal", "subject": subject + f" (the other machine isn't {', '.join(sources)}, "
                         "which the question is about)", "ok": True, "detail": seen, "decisive": False,
