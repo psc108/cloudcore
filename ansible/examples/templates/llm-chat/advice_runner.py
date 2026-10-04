@@ -2439,10 +2439,50 @@ def run_check(root, prober_root, c: dict) -> tuple[bool | None, str]:
     return None, "unknown check"
 
 
-def model_goal_checks(root, prober_root, planned: list[dict], before: dict) -> list[dict]:
+# Checks that only show something exists or runs. They prove the answer
+# only for a question that asks for nothing more (L21 dev run: "install MySQL
+# and change the root password" was "verified" by mysql running).
+_FIREWALL_CHANGE_RE = re.compile(r"\bufw\s+(?:enable|default|deny|reject|limit|allow)|\biptables\s+-[AIP]|"
+                                 r"\bnft\s+(?:add|insert|flush)|\bfirewall-cmd\b")
+_EXISTENCE_CHECKS = {"user_exists", "path_exists", "service_active", "service_enabled", "port_listening"}
+_EXISTENCE_Q_RE = re.compile(r"^\s*how (?:do|can) i\s+(?:install|enable|start|create|add|set up|run)\b", re.IGNORECASE)
+_SECOND_GOAL_RE = re.compile(r"\b(?:and|so (?:that|it)|then|to)\b\s+(?:\w+\s+){0,3}?(?:make|change|set|configure|serve|enable|start|mount|activate|"
+                             r"allow|block|limit|listen|redirect|use|point|protect|restrict|reach|keep|check|run)\b",
+                             re.IGNORECASE)
+
+
+_QUALIFIER_RE = re.compile(r"\b(?:with(?:out)?|who|which|that|whose|so)\b", re.IGNORECASE)
+
+
+def _existence_question(question: str) -> bool:
+    """Asks only for something to exist or run -- nothing further about it.
+    Errs towards False: that costs a "ran clean", a wrong True a false pass."""
+    return (bool(_EXISTENCE_Q_RE.search(question)) and not _SECOND_GOAL_RE.search(question)
+            and not _QUALIFIER_RE.search(question))
+
+
+def _named_sources(question: str) -> list[str]:
+    """Addresses or networks the question names as a traffic source."""
+    return re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?)\b", question)
+
+
+def _prober_is_source(prober_ip: str, sources: list[str]) -> bool:
+    for s in sources:
+        try:
+            if ipaddress.ip_address(prober_ip) in ipaddress.ip_network(s, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def model_goal_checks(root, prober_root, planned: list[dict], before: dict, question: str = "",
+                      prober_ip: str = "") -> list[dict]:
     """Run the planned checks after the answer and grade them against the
     baseline taken before it."""
     out = []
+    existence_ok = _existence_question(question)
+    sources = _named_sources(question)
     for i, c in enumerate(planned):
         ok, seen = run_check(root, prober_root, c)
         if ok is None:
@@ -2452,6 +2492,13 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict) -> l
         if ok and was:
             out.append({"kind": "goal", "subject": subject + " (already true before the answer)", "ok": True,
                         "detail": seen, "decisive": False, "source": "model"})
+        elif ok and c["kind"] in _EXISTENCE_CHECKS and not existence_ok:
+            out.append({"kind": "goal", "subject": subject + " (shows it exists, not that the question's change "
+                        "was made)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
+        elif ok and c["kind"].endswith("_from_other") and sources and not _prober_is_source(prober_ip, sources):
+            out.append({"kind": "goal", "subject": subject + f" (the other machine isn't {', '.join(sources)}, "
+                        "which the question is about)", "ok": True, "detail": seen, "decisive": False,
+                        "source": "model"})
         elif ok:
             out.append({"kind": "goal", "subject": subject, "ok": True, "detail": seen, "decisive": True,
                         "source": "model"})
@@ -2595,7 +2642,11 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         pam = _pam_services_touched(steps)
         sshd_changed = "sshd" in pam or any("sshd_config" in (s.target or "") or
                                             (s.kind == "run" and "sshd_config" in s.source) for s in steps)
-        auth_related = bool(pam) or sshd_changed or bool(_MFA_RE.search(question + "\n" + answer))
+        # L21: a firewall change can lock SSH out as surely as an sshd change
+        # (dev run #28: `ufw enable` with no allow rule).
+        firewall_changed = any(s.kind == "run" and _FIREWALL_CHANGE_RE.search(s.source) for s in steps)
+        auth_related = (bool(pam) or sshd_changed or firewall_changed
+                        or bool(_MFA_RE.search(question + "\n" + answer)))
         if make_prober and pair:
             say("# booting the prober: a second machine on a private link, to test the result from outside\n")
             prober = make_prober(pair)
@@ -2807,7 +2858,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         checks += _goal_checks(question, answer, steps, root, prober_root,
                                (prober.ip or "") if prober is not None else "")
         if planned_checks:
-            checks += model_goal_checks(root, prober_root, planned_checks, checks_before)
+            checks += model_goal_checks(root, prober_root, planned_checks, checks_before, question,
+                                        (prober.ip or "") if prober is not None else "")
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)

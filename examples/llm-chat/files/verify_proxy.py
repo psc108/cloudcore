@@ -1925,7 +1925,8 @@ _PRESUME_SYSTEM = (
     '  {"kind":"default_target","target":"....target"}  {"kind":"sysctl","key":"...","value":"..."}\n'
     '  {"kind":"command_output","command":"<one read-only command, no pipes>","contains":"..."}\n'
     "Prefer the most direct check of the goal (for \"let maria edit /var/www/html\": user_in_group or path_owner, "
-    "not file_contains). At most 4 checks.\n"
+    "not file_contains; for \"let another machine reach X\": port_open_from_other). Check the change the "
+    "question asks for, not only that the software is installed or running. At most 4 checks.\n"
     'If nothing applies, reply {"setup":[],"placeholders":[],"checks":[]}.')
 
 
