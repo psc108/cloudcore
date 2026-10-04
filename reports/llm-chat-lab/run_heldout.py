@@ -114,8 +114,14 @@ def main() -> int:
     ap.add_argument("--base", default="http://127.0.0.1:8620")
     ap.add_argument("--sentinel-db", type=Path, default=Path.home() / ".local/share/sentinel/sentinel.db")
     ap.add_argument("--only", default="")
+    ap.add_argument("--questions", type=Path, default=HERE / "heldout-questions.json")
+    ap.add_argument("--prefix", default="heldout", help="output files <prefix>-asks.jsonl, <prefix>-labs.jsonl")
     args = ap.parse_args()
-    questions = json.loads((HERE / "heldout-questions.json").read_text())["questions"]
+    global ASKS, LABS
+    ASKS, LABS = HERE / f"{args.prefix}-asks.jsonl", HERE / f"{args.prefix}-labs.jsonl"
+    questions = json.loads(args.questions.read_text())["questions"]
+    # The sealed set lists [kind, question]; number them as heldout-questions.json does.
+    questions = [q if isinstance(q, dict) else {"n": i, "kind": q[0], "q": q[1]} for i, q in enumerate(questions, 1)]
     only = {int(x) for x in args.only.split(",") if x}
     have = {json.loads(l)["n"]: json.loads(l) for l in ASKS.read_text().splitlines()} if ASKS.exists() else {}
     for q in questions:
