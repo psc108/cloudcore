@@ -21,7 +21,11 @@
 # Usage:
 #   sudo api/setup-lab-network.sh --controllers CIDR[,CIDR...] [--dry-run]
 #   sudo api/setup-lab-network.sh --remove [--dry-run]
+#   sudo api/setup-lab-network.sh --from-conf [--clear-leases]   (re-apply saved settings)
 #   api/setup-lab-network.sh --help
+#
+# --clear-leases empties the lab DHCP lease file on restart. Only when no lab
+#                VM is running: theirs would be handed out again (F-217).
 #
 # --controllers  who may SSH into lab VMs: the coordinators' bridge subnets
 #                (this host's and its peers', e.g.
@@ -116,7 +120,8 @@ install_helper() {
 # The only root action CloudCore's broker may take on the lab network: let a
 # run's target and prober reach each other, and undo it.
 #   cloudcore-labnet pair add|del IP_A IP_B
-#   cloudcore-labnet unpair IP        (every pair involving IP)
+#   cloudcore-labnet unpair IP        (every pair involving IP, and its DHCP lease:
+#                                      the broker calls this as a lab VM goes, F-217)
 #   cloudcore-labnet list
 set -euo pipefail
 . /etc/cloudcore/labnet.conf
@@ -139,6 +144,12 @@ for o in json.load(sys.stdin)["nftables"]:
       a="${a1}.${a2}.${a3}.${a4}"; b="${b1}.${b2}.${b3}.${b4}"
       if [[ "${a}" == "$2" || "${b}" == "$2" ]]; then nft delete element bridge cclab pairs "{ ${a} . ${b} }"; fi
     done
+    # F-217: every lab VM has a new MAC, so a lease outlives its VM; 241
+    # addresses ran out in a night of proof runs. Give the address back.
+    mac="$(awk -v ip="$2" '$3 == ip {print $2; exit}' /var/lib/misc/cloudcore-lab-dnsmasq.leases 2>/dev/null || true)"
+    if [[ -n "${mac}" ]] && command -v dhcp_release >/dev/null; then
+      dhcp_release cclab0 "$2" "${mac}" || true
+    fi
     ;;
   list) nft list set bridge cclab pairs ;;
   *) echo "usage: cloudcore-labnet pair add|del IP_A IP_B | unpair IP | list" >&2; exit 2 ;;
@@ -223,15 +234,21 @@ apply() {
   # VM's address, so the mode is set explicitly rather than left to root's
   # umask (found on the peer: a stricter umask made it root-only and every
   # status request for a lab VM failed with a 500).
+  if [[ "${CLEAR_LEASES:-0}" -eq 1 ]]; then
+    log "clearing ${LEASE_FILE} (--clear-leases: only when no lab VM is running)"
+    run truncate -s 0 "${LEASE_FILE}"
+  fi
   run touch "${LEASE_FILE}"
   run chmod 0644 "${LEASE_FILE}"
   # DNS goes straight to public resolvers: lab VMs never see this host's or
   # the LAN's own names.
   run dnsmasq --interface="${BRIDGE}" --bind-interfaces --except-interface=lo \
-    --dhcp-range="10.250.${octet}.10,10.250.${octet}.250,12h" \
+    --dhcp-range="10.250.${octet}.10,10.250.${octet}.250,1h" \
     --dhcp-option="option:dns-server,${gw}" --server=1.1.1.1 --server=8.8.8.8 --no-resolv \
     --dhcp-leasefile="${LEASE_FILE}" --pid-file="${PIDFILE}" --log-facility=/var/log/cloudcore-lab-dnsmasq.log
 
+  # dhcp_release, which the helper uses to give a gone lab VM's address back (F-217).
+  command -v dhcp_release >/dev/null || run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends dnsmasq-utils
   install_helper
   install_sudoers
   [[ -f "${UNIT}" ]] || install_unit
@@ -260,6 +277,7 @@ main() {
       --from-conf) mode=conf; shift ;;
       --remove) mode=remove; shift ;;
       --keep-conf) keep_conf=1; shift ;;
+      --clear-leases) CLEAR_LEASES=1; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) usage; die "unknown argument: $1" 2 ;;

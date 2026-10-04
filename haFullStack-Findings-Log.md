@@ -4354,6 +4354,24 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **The #25 case offline:** `user` → `labuser` only as a whole word, while `username` and `/home/users` stay. `destination` → the other machine's address in `labuser@destination:` and `ssh destination`, but not inside `/path/to/destination/`. `/path/to/source` → `/srv/lab/source` in both setup and fill.
 - **Regression run:** the 40-answer run with these fixes follows.
 
+### F-217 — The lab network ran out of DHCP addresses overnight: leases outlived their VMs
+
+**Where:** `api/setup-lab-network.sh` (the lab dnsmasq, and the `cloudcore-labnet` helper).
+
+**Symptom:** found 2026-10-04 grading the sealed L20 run. 13 of 40 lab runs never ran: the proof-target VM failed to boot with "timed out waiting for an address", or cloud-init failed with no network. Ten were consecutive (#30–#40), from about 07:30. Nothing had leaked: every lab VM had been deleted, and memory and disk were fine.
+
+**Root cause:**
+- **The range was full:** the lab DHCP range is 10.250.N.10–250 (241 addresses) with 12-hour leases. Llwyn-y-Groes's lease file held exactly 241.
+- **Every lab VM is new:** each has a new MAC, so each takes a new lease, and deleting the VM never gave the address back.
+- **The volume:** in one night the lab created over 200 lab VMs (S7, three 15-answer passes, a 40-answer regression run, the sealed run). The range filled and later VMs got no address.
+
+**Fix:**
+- **Release on delete:** the root helper's `unpair IP`, which the broker already calls for every lab VM it deletes (local or on a peer), now also runs `dhcp_release` for that address with the MAC from the lease file. The setup installs `dnsmasq-utils`.
+- **Shorter leases:** leases are now 1 hour, as a backstop.
+- **Emptying a full file:** `--clear-leases` empties the lease file on restart, only when no lab VM is running.
+
+**Verified by:** the re-applied lab network on both hosts and the re-run of the 13 runs, recorded with L20.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4522,3 +4540,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.42 | 2026-10-03 | Paul Scott | Two-host S7. F-214: the peer's OpenTofu provider was a stale build (git pull doesn't rebuild it); checklist step 3c. |
 | v3.43 | 2026-10-03 | Paul Scott | Two-host S7 done. F-215: Stourport's hand-edited Loki config held a duplicate key since F-197 and failed on its first restart. |
 | v3.44 | 2026-10-04 | Paul Scott | L16-L19 testing. F-216: placeholder filling replaced substrings (`user` inside other words). |
+| v3.45 | 2026-10-04 | Paul Scott | L20. F-217: lab DHCP leases outlived their VMs; 241 addresses ran out overnight. |

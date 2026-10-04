@@ -1,0 +1,122 @@
+02:59:09 #1 [everyday] How do I find which files in my home directory were changed in the last hour?
+03:04:56   answered in 343s (1239 chars, complete=True); grounding=kiwix refs=['How to find Directories that updated las', 'Find the files that have been changed in']; lab=yes
+03:04:56 #2 [everyday] How can I see the size of every log file in /var/log, biggest first?
+03:09:14   answered in 256s (476 chars, complete=True); grounding=kiwix refs=['How can I delete files from my hard driv', 'Error: ENOSPC: no space left on device, ']; lab=yes
+03:09:14 #3 [everyday] How do I check how long the server has been running and who is logged in?
+03:11:29   answered in 132s (793 chars, complete=True); grounding=kiwix refs=['Uptime and who -b are showing different ', 'Get Linux System Last Boot Time']; lab=yes
+03:11:29 #4 [everyday] How do I compress a large log file with gzip but keep the original?
+03:12:52   answered in 80s (346 chars, complete=True); grounding=kiwix refs=['logrotate not compressing files', 'How can I compress the output of "tail -']; lab=yes
+03:12:52 #5 [everyday] How do I see which ports my machine is listening on and which program owns each?
+03:18:52   answered in 357s (844 chars, complete=True); grounding=kiwix refs=['What network connections are not seen by', 'lsof show many sock fd while ss/netstat ']; lab=yes
+03:18:52 #6 [everyday] How do I find and delete empty directories under /srv/data?
+03:22:02   answered in 186s (716 chars, complete=True); grounding=kiwix refs=['Using symbolic link on directory with co', 'Parse Apache VHosts to get list of Domai']; lab=yes
+03:22:02 #7 [everyday] My disk is nearly full -- how do I find what is taking up the space?
+03:26:38   answered in 273s (1179 chars, complete=True); grounding=kiwix refs=['Unable to find which files are consuming', 'increased disk space usage after nodetoo']; lab=yes
+03:26:38 #8 [services] How do I create a user called backup with no login shell?
+03:38:28   answered in 707s (767 chars, complete=True); grounding=None refs=[]; lab=yes
+03:38:28 #9 [services] How do I make user carol an administrator who can run any command with sudo?
+03:49:17   answered in 646s (1879 chars, complete=True); grounding=kiwix refs=['usermod command is not working despite g', 'When I(root) excute "usermod -G sudo cha']; lab=yes
+03:49:17 #10 [services] How do I run a command as user www-data?
+03:53:36   answered in 257s (805 chars, complete=True); grounding=kiwix refs=['BASH Scripting, su to www-data for singl', 'How to sudo or su to other user as www-d']; lab=yes
+03:53:36 #11 [services] How do I make a systemd service start only after the network is up?
+03:56:51   answered in 191s (1201 chars, complete=True); grounding=kiwix refs=['How to force network.target to wait for ', 'Debian systemd service starts before net']; lab=yes
+03:56:51 #12 [services] How do I see why a systemd service failed to start?
+04:00:58   answered in 245s (1102 chars, complete=True); grounding=kiwix refs=['Why doesn\'t "systemctl status" show anyt', 'Job for docker.service failed because th']; lab=yes
+04:00:58 #13 [services] How do I schedule a one-off job to run tomorrow at 9am?
+04:07:29   answered in 388s (1311 chars, complete=True); grounding=local_corpus refs=['How do I schedule a script to run every ']; lab=yes
+04:07:29 #14 [services] How do I change the owner of /var/www/site and everything in it to user deploy?
+04:14:26   answered in 414s (675 chars, complete=True); grounding=kiwix refs=['Django 2.1 deployment on centos 7 with a', 'Issue with Wordpress Folders on Google C']; lab=yes
+04:14:26 #15 [services] How do I force a user to change their password at next login?
+04:24:37   answered in 608s (1505 chars, complete=True); grounding=kiwix refs=['Puppet: Forcing user to change his passw', 'Forcing users to change his password at ']; lab=yes
+04:24:37 #16 [logins-web] How do I install nginx and make it serve files from /srv/www instead of the default?
+04:37:41   answered in 781s (2022 chars, complete=True); grounding=kiwix refs=['Redirecting webapps in nginx content fol', 'nginx - two subdomain configuration']; lab=yes
+04:37:41 #17 [logins-web] How do I redirect all HTTP traffic to HTTPS in nginx?
+04:50:29   answered in 765s (1907 chars, complete=True); grounding=kiwix refs=['How to redirect http requests to https (', 'Kubernetes Ingress: SSL (HTTP -> HTTPS) ']; lab=yes
+04:50:29 #18 [logins-web] How do I limit SSH logins to members of a group called sshusers?
+05:04:52   answered in 860s (1572 chars, complete=True); grounding=local_corpus refs=['how could we add mfa to the linux login ']; lab=yes
+05:04:52 #19 [logins-web] How do I install MySQL and change the root password?
+05:11:02   answered in 367s (1121 chars, complete=True); grounding=kiwix refs=['MySQL root account without password?', 'Ansible idempotent MySQL installation Pl']; lab=yes
+05:11:02 #20 [logins-web] How do I see the last 50 failed SSH login attempts?
+05:25:23   answered in 858s (828 chars, complete=True); grounding=kiwix refs=['Fail2Ban does not ban failed root login ', 'Counting the frequency of seperate IP en']; lab=yes
+05:25:23 #21 [logins-web] How do I get a certificate for example.org from Let's Encrypt with certbot standalone?
+05:38:15   answered in 769s (2007 chars, complete=True); grounding=kiwix refs=['cannot run certbot on ubuntu 14 server f', "Let's encrypt error certificate install "]; lab=yes
+05:38:15 #22 [disks] How do I add a second disk and mount it at /backup so it is there after reboot?
+05:53:00   answered in 882s (2000 chars, complete=True); grounding=kiwix refs=['How do I get udev to mount certain USB d', 'Data gone after EC2 Instance reboot']; lab=yes
+05:53:00 #23 [disks] How do I check which filesystem type each mounted disk uses?
+06:08:45   answered in 942s (1268 chars, complete=True); grounding=kiwix refs=["disk partitions don't mount to filesyste", 'How to check if a directory is on a loca']; lab=yes
+06:08:45 #24 [disks] How do I extend an LVM logical volume by 1GB and grow the filesystem on it?
+06:17:30   answered in 522s (1305 chars, complete=True); grounding=kiwix refs=['Proper way of extend /opt with lvm and x', 'Linux CENTOS7 LVM']; lab=yes
+06:17:30 #25 [disks] How do I set a disk quota of 1GB for user dave?
+06:24:59   answered in 446s (1286 chars, complete=True); grounding=kiwix refs=['smb.conf: The configuration file for the', '"Insufficient resources to perform opera']; lab=yes
+06:24:59 #26 [disks] How do I see the health and temperature of my NVMe drive?
+06:27:48   answered in 166s (892 chars, complete=True); grounding=kiwix refs=['How to check/fix nvme health?', 'How do you read package temperature on N']; lab=yes
+06:27:48 #27 [networking] How do I find my server's public IP address from the command line?
+06:31:11   answered in 200s (1292 chars, complete=True); grounding=kiwix refs=['ifconfig ip address does not show server', 'How to get ip address of a server on Cen']; lab=yes
+06:31:11 #28 [networking] How do I block all incoming traffic from 203.0.113.50 with ufw?
+06:33:14   answered in 120s (507 chars, complete=True); grounding=kiwix refs=['Bad ARGS for ufw deny', 'Deny requests to a port ufw']; lab=yes
+06:33:14 #29 [networking] How do I add an entry to /etc/hosts so that db.local points to 10.0.0.5?
+06:46:42   answered in 805s (1091 chars, complete=True); grounding=kiwix refs=['Graylog does not receive logs from Docke', 'JDBC connection between Docker container']; lab=yes
+06:46:42 #30 [networking] How do I bring a network interface down and back up?
+06:55:10   answered in 505s (958 chars, complete=True); grounding=kiwix refs=['Centos 7 nmcli creating new connections ', 'system() call not working with ifup/ifdo']; lab=yes
+06:55:10 #31 [networking] How do I see the route my packets take to 8.8.8.8?
+07:04:30   answered in 557s (789 chars, complete=True); grounding=kiwix refs=['sudo traceroute -n . Not working', "can't traceroute from linux docker in wi"]; lab=yes
+07:04:30 #32 [multi-machine] How do I copy a file to another server with scp?
+07:12:18   answered in 465s (1034 chars, complete=True); grounding=kiwix refs=['How to make scp copy hidden files?', 'Secure copy protocol']; lab=yes
+07:12:18 #33 [multi-machine] How do I mount a remote directory over SSH with sshfs?
+07:20:05   answered in 465s (1126 chars, complete=True); grounding=kiwix refs=['Mount remote directory using SSH', 'how to mount local directory to remote l']; lab=yes
+07:20:05 #34 [multi-machine] How do I let another machine reach a PostgreSQL database on this one?
+07:31:05   answered in 657s (2411 chars, complete=True); grounding=kiwix refs=['pmdapostgresql: PostgreSQL database PMDA', 'aws - How to add multiple postgresql con']; lab=yes
+07:31:05 #35 [kernel-boot] How do I see which kernel version I am running and which ones are installed?
+07:33:40   answered in 152s (417 chars, complete=True); grounding=kiwix refs=["modprobe: ERROR: could not insert 'opena", "TS-7500 doesn't detect ttyACM ports"]; lab=yes
+07:33:40 #36 [kernel-boot] How do I list the USB devices plugged into this machine?
+07:41:35   answered in 472s (1441 chars, complete=True); grounding=kiwix refs=['USB serial number not shown with lsusb -', "What's wrong with lsusb | awk '{print $6"]; lab=yes
+07:41:35 #37 [kernel-boot] How do I make the system boot into text mode instead of the desktop?
+07:43:48   answered in 129s (784 chars, complete=True); grounding=kiwix refs=['How can I simply change into a text mode', 'What does "Failed to execute operation: ']; lab=yes
+07:43:48 #38 [kernel-boot] How do I check whether my CPU supports hardware virtualisation?
+07:48:31   answered in 281s (452 chars, complete=True); grounding=kiwix refs=['Oracle virtualbox not allowing than one ', 'How to enable support of CPU virtualizat']; lab=yes
+07:48:31 #39 [explanation] What is the difference between a process and a thread?
+08:04:04   answered in 929s (3561 chars, complete=True); grounding=kiwix refs=['concurrency vs parallelism', 'Thread priorities in Lua']; lab=yes
+08:04:04 #40 [explanation] What does the sticky bit do on a directory?
+08:11:08   answered in 421s (654 chars, complete=True); grounding=kiwix refs=['Do sticky bits in Linux permissions make', 'Ansible - find and set permissions, incl']; lab=yes
+08:11:08 all questions asked; waiting for lab runs
+08:11:08   #1: lab partial
+08:11:08   #2: lab failed -> repaired partial
+08:11:08   #3: lab partial
+08:11:08   #4: lab failed -> repaired partial
+08:11:08   #5: lab ran_clean
+08:11:08   #6: lab partial
+08:11:08   #7: lab failed -> repaired failed -> attempts ['ran_clean']
+08:11:08   #8: lab failed -> attempts ['ran_clean']
+08:11:08   #9: lab ran_clean
+08:11:08   #10: lab not_runnable
+08:11:08   #11: lab ran_clean
+08:11:08   #12: lab failed -> repaired partial
+08:11:08   #13: lab failed -> attempts ['failed', 'ran_clean']
+08:11:08   #14: lab failed -> repaired failed -> attempts ['ran_clean']
+08:11:08   #15: lab failed -> attempts ['partial']
+08:11:08   #16: lab failed -> attempts ['failed', '']
+08:11:08   #17: lab failed -> repaired ran_clean
+08:11:08   #18: lab failed -> repaired failed -> attempts ['goal_verified']
+08:11:08   #19: lab ran_clean
+08:11:08   #20: lab partial
+08:11:08   #21: lab not_testable
+08:11:08   #22: lab partial
+08:11:08   #23: lab partial
+08:11:08   #24: lab failed -> attempts ['failed', 'failed']
+08:11:08   #25: lab failed -> repaired failed -> attempts ['failed', 'failed']
+08:11:08   #26: lab not_testable
+08:11:08   #27: lab ran_clean
+08:11:08   #28: lab ran_clean
+08:23:10   #29: lab failed -> attempts ['partial']
+08:33:11   #30: lab partial
+08:43:12   #31: lab partial
+08:53:12   #32: lab partial
+09:03:13   #33: lab partial
+09:13:14   #34: lab partial
+09:23:14   #35: lab partial
+09:33:15   #36: lab partial
+09:43:15   #37: lab partial
+09:48:15   #38: lab partial
+09:51:15   #39: lab partial
+10:01:15   #40: lab partial
+10:01:15 ALL DONE
