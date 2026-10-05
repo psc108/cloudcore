@@ -2003,10 +2003,39 @@ def _students_first(what: str) -> None:
 LAB_READER_URLS = [u.strip().rstrip("/") for u in os.environ.get("LAB_READER_URLS", "").split(",") if u.strip()]
 
 
+_floor_ok: dict[str, tuple[float, bool]] = {}
+
+
+def _meets_floor(url: str) -> bool:
+    """C2: a lab endpoint is used only if it serves our own model -- never a
+    smaller one (direct request: "I don't want quality compromised").
+    Asked via llama-server's /props, remembered for 5 minutes."""
+    now = time.monotonic()
+    hit = _floor_ok.get(url)
+    if hit and now - hit[0] < 300:
+        return hit[1]
+    own = os.environ.get("EXAMPLES_MODEL_FILENAME", "")
+    ok = False
+    try:
+        with urllib.request.urlopen(url + "/props", timeout=3) as resp:
+            props = json.loads(resp.read())
+        served = os.path.basename(str(props.get("model_path") or props.get("default_generation_settings", {}).get("model", "")))
+        ok = bool(own) and served == own
+        if not ok:
+            print(f"verify-proxy: lab endpoint {url} serves {served!r}, not {own!r}: not used (quality floor)", flush=True)
+    except Exception:  # noqa: BLE001 -- unreachable: not used
+        ok = False
+    _floor_ok[url] = (now, ok)
+    return ok
+
+
 def _idle_reader() -> str:
-    """The first reader with a free slot right now, or "" (use our own
-    model). Asked per reading: readers come and go, and get busy."""
+    """The first lab endpoint serving our own model with a free slot right
+    now, or "" (use our own model, students first). Asked per call: lab
+    endpoints come and go, and get busy."""
     for url in LAB_READER_URLS:
+        if not _meets_floor(url):
+            continue
         try:
             with urllib.request.urlopen(url + "/slots", timeout=3) as resp:
                 slots = json.loads(resp.read())
@@ -2017,6 +2046,27 @@ def _idle_reader() -> str:
     return ""
 
 
+def _lab_chat(payload: dict, what: str, timeout: int) -> str:
+    """One chat completion for the lab: on an idle lab endpoint (C2/C5), else
+    on our own model once no student is waiting (C1). Raises on failure."""
+    lab = _idle_reader()
+    if not lab:
+        _students_first(what)
+    for base in ([lab] if lab else []) + [f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"]:
+        try:
+            req = urllib.request.Request(f"{base}/v1/chat/completions", data=json.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())["choices"][0]["message"]["content"]
+        except Exception as e:  # noqa: BLE001
+            if base == lab:
+                print(f"verify-proxy: {what} on {lab} failed ({e!r}); using our own model", flush=True)
+                _students_first(what)
+                continue
+            raise
+    raise RuntimeError("no model answered")
+
+
 def _model_presumptions(question: str, answer: str) -> dict:
     """L16/L17: the model's reading of what the question presumes and which
     tokens are placeholders. {} on any failure: the run goes on without it."""
@@ -2024,28 +2074,12 @@ def _model_presumptions(question: str, answer: str) -> dict:
         {"role": "system", "content": _PRESUME_SYSTEM},
         {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
         "max_tokens": 700, "stream": False, "temperature": 0.0}
-    reader = _idle_reader()
-    if not reader:
-        _students_first("a lab reading")
-    base = reader or f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"
+    reader = _idle_reader()  # recorded with the run: which model read it
     try:
-        req = urllib.request.Request(f"{base}/v1/chat/completions",
-                                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as resp:
-            text = json.loads(resp.read())["choices"][0]["message"]["content"]
+        text = _lab_chat(payload, "a lab reading", 600)
     except Exception as e:  # noqa: BLE001 -- an aid, never a hard dependency
-        print(f"verify-proxy: presumptions request to {base} failed: {e!r}", flush=True)
-        if not reader:
-            return {}
-        reader, base = "", f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"  # the reader failed mid-call: our own model
-        try:
-            req = urllib.request.Request(f"{base}/v1/chat/completions", data=json.dumps(payload).encode(),
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                text = json.loads(resp.read())["choices"][0]["message"]["content"]
-        except Exception as e2:  # noqa: BLE001
-            print(f"verify-proxy: presumptions request failed: {e2!r}", flush=True)
-            return {}
+        print(f"verify-proxy: presumptions request failed: {e!r}", flush=True)
+        return {}
     start, end = text.find("{"), text.rfind("}")
     try:
         data = json.loads(text[start:end + 1]) if start >= 0 < end else {}
@@ -2061,17 +2095,13 @@ def _model_presumptions(question: str, answer: str) -> dict:
 def _model_fix(question: str, step: str, output: str) -> str:
     """L10b: the model's one-line fix for one failed step (the lab's own
     repair strategies having failed). "" on any failure."""
-    _students_first("a lab repair")
     payload = {"messages": [
         {"role": "system", "content": _MODEL_FIX_SYSTEM},
         {"role": "user", "content": f"The question was: {question}\n\nThe step:\n{step}\n\n"
                                     f"What it printed (last part):\n{output}"}],
         "max_tokens": 80, "stream": False, "temperature": 0.2}
     try:
-        req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
-                                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as resp:
-            text = json.loads(resp.read())["choices"][0]["message"]["content"].strip()
+        text = _lab_chat(payload, "a lab repair", 600).strip()
     except Exception as e:  # noqa: BLE001 -- a repair aid, never a hard dependency
         print(f"verify-proxy: model fix request failed: {e!r}", flush=True)
         return ""
@@ -2160,7 +2190,6 @@ def _same_method(a: str, b: str) -> bool:
 def _model_alternative(question: str, answer: str, report: str, search_terms: str,
                        temperature: float = 0.4, nudge: str = "") -> str:
     """A different answer to `question`, given what failed. "" on failure."""
-    _students_first("a lab 'another way' answer")
     payload = {"messages": [
         {"role": "system", "content": LINUX_SYSTEM_MESSAGE},
         {"role": "user", "content": _lab_facts(search_terms) + question},
@@ -2168,10 +2197,7 @@ def _model_alternative(question: str, answer: str, report: str, search_terms: st
         {"role": "user", "content": _RETRY_INSTRUCTION + (" " + nudge if nudge else "") + "\n\n" + report}],
         "max_tokens": 1200, "stream": False, "temperature": temperature}
     try:
-        req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
-                                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=3600) as resp:
-            return _standalone(json.loads(resp.read())["choices"][0]["message"]["content"].strip())
+        return _standalone(_lab_chat(payload, "a lab 'another way' answer", 3600).strip())
     except Exception as e:  # noqa: BLE001 -- another way is a bonus; the original result stands
         print(f"verify-proxy: alternative-answer request failed: {e!r}", flush=True)
         return ""

@@ -64,8 +64,8 @@ locals {
   reader_user_data = templatefile("${path.module}/files/reader-cloud-init.yaml.tftpl", {
     llama_archive_name    = var.llama_archive_name
     llama_sha256          = var.llama_sha256
-    reader_model_filename = var.reader_model_filename
-    reader_model_sha256   = var.reader_model_sha256
+    reader_model_filename = var.reader_model_filename != "" ? var.reader_model_filename : var.model_filename
+    reader_model_sha256   = var.reader_model_filename != "" ? var.reader_model_sha256 : var.model_sha256
     reader_port           = var.reader_port
     reader_threads        = var.reader_threads
     reader_context_size   = var.reader_context_size

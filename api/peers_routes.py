@@ -609,6 +609,73 @@ def recommend_placement():
     })
 
 
+def _placement_candidates() -> list[dict]:
+    """This host and every reachable approved peer, with their live stats."""
+    out = []
+    try:
+        s = host_stats.collect()
+        out.append({"peer_id": None, "hostname": "This host (local)", "verdict": host_stats.verdict(s), "stats": s})
+    except Exception:  # noqa: BLE001 -- a broken local stats read just isn't a candidate
+        pass
+    for peer in peers_store.list_peers(status="approved"):
+        resp, error = _peer_proxy_get(peer["id"], "/v1/system/stats")
+        if error or resp.status != 200:
+            continue
+        out.append({"peer_id": peer["id"], "hostname": peer["hostname"],
+                    "verdict": host_stats.verdict(resp.body), "stats": resp.body})
+    return out
+
+
+@peers_bp.get("/v1/peers/recommend-llm-placement")
+def recommend_llm_placement():
+    """C4 (llm-chat-placement-Phased-Implementation.md): place LLM roles on
+    the hosts that run that model FASTEST, by measured speed (api/llm-bench.py,
+    reported in each host's stats), not by core counts or load.
+
+    ?model=<gguf file> (required), ?roles=answer,lab (in priority order),
+    ?flavors=<largest first>, ?min_ram_mb=<the model's need>.
+    Each role, in order, gets the fastest host that can fit one of the
+    flavors with at least min_ram_mb, preferring a host no earlier role
+    took; on it, the largest such flavor. A host without a measurement for
+    this model ranks after every measured one (run llm-bench.py there).
+    Direct request: "choose the best specified system to run whatever we
+    need where it's possible." Advisory: the build's own vars still decide."""
+    model = request.args.get("model", "").strip()
+    if not model.endswith(".gguf") or "/" in model:
+        return jsonify({"status": 400, "title": "Bad Request", "detail": "model must be a .gguf file name"}), 400
+    roles = [r.strip() for r in request.args.get("roles", "answer,lab").split(",") if r.strip()][:6]
+    flavors = [f.strip() for f in request.args.get(
+        "flavors", "standard.2xlarge,standard.xlarge,memory.large,standard.large").split(",") if f.strip()]
+    import capacity_gate  # deferred: capacity_gate imports this module (see recommend_placement)
+    min_ram = int(request.args.get("min_ram_mb", "0") or 0)
+    flavors = [f for f in flavors if f in compute.FLAVORS and compute.FLAVORS[f][1] >= min_ram]
+
+    hosts = []
+    for c in _placement_candidates():
+        bench = (c["stats"].get("llm_bench") or {}).get(model) or {}
+        fits = [f for f in flavors if capacity_gate.affords(c["stats"], f)]
+        hosts.append({"peer_id": c["peer_id"], "hostname": c["hostname"], "verdict": c["verdict"],
+                      "gen_tps": bench.get("gen_tps"), "prompt_tps": bench.get("prompt_tps"),
+                      "measured_at": bench.get("measured_at"), "gpus": c["stats"].get("gpus") or [],
+                      "flavor": fits[0] if fits else None,
+                      "load_pct_1m": c["stats"].get("cpu", {}).get("load_pct_1m", 0)})
+
+    def rank(h):
+        return (h["gen_tps"] is not None, h["gen_tps"] or 0, h["prompt_tps"] or 0, -h["load_pct_1m"])
+
+    taken, assignments = set(), {}
+    for role in roles:
+        usable = [h for h in hosts if h["flavor"] and h["verdict"] != "error"]
+        fresh = [h for h in usable if h["hostname"] not in taken] or usable
+        if not fresh:
+            assignments[role] = None
+            continue
+        best = max(fresh, key=rank)
+        taken.add(best["hostname"])
+        assignments[role] = {k: best[k] for k in ("peer_id", "hostname", "flavor", "gen_tps", "prompt_tps")}
+    return jsonify({"model": model, "assignments": assignments, "hosts": hosts})
+
+
 def _peer_inbound_auth() -> bool:
     """True if the request carries either the shared dev token or a
     valid approved peer's own local_token. Duplicated here rather than

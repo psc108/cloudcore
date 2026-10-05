@@ -222,6 +222,9 @@ FLAVORS = {
     # reader, 7B Q4 + 8k context in ~6GB). 2 vCPU, so a 4-core host keeps
     # 2 for itself (same rule as standard.2xlarge above).
     "memory.medium": (2, 8192, 40),
+    # The same for a 14B (Q4 ~8.4GB + context): llm-chat's lab model on a
+    # 4-core host, measured at ~80% of an 8-thread host's speed (C3).
+    "memory.large": (2, 16384, 60),
 }
 
 

@@ -906,27 +906,27 @@ variable "labvm_broker_token" {
 # falls back to its own model.
 
 variable "reader_enabled" {
-  description = "Run a lab reader instance (a small model) for the lab's readings."
+  description = "Run the lab's own model instance (C2: the `lab` role -- readings, repairs, another way), placed by measured speed (C4)."
   type        = bool
   default     = false
 }
 
 variable "reader_flavor" {
-  description = "The reader's flavor. memory.medium (2 vCPU, 8GB) fits a 7B Q4 model and leaves a 4-core host 2 cores."
+  description = "The lab model's flavor. memory.large (2 vCPU, 16GB) fits the 14B Q4 and leaves a 4-core host 2 cores."
   type        = string
-  default     = "memory.medium"
+  default     = "memory.large"
 }
 
 variable "reader_model_filename" {
-  description = "Model the reader serves, from the host package repo's artifacts."
+  description = "Model the lab instance serves. Empty: the coordinator's own model_filename -- the quality floor (C2); the coordinator refuses a lab endpoint serving anything else."
   type        = string
-  default     = "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+  default     = ""
 }
 
 variable "reader_model_sha256" {
-  description = "sha256 of reader_model_filename (the repo's sync-index.json lists it)."
+  description = "sha256 of reader_model_filename; empty with it to use model_sha256."
   type        = string
-  default     = "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6"
+  default     = ""
 }
 
 variable "reader_port" {
