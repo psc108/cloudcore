@@ -13,6 +13,7 @@ for our intended resource placement and which can tolerate it").
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 
@@ -103,6 +104,29 @@ def _lab_network_ready() -> bool:
     return any(l.strip() in (f"allow {compute.LAB_BRIDGE_NAME}", "allow all") for l in lines)
 
 
+def _llm_bench() -> dict:
+    """api/llm-bench.py's measurements, by model file (a file read)."""
+    try:
+        data = json.loads((Path.home() / ".local/share/cloudcore/llm-bench.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    models = data.get("models") if isinstance(data, dict) else None
+    return models if isinstance(models, dict) else {}
+
+
+def _gpus() -> list[str]:
+    """NVIDIA GPUs the driver reports (a /proc read); empty without one."""
+    out = []
+    for info in sorted(Path("/proc/driver/nvidia/gpus").glob("*/information")):
+        try:
+            model = next((l.split(":", 1)[1].strip() for l in info.read_text().splitlines()
+                          if l.startswith("Model:")), "")
+        except OSError:
+            continue
+        out.append(model or info.parent.name)
+    return out
+
+
 def collect() -> dict:
     """This host's own current stats — safe to call often, every number
     here is a cheap local read (no subprocess, no network)."""
@@ -113,6 +137,10 @@ def collect() -> dict:
         "instances": _instance_stats(),
         # F2: can this host run isolated lab VMs? (a sysfs read, no subprocess)
         "lab_network": _lab_network_ready(),
+        # C3: how fast this host runs each LLM it has measured (api/llm-bench.py),
+        # and any GPUs -- what placement ranks hosts by.
+        "llm_bench": _llm_bench(),
+        "gpus": _gpus(),
         "collected_at": now_iso(),
     }
 
