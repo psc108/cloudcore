@@ -2649,7 +2649,8 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
     return out
 
 
-PRESUME_TIMEOUT_S = 240
+# A reading may wait for students first (C1): long enough not to skip it.
+PRESUME_TIMEOUT_S = 1900
 
 
 def _setup_stage(result, root, presumed: dict, question: str, answer: str, other_ip: str, say):

@@ -1962,6 +1962,42 @@ def _answer_code(answer: str, limit: int = 3000) -> str:
     return ("\n".join(out) or answer)[:limit]
 
 
+# C1 (llm-chat-placement-Phased-Implementation.md): students first. Every
+# model call the lab makes -- readings, repairs, another way -- waits while a
+# student's question is being answered on this model, so students get the
+# whole 14B. The lab's work is unchanged, only later. Waiting is bounded so
+# the lab never stalls for good.
+STUDENT_PRIORITY_WAIT_S = int(os.environ.get("STUDENT_PRIORITY_WAIT_S", "1800"))
+_students_active = 0
+_students_cv = threading.Condition()
+
+
+class _StudentRequest:
+    """`with _StudentRequest():` around a student's request."""
+
+    def __enter__(self):
+        global _students_active
+        with _students_cv:
+            _students_active += 1
+
+    def __exit__(self, *exc):
+        global _students_active
+        with _students_cv:
+            _students_active -= 1
+            _students_cv.notify_all()
+
+
+def _students_first(what: str) -> None:
+    """Hold a lab model call while students are being answered."""
+    with _students_cv:
+        if _students_active == 0:
+            return
+        t0 = time.monotonic()
+        print(f"verify-proxy: {what} waits for {_students_active} student request(s)", flush=True)
+        _students_cv.wait_for(lambda: _students_active == 0, timeout=STUDENT_PRIORITY_WAIT_S)
+        print(f"verify-proxy: {what} went ahead after {time.monotonic() - t0:.0f}s", flush=True)
+
+
 # L25: readers -- small models on other instances that do the lab's readings,
 # so they don't queue behind students' answers on this coordinator's model.
 LAB_READER_URLS = [u.strip().rstrip("/") for u in os.environ.get("LAB_READER_URLS", "").split(",") if u.strip()]
@@ -1989,6 +2025,8 @@ def _model_presumptions(question: str, answer: str) -> dict:
         {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
         "max_tokens": 700, "stream": False, "temperature": 0.0}
     reader = _idle_reader()
+    if not reader:
+        _students_first("a lab reading")
     base = reader or f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"
     try:
         req = urllib.request.Request(f"{base}/v1/chat/completions",
@@ -2023,6 +2061,7 @@ def _model_presumptions(question: str, answer: str) -> dict:
 def _model_fix(question: str, step: str, output: str) -> str:
     """L10b: the model's one-line fix for one failed step (the lab's own
     repair strategies having failed). "" on any failure."""
+    _students_first("a lab repair")
     payload = {"messages": [
         {"role": "system", "content": _MODEL_FIX_SYSTEM},
         {"role": "user", "content": f"The question was: {question}\n\nThe step:\n{step}\n\n"
@@ -2121,6 +2160,7 @@ def _same_method(a: str, b: str) -> bool:
 def _model_alternative(question: str, answer: str, report: str, search_terms: str,
                        temperature: float = 0.4, nudge: str = "") -> str:
     """A different answer to `question`, given what failed. "" on failure."""
+    _students_first("a lab 'another way' answer")
     payload = {"messages": [
         {"role": "system", "content": LINUX_SYSTEM_MESSAGE},
         {"role": "user", "content": _lab_facts(search_terms) + question},
@@ -4492,9 +4532,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if path == "/sandbox/run":
             self._handle_sandbox_run()
         elif path == "/sandbox/ask":
-            self._handle_sandbox_ask()
+            with _StudentRequest():
+                self._handle_sandbox_ask()
         elif path == "/sandbox/linux-ask":
-            self._handle_linux_ask()
+            with _StudentRequest():
+                self._handle_linux_ask()
         elif path == "/sandbox/interrupt":
             self._handle_sandbox_interrupt()
         elif path == "/sandbox/reverify":
