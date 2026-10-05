@@ -102,6 +102,17 @@ module "security_groups" {
     # Only used when kiwix stays local; a peer-placed kiwix instance
     # uses kiwix_peer_security_group_id (that peer's own existing SG)
     # instead, same pattern coordinator_peer_id already established.
+    # L25: the lab reader's llama-server, when it stays local.
+    "reader${local.sfx}" = {
+      description = "LLM chat lab reader (llama-server) — SSH + completions, scoped to admin_cidr"
+      ingress_rules = {
+        ssh    = { ip_protocol = "tcp", from_port = 22, to_port = 22, cidr = var.admin_cidr }
+        reader = { ip_protocol = "tcp", from_port = var.reader_port, to_port = var.reader_port, cidr = var.admin_cidr }
+      }
+      egress_rules = {
+        all = { ip_protocol = "-1", cidr = "0.0.0.0/0" }
+      }
+    }
     "kiwix${local.sfx}" = {
       description = "LLM chat retrieval-grounding (kiwix-serve) — SSH + search API, scoped to admin_cidr"
       ingress_rules = {
@@ -171,6 +182,27 @@ module "kiwix" {
   security_group_ids  = module.security_groups.security_group_ids_list
   placement_overrides = local.kiwix_placement_overrides
   user_data           = local.kiwix_user_data
+  users               = local.claude_debug_users
+}
+
+# L25: the lab reader -- a small model for the lab's readings, placed where
+# there is room (reader_peer_id). Zero instances unless reader_enabled.
+module "reader" {
+  source = "../../modules/instance-group"
+
+  project     = var.project
+  environment = var.environment
+  owner       = var.owner
+
+  name                = "llm-chat-reader${local.sfx}"
+  image_id            = "ubuntu-22.04"
+  flavor              = var.reader_flavor
+  count_instances     = var.reader_enabled ? 1 : 0
+  vpc_id              = module.vpc.vpc_ids_by_key[local.vpc_key]
+  subnet_id           = module.subnets.subnet_ids_by_key["chat${local.sfx}"]
+  security_group_ids  = module.security_groups.security_group_ids_list
+  placement_overrides = local.reader_placement_overrides
+  user_data           = local.reader_user_data
   users               = local.claude_debug_users
 }
 

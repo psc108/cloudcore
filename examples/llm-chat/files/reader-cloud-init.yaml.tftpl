@@ -1,0 +1,86 @@
+#cloud-config
+# Lab reader for the llm-chat coordinator (L25): a small model on its own
+# llama-server that does the lab's readings -- what a question presumes,
+# its placeholders, and how to check it (L16-L23) -- so they no longer
+# queue behind students' answers on the coordinator's own model. Placed
+# wherever there is room (reader_peer_id); the coordinator picks an idle
+# reader at run time and falls back to its own model when none is free.
+#
+# Access control is this instance's security group: reader_port only from
+# the coordinator's networks. llama-server here has no API key; it serves
+# completions and nothing else.
+apt_preserve_sources_list: true
+bootcmd:
+  - |
+    cat > /etc/apt/sources.list <<'EOF'
+    deb [trusted=yes] http://repo.cloudcore.internal:8090/jammy/apt-repo ./
+    EOF
+
+package_update: true
+packages:
+  - curl
+  - promtail
+  - libgomp1
+
+write_files:
+  - path: /etc/promtail/config.yml
+    content: |
+      ${indent(6, promtail_config)}
+
+  - path: /etc/systemd/system/llama-reader.service
+    content: |
+      [Unit]
+      Description=llama.cpp lab reader (llm-chat L25)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      WorkingDirectory=/opt/llama.cpp
+      Environment=LD_LIBRARY_PATH=/opt/llama.cpp
+      # One slot: a reading at a time, all threads on it. The coordinator
+      # sees a busy reader through /slots and uses another, or its own model.
+      ExecStart=/opt/llama.cpp/llama-server -m /opt/llama.cpp/models/${reader_model_filename} --host 0.0.0.0 --port ${reader_port} -c ${reader_context_size} --parallel 1 -t ${reader_threads} --slots
+      Restart=on-failure
+      RestartSec=5
+      User=root
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Same apt retry as the worker (F-142) and the same conffile answer (F-133).
+  - |
+    for attempt in 1 2 3 4 5; do
+      apt-get update -qq && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" curl promtail libgomp1 && break
+      echo "apt-get install attempt $attempt failed (F-142), retrying with a fresh apt-get update..." >&2
+      sleep 5
+    done
+  - systemctl stop promtail || true
+  - sed "s/__HOSTNAME__/$(hostname)/" -i /etc/promtail/config.yml
+  - usermod -aG adm promtail
+  - systemctl enable --now promtail
+
+  - mkdir -p /opt/llama.cpp/models
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /tmp/${llama_archive_name} \
+        http://repo.cloudcore.internal:8090/jammy/artifacts/${llama_archive_name} && break
+      echo "llama.cpp download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${llama_sha256}  /tmp/${llama_archive_name}' | sha256sum -c -
+  - tar -xzf /tmp/${llama_archive_name} -C /opt/llama.cpp --strip-components=1
+  - rm -f /tmp/${llama_archive_name}
+  - |
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      curl -fSL --connect-timeout 15 --speed-limit 51200 --speed-time 20 \
+        -C - -o /opt/llama.cpp/models/${reader_model_filename} \
+        http://repo.cloudcore.internal:8090/jammy/artifacts/${reader_model_filename} && break
+      echo "reader model download attempt $attempt stalled/failed, retrying..." >&2
+      sleep 5
+    done
+    echo '${reader_model_sha256}  /opt/llama.cpp/models/${reader_model_filename}' | sha256sum -c -
+  - systemctl daemon-reload
+  - systemctl enable --now llama-reader

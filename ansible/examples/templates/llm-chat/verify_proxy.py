@@ -1962,6 +1962,25 @@ def _answer_code(answer: str, limit: int = 3000) -> str:
     return ("\n".join(out) or answer)[:limit]
 
 
+# L25: readers -- small models on other instances that do the lab's readings,
+# so they don't queue behind students' answers on this coordinator's model.
+LAB_READER_URLS = [u.strip().rstrip("/") for u in os.environ.get("LAB_READER_URLS", "").split(",") if u.strip()]
+
+
+def _idle_reader() -> str:
+    """The first reader with a free slot right now, or "" (use our own
+    model). Asked per reading: readers come and go, and get busy."""
+    for url in LAB_READER_URLS:
+        try:
+            with urllib.request.urlopen(url + "/slots", timeout=3) as resp:
+                slots = json.loads(resp.read())
+        except Exception:  # noqa: BLE001 -- down or unreachable: try the next
+            continue
+        if isinstance(slots, list) and any(not s.get("is_processing") for s in slots if isinstance(s, dict)):
+            return url
+    return ""
+
+
 def _model_presumptions(question: str, answer: str) -> dict:
     """L16/L17: the model's reading of what the question presumes and which
     tokens are placeholders. {} on any failure: the run goes on without it."""
@@ -1969,21 +1988,36 @@ def _model_presumptions(question: str, answer: str) -> dict:
         {"role": "system", "content": _PRESUME_SYSTEM},
         {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
         "max_tokens": 700, "stream": False, "temperature": 0.0}
+    reader = _idle_reader()
+    base = reader or f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"
     try:
-        req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
+        req = urllib.request.Request(f"{base}/v1/chat/completions",
                                      data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=600) as resp:
             text = json.loads(resp.read())["choices"][0]["message"]["content"]
     except Exception as e:  # noqa: BLE001 -- an aid, never a hard dependency
-        print(f"verify-proxy: presumptions request failed: {e!r}", flush=True)
-        return {}
+        print(f"verify-proxy: presumptions request to {base} failed: {e!r}", flush=True)
+        if not reader:
+            return {}
+        reader, base = "", f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"  # the reader failed mid-call: our own model
+        try:
+            req = urllib.request.Request(f"{base}/v1/chat/completions", data=json.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                text = json.loads(resp.read())["choices"][0]["message"]["content"]
+        except Exception as e2:  # noqa: BLE001
+            print(f"verify-proxy: presumptions request failed: {e2!r}", flush=True)
+            return {}
     start, end = text.find("{"), text.rfind("}")
     try:
         data = json.loads(text[start:end + 1]) if start >= 0 < end else {}
     except ValueError:
         print(f"verify-proxy: presumptions reply wasn't JSON: {text[:200]!r}", flush=True)
         return {}
-    return data if isinstance(data, dict) else {}
+    if isinstance(data, dict):
+        data["_reader"] = reader or "coordinator"
+        return data
+    return {}
 
 
 def _model_fix(question: str, step: str, output: str) -> str:

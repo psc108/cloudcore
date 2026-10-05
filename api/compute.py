@@ -218,6 +218,10 @@ FLAVORS = {
     # same principle applied generally to live capacity checking, not
     # just this one flavor's static definition.
     "standard.2xlarge": (6, 16384, 100),
+    # Few cores, much memory: a small LLM on a small host (llm-chat's lab
+    # reader, 7B Q4 + 8k context in ~6GB). 2 vCPU, so a 4-core host keeps
+    # 2 for itself (same rule as standard.2xlarge above).
+    "memory.medium": (2, 8192, 40),
 }
 
 

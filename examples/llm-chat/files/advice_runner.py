@@ -2665,7 +2665,8 @@ def _setup_stage(result, root, presumed: dict, question: str, answer: str, other
         if p["kind"] == "path" and p["token"].startswith("/path/to/"):
             facts[p["token"]] = LAB_DIR + "/" + p["token"].rstrip("/").rsplit("/", 1)[-1]
     filled, changes, unfilled = fill_placeholders(answer, placeholders, facts)
-    result.setup = {"done": done, "placeholders": changes, "unfilled": unfilled, "refused": dropped}
+    result.setup = {"done": done, "placeholders": changes, "unfilled": unfilled, "refused": dropped,
+                    "reader": str(presumed.get("_reader", ""))}
     if done:
         say(f"# setup: the lab created {', '.join(done)} -- the question assumes they already exist\n", now=True)
     if changes:

@@ -52,6 +52,26 @@ locals {
     }
   } : {}
 
+  reader_placement_overrides = var.reader_peer_id != "" ? {
+    "01" = {
+      peer_id            = var.reader_peer_id
+      vpc_id             = var.reader_peer_vpc_id
+      subnet_id          = var.reader_peer_subnet_id
+      security_group_ids = [var.reader_peer_security_group_id]
+    }
+  } : {}
+
+  reader_user_data = templatefile("${path.module}/files/reader-cloud-init.yaml.tftpl", {
+    llama_archive_name    = var.llama_archive_name
+    llama_sha256          = var.llama_sha256
+    reader_model_filename = var.reader_model_filename
+    reader_model_sha256   = var.reader_model_sha256
+    reader_port           = var.reader_port
+    reader_threads        = var.reader_threads
+    reader_context_size   = var.reader_context_size
+    promtail_config       = local.promtail_config
+  })
+
   worker_user_data = templatefile("${path.module}/files/worker-cloud-init.yaml.tftpl", {
     llama_archive_name = var.llama_archive_name
     llama_sha256       = var.llama_sha256
@@ -106,6 +126,9 @@ locals {
   # endpoint; OpenTofu sequences kiwix's own creation (and IP
   # allocation) before the coordinator's user_data is rendered.
   kiwix_host = module.kiwix.private_ips_list[0]
+
+  # L25: the coordinator's readers, by address; empty means it uses its own model.
+  lab_reader_urls = join(",", [for ip in module.reader.private_ips_list : "http://${ip}:${var.reader_port}"])
 
   # Direct request: keep worker_peers/RPC offloading fully intact for
   # later (better hardware), but make "coordinator alone, zero
@@ -224,6 +247,7 @@ locals {
     generation_stall_timeout_seconds = var.generation_stall_timeout_seconds
     relay_debug                      = var.relay_debug ? "1" : "0"
     kiwix_host                       = local.kiwix_host
+    lab_reader_urls                  = local.lab_reader_urls
     kiwix_port                       = var.kiwix_port
     kiwix_books_coding               = local.kiwix_books_coding
     kiwix_books_linux                = local.kiwix_books_linux

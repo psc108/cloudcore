@@ -896,3 +896,77 @@ variable "labvm_broker_token" {
   sensitive   = true
   default     = ""
 }
+
+
+# --- L25: a lab reader on another machine --------------------------------------
+# The lab's readings of each answer (setup, placeholders, checks: L16-L23)
+# ran on the coordinator's own model and slowed students' answers to as much
+# as 20 minutes during lab runs (L24). A small model on its own instance
+# does them instead. The coordinator picks an idle reader per reading and
+# falls back to its own model.
+
+variable "reader_enabled" {
+  description = "Run a lab reader instance (a small model) for the lab's readings."
+  type        = bool
+  default     = false
+}
+
+variable "reader_flavor" {
+  description = "The reader's flavor. memory.medium (2 vCPU, 8GB) fits a 7B Q4 model and leaves a 4-core host 2 cores."
+  type        = string
+  default     = "memory.medium"
+}
+
+variable "reader_model_filename" {
+  description = "Model the reader serves, from the host package repo's artifacts."
+  type        = string
+  default     = "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+}
+
+variable "reader_model_sha256" {
+  description = "sha256 of reader_model_filename (the repo's sync-index.json lists it)."
+  type        = string
+  default     = "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6"
+}
+
+variable "reader_port" {
+  description = "The reader's llama-server port."
+  type        = number
+  default     = 8723
+}
+
+variable "reader_threads" {
+  description = "llama-server threads on the reader: its vCPU count."
+  type        = number
+  default     = 2
+}
+
+variable "reader_context_size" {
+  description = "The reader's context: a reading's prompt is ~2k tokens and its reply up to 700."
+  type        = number
+  default     = 8192
+}
+
+variable "reader_peer_id" {
+  description = "Approved peer to place the reader on (the host with spare capacity). Empty keeps it local."
+  type        = string
+  default     = ""
+}
+
+variable "reader_peer_vpc_id" {
+  description = "The chosen reader_peer_id's own VPC. Ignored when reader_peer_id is empty."
+  type        = string
+  default     = ""
+}
+
+variable "reader_peer_subnet_id" {
+  description = "The chosen reader_peer_id's own subnet. Ignored when reader_peer_id is empty."
+  type        = string
+  default     = ""
+}
+
+variable "reader_peer_security_group_id" {
+  description = "The chosen reader_peer_id's own security group: must allow reader_port from the coordinator's traffic (its bridge, or the WireGuard transit range). Ignored when reader_peer_id is empty."
+  type        = string
+  default     = ""
+}
