@@ -1,0 +1,26 @@
+21:49:55 #1 [everyday] How do I find the ten largest files under /home?
+21:55:13   answered in 315s (869 chars, complete=True); grounding=kiwix refs=['Finding files that use the most disk spa', 'List files over a specific size in curre']; lab=yes
+21:55:13 #2 [services] How do I add a user called erin and set her password?
+21:57:48   answered in 152s (654 chars, complete=True); grounding=kiwix refs=['useradd: cannot open /etc/passwd', 'How to add user with out using useradd o']; lab=yes
+21:57:48 #3 [logins-web] How do I install Apache and make it listen on port 8080 instead of 80?
+22:03:50   answered in 359s (1469 chars, complete=True); grounding=local_corpus refs=['How do I install Apache and make it list']; lab=yes
+22:03:50 #4 [disks] How do I create a 2GB swap file and make it permanent?
+22:09:42   answered in 349s (1432 chars, complete=True); grounding=local_corpus refs=['How do I create a 2GB swap file and make']; lab=yes
+22:09:42 #5 [networking] How do I make this machine resolve example.internal to 10.1.2.3 without a DNS server?
+22:13:38   answered in 233s (818 chars, complete=True); grounding=kiwix refs=['configuration.nix: NixOS system configur']; lab=yes
+22:13:38 #6 [networking] How do I see all current network connections and which process owns each?
+22:16:49   answered in 188s (798 chars, complete=True); grounding=kiwix refs=["`lsof` doesn't display PID that `netstat", 'How to identify what application is usin']; lab=yes
+22:16:49 #7 [kernel-boot] How do I make a sysctl setting like net.ipv4.tcp_syncookies=1 permanent?
+22:20:25   answered in 213s (926 chars, complete=True); grounding=kiwix refs=['better alternative for tcp_syncookies in', 'Ansible sysctl tries to reload ipv6, eve']; lab=yes
+22:20:25 #8 [explanation] What is the difference between /etc/profile and ~/.bashrc?
+22:24:03   answered in 216s (1474 chars, complete=True); grounding=kiwix refs=['How to source correct startup scripts on', '.bashrc and various linux startup script']; lab=yes
+22:24:03 all questions asked; waiting for lab runs
+22:24:03   #1: lab partial
+22:24:03   #2: lab failed -> attempts ['ran_clean']
+22:24:03   #3: lab goal_verified
+22:24:03   #4: lab goal_verified
+22:44:04   #5: lab failed -> attempts ['failed', 'failed']
+22:45:04   #6: lab ran_clean
+22:47:04   #7: lab ran_clean
+22:47:04   #8: lab not_runnable
+22:47:04 ALL DONE
