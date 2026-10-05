@@ -581,6 +581,8 @@ def run_tofu_destroy(build_id: str) -> tuple[bool, list[str]]:
         ts2 = datetime.now(timezone.utc).strftime("%H:%M:%S")
         logs.append(f"[{ts2}] {line}")
 
+    # F-218: a module block added since the build must be installed even to destroy.
+    _stream_cmd([tofu, "get", "-no-color"], env, str(work_dir), _emit)
     destroy_cmd = [tofu, "destroy", "-auto-approve", "-no-color", *_parallelism_args()]
     _emit(f"$ {' '.join(destroy_cmd)}")
     _emit("─" * 60)
@@ -649,6 +651,11 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
     # code (see above), there's no real benefit to skipping it worth that risk.
     using_dev_overrides = tofurc.exists() and "dev_overrides" in tofurc.read_text()
     modules_json = work_dir / ".terraform" / "modules" / "modules.json"
+    # F-218: under dev_overrides init fails at the provider query, and can do
+    # so before installing a module block added since the last build -- the
+    # check below then trusted a stale modules.json ("Module not installed").
+    # `tofu get` installs modules without touching providers.
+    _run_cmd([tofu, "get", "-no-color"])
     rc = _run_cmd([tofu, "init", "-no-color"])
     if rc != 0:
         if using_dev_overrides and modules_json.exists():

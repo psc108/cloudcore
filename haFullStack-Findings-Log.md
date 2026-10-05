@@ -4372,6 +4372,23 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Verified by:** the re-applied lab network on both hosts and the re-run of the 13 runs, recorded with L20.
 
+### F-218 — A module block added to a template broke both the next build and the destroy of the running one
+
+**Where:** `api/tofu_engine.py` (apply and destroy).
+
+**Symptom:** found 2026-10-05 adding the lab reader (L25) to llm-chat on Llwyn-y-Groes. The destroy of the running build failed, leaving its instances up, and the new build failed at once with `Error: Module not installed`. A second error was `Invalid Attribute Value Match`, covered below.
+
+**Root cause:**
+- **A stale module list was trusted:** under the provider's `dev_overrides`, `tofu init` always exits non-zero at the provider query. The engine then trusts that modules are resolved whenever `.terraform/modules/modules.json` exists. But init can fail before installing a module block added since the last build, so the old `modules.json` was stale. The engine's own comment warned about exactly this trap.
+- **Destroy had the same gap:** destroy runs `tofu destroy` with no module install at all, and fails for the same reason once the template has a new module.
+- **The provider hard-codes flavours:** the second error came from the provider's flavor validator, which knows only the `standard.*` flavours. The new `memory.medium` wasn't in it.
+
+**Fix:**
+- **Install modules first:** the engine runs `tofu get` (modules only, no provider query) before init on every apply, and before every destroy.
+- **The provider:** both of its flavor validators accept `memory.medium`, and the provider was rebuilt on both hosts (`scripts/build-provider.sh`, F-214).
+
+**Verified by:** the old build's destroy, then the L25 build with the reader on Stourport, recorded with L25.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4541,3 +4558,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.43 | 2026-10-03 | Paul Scott | Two-host S7 done. F-215: Stourport's hand-edited Loki config held a duplicate key since F-197 and failed on its first restart. |
 | v3.44 | 2026-10-04 | Paul Scott | L16-L19 testing. F-216: placeholder filling replaced substrings (`user` inside other words). |
 | v3.45 | 2026-10-04 | Paul Scott | L20. F-217: lab DHCP leases outlived their VMs; 241 addresses ran out overnight. |
+| v3.46 | 2026-10-05 | Paul Scott | L25. F-218: a new module block broke the next build and the destroy (stale modules.json under dev_overrides); provider flavours. |
