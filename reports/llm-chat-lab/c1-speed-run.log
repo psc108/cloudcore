@@ -1,0 +1,27 @@
+20:14:20 #1 [everyday] How do I find the ten largest files under /home?
+20:14:22   busy (503); retrying in 60s
+20:20:39   answered in 314s (778 chars, complete=True); grounding=kiwix refs=['How can I find the three largest files u', 'My directory names contain a number. How']; lab=yes
+20:20:39 #2 [services] How do I add a user called erin and set her password?
+20:27:22   answered in 400s (259 chars, complete=True); grounding=kiwix refs=['Perspectives in Digital Literacy/Printab', 'Is it common to allow local desktop and/']; lab=yes
+20:27:22 #3 [logins-web] How do I install Apache and make it listen on port 8080 instead of 80?
+20:34:13   answered in 408s (1268 chars, complete=True); grounding=local_corpus refs=['How do I install Apache and make it list']; lab=yes
+20:34:13 #4 [disks] How do I create a 2GB swap file and make it permanent?
+20:42:31   answered in 495s (1554 chars, complete=True); grounding=local_corpus refs=['How do I create a 2GB swap file and make']; lab=yes
+20:42:31 #5 [networking] How do I make this machine resolve example.internal to 10.1.2.3 without a DNS server?
+20:49:10   answered in 396s (1160 chars, complete=True); grounding=kiwix refs=['Ubuntu 20.04 upgrades - DNS name resolut', 'Nginx Redirect using /etc/hosts for Upst']; lab=yes
+20:49:10 #6 [networking] How do I see all current network connections and which process owns each?
+20:53:28   answered in 255s (952 chars, complete=True); grounding=kiwix refs=["`lsof` doesn't display PID that `netstat", 'How to identify what application is usin']; lab=yes
+20:53:28 #7 [kernel-boot] How do I make a sysctl setting like net.ipv4.tcp_syncookies=1 permanent?
+20:56:52   answered in 201s (909 chars, complete=True); grounding=kiwix refs=['better alternative for tcp_syncookies in', 'Ansible sysctl tries to reload ipv6, eve']; lab=yes
+20:56:52 #8 [explanation] What is the difference between /etc/profile and ~/.bashrc?
+21:07:28   answered in 633s (1333 chars, complete=True); grounding=kiwix refs=['Difference between .bashrc and .bash_pro', 'What is the difference between the vario']; lab=yes
+21:07:28 all questions asked; waiting for lab runs
+21:07:28   #1: lab partial
+21:07:28   #2: lab ran_clean
+21:07:28   #3: lab goal_verified
+21:07:28   #4: lab goal_verified
+21:27:29   #5: lab failed -> attempts ['failed', 'failed']
+21:29:30   #6: lab partial
+21:30:30   #7: lab ran_clean
+21:30:30   #8: lab not_runnable
+21:30:30 ALL DONE
