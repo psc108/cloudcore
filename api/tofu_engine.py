@@ -619,11 +619,23 @@ def _execute_tofu(build: dict, var_overrides: dict) -> None:
             state_data = json.loads(state_file.read_text())
             if state_data.get("resources"):
                 _log(build, "Existing state with resources detected — running tofu destroy before apply...")
+                _run_cmd([tofu, "get", "-no-color"])  # F-218
                 rc = _run_cmd([tofu, "destroy", "-auto-approve", "-no-color", *_parallelism_args()])
                 if rc != 0:
-                    _log(build, f"WARNING: pre-apply destroy exited {rc} — continuing anyway")
+                    # F-219: carrying on deleted this state below, orphaning a
+                    # whole running deployment (its instances, LB, SGs, VPC
+                    # still up, with nothing left to destroy them by).
+                    build["exit_code"] = rc
+                    build["status"] = "failed"
+                    _log(build, f"pre-apply destroy failed (exit {rc}): stopping, and keeping the existing state "
+                                "so its resources can still be destroyed")
+                    return
         except Exception as ex:
-            _log(build, f"WARNING: could not read existing state: {ex}")
+            # Unreadable state might still hold resources: don't delete it (F-219).
+            build["exit_code"] = 1
+            build["status"] = "failed"
+            _log(build, f"could not read the existing state ({ex}): stopping, and keeping it")
+            return
 
     # Remove any stale state files before the fresh apply
     for stale in ("terraform.tfstate", "terraform.tfstate.backup"):

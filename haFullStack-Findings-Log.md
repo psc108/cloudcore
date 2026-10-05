@@ -4389,6 +4389,27 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Verified by:** the old build's destroy, then the L25 build with the reader on Stourport, recorded with L25.
 
+### F-219 — A failed build orphaned the running deployment: state deleted after a failed pre-apply destroy
+
+**Where:** `api/tofu_engine.py` (`_execute_tofu`, the destroy-before-apply step).
+
+**Symptom:** found 2026-10-05 during L25. The first L25 build of llm-chat on Llwyn-y-Groes failed (F-218). Afterwards:
+- **A destroy that destroyed nothing:** the running llm-chat's own destroy "succeeded" while destroying nothing, and its instances stayed up.
+- **A name collision:** the next build failed with `Create VPC failed`, because the old VPC's name was still taken.
+
+**Root cause:**
+- **Shared state, cleared on every build:** every build of a template shares the template directory's state file. Before a fresh apply, the engine destroys what that state holds, then deletes the state file.
+- **Errors ignored:** when that destroy failed (here with F-218's "Module not installed"), the engine logged "WARNING: pre-apply destroy exited 1 — continuing anyway" and deleted the state regardless. That orphaned the whole running deployment: 2 instances, the load balancer, 2 security groups, a subnet and the VPC, now with no state to destroy them by. An unreadable state file was handled the same way.
+
+**Fix:**
+- **Stop on a failed pre-destroy:** the build stops and keeps the state. The same applies to unreadable state.
+- **Install modules first:** the pre-destroy runs `tofu get` first, as F-218 added to apply and destroy.
+- **This time's orphans:** removed through the API in dependency order (LB, instances, SGs, subnet, VPC).
+
+**Verified by:**
+- **Clean-up:** every orphan returned 204, and Llwyn-y-Groes is back to its standing VPCs only (`peer-workloads`, `lab-vms`).
+- **The engine change:** the next L25 build is its live test.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4559,3 +4580,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.44 | 2026-10-04 | Paul Scott | L16-L19 testing. F-216: placeholder filling replaced substrings (`user` inside other words). |
 | v3.45 | 2026-10-04 | Paul Scott | L20. F-217: lab DHCP leases outlived their VMs; 241 addresses ran out overnight. |
 | v3.46 | 2026-10-05 | Paul Scott | L25. F-218: a new module block broke the next build and the destroy (stale modules.json under dev_overrides); provider flavours. |
+| v3.47 | 2026-10-05 | Paul Scott | L25. F-219: a failed pre-apply destroy still deleted the state, orphaning the running llm-chat. |
