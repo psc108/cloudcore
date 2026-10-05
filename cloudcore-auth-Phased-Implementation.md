@@ -24,8 +24,15 @@ Direct request (2026-10-02): "given the security concerns … should we think ab
 | A2 | **One token table.** `api_tokens`: id, name, scope (`admin`, `peer`, `capture`, `labvm`, `student`), SHA-256 hash, created, expires, revoked, last used. Tokens are shown once at creation. Migrate the existing ones: the master token (as `admin`, still loadable from `api.env`), per-peer tokens, the capture and broker tokens, and the per-student client tokens (`llm_client_tokens`). Each scope maps to an explicit set of routes. | Done (F-206): `api_tokens` table (hashed, scoped admin/capture/labvm, expiry, revocation, last used). Peer and student tokens resolve through their existing stores; the api.env tokens stay valid (break-glass). |
 | A3 | **Audit log.** Every state-changing request (POST, PUT, DELETE) is recorded: token id and scope, route, target id, result, time, source address. Visible in the dashboard and shipped to Loki, so Sentinel can watch it. | Done (F-206): `audit_log` table plus an `AUDIT` log line for every POST/PUT/PATCH/DELETE, with identity, route, status and source. Readable at `GET /v1/auth/audit`. Dashboard view not yet; not yet shipped to Loki (no host promtail). |
 | A4 | **Token management.** Dashboard and CLI: create (shown once), list, revoke, rotate; expiry warnings. | Partly (F-206): `GET/POST /v1/auth/tokens`, `DELETE /v1/auth/tokens/<id>` (create shows the token once). Dashboard UI not yet. |
-| A5 | **The peer.** Llwyn-y-Groes runs its own CloudCore; it takes the same code and its own `api.env`. This also brings it up to date with F-201. | **Pending — the peer hasn't taken the F-201 update yet** (checked 2026-10-02: its 8082 still serves SGs without a token). `peer-update-checklist.md` brings this layer too. |
+| A5 | **The peer.** Llwyn-y-Groes runs its own CloudCore; it takes the same code and its own `api.env`. This also brings it up to date with F-201. | Done (2026-10-02, two-host S1): Llwyn-y-Groes runs the same code with its own `api.env`; F-201 closed there (no token and the master token are refused on its 8082). |
 | A6 | **Verify.** A test suite that walks every registered route with no token, the wrong scope and the right scope; plus the F-201 checks from the LAN and a lab VM. | Done (F-206): `tests/authz_walk.py` walks all 168 routes (701 requests); refused requests never reach route code. Plus live checks. |
+
+## Layer 1 follow-ups (noted 2026-10-05, not started)
+
+- **A3 dashboard view:** a page listing the audit log (`GET /v1/auth/audit`), filterable by identity, route and status.
+- **A3 shipping:** send the `AUDIT` log lines to the host's Loki, so Sentinel can watch them. Each host now runs its own Loki (two-host S4), but the API's log isn't shipped there yet.
+- **A4 dashboard view:** list, create (shown once), revoke and rotate named tokens, with expiry warnings.
+- **Rotation of the shared guest tokens:** capture and lab-VM broker, done by hand on 2026-10-04. It could be a dashboard or CLI action that rotates both hosts together, using `import-shared-tokens.sh`.
 
 ## Layer 2 — human logins (when the dashboard or llm-chat reaches beyond localhost)
 
