@@ -2297,7 +2297,7 @@ _CHECK_PARAMS = {
     "login_env": ("user", "var", "contains"), "user_can": ("user", "action", "path"),
     "user_cannot": ("user", "action", "path"), "sudo_allowed": ("user", "command"),
     "sudo_denied": ("user", "command"), "http_from_other": ("port",), "resolves": ("name", "address"),
-    "unit_runs_ok": ("unit",), "sshd_effective": ("key", "value"),
+    "unit_runs_ok": ("unit",), "sshd_effective": ("key", "value"), "group_exists": ("group",),
 }
 # Optional parameters, and validators for them.
 _CHECK_OPTIONAL = {"http_from_other": ("path", "host", "status", "contains", "location")}
@@ -2379,6 +2379,11 @@ def plan_checks(raw: dict) -> tuple[list[dict], list[str]]:
             continue
         if "path" in params and kind != "http_from_other":
             params["path"] = params["path"].replace("~/", "/home/student/")
+        # Placeholder names the answer's fill turned into the lab's own (L23 dev #12).
+        if "user" in params and _PLACEHOLDER_SHAPE.search(params["user"]):
+            params["user"] = LAB_USER
+        if "group" in params and _PLACEHOLDER_SHAPE.search(params["group"]):
+            params["group"] = LAB_GROUP
         check = {"kind": kind, **params}
         if item.get("after_reboot") is True:
             check["after_reboot"] = True
@@ -2417,6 +2422,7 @@ def _describe_check(c: dict) -> str:
         "resolves": f"{c.get('name')} resolves to {c.get('address')}",
         "unit_runs_ok": f"{c.get('unit')} runs and succeeds",
         "sshd_effective": f"sshd actually uses {c.get('key')} {c.get('value')}",
+        "group_exists": f"group {c.get('group')} exists",
     }[k] + (" (after a reboot)" if c.get("after_reboot") else "")
 
 
@@ -2431,6 +2437,9 @@ def run_check(root, prober_root, c: dict) -> tuple[bool | None, str]:
 
     if k == "user_exists":
         code, out = sh(f"getent passwd {q(c['user'])}")
+        return code == 0, out[:120]
+    if k == "group_exists":
+        code, out = sh(f"getent group {q(c['group'])}")
         return code == 0, out[:120]
     if k == "user_in_group":
         _, out = sh(f"id -nG {q(c['user'])} 2>&1")
@@ -2549,7 +2558,7 @@ _FIREWALL_CHANGE_RE = re.compile(r"\bufw\s+(?:enable|default|deny|reject|limit|a
                                  r"\bnft\s+(?:add|insert|flush)|\bfirewall-cmd\b")
 _REACH_Q_RE = re.compile(r"\b(?:another|other|remote)\s+(?:machine|server|host|computer|client)s?\b|\bremote(?:ly)?\s+"
                          r"(?:connections?|access)\b|\bfrom\s+(?:outside|elsewhere|the network)\b", re.IGNORECASE)
-_EXISTENCE_CHECKS = {"user_exists", "path_exists", "service_active", "service_enabled", "port_listening"}
+_EXISTENCE_CHECKS = {"user_exists", "group_exists", "path_exists", "service_active", "service_enabled", "port_listening"}
 _EXISTENCE_Q_RE = re.compile(r"^\s*how (?:do|can) i\s+(?:install|enable|start|create|add|set up|run)\b", re.IGNORECASE)
 _SECOND_GOAL_RE = re.compile(r"\b(?:and|so (?:that|it)|then|to)\b\s+(?:\w+\s+){0,3}?(?:make|change|set|configure|serve|enable|start|mount|activate|"
                              r"allow|block|limit|listen|redirect|use|point|protect|restrict|reach|keep|check|run)\b",
@@ -2579,6 +2588,13 @@ def _prober_is_source(prober_ip: str, sources: list[str]) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _sets_directly(c: dict, answer: str) -> bool:
+    """The answer runs chmod/chown with exactly this value on this path."""
+    value = c.get("mode") or c.get("owner") or ""
+    verb = "chmod" if c["kind"] == "path_mode" else "chown"
+    return bool(re.search(rf"\b{verb}\b[^\n]*\b{re.escape(value)}\b[^\n]*{re.escape(c['path'])}", answer))
 
 
 def model_goal_checks(root, prober_root, planned: list[dict], before: dict, question: str = "",
@@ -2611,6 +2627,10 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
             out.append({"kind": "goal", "subject": subject + " (the answer wrote this itself; that shows it was "
                         "written, not that it works)", "ok": True, "detail": seen, "decisive": False,
                         "source": "model"})
+        elif ok and c["kind"] in ("path_mode", "path_owner") and _sets_directly(c, answer) \
+                and c["mode" if c["kind"] == "path_mode" else "owner"].split(":")[0] not in question:
+            out.append({"kind": "goal", "subject": subject + " (the answer set this directly; a means, not the "
+                        "question's goal)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
         elif ok and from_elsewhere and not c["kind"].endswith("_from_other"):
             out.append({"kind": "goal", "subject": subject + " (a step towards it; the question is about another "
                         "machine reaching this one)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
