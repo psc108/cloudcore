@@ -30,7 +30,7 @@ Every piece of LLM work runs on the best machine that can run it **without lower
 |---|---|---|
 | C1 | **Students first, now.** Every lab model call (readings, repairs, another way) waits while a student's request is being answered on the same model. The 7B reader is switched off (quality floor). This gives students their speed back today, at the same quality. | **Done 2026-10-05** (6faa38d): 8 questions asked while their lab runs ran gave a median answer of 398 s (max 633), against L22's ~384 s before lab readings, L25's ~506 s with the 7B reader and up to 20 min in L24. Logged waits: a repair 82 s, another-way 159 s. Reader off, all on the 14B |
 | C2 | **Roles and their needs.** llm-chat's LLM work becomes roles: `answer` (students) and `lab` (readings, repairs, another way). Each declares its model (the quality floor), its memory and its minimum cores. Placement chooses a host per role from those needs. | Claude |
-| C3 | **Measure each host.** A short benchmark of the role's model: prompt and generation tokens/s for the actual model file, from the repo, at a fixed size. Each host runs it once and again when its hardware changes. The result lives in that host's stats, beside its cores, RAM and (later) GPUs. | Both (the first run on each host) |
+| C3 | **Measure each host.** A short benchmark of the role's model: prompt and generation tokens/s for the actual model file, from the repo, at a fixed size. Each host runs it once and again when its hardware changes. The result lives in that host's stats, beside its cores, RAM and (later) GPUs. | **Done 2026-10-05** (9d9345e): `api/llm-bench.py`; host stats report `llm_bench` and `gpus`. Qwen2.5-Coder-14B Q4: Llwyn-y-Groes (i7-8650U, 6 threads) prompt 5.54 / generation 2.39 tok/s; Stourport (i5-6300U, 2 threads) 3.91 / 1.90. Both are 4- and 2-core laptop CPUs with hyperthreading; 14B generation is memory-bandwidth-bound, so Stourport runs it at ~80% of Llwyn-y-Groes's speed, not the crawl core counts suggested |
 | C4 | **Place by measured speed.** The recommender ranks hosts that fit a role by measured throughput, then by load. The llm-chat build places `answer` and `lab` from it: the same host when only one is good enough, separate hosts when two are. | Claude |
 | C5 | **Route at run time.** The coordinator knows every endpoint able to serve a role (same model or better), with its measured speed. Per request it takes the fastest idle one. Students first wherever one endpoint is shared. | Claude |
 | C6 | **Prove it.** Today: placement keeps both roles on Llwyn-y-Groes (Stourport's 2 spare vCPUs fall below the floor for the 14B). Then add a stand-in faster host (a peer with a better measured score): the `lab` role, and the `answer` role if it is faster, move there with no template change. | Both |
@@ -40,9 +40,9 @@ Every piece of LLM work runs on the best machine that can run it **without lower
 | Host | Cores (spare) | RAM free | Fits the 14B role? |
 |---|---|---|---|
 | Llwyn-y-Groes | 8 (6) | ~9 GB beside the coordinator | Yes: runs it now |
-| Stourport | 4 (2) | ~23 GB | On 2 vCPUs, about 1–2 tokens/s: C3 will measure it. Probably below a useful speed floor |
+| Stourport | 4 (2) | ~23 GB | Measured (C3): 1.90 tok/s generation, ~80% of Llwyn-y-Groes. Good enough for the `lab` role's own 14B |
 
-So until better hardware arrives, the best placement is one 14B on Llwyn-y-Groes, shared with students first (C1). The point of C2–C5 is that the decision is made by measurement each time, not by this table.
+C3's measurement changes the guess above: the best placement today is two 14Bs, `answer` on Llwyn-y-Groes and `lab` on Stourport, with no quality cost and no sharing. Students first (C1) stays for whenever roles must share. The point of C2–C5 is that the decision is made by measurement each time, not by this table.
 
 ## Risks
 
