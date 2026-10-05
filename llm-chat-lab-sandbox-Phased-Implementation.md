@@ -72,6 +72,15 @@ work in advice".
 | L20 | **Measure once with the sealed set** (also F8 in the full-VM plan), through `/sandbox/linux-ask` on full VMs, graded by reading every run. Compare with F-200's held-out result (3/40 proven) | Done 2026-10-04 (results below) |
 | L21 | **Goal checks from the model's reading, run by the lab** (from L20: 1/40 verified). The setup stage's model call also proposes what success means for the question, as checks from a fixed menu: user exists/in group/shell, path exists/owner/mode, file contains, service active/enabled/disabled, port listening or open/closed from the prober, default target, sysctl, read-only command output (allowlisted programs, no shell syntax). Each is run before the answer and after; only a **false→true** change proves the answer, and a failing model check is "not confirmed", never a failure. Fresh set sealed first: `sealed-questions-2026-10-04.json` (8e1c52d) | Built 2026-10-04 (659adf5); development run on the 2026-10-03 answers |
 | L22 | **Measure L21 once with the 2026-10-04 sealed set**, as L20 | Done 2026-10-05 (results below) |
+| L23 | **Behaviour checks** (from L22: checks of configuration, not behaviour, let a wrong answer pass). New menu kinds:
+- **What a person would see:** a fresh login's environment (`login_env`); reading, writing, executing or listing *as a user* (`user_can` / `user_cannot`); sudo's own verdict on an exact command (`sudo_allowed` / `sudo_denied`); a real HTTP request from the other machine, with status, body text and redirect target (`http_from_other`).
+- **What the system really does:** name resolution (`resolves`); running a unit once and checking it succeeds (`unit_runs_ok`); sshd's effective settings (`sshd_effective`).
+- **Reboot:** `after_reboot`, which reboots the full VM once and re-checks.
+
+A mode or owner the answer sets directly, or a file line it writes, is never proof unless the question names that value. Placeholder users in checks map to the lab's.
+
+**Known limit:** the lab can't judge whether a setting means what the question wants (L22 #19: `ClientAliveCountMax 0` is accepted by sshd but disables the disconnect). Fresh set sealed first: `sealed-questions-2026-10-05.json` (2fc22fd) | Built 2026-10-05 (20f389f, 4ecdfcf); development run on the L22 answers |
+| L24 | **Measure L23 once with the 2026-10-05 sealed set** | Not started |
 
 ## Results: the same 40 answers through each stage
 
