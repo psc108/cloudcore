@@ -1924,6 +1924,19 @@ _PRESUME_SYSTEM = (
     '  {"kind":"port_listening","port":N}  {"kind":"port_open_from_other","port":N}  {"kind":"port_closed_from_other","port":N}\n'
     '  {"kind":"default_target","target":"....target"}  {"kind":"sysctl","key":"...","value":"..."}\n'
     '  {"kind":"command_output","command":"<one read-only command, no pipes>","contains":"..."}\n'
+    "Behaviour checks (L23) -- PREFER these: they test what a person would see, not what a file says:\n"
+    '  {"kind":"login_env","user":"...","var":"NAME","contains":"..."}  (a fresh login session)\n'
+    '  {"kind":"user_can"|"user_cannot","user":"...","action":"read|write|execute|list","path":"/..."}\n'
+    '  {"kind":"sudo_allowed"|"sudo_denied","user":"...","command":"<the exact command>"}\n'
+    '  {"kind":"http_from_other","port":N,"path":"/...","host":"<Host header, optional>",'
+    '"status":"200|301|404|3xx...","contains":"<body text, optional>","location":"<redirect target, optional>"}\n'
+    '  {"kind":"resolves","name":"...","address":"..."}  {"kind":"unit_runs_ok","unit":"<service or timer>"}\n'
+    '  {"kind":"sshd_effective","key":"<sshd option>","value":"..."}  (what sshd really uses)\n'
+    "Add \"after_reboot\":true to a check when the question asks for something permanent, at boot, or to "
+    "survive a reboot.\n"
+    "Prefer login_env over file_contains for variables, user_can/user_cannot over path_mode for permissions, "
+    "sudo_allowed/sudo_denied for sudo rights, http_from_other for web servers, sshd_effective for SSH "
+    "settings. Never check only that a file contains a line the answer writes.\n"
     "Prefer the most direct check of the goal (for \"let maria edit /var/www/html\": user_in_group or path_owner, "
     "not file_contains; for \"let another machine reach X\": port_open_from_other). Check the change the "
     "question asks for, not only that the software is installed or running. At most 4 checks.\n"
@@ -1955,7 +1968,7 @@ def _model_presumptions(question: str, answer: str) -> dict:
     payload = {"messages": [
         {"role": "system", "content": _PRESUME_SYSTEM},
         {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
-        "max_tokens": 600, "stream": False, "temperature": 0.0}
+        "max_tokens": 700, "stream": False, "temperature": 0.0}
     try:
         req = urllib.request.Request(f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/v1/chat/completions",
                                      data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})

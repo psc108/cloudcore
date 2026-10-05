@@ -2293,7 +2293,14 @@ _CHECK_PARAMS = {
     "service_disabled": ("unit",), "port_listening": ("port",), "port_open_from_other": ("port",),
     "port_closed_from_other": ("port",), "default_target": ("target",), "sysctl": ("key", "value"),
     "command_output": ("command", "contains"),
+    # L23: behaviour, not configuration.
+    "login_env": ("user", "var", "contains"), "user_can": ("user", "action", "path"),
+    "user_cannot": ("user", "action", "path"), "sudo_allowed": ("user", "command"),
+    "sudo_denied": ("user", "command"), "http_from_other": ("port",), "resolves": ("name", "address"),
+    "unit_runs_ok": ("unit",), "sshd_effective": ("key", "value"),
 }
+# Optional parameters, and validators for them.
+_CHECK_OPTIONAL = {"http_from_other": ("path", "host", "status", "contains", "location")}
 
 
 def _check_ok_value(kind: str, key: str, v) -> bool:
@@ -2312,8 +2319,20 @@ def _check_ok_value(kind: str, key: str, v) -> bool:
         return bool(re.fullmatch(r"[\w.-]+\.target", v))
     if key == "key":
         return bool(re.fullmatch(r"[\w./-]{1,100}", v))
-    if key in ("text", "value", "contains"):
+    if key in ("text", "value", "contains", "location"):
         return 0 < len(v) <= 200 and "\n" not in v
+    if key == "var":
+        return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", v))
+    if key == "action":
+        return v in ("read", "write", "execute", "list")
+    if key == "status":
+        return bool(re.fullmatch(r"[1-5](?:\d\d|xx)", v))
+    if key == "host" or key == "name":
+        return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", v))
+    if key == "address":
+        return bool(re.fullmatch(r"[0-9a-fA-F:.]{2,45}", v))
+    if key == "command" and kind in ("sudo_allowed", "sudo_denied"):
+        return 0 < len(v) <= 200 and "\n" not in v and not _SHELL_META.search(v)  # only ever listed, never run
     if key == "command":
         words = v.split()
         if not words or _SHELL_META.search(v) or words[0] not in _READONLY_PROGRAMS:
@@ -2345,13 +2364,25 @@ def plan_checks(raw: dict) -> tuple[list[dict], list[str]]:
             continue
         kind = item["kind"]
         params = {k: str(item.get(k, "")).strip() for k in _CHECK_PARAMS[kind]}
-        bad = [k for k, v in params.items() if not _check_ok_value(kind, k, v)]
+        for k in _CHECK_OPTIONAL.get(kind, ()):
+            if str(item.get(k, "")).strip():
+                params[k] = str(item[k]).strip()
+        if kind == "http_from_other" and "path" in params and not params["path"].startswith("/"):
+            params["path"] = "/" + params["path"]
+        bad = [k for k, v in params.items() if k != "path" and not _check_ok_value(kind, k, v)]
+        if kind != "http_from_other" and "path" in params and not _check_ok_value(kind, "path", params["path"]):
+            bad.append("path")
+        if kind == "http_from_other" and not re.fullmatch(r"/[\w./%~-]{0,200}", params.get("path", "/")):
+            bad.append("path")
         if bad:
             refused.append(f"check {kind}: unsafe or missing {', '.join(bad)}")
             continue
-        if "path" in params:
+        if "path" in params and kind != "http_from_other":
             params["path"] = params["path"].replace("~/", "/home/student/")
-        checks.append({"kind": kind, **params})
+        check = {"kind": kind, **params}
+        if item.get("after_reboot") is True:
+            check["after_reboot"] = True
+        checks.append(check)
     return checks, refused
 
 
@@ -2374,7 +2405,19 @@ def _describe_check(c: dict) -> str:
         "default_target": f"the machine boots to {c.get('target')}",
         "sysctl": f"{c.get('key')} = {c.get('value')}",
         "command_output": f"`{c.get('command')}` shows '{c.get('contains')}'",
-    }[k]
+        "login_env": f"in a new login as {c.get('user')}, {c.get('var')} contains '{c.get('contains')}'",
+        "user_can": f"{c.get('user')} can {c.get('action')} {c.get('path')}",
+        "user_cannot": f"{c.get('user')} cannot {c.get('action')} {c.get('path')}",
+        "sudo_allowed": f"sudo lets {c.get('user')} run '{c.get('command')}'",
+        "sudo_denied": f"sudo refuses {c.get('user')} '{c.get('command')}'",
+        "http_from_other": (f"another machine gets http://{c.get('host') or 'this machine'}:{c.get('port')}"
+                            f"{c.get('path', '/')}" + (f" -> {c['status']}" if c.get("status") else "")
+                            + (f" containing '{c['contains']}'" if c.get("contains") else "")
+                            + (f" redirecting to '{c['location']}'" if c.get("location") else "")),
+        "resolves": f"{c.get('name')} resolves to {c.get('address')}",
+        "unit_runs_ok": f"{c.get('unit')} runs and succeeds",
+        "sshd_effective": f"sshd actually uses {c.get('key')} {c.get('value')}",
+    }[k] + (" (after a reboot)" if c.get("after_reboot") else "")
 
 
 def run_check(root, prober_root, c: dict) -> tuple[bool | None, str]:
@@ -2436,6 +2479,66 @@ def run_check(root, prober_root, c: dict) -> tuple[bool | None, str]:
     if k == "command_output":
         code, out = sh(" ".join(q(w) for w in c["command"].split()) + " 2>&1 | head -50", 30)
         return c["contains"] in out, out[-160:]
+    if k in ("login_env", "user_can", "user_cannot") and sh(f"id {q(c['user'])}")[0] != 0:
+        return None, f"user {c['user']} doesn't exist here"
+    if k == "login_env":
+        # A login shell through PAM: /etc/environment, /etc/profile(.d), ~/.profile all apply.
+        _, out = sh(f"su - {q(c['user'])} -s /bin/bash -c 'printenv {c['var']}' 2>&1 | tail -3")
+        return c["contains"] in out, out[-160:]
+    if k in ("user_can", "user_cannot"):
+        path, action = q(c["path"]), c["action"]
+        probe = {
+            "read": f"if [ -d {path} ]; then ls {path} >/dev/null; else head -c1 {path} >/dev/null; fi",
+            "list": f"ls {path} >/dev/null",
+            "execute": f"if [ -d {path} ]; then cd {path}; else test -x {path}; fi",
+            # Really create (and remove) a file in a directory; a file is only tested, never changed.
+            "write": f"if [ -d {path} ]; then f={path}/.lab-probe-$$ && touch \"$f\" && rm -f \"$f\"; else test -w {path}; fi",
+        }[action]
+        code, out = sh(f"su -s /bin/bash {q(c['user'])} -c {q(probe)} 2>&1 | tail -2; exit ${{PIPESTATUS[0]}}")
+        can = code == 0
+        return (can if k == "user_can" else not can), out[-160:] or ("allowed" if can else "refused")
+    if k in ("sudo_allowed", "sudo_denied"):
+        code, out = sh(f"sudo -l -U {q(c['user'])} {' '.join(q(w) for w in c['command'].split())} 2>&1 | tail -2")
+        allowed = code == 0 and bool(out)
+        return (allowed if k == "sudo_allowed" else not allowed), out[-160:] or ("allowed" if allowed else "not allowed")
+    if k == "http_from_other":
+        if prober_root is None:
+            return None, "no second machine in this run"
+        script = ("import http.client,sys\n"
+                  "c=http.client.HTTPConnection(sys.argv[1],int(sys.argv[2]),timeout=8)\n"
+                  "h={'Host':sys.argv[4]} if sys.argv[4] else {}\n"
+                  "c.request('GET',sys.argv[3],headers=h); r=c.getresponse()\n"
+                  "print(r.status); print(r.getheader('Location') or ''); print(r.read(4000).decode('utf-8','replace'))")
+        code, out, _ = _exec(prober_root, f"python3 -c {q(script)} {TARGET_PAIR_IP} {int(c['port'])} "
+                                          f"{q(c.get('path', '/'))} {q(c.get('host', ''))} 2>&1", 20)
+        lines = out.split("\n", 2) + ["", ""]
+        status, location, body = lines[0].strip(), lines[1].strip(), lines[2]
+        if code != 0 or not status.isdigit():
+            return False, out.strip()[-160:]
+        ok = True
+        if c.get("status"):
+            ok &= status == c["status"] or (c["status"].endswith("xx") and status[0] == c["status"][0])
+        if c.get("contains"):
+            ok &= c["contains"] in body
+        if c.get("location"):
+            ok &= c["location"] in location
+        return ok, f"HTTP {status}" + (f", Location: {location}" if location else "")
+    if k == "resolves":
+        _, out = sh(f"getent hosts {q(c['name'])}")
+        return c["address"] in out.split(), out[:120]
+    if k == "unit_runs_ok":
+        unit = c["unit"] if "." in c["unit"] else c["unit"] + ".service"
+        if unit.endswith(".timer"):
+            unit = unit[:-6] + ".service"
+        sh(f"systemctl reset-failed {q(unit)} 2>/dev/null; systemctl start {q(unit)}", 120)
+        _, out = sh(f"systemctl show -p Result -p ExecMainStatus -p ActiveState {q(unit)}")
+        props = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+        ok = props.get("Result") == "success" and props.get("ExecMainStatus", "0") == "0" \
+            and props.get("ActiveState") in ("active", "inactive")
+        return ok, " ".join(out.split())[:160]
+    if k == "sshd_effective":
+        _, out = sh(f"sshd -T 2>/dev/null | grep -i '^{c['key'].lower()} '")
+        return " ".join(out.split()[1:]).lower() == " ".join(c["value"].split()).lower(), out[:120]
     return None, "unknown check"
 
 
@@ -2492,6 +2595,7 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
         ok, seen = run_check(root, prober_root, c)
         if ok is None:
             continue
+        mark = len(out)
         was = before.get(i)
         subject = _describe_check(c)
         if ok and was:
@@ -2520,6 +2624,8 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
         else:
             out.append({"kind": "goal", "subject": subject + " (not confirmed)", "ok": False, "detail": seen,
                         "decisive": False, "source": "model"})
+        for entry in out[mark:]:
+            entry["plan_index"] = i
     return out
 
 
@@ -2873,8 +2979,32 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
         checks += _goal_checks(question, answer, steps, root, prober_root,
                                (prober.ip or "") if prober is not None else "")
         if planned_checks:
-            checks += model_goal_checks(root, prober_root, planned_checks, checks_before, question,
-                                        (prober.ip or "") if prober is not None else "", answer)
+            model_checks = model_goal_checks(root, prober_root, planned_checks, checks_before, question,
+                                             (prober.ip or "") if prober is not None else "", answer)
+            checks += model_checks
+            # L23: what should survive a reboot is checked after one (full VMs:
+            # they reboot in place). A check that doesn't survive proves nothing.
+            again = [m for m in model_checks if m["decisive"] and planned_checks[m["plan_index"]].get("after_reboot")]
+            if again and full_vm and time.monotonic() < deadline - 180:
+                say("# rebooting the lab machine to check what should survive a reboot...\n", now=True)
+                try:
+                    _exec(root, "nohup sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 &", 10)
+                except (OSError, EOFError):
+                    pass
+                if vm.wait_exit(120):
+                    connect()
+                    if prober_root is not None:
+                        _exec(prober_root, "ip neigh flush all", 10)
+                    for m in again:
+                        ok, seen = run_check(root, prober_root, planned_checks[m["plan_index"]])
+                        if not ok:
+                            m.update(ok=False, decisive=False, detail=seen,
+                                     subject=m["subject"].replace(" (after a reboot)", "") + " -- but not after a reboot")
+                    say("# after the reboot: " + "; ".join(f"{m['subject']}: {'yes' if m['ok'] else 'no'}"
+                                                             for m in again) + "\n")
+                else:
+                    for m in again:
+                        m.update(decisive=False, subject=m["subject"] + " (the machine didn't come back to recheck)")
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
