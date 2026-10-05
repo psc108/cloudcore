@@ -2771,6 +2771,14 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             "following the answer would; modprobe succeeds for modules built into the lab's kernel, as it "
             "would on a real machine\n")
         _exec(root, _HARNESS_SETUP, 60)
+        if full_vm:
+            # A full VM is driven over its own sshd on 1022 (L13's control
+            # channel). An answer that firewalls everything but SSH and HTTPS
+            # is right for a real server, but cut the lab off from its own
+            # machine (L23 dev #17: "Timeout opening channel"). ufw keeps that
+            # port open unless the answer resets ufw itself.
+            _exec(root, "ufw allow proto tcp to any port 1022 comment 'lab control channel' >/dev/null 2>&1 || true", 30)
+            say("# lab setup: ufw keeps port 1022 open -- the lab's own control channel to this machine\n")
         global _target_clock_offset
         t_a = time.time()
         _, guest_now, _ = _exec(root, "date +%s.%N", 15)

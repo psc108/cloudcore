@@ -79,7 +79,7 @@ work in advice".
 
 A mode or owner the answer sets directly, or a file line it writes, is never proof unless the question names that value. Placeholder users in checks map to the lab's.
 
-**Known limit:** the lab can't judge whether a setting means what the question wants (L22 #19: `ClientAliveCountMax 0` is accepted by sshd but disables the disconnect). Fresh set sealed first: `sealed-questions-2026-10-05.json` (2fc22fd) | Built 2026-10-05 (20f389f, 4ecdfcf); development run on the L22 answers |
+**Known limit:** the lab can't judge whether a setting means what the question wants (L22 #19: `ClientAliveCountMax 0` is accepted by sshd but disables the disconnect). Fresh set sealed first: `sealed-questions-2026-10-05.json` (2fc22fd) | Built 2026-10-05 (20f389f, 4ecdfcf). Development run on the L22 answers: 8 "verified", 7 genuine on reading (L22 grading of the same answers: 5), including #12 (a webteam member can write) and #13 (a fresh login sees the variable). The 8th, #19, is the known limit. The run's one error (#17): an answer firewalling all but SSH and HTTPS cut off the full VM's control sshd on 1022, so the lab now allows 1022 in ufw first |
 | L24 | **Measure L23 once with the 2026-10-05 sealed set** | Not started |
 
 ## Results: the same 40 answers through each stage
