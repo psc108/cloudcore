@@ -591,6 +591,7 @@ try:
         t.auth_none(user)
     except paramiko.BadAuthenticationType as e:
         res["methods"] = list(e.allowed_types)
+    res["banner"] = (t.get_banner() or b"").decode("utf-8", "replace")
     remaining = list(res["methods"])
     if use_key and "publickey" in remaining:
         more = t.auth_publickey(user, paramiko.Ed25519Key.from_private_key_file(keyfile))
@@ -632,7 +633,10 @@ def totp(secret_b32: str, at: float | None = None, step: int = 30, digits: int =
 
 
 def _check(kind: str, subject: str, ok: bool, detail: str = "", decisive: bool = True) -> dict:
-    return {"kind": kind, "subject": subject, "ok": ok, "detail": detail, "decisive": decisive}
+    # "evidence": False -- may fail a run, but passing doesn't show the
+    # question's goal (L26): set for kinds that only show configuration.
+    return {"kind": kind, "subject": subject, "ok": ok, "detail": detail, "decisive": decisive,
+            **({"evidence": False} if kind == "effective" else {})}
 
 
 def _pam_services_touched(steps: list[Step]) -> set[str]:
@@ -969,9 +973,18 @@ _CLIENT_Q_RE = re.compile(r"\b(?:connect|log ?in|ssh|copy|mount)\b[^?]*\b(?:to|i
 _SERVER_Q_RE = re.compile(r"\b(?:change|set|make|configure|run|listen|move|enable)\b", re.IGNORECASE)
 
 
-def _goal_checks(question: str, answer: str, steps: list, root, prober_root, prober_ip: str = "") -> list[dict]:
+_LIMIT_Q_RE = re.compile(r"\b(?:limit|rate|repeated|brute|too many)\b", re.IGNORECASE)
+_GROUP_NAME_RE = re.compile(r"\bgroup\s+(?:called\s+|named\s+)?['\"`]?([a-z_][a-z0-9_-]*)", re.IGNORECASE)
+_NOT_GROUP_NAMES = {"automatically", "ownership", "owner", "permissions", "by", "of", "and", "the", "to", "too", "so"}
+
+
+def _goal_checks(question: str, answer: str, steps: list, root, prober_root, prober_ip: str = "",
+                 ran: str | None = None) -> list[dict]:
+    """`ran`: the commands to take parameters from; by default the steps that
+    worked. The baseline before the answer passes all of the answer's steps."""
     q, a = question.lower(), answer
-    ran = "\n".join(s.final or s.source for s in steps if s.cls in ("ok", "repaired"))
+    if ran is None:
+        ran = "\n".join(s.final or s.source for s in steps if s.cls in ("ok", "repaired"))
     checks = []
 
     def sh(cmd, t=30):
@@ -990,6 +1003,9 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
                 inside = ipaddress.ip_address(prober_ip) in ipaddress.ip_network(src.group(1), strict=False)
             except ValueError:
                 src = None
+        # L26 (L24 #27, #30): "allowed" means something only while a firewall
+        # filters: with none, every port is "allowed" before the answer runs.
+        filtering = bool(wanted) and _port_state(prober_root, 8081) == "filtered"
         for port in sorted(wanted):
             st = _port_state(prober_root, port)
             if src and prober_ip and not inside:
@@ -997,8 +1013,20 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
                                     st == "filtered", f"connection {st}"))
             else:
                 where = f" (from {prober_ip}, inside {src.group(1)})" if src and prober_ip else " (from another machine)"
-                checks.append(_goal(f"port {port} is allowed through the firewall{where}", st != "filtered",
-                                    f"connection {st}"))
+                c = _goal(f"port {port} is allowed through the firewall{where}", st != "filtered", f"connection {st}")
+                if not filtering:
+                    c.update(decisive=False, subject=c["subject"] + " (nothing is being filtered, so no firewall "
+                                                                     "rule is shown at work)")
+                checks.append(c)
+            if _LIMIT_Q_RE.search(q) and st == "open":
+                # A rate limit shows itself by refusing a burst it let the first
+                # few of through (ufw limit: 6 in 30 s).
+                _, burst, _ = _exec(prober_root, "for i in $(seq 1 12); do timeout 2 bash -c "
+                                                 f"'</dev/tcp/{TARGET_PAIR_IP}/{port}' 2>/dev/null && printf o || printf x; "
+                                                 "done", 60)
+                burst = burst.strip()
+                checks.append(_goal(f"a burst of connections to port {port} gets cut off (from another machine)",
+                                    "o" in burst and "x" in burst.split("o", 1)[-1], f"connections: {burst}"))
         if wanted and re.search(r"\bonly\b", q):
             st = _port_state(prober_root, 8081)
             checks.append(_goal("a port the question didn't ask for (8081) is blocked", st == "filtered",
@@ -1012,7 +1040,8 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
                                           f"head -c 4 <&3' 2>&1", 10)
         checks.append(_goal(f"SSH answers on port {port} (from another machine)", banner.startswith("SSH-"),
                             "" if banner.startswith("SSH-") else banner.strip()[:120] or "no answer"))
-    if re.search(r"\bpassword\b", q) and re.search(r"\b(?:disable|no|without|only)\b", q) and "ssh" in q:
+    if re.search(r"\bpassword\b", q) and re.search(r"\b(?:disable|no|without|only)\b", q) and "ssh" in q \
+            and not _CLIENT_Q_RE.search(question):  # L24 #32: copying a key to another server
         _, eff, _ = sh("sshd -T 2>/dev/null | grep -E '^(passwordauthentication|kbdinteractiveauthentication) '")
         on = [ln for ln in eff.splitlines() if ln.split()[-1:] == ["yes"]]
         checks.append(_goal("SSH no longer accepts passwords", not on, "; ".join(on)))
@@ -1042,13 +1071,20 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
             _, rights, _ = sh(f"sudo -l -U {shlex.quote(user)} 2>&1")
             ok = "sudo" in groups.split() or "(ALL" in rights
             checks.append(_goal(f"user '{user}' exists and can use sudo", ok, groups.strip()[:120]))
-    if re.search(r"\binherit", q) and "group" in q:
+    if "group" in q and (re.search(r"\binherit", q) or re.search(r"\bbelong\b.*\bautomatic", q)):
+        # L26 (L24 #13): what a new file gets, not the setgid bit that should give it.
         m = re.search(r"chmod\s+(?:-R\s+)?[0-7]*g\+[rwx]*s[rwx]*\s+(\S+)|chmod\s+2[0-7]{3}\s+(\S+)", ran)
-        if m:
-            d = m.group(1) or m.group(2)
-            _, mode, _ = sh(f"stat -c %A {shlex.quote(d)}")
-            ok = len(mode.strip()) == 10 and mode.strip()[6] in "sS"
-            checks.append(_goal(f"new files in {d} inherit its group (setgid)", ok, mode.strip()))
+        mq = re.search(r"(/[\w./-]+)", question)
+        d = (mq.group(1).rstrip(".") if mq else "") or (m and (m.group(1) or m.group(2))) or ""
+        groups = [g for g in _GROUP_NAME_RE.findall(question) if g.lower() not in _NOT_GROUP_NAMES]
+        if d:
+            _, got, _ = sh(f"f=$(mktemp -p {shlex.quote(d)} .lab-probe.XXXXXX 2>/dev/null) && stat -c %G \"$f\"; "
+                           f"rm -f \"$f\"")
+            got = got.strip()
+            want = groups[0] if groups else ""
+            ok = (got == want) if want else (bool(got) and got != "root")
+            checks.append(_goal(f"a new file made in {d} belongs to group {want or 'other than root'}", ok,
+                                f"it belongs to {got or 'nothing: no file could be made'}"))
     if re.search(r"\b(?:systemd|service)\b", q) and re.search(r"\bboot\b", q):
         for unit in dict.fromkeys(re.findall(r"/etc/systemd/system/([\w@.-]+\.service)", a)):
             _, en, _ = sh(f"systemctl is-enabled {unit}")
@@ -1056,6 +1092,15 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
             if re.search(r"\b(?:restart|crash)", q):
                 _, rs, _ = sh(f"systemctl show -p Restart --value {unit}")
                 checks.append(_goal(f"{unit} restarts if it crashes", rs.strip() not in ("", "no"), f"Restart={rs.strip()}"))
+    if "banner" in q and "ssh" in q and prober_root is not None:
+        # L26 (L24 #19): seen by a client before it logs in, not "sshd uses Banner".
+        _, out, _ = _exec(prober_root, f"python3 /tmp/probe_ssh.py {TARGET_PAIR_IP} student x 0 - 22", 40)
+        try:
+            shown = json.loads(out.strip().splitlines()[-1]).get("banner", "")
+        except (ValueError, IndexError):
+            shown = ""
+        checks.append(_goal("another machine is shown a banner before logging in over SSH", bool(shown.strip()),
+                            " ".join(shown.split())[:120] or "no banner"))
     if "fail2ban" in q:
         code, out, _ = sh("for i in 1 2 3; do fail2ban-client status sshd && exit 0; sleep 4; done; exit 1")
         checks.append(_goal("fail2ban is protecting SSH (sshd jail active)", code == 0, out.strip()[-160:]))
@@ -1164,7 +1209,7 @@ def _sshd_effective_checks(steps: list[Step], root) -> list[dict]:
         if now is None:
             continue
         took = value.lower() in now
-        checks.append(_check("effective", f"sshd uses '{key} {value}'", took,
+        checks.append(_check("effective", f"sshd uses '{key} {value}'", took,  # L24 #19: config, not behaviour
                              "" if took else f"sshd is using '{k} {now[0]}': the answer's line did not take "
                                              "effect (sshd keeps the first value it reads; an earlier line, "
                                              "or a file in sshd_config.d, already sets it)"))
@@ -2566,6 +2611,9 @@ _SECOND_GOAL_RE = re.compile(r"\b(?:and|so (?:that|it)|then|to)\b\s+(?:\w+\s+){0
 
 
 _QUALIFIER_RE = re.compile(r"\b(?:with(?:out)?|who|which|that|whose|so)\b", re.IGNORECASE)
+_PERM_Q_RE = re.compile(r"\b(?:own(?:er|ed|s|ership)?|belongs?|permissions?|perms|mode|chmod|chown|access|readable|"
+                        r"writ(?:e)?able|executable|setgid|setuid|sticky|read|write)\b", re.IGNORECASE)
+_CUSTOM_PAGE_RE = re.compile(r"\b(?:custom|own|my|message|says|saying|text)\b", re.IGNORECASE)
 
 
 def _existence_question(question: str) -> bool:
@@ -2631,6 +2679,20 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
                 and c["mode" if c["kind"] == "path_mode" else "owner"].split(":")[0] not in question:
             out.append({"kind": "goal", "subject": subject + " (the answer set this directly; a means, not the "
                         "question's goal)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
+        elif ok and c["kind"] in ("path_mode", "path_owner") and not _PERM_Q_RE.search(question):
+            # L24 #24, #25: a directory the answer made has some owner and mode;
+            # that it has them says nothing of a question not about them.
+            out.append({"kind": "goal", "subject": subject + " (the question isn't about ownership or permissions)",
+                        "ok": True, "detail": seen, "decisive": False, "source": "model"})
+        elif ok and c["kind"] == "http_from_other" and c.get("contains") \
+                and " ".join(c["contains"].lower().split()) not in " ".join((answer + " " + question).lower().split()):
+            # L24 #16: "404 Not Found" is nginx's own page, not the custom one.
+            out.append({"kind": "goal", "subject": subject + " (text a default page shows too; not from the answer "
+                        "or the question)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
+        elif ok and c["kind"] == "http_from_other" and not c.get("contains") and not c.get("location") \
+                and _CUSTOM_PAGE_RE.search(question):
+            out.append({"kind": "goal", "subject": subject + " (a status code alone doesn't show the page the "
+                        "question asks for)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
         elif ok and from_elsewhere and not c["kind"].endswith("_from_other"):
             out.append({"kind": "goal", "subject": subject + " (a step towards it; the question is about another "
                         "machine reaching this one)", "ok": True, "detail": seen, "decisive": False, "source": "model"})
@@ -2836,6 +2898,11 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     + "\n")
             _unit_scripts = {p for line in answer.splitlines() if "ExecStart" in line
                              for p in _STUB_SCRIPT_RE.findall(_substitute(line)[0])}
+        # L26: the hand-written goal checks, before the answer, as the model's
+        # are -- a check that already passes shows nothing (L24 #27, #30, #32).
+        goal_before = {c["subject"] for c in _goal_checks(question, answer, steps, root, prober_root,
+                                                          (prober.ip or "") if prober is not None else "",
+                                                          ran="\n".join(s.source for s in steps)) if c["ok"]}
         say("# now following the answer, step by step\n", now=True)
 
         for s in steps:
@@ -2977,7 +3044,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 want = [ln.strip() for ln in s.source.splitlines() if ln.strip() and not ln.strip().startswith("#")]
                 checks.append({"kind": "cron", "subject": f"{user}'s crontab has the answer's entry",
                                "ok": bool(want) and all(w in tab for w in want),
-                               "detail": "" if want and all(w in tab for w in want) else tab.strip()[-200:]})
+                               "detail": "" if want and all(w in tab for w in want) else tab.strip()[-200:],
+                               "evidence": False})  # L24 #11: the answer's own line; says nothing of when it runs
         _explain_missing_packages(steps, checks, root)
         _add_corrections(steps, root)
         checks += _sshd_effective_checks(steps, root)
@@ -3004,10 +3072,19 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             if login_prober is not None:
                 login_prober.root = root  # a reboot replaced the connection
                 checks += _login_probes(steps, login_prober, baseline, question, answer, sshd_changed)
-            checks += _network_probes(steps, root, prober_root, answer, services_started, pkgs)
+            probed = _network_probes(steps, root, prober_root, answer, services_started, pkgs)
+            if not _existence_question(question):
+                # L24 #16: nginx's default page answering shows nginx runs, not
+                # the custom 404 asked for. Still fails a run when it fails.
+                for c in probed:
+                    c["evidence"] = False
+            checks += probed
         say("# checking what the question asked for...\n", True)
-        checks += _goal_checks(question, answer, steps, root, prober_root,
-                               (prober.ip or "") if prober is not None else "")
+        for c in _goal_checks(question, answer, steps, root, prober_root,
+                              (prober.ip or "") if prober is not None else ""):
+            if c["ok"] and c["subject"] in goal_before:
+                c.update(decisive=False, subject=c["subject"] + " (already true before the answer)")
+            checks.append(c)
         if planned_checks:
             model_checks = model_goal_checks(root, prober_root, planned_checks, checks_before, question,
                                              (prober.ip or "") if prober is not None else "", answer)
@@ -3141,7 +3218,7 @@ def _finish_verdict(result: RunResult, steps: list[Step], checks: list[dict]) ->
     # "... still works" logins guard against a lockout; they can fail a run but
     # never show the question's goal was met (L22 #13: an environment-variable
     # answer was "verified" by SSH still working).
-    goal = [c for c in checks if c["ok"] and c.get("decisive", True)
+    goal = [c for c in checks if c["ok"] and c.get("decisive", True) and c.get("evidence", True)
             and c["kind"] in ("goal", "login", "http", "cron", "effective")
             and not (c["kind"] == "login" and "still works" in c["subject"])]
     if limits and not bad and not failed_checks:

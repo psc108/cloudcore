@@ -80,7 +80,17 @@ work in advice".
 A mode or owner the answer sets directly, or a file line it writes, is never proof unless the question names that value. Placeholder users in checks map to the lab's.
 
 **Known limit:** the lab can't judge whether a setting means what the question wants (L22 #19: `ClientAliveCountMax 0` is accepted by sshd but disables the disconnect). Fresh set sealed first: `sealed-questions-2026-10-05.json` (2fc22fd) | Built 2026-10-05 (20f389f, 4ecdfcf). Development run on the L22 answers: 8 "verified", 7 genuine on reading (L22 grading of the same answers: 5), including #12 (a webteam member can write) and #13 (a fresh login sees the variable). The 8th, #19, is the known limit. The run's one error (#17): an answer firewalling all but SSH and HTTPS cut off the full VM's control sshd on 1022, so the lab now allows 1022 in ufw first |
-| L24 | **Measure L23 once with the 2026-10-05 sealed set** | Not started |
+| L24 | **Measure L23 once with the 2026-10-05 sealed set** | Done 2026-10-05 (results below): 13 lab-verified, **4 genuine** on reading |
+| L25 | **A lab reader on another host** (a 7B for the lab's readings) | Switched off 2026-10-05: weaker checks than the 14B, and students' answers still slow. Replaced by `llm-chat-placement-Phased-Implementation.md` (the lab's own 14B, placed by measured speed) |
+| L26 | **One check standard** (from L24: 9 of 13 verifications false or weak, most from the older hand-written checks):
+- **Before and after for every check.** The hand-written goal checks now run before the answer as the model's do, and one already true shows nothing (L24 #32: "SSH refuses passwords" is the image's default).
+- **"Allowed through the firewall" only while a firewall filters** (another port is blocked), else not evidence (#27, #30).
+- **Configuration is not evidence:** the answer's own crontab entry (#11), `sshd -T` showing the answer's own line (#19), and the basic web-server probe (#16, nginx's default page) can fail a run but never verify one, except the probe for a pure install question.
+- **Model checks:** owner or mode counts only if the question is about ownership or permissions (#24, #25: the mode of a directory the answer made). Web text counts only if the answer or the question supplied it; a bare status doesn't show a custom page (#16: "404 Not Found" is nginx's own).
+- **New behaviour checks:** a new file in the directory gets the group (#13, not the setgid bit); another machine is shown the SSH banner (#19); a burst of connections is cut off (#30, a rate limit).
+
+Fresh set sealed first: `sealed-questions-2026-10-06.json` (1f5b252, sha256 `3fc00be5…`) | Built 2026-10-06 |
+| L27 | **Measure L26 once with the 2026-10-06 sealed set**, as L24 | Not started |
 
 ## Results: the same 40 answers through each stage
 
@@ -122,6 +132,25 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 **Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The 11 runs graded `lab_verified` before L12 were regraded the same way: all 11 are goal-verified (F-195). A goal-verified repaired procedure is now stored as an answer of its own; it's reused automatically only when its repairs are real corrections (F-195).
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
+## L24: L23 on a fresh sealed set (2026-10-05)
+
+The 40 questions sealed before L23 (`sealed-questions-2026-10-05.json`, sha256 `76b418be…`, unchanged), through `/sandbox/linux-ask` on full VMs (`sealed3-asks.jsonl`, `sealed3-labs.jsonl`). Every "verified" was read: 8 first time, 5 after a repair or another way.
+
+| | L20 | L22 | L24 |
+|---|---|---|---|
+| Goal-verified, as graded by the lab | 1 | 8 | 13 |
+| **… true on reading** | **1** | **6** | **4** (#8 devs group members, #9 liam's one sudo command, #21 the www redirect, #22 tmpfs mounted and in fstab) |
+| False or weak | 0 | 2 | 9 |
+
+**The 9, by cause** (each fixed in L26):
+- **No before-state for hand-written checks:** #27 (ports "allowed" with no firewall at all), #30 (port 22 "allowed", and nothing tested the limit), #32 ("SSH refuses passwords", already so, and the question was about the client).
+- **Configuration taken as the goal:** #11 (the crontab has the answer's own line), #19 (sshd uses the answer's own Banner line).
+- **Owner or mode of a new directory:** #24 (`/mnt/DATA` is root:root 755, nothing about the label), #25 (the same for a bind mount).
+- **A default page:** #16 ("404 Not Found" is nginx's own text, not the custom page).
+- **Weak:** #13 (the setgid bit, not that new files get the group).
+
+L23's behaviour checks were right where the model chose them. The false passes came from the older hand-written checks and two loopholes in the rules.
 
 ## L22: L21 on a fresh sealed set (2026-10-05)
 
