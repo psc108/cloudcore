@@ -304,7 +304,9 @@ def _build_write_files_block(ssh_user: str, cc_pubkey: str, cc_privkey: str, ext
         # No `owner:` here deliberately: the write_files module runs before
         # users-groups creates {usr}, so an owner referencing that user
         # fails with "Unknown user or group". Files land root-owned and the
-        # runcmd below (which runs after users-groups) chowns them.
+        # runcmd below (which runs after users-groups) chowns them -- the home
+        # directory too (F-221): write_files makes /home/{usr} as root first,
+        # and useradd leaves an existing home as it finds it.
         write_entries.append(f"""  - path: /home/{usr}/.ssh/cloudcore_ed25519
     permissions: '0600'
     content: |
@@ -316,7 +318,8 @@ def _build_write_files_block(ssh_user: str, cc_pubkey: str, cc_privkey: str, ext
         runcmds.append(f"""  - |
     mkdir -p /home/{usr}/.ssh
     grep -qF 'cloudcore_ed25519' /home/{usr}/.ssh/config 2>/dev/null || printf '\\nHost *\\n  IdentityFile ~/.ssh/cloudcore_ed25519\\n  StrictHostKeyChecking no\\n' >> /home/{usr}/.ssh/config
-    chown {usr}:{usr} /home/{usr}/.ssh/config /home/{usr}/.ssh/cloudcore_ed25519 /home/{usr}/.ssh/cloudcore_ed25519.pub
+    chown {usr}:{usr} /home/{usr} /home/{usr}/.ssh /home/{usr}/.ssh/config /home/{usr}/.ssh/cloudcore_ed25519 /home/{usr}/.ssh/cloudcore_ed25519.pub
+    chmod 700 /home/{usr}/.ssh
     chmod 600 /home/{usr}/.ssh/config /home/{usr}/.ssh/cloudcore_ed25519""")
 
     return "write_files:\n" + "\n".join(write_entries) + "\nruncmd:\n" + "\n".join(runcmds)

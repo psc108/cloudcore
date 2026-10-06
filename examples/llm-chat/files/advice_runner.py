@@ -111,6 +111,7 @@ _PLACEHOLDER_RE = re.compile(r"\byour[_-][a-z_]+|\b(?:username|user|youruser)@|"
                              r"<(?:your[\w -]*|[\w-]*(?:user|name|server|ip|file|path|dir|domain|host|group|"
                              r"password|key|port)[\w-]*)>|\bYOUR_[A-Z_]+\b|\bserver_ip\b", re.IGNORECASE)
 LAB_USER, LAB_GROUP, LAB_DIR = "labuser", "labgroup", "/srv/lab"
+STUDENT_HOME = "/home/student"  # where the answer's steps run
 _MICROVM_TARGET_IP = "172.30.0.2"
 TARGET_PAIR_IP = _MICROVM_TARGET_IP
 _SUBSTITUTIONS = [
@@ -258,6 +259,61 @@ def _strip_console(code: str) -> str:
     return "\n".join(ln.lstrip()[2:] for ln in lines if ln.lstrip().startswith(("$ ", "# ")))
 
 
+# F-223 (L27 #19): "It might look like this:" shows the file as it is, before
+# the change -- not a step. ("Should look like" is the wanted end state.)
+_EXISTING_HINT_RE = re.compile(r"\b(?:might|may|could|will|would)\s+(?:look|appear|read)\b|\blooks?\s+something\s+like\b|"
+                               r"\bcurrently\s+(?:looks|reads|contains|says)\b|\byou(?:'ll|\s+will)\s+(?:see|find)\b|"
+                               r"\b(?:default|existing|original|current)\s+(?:section|block|config\w*|lines?|settings?|"
+                               r"entry|file)\b[^.:]*\blike\b", re.IGNORECASE)
+
+
+# F-224 (L27 #32, #34): commands that never end on their own. A server started
+# in the foreground keeps running, as the answer means it to; an interactive
+# client with nothing to do waits at its prompt. Either would hit the step's
+# time limit and fail a working answer.
+_FG_SERVER_RE = re.compile(
+    r"^\s*(?:sudo\s+(?:-u\s+\S+\s+)?)?(?:python3?\s+-m\s+http\.server\b|php\s+-S\s|redis-server\b(?!.*--daemonize\s+yes)|"
+    r"node\s+\S+\.(?:js|mjs)\b|flask\s+run\b|uvicorn\s|gunicorn\s(?!.*(?:-D\b|--daemon))|nc\s+(?:-\w*l\w*\s)|"
+    r"ncat\s+(?:-\w*l\w*\s)|socat\s+\S*LISTEN|busybox\s+httpd\s+-f|ruby\s+-run\s+-e\s+httpd|npx\s+(?:serve|http-server)\b|"
+    r"mongod\b(?!.*--fork)|ssh\s+(?:-\w+\s+)*-N\b)")
+_REPL_CLIENTS = {"redis-cli": "ping", "mysql": "-e 'SELECT 1'", "mariadb": "-e 'SELECT 1'", "psql": "-c 'SELECT 1'"}
+_REPL_RE = re.compile(r"^(\s*(?:sudo\s+(?:-u\s+\S+\s+)?)?(redis-cli|mysql|mariadb|psql|sqlite3|mongosh|mongo)\b([^|&;<>]*))$")
+
+
+def _never_ending(body: str) -> tuple[str, list[str]]:
+    """Run foreground servers in the background, checked as running, and give
+    interactive clients something to do. Returns (body, what was changed)."""
+    if "<<" in body:
+        return body, []
+    out, notes = [], []
+    for i, line in enumerate(body.splitlines()):
+        s = line.rstrip()
+        if not s.strip() or s.endswith("&") or re.search(r"\bnohup\b|\bsystemctl\b|-d\b.*\bdocker\b", s):
+            out.append(line)
+            continue
+        head, _, tail = s.rpartition("&&") if "&&" in s else ("", "", s)
+        if _FG_SERVER_RE.match(tail):
+            log = f"/tmp/lab-server-{i}.log"
+            # setsid + nohup: it outlives the step's terminal, as a person's
+            # server outlives them switching to another window.
+            start = f"setsid nohup {tail.strip()} >{log} 2>&1 &"
+            out.append((f"{head.strip()} && {{ {start} }}" if head else start)
+                       + f"\nsleep 3; kill -0 $! 2>/dev/null || {{ cat {log}; false; }}")
+            notes.append(f"'{s.strip()[:60]}' keeps running, so the lab started it in the background and checked it was up")
+            continue
+        m = _REPL_RE.match(s)
+        if m and not re.search(r"\s-(?:e|c|f)\b|\s--(?:execute|command|file)\b", m.group(3)) and \
+                not (m.group(2) == "redis-cli" and re.search(r"(?:^|\s)(?![-])\w+(?:\s|$)", re.sub(r"-\w+\s+\S+", "", m.group(3)))) and \
+                not (m.group(2) == "sqlite3" and len(m.group(3).split()) > 1):
+            extra = _REPL_CLIENTS.get(m.group(2))
+            out.append(f"{s} {extra}" if extra else f"{s} </dev/null")
+            notes.append(f"'{s.strip()[:60]}' opens an interactive prompt; the lab ran "
+                         + (f"'{extra}' in it" if extra else "it with no input") + " to test the connection")
+            continue
+        out.append(line)
+    return "\n".join(out), notes
+
+
 def parse_steps(answer: str) -> list[Step]:
     global _placeholder_account
     _placeholder_account = "/home/user/" in answer
@@ -313,6 +369,8 @@ def parse_steps(answer: str) -> list[Step]:
                                   note=f"example with a placeholder ({placeholder.group(0)}) for you to fill in; "
                                        "logins are tested from the lab's prober machine instead"))
             elif body:
+                body, bg = _never_ending(body)
+                subs = subs + bg
                 steps.append(Step(len(steps) + 1, "run", body, subs=subs, needs=sorted(needs),
                                   note=("the lab filled in: " + ", ".join(subs)) if subs else ""))
             elif editors:
@@ -322,8 +380,20 @@ def parse_steps(answer: str) -> list[Step]:
         # A config block: where does it go, and how?
         target = pending_editor_target
         if not target:
-            paths = _PATH_RE.findall(lead) or _PATH_RE.findall(code.splitlines()[0])
+            first = code.splitlines()[0]
+            # F-223: a path in a section header (<Directory /var/www/>,
+            # location /api/ {) is what the section is about, not the file.
+            paths = _PATH_RE.findall(lead) or ([] if re.match(r"\s*<|\s*(?:location|server|Match)\b", first)
+                                               else _PATH_RE.findall(first))
             target = paths[-1] if paths else ""
+        if not target and last_config_target and not _CREATE_HINT_RE.search(last_sentence):
+            target = last_config_target if _EXISTING_HINT_RE.search(lead) or _EDIT_HINT_RE.search(last_sentence) \
+                else target
+        if target and _EXISTING_HINT_RE.search(last_sentence):
+            steps.append(Step(len(steps) + 1, "skip", code, target=target,
+                              note="how the file looks before the change, not a step"))
+            last_config_target = pending_editor_target = target
+            continue
         if not target and _EDIT_HINT_RE.search(last_sentence):
             # "Ensure that PasswordAuthentication is set to yes" -- still the
             # file the previous config block went into.
@@ -1134,7 +1204,15 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
         checks.append(_goal("a WireGuard interface is up", up, " ".join(out.split())[:160]))
     if re.search(r"\bswap\b", q):  # L19 (F-200 #28): not "swappiness"
         _, sw, _ = sh("swapon --show --noheadings")
-        checks.append(_goal("swap is active", bool(sw.strip()), sw.strip()[:120]))
+        if re.search(r"\b(?:turn(?:ing)?\s+off|disable|switch\s+off|remove|get rid of|stop using|without)\b[^?]*\bswap\b|"
+                     r"\bswap\b[^?]*\b(?:off|disabled)\b", q):
+            # F-222 (L27 #26): the question's direction, not always "on".
+            checks.append(_goal("no swap is active", not sw.strip(), sw.strip()[:120] or "none"))
+            if re.search(r"\b(?:boot|reboot|permanent|keep)", q):
+                _, fst, _ = sh("awk '$1 !~ /^#/ && $3 == \"swap\"' /etc/fstab")
+                checks.append(_goal("/etc/fstab turns on no swap at boot", not fst.strip(), fst.strip()[:120] or "none"))
+        else:
+            checks.append(_goal("swap is active", bool(sw.strip()), sw.strip()[:120]))
     # L19 (F-200 #11, #40): a question about something inside a container
     # isn't checked on the host; "without sudo" is checked as that user.
     if "docker" in q and not re.search(r"\b(?:inside|in|within)\s+(?:a|the|my)?\s*(?:docker\s+)?container", q):
@@ -1276,6 +1354,9 @@ _LAB_LIMITS = [
                 r"Let'?s ?Encrypt", re.IGNORECASE),
      "a certificate from a public CA: that needs a real domain whose DNS points at this machine from the "
      "internet, which a lab machine can't have"),
+    # L27 #27: the answer's gateway is on the reader's network, not the lab's.
+    (re.compile(r"Nexthop has invalid gateway|RTNETLINK answers: Network is unreachable"),
+     "a route through a gateway on a network this lab machine isn't connected to"),
 ]
 # Questions that are about such things outright: the lab says so before
 # booting anything (and never asks a public CA for a certificate for a
@@ -1561,6 +1642,11 @@ class _StepLog:
             self.say(line + "\n")
 
 _HARNESS_SETUP = r"""set -e
+# F-221: the student's home, where steps run, and the lab's directory for
+# placeholder paths belong to the student (instances made before the CloudCore
+# fix have root-owned homes).
+chown student: /home/student
+mkdir -p /srv/lab && chown student: /srv/lab
 # The runner answers apt's and debconf's questions the way a person
 # following the answer would (yes / defaults); nothing else is changed.
 printf 'APT::Get::Assume-Yes "true";\n' > /etc/apt/apt.conf.d/99lab-assume-yes
@@ -1590,6 +1676,20 @@ exec /sbin/modprobe "$@"
 EOS
 chmod 755 /usr/local/sbin/modprobe
 """
+
+
+def _repeats_root_repair(steps: list, s) -> bool:
+    """This step is the previous step again with sudo, and the lab already
+    repaired the previous one by running it as root."""
+    prev = next((x for x in reversed(steps[:s.n - 1]) if x.kind == "run"), None)
+    if prev is None or prev.cls != "repaired" or "ran it as root" not in (prev.repair or ""):
+        return False
+    norm = lambda x: re.sub(r"\s+", " ", re.sub(r"^\s*sudo\s+", "", x.strip()))
+    return s.source.strip().startswith("sudo") and norm(s.source) == norm(prev.source)
+
+
+class _MachineLost(Exception):
+    """F-225: the machine didn't come back from the answer's own reboot."""
 
 
 _REBOOT_RE = re.compile(r"\b(?:reboot|shutdown\s+(?:-\S+\s+)*-r|systemctl\s+reboot|init\s+6)\b")
@@ -1781,6 +1881,23 @@ def _edit_config(old: str, block: str) -> str:
     silently do nothing. Anything else is appended."""
     lines = old.splitlines()
     blines = [b for b in block.splitlines() if b.strip() and not b.strip().startswith("#")]
+    tag = re.match(r"\s*<(\w+)(\s[^>]*)?>\s*$", blines[0]) if blines else None
+    if tag and re.match(rf"\s*</{tag.group(1)}>\s*$", blines[-1], re.IGNORECASE):
+        # F-223: an Apache-style <Section args>...</Section> block replaces the
+        # file's own section with that header, or is added if there is none.
+        def norm(s):
+            return re.sub(r"\s+", " ", s.strip().rstrip("/>").rstrip("/").lower())
+        want = norm(blines[0])
+        start = next((i for i, ln in enumerate(lines) if norm(ln) == want), None)
+        if start is not None:
+            end = next((i for i in range(start + 1, len(lines))
+                        if re.match(rf"\s*</{tag.group(1)}>", lines[i], re.IGNORECASE)), None)
+            if end is not None:
+                indent = re.match(r"\s*", lines[start]).group(0)
+                body = [indent + b.strip() if i in (0, len(blines) - 1) else indent + "    " + b.strip()
+                        for i, b in enumerate(blines)]
+                return "\n".join(lines[:start] + body + lines[end + 1:]) + "\n"
+        return "\n".join(lines + [""] + [b.rstrip() for b in block.strip("\n").splitlines()]) + "\n"
     if blines and _INI_SECTION_RE.match(blines[0]):
         section = None
         for b in blines:
@@ -2177,6 +2294,13 @@ def plan_setup(raw: dict, question: str, answer: str) -> tuple[list[dict], list[
             name = LAB_USER
         if a in ("dir", "file") and name.startswith("/path/to/"):
             name = LAB_DIR + "/" + name.rstrip("/").rsplit("/", 1)[-1]  # as the placeholder fill names it
+        base = name.rstrip("/").rsplit("/", 1)[-1]
+        if a in ("dir", "file") and not name.startswith(STUDENT_HOME + "/") and base and \
+                re.search(rf"(?<![\w/.~-])(?:\./)?{re.escape(base)}(?![\w-])", answer) and \
+                not re.search(rf"/{re.escape(base)}(?![\w-])", answer.replace("./" + base, "")):
+            # F-221 (L27 #5): the answer uses it by a relative name, so it is
+            # where the answer's steps run: the student's home.
+            name, item = f"{STUDENT_HOME}/{base}", {**item, "owner": "student"}
         if a == "group" and _PLACEHOLDER_SHAPE.search(name):
             name = LAB_GROUP
         clean = {"action": a, ("path" if a in ("dir", "file") else "name"): name.rstrip("/") if a != "dir" else name}
@@ -2638,11 +2762,27 @@ def _prober_is_source(prober_ip: str, sources: list[str]) -> bool:
     return False
 
 
+# F-226 (L27 #40): the special bits by name, as chmod sets them symbolically
+# or by an octal digit.
+_SPECIAL_MODES = {"setuid": r"(?:[ua]*\+[rwx]*s|\b[4-7][0-7]{3}\b)", "setgid": r"(?:[ga]*\+[rwx]*s|\b[2367][0-7]{3}\b)",
+                  "sticky": r"(?:[oa]*\+[rwx]*t|\b[1357][0-7]{3}\b)"}
+
+
 def _sets_directly(c: dict, answer: str) -> bool:
     """The answer runs chmod/chown with exactly this value on this path."""
     value = c.get("mode") or c.get("owner") or ""
     verb = "chmod" if c["kind"] == "path_mode" else "chown"
-    return bool(re.search(rf"\b{verb}\b[^\n]*\b{re.escape(value)}\b[^\n]*{re.escape(c['path'])}", answer))
+    pattern = _SPECIAL_MODES.get(value.lower()) if verb == "chmod" else None
+    pattern = pattern or rf"\b{re.escape(value)}\b"
+    return bool(re.search(rf"\b{verb}\b[^\n]*{pattern}[^\n]*{re.escape(c['path'])}", answer))
+
+
+# F-226: a question asking what something is or means. Its demo commands can
+# run, but nothing they change is what the question asked for.
+_EXPLAIN_Q_RE = re.compile(r"^\s*(?:what(?:'s|\s+is|\s+are|\s+does|\s+do)\b(?![^?]*\b(?:command|way|tool)\b)|why\b|"
+                           r"explain\b|describe\b|how\s+does\b)", re.IGNORECASE)
+_NOPASSWD_Q_RE = re.compile(r"\b(?:without\s+(?:typing\s+|entering\s+|a\s+)*(?:a\s+|their\s+|his\s+|her\s+)?password|"
+                            r"no\s+password|passwordless|nopasswd)\b", re.IGNORECASE)
 
 
 def model_goal_checks(root, prober_root, planned: list[dict], before: dict, question: str = "",
@@ -2700,6 +2840,15 @@ def model_goal_checks(root, prober_root, planned: list[dict], before: dict, ques
             out.append({"kind": "goal", "subject": subject + f" (the other machine isn't {', '.join(sources)}, "
                         "which the question is about)", "ok": True, "detail": seen, "decisive": False,
                         "source": "model"})
+        elif ok and c["kind"] == "sudo_allowed" and _NOPASSWD_Q_RE.search(question) and root is not None:
+            # L27 #9: `sudo -l` shows it is allowed, not that no password is asked.
+            cmd = " ".join(shlex.quote(w) for w in c["command"].split())
+            code, said, _ = _exec(root, f"su -s /bin/bash {shlex.quote(c['user'])} -c "
+                                        f"{shlex.quote('sudo -n ' + cmd + ' </dev/null')} 2>&1 | tail -1; "
+                                        "exit ${PIPESTATUS[0]}", 30)
+            out.append({"kind": "goal", "subject": subject + ", without a password", "ok": code == 0,
+                        "detail": said.strip()[-120:] or ("ran" if code == 0 else "asked for a password"),
+                        "decisive": code == 0, "source": "model"})
         elif ok:
             out.append({"kind": "goal", "subject": subject, "ok": True, "detail": seen, "decisive": True,
                         "source": "model"})
@@ -2842,7 +2991,14 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
             # machine (L23 dev #17: "Timeout opening channel"). ufw keeps that
             # port open unless the answer resets ufw itself.
             _exec(root, "ufw allow proto tcp to any port 1022 comment 'lab control channel' >/dev/null 2>&1 || true", 30)
-            say("# lab setup: ufw keeps port 1022 open -- the lab's own control channel to this machine\n")
+            # F-225 (L27 #28): `ufw reset` deletes that rule too. A rule at the
+            # top of INPUT itself survives: ufw leaves the built-in chains'
+            # own rules alone (MANAGE_BUILTINS=no) and appends its jumps after.
+            _exec(root, "for t in iptables ip6tables; do $t -C INPUT -p tcp --dport 1022 -j ACCEPT 2>/dev/null || "
+                        "$t -I INPUT 1 -p tcp --dport 1022 -m comment --comment 'lab control channel' -j ACCEPT; "
+                        "done 2>/dev/null || true", 30)
+            say("# lab setup: port 1022 stays open, whatever the firewall -- the lab's own control channel to this "
+                "machine\n")
         global _target_clock_offset
         t_a = time.time()
         _, guest_now, _ = _exec(root, "date +%s.%N", 15)
@@ -2942,6 +3098,7 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                         say(f"# back up after the reboot ({time.monotonic() - t0:.0f}s)\n", now=True)
                     else:
                         s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not come back after the reboot"
+                        raise _MachineLost(s.n)
                 elif vm.wait_exit(90):
                     saved = vm.jail_dir + ".scratch"
                     vm.take_scratch(saved)
@@ -2957,6 +3114,13 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     say(f"# back up after the reboot ({time.monotonic() - t0:.0f}s), same disk\n", now=True)
                 else:
                     s.exit, s.cls, s.detail = 1, "step_failed", "the machine did not restart"
+                    raise _MachineLost(s.n)
+            elif s.kind == "run" and _repeats_root_repair(steps, s):
+                # L27 #12: "userdel x", then "if that fails, sudo userdel x" -- the
+                # lab already ran the first as root, so the retry has nothing to do.
+                s.exit, s.cls = 0, "skipped"
+                s.note = (s.note + "; " if s.note else "") + "the answer's own sudo retry of the step before, which the lab already ran as root"
+                say("# skipped: the lab already ran the step before as root\n")
             elif s.kind == "run":
                 step_log = _StepLog(say)
                 code, out, timed_out, replies, marks, fullscreen = _exec_step(
@@ -3112,6 +3276,12 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 else:
                     for m in again:
                         m.update(decisive=False, subject=m["subject"] + " (the machine didn't come back to recheck)")
+        if _EXPLAIN_Q_RE.search(question):
+            # F-226 (L27 #40): an explanation's demo ran or it didn't; whether
+            # the explanation is right isn't something the lab can see.
+            for c in checks:
+                if c["ok"] and c.get("evidence", True):
+                    c["evidence"] = False
         result.checks = checks
         result.steps = [asdict(x) for x in steps]
         _finish_verdict(result, steps, checks)
@@ -3144,6 +3314,20 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                     "password": login_prober.pw if login_prober else "",
                     "totp_secret": login_prober.secret if login_prober else ""}
             kept = bool(keep_vm(vm, info))
+    except _MachineLost as e:
+        # The answer's own reboot didn't come back: the answer's doing (a bad
+        # fstab line, a broken boot setting), not the lab's. Nothing after it
+        # can be run or checked.
+        n = e.args[0]
+        for s in steps:
+            if s.n > n and not s.cls:
+                s.cls, s.detail = "skipped", "not run: the machine didn't come back from the reboot before it"
+        result.steps = [asdict(x) for x in steps]
+        result.checks, result.verdict = [], "failed"
+        result.summary = (f"step {n}: the machine did not come back after the answer's reboot -- something set up "
+                          "before it (often /etc/fstab or a boot setting) stops it starting, as it would on a real "
+                          "machine. Nothing after the reboot could be run or checked.")
+        say(f"\n# verdict: failed -- {result.summary}\n", now=True)
     except Exception as e:  # noqa: BLE001 -- any failure is reported as the run's error
         result.status, result.error = "error", f"{type(e).__name__}: {e}"
         result.verdict = result.verdict or "partial"

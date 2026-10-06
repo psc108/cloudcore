@@ -1896,6 +1896,8 @@ _PRESUME_SYSTEM = (
     '  {"action":"service","name":"...","running":true|false}\n'
     '  {"action":"dir","path":"/...","owner":"..."}\n'
     '  {"action":"file","path":"/...","owner":"..."}\n'
+    "A file or directory the answer uses by a relative name (file1.txt, ./run.sh) is in the student's "
+    "home: give it as /home/student/<name>.\n"
     "NEVER list what the question asks to create, install or configure -- that is the answer's job. Only "
     "list what must be there for the answer to make sense (an existing user it modifies, a server it "
     "configures but does not install, a file or directory it reads).\n"
