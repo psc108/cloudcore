@@ -28,6 +28,8 @@ from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request
 
+from pathlib import Path
+
 import compute
 import discovery
 import host_stats
@@ -648,6 +650,12 @@ def recommend_llm_placement():
         "flavors", "standard.2xlarge,standard.xlarge,memory.large,standard.large").split(",") if f.strip()]
     import capacity_gate  # deferred: capacity_gate imports this module (see recommend_placement)
     min_ram = int(request.args.get("min_ram_mb", "0") or 0)
+    if not min_ram:
+        # The model's weights plus ~30% (context, buffers) plus 1GB for the OS:
+        # 14B Q4 (8.4GB) -> ~12GB, the size llm-chat's coordinator runs it in.
+        model_file = Path(__file__).resolve().parent / "package-repo" / "jammy" / "artifacts" / model
+        if model_file.is_file():
+            min_ram = int(model_file.stat().st_size / 2**20 * 1.3) + 1024
     flavors = [f for f in flavors if f in compute.FLAVORS and compute.FLAVORS[f][1] >= min_ram]
 
     hosts = []
@@ -673,7 +681,10 @@ def recommend_llm_placement():
         best = max(fresh, key=rank)
         taken.add(best["hostname"])
         assignments[role] = {k: best[k] for k in ("peer_id", "hostname", "flavor", "gen_tps", "prompt_tps")}
-    return jsonify({"model": model, "assignments": assignments, "hosts": hosts})
+    for role, a in assignments.items():
+        if a:
+            a["verdict"] = next(h["verdict"] for h in hosts if h["hostname"] == a["hostname"])
+    return jsonify({"model": model, "min_ram_mb": min_ram, "assignments": assignments, "hosts": hosts})
 
 
 def _peer_inbound_auth() -> bool:

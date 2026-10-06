@@ -4501,6 +4501,17 @@ const _TF_COORDINATOR_PEER_ID_VAR = 'coordinator_peer_id';
 const _TF_FLAVOR_VAR = 'coordinator_flavor';
 const _TF_FLAVOR_CANDIDATES_DESC = ['standard.2xlarge', 'standard.xlarge', 'standard.large'];
 
+// Placement C4 (llm-chat-placement-Phased-Implementation.md): a template
+// with an LLM (model_filename) and a lab-model instance (reader_*) is placed
+// by MEASURED speed for that model (api/llm-bench.py on each host), via
+// /v1/peers/recommend-llm-placement: the answer role (the coordinator) on the
+// fastest host, the lab role on the next. Direct request: "choose the best
+// specified system to run whatever we need where it's possible."
+const _TF_MODEL_VAR = 'model_filename';
+const _TF_LAB_ENABLED_VAR = 'reader_enabled';
+const _TF_LAB_PEER_VAR = 'reader_peer_id';
+const _TF_LAB_FLAVOR_VAR = 'reader_flavor';
+
 // Found live: this field's own static Terraform default (24, llm-chat's
 // only consumer today) was being pre-filled into the input and
 // submitted on every single build regardless of whether a real person
@@ -4595,8 +4606,30 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
       recommendation = await api('GET', `/v1/peers/recommend-placement${flavorQuery}`);
     } catch (e) { /* fall through — fields fall back to the old local default */ }
   }
+  // C4: measured placement for an LLM template, when the hosts have measurements.
+  let llmPick = null;
+  const modelDefault = (editable.find(([k]) => k === _TF_MODEL_VAR) || [, {}])[1].default;
+  if (modelDefault && editable.some(([k]) => k === _TF_LAB_ENABLED_VAR)) {
+    try {
+      llmPick = await api('GET', `/v1/peers/recommend-llm-placement?model=${encodeURIComponent(modelDefault)}&roles=answer,lab`);
+      if (!llmPick.assignments || !llmPick.assignments.answer) {
+        toast(`No host has ${Math.round((llmPick.min_ram_mb || 0) / 1024)}GB free for ${modelDefault} right now (a running build may be holding it): using the load-based placement. Destroy the old build first for a measured one.`, 'info');
+        llmPick = null;
+      } else if (llmPick.assignments.answer.gen_tps == null) {
+        llmPick = null;  // no host measured this model yet (api/llm-bench.py)
+      }
+    } catch (e) { llmPick = null; /* no measurements: the older load-based pick below */ }
+  }
+  const toPick = a => a ? { peer_id: a.peer_id, hostname: a.hostname, verdict: a.verdict, best_flavor: a.flavor,
+                             gen_tps: a.gen_tps, model: llmPick.model } : null;
+  const answerPick = llmPick ? toPick(llmPick.assignments.answer) : null;
+  const labA = llmPick ? llmPick.assignments.lab : null;
+  // A separate lab model only on a different host: two copies on one machine
+  // share its CPU and memory bandwidth, and students-first sharing is better.
+  const labPick = labA && labA.hostname !== llmPick.assignments.answer.hostname ? toPick(labA) : null;
+
   let workerPeersVerdicts = {};
-  if (hasWorkerPeers && recommendation) {
+  if (hasWorkerPeers && recommendation && !llmPick) {
     (recommendation.hosts || []).forEach(h => { if (h.peer_id) workerPeersVerdicts[h.peer_id] = h.verdict; });
   }
 
@@ -4609,8 +4642,8 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
   // One-shot, computed from this same initial fetch -- matches every
   // other recommendation on this form already being a prefill, not a
   // live binding that reacts to later checkbox changes.
-  let coordinatorPick = null;
-  if (hasFlavorVar && recommendation) {
+  let coordinatorPick = answerPick;
+  if (hasFlavorVar && recommendation && !coordinatorPick) {
     const claimedByWorker = new Set(
       Object.entries(workerPeersVerdicts).filter(([, v]) => v === 'active').map(([id]) => id)
     );
@@ -4637,7 +4670,13 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
 
   container.innerHTML = editable.map(([key, meta]) => {
     if (key === _TF_USB_DEVICE_VAR) return _tfRenderUsbField(key, meta, usbDevices);
-    if (key === _TF_WORKER_PEERS_VAR) return _tfRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts);
+    if (key === _TF_WORKER_PEERS_VAR) return _tfRenderWorkerPeersField(key, approvedPeers, workerPeersVerdicts, !!llmPick);
+    if (llmPick && key === _TF_LAB_ENABLED_VAR) return _tfRenderBoolField(key, { ...meta, default: labPick ? 'true' : 'false' },
+      labPick ? `On: the lab model goes on ${labPick.hostname}, the next-fastest host measured for ${llmPick.model}.`
+              : 'Off: no second host fits this model, so the lab shares the coordinator (students first).');
+    if (llmPick && key === _TF_LAB_PEER_VAR) return _tfRenderPeerField(key, meta, approvedPeers,
+      labPick ? { recommended: labPick } : null, false);
+    if (llmPick && key === _TF_LAB_FLAVOR_VAR) return _tfRenderFlavorField(key, meta, labPick);
     if (key === _TF_COORDINATOR_PEER_ID_VAR && hasFlavorVar) {
       // Bypasses _tfRenderPeerField's own !hasWorkerPeers guard
       // (passing hasWorkerPeers=false) -- that guard exists because
@@ -4703,10 +4742,10 @@ async function _tfRenderVarForm(dirName, tpl, schema) {
 // tf-var-worker_peers) so tfSubmitBuild's existing generic
 // input[data-key] collection loop picks it up unchanged — see that
 // function's own JSON.parse() of this one field.
-function _tfRenderWorkerPeersField(key, peers, verdicts) {
+function _tfRenderWorkerPeersField(key, peers, verdicts, measuredPlacement) {
   const rows = peers.length ? peers.map(p => {
     const verdict = verdicts[p.id];
-    const checked = verdict === 'active' ? 'checked' : '';
+    const checked = verdict === 'active' && !measuredPlacement ? 'checked' : '';
     const badgeHtml = verdict && typeof _PLACEMENT_VERDICTS !== 'undefined' && _PLACEMENT_VERDICTS[verdict]
       ? `<span class="badge badge-${verdict}">${_PLACEMENT_VERDICTS[verdict].dot} ${_PLACEMENT_VERDICTS[verdict].label}</span>`
       : '<span class="badge">⚪ Unknown</span>';
@@ -4735,6 +4774,7 @@ function _tfRenderWorkerPeersField(key, peers, verdicts) {
           <input type="text" id="tf-worker-manual-peer_security_group_id" placeholder="peer_security_group_id">
         </div>
       </div>
+      ${measuredPlacement ? '<span class="bm-field-hint">None ticked: the model is placed whole on the fastest measured host above. Splitting it across hosts over the network (RPC) would only slow it. Tick one only for a model too big for any single host.</span>' : ''}
       <span class="bm-field-hint bm-required" id="tf-worker-peers-warn" style="display:none"></span>
       <input type="hidden" id="tf-var-${key}" data-key="${key}" data-required="1" value="">
     </div>`;
@@ -4933,7 +4973,8 @@ function _tfRenderPeerField(key, meta, peers, recommendation, hasWorkerPeers) {
         <option value=""${recId === '' ? ' selected' : ''}>— local (this host) —</option>
         ${options}
       </select>
-      ${rec && peers.length ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
+      ${rec && peers.length && rec.gen_tps != null ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)}, measured at ${rec.gen_tps} tokens/s for ${_esc(rec.model)} (the fastest that fits). Change it if you'd rather place this yourself.</span>` : ''}
+      ${rec && peers.length && rec.gen_tps == null ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
       ${hasWorkerPeers && peers.length ? `<span class="bm-field-hint">Not auto-selected — must be a different peer than any worker below, so this always starts local. Pick one deliberately if you want it peer-placed.</span>` : ''}
       ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
     </div>
@@ -4952,7 +4993,7 @@ function _tfRenderPeerField(key, meta, peers, recommendation, hasWorkerPeers) {
 // already parses "true"/"false" text into the variable's real
 // `type = bool` regardless of how that text was typed/selected, exactly
 // like the old free-text box already worked for this same variable.
-function _tfRenderBoolField(key, meta) {
+function _tfRenderBoolField(key, meta, hint) {
   const label = `${key.replace(/_/g, ' ')}${meta.required ? ' <span class="bm-required">*</span>' : ''}`;
   const def = String(meta.default ?? '').trim().toLowerCase() === 'true';
   return `
@@ -4962,6 +5003,7 @@ function _tfRenderBoolField(key, meta) {
         <option value="true"${def ? ' selected' : ''}>true</option>
         <option value="false"${!def ? ' selected' : ''}>false</option>
       </select>
+      ${hint ? `<span class="bm-field-hint">${_esc(hint)}</span>` : ''}
     </div>
   `;
 }
@@ -4983,7 +5025,7 @@ function _tfRenderFlavorField(key, meta, coordinatorPick) {
       <input type="text" id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}"
              placeholder="${meta.required ? 'Required — no default value' : ''}"
              value="${_esc(String(value))}">
-      ${coordinatorPick ? `<span class="bm-field-hint">Auto-selected: ${_esc(coordinatorPick.best_flavor)} to match ${_esc(coordinatorPick.hostname)}'s real available capacity (RAM, vCPU, and disk all checked) — change it if you'd rather choose a flavor yourself.</span>` : ''}
+      ${coordinatorPick ? `<span class="bm-field-hint">Auto-selected: ${_esc(coordinatorPick.best_flavor)}, the largest ${_esc(coordinatorPick.hostname)} can give${coordinatorPick.gen_tps != null ? ' with enough memory for the model' : ''} (RAM, vCPU and disk checked) — change it if you'd rather choose a flavor yourself.</span>` : ''}
     </div>
   `;
 }
