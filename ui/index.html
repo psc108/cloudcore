@@ -4973,7 +4973,7 @@ function _tfRenderPeerField(key, meta, peers, recommendation, hasWorkerPeers) {
         <option value=""${recId === '' ? ' selected' : ''}>— local (this host) —</option>
         ${options}
       </select>
-      ${rec && peers.length && rec.gen_tps != null ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)}, measured at ${rec.gen_tps} tokens/s for ${_esc(rec.model)} (the fastest that fits). Change it if you'd rather place this yourself.</span>` : ''}
+      ${rec && peers.length && rec.gen_tps != null ? `<span class="bm-field-hint">Auto-selected: ${rec.peer_id ? _esc(rec.hostname) : 'this host'}, measured at ${rec.gen_tps} tokens/s for ${_esc(rec.model)} (the fastest that fits). Change it if you'd rather place this yourself.</span>` : ''}
       ${rec && peers.length && rec.gen_tps == null ? `<span class="bm-field-hint">Auto-selected: ${_esc(rec.hostname)} (${badge(rec.verdict)} on the Capacity traffic light) — change it if you'd rather place this yourself.</span>` : ''}
       ${hasWorkerPeers && peers.length ? `<span class="bm-field-hint">Not auto-selected — must be a different peer than any worker below, so this always starts local. Pick one deliberately if you want it peer-placed.</span>` : ''}
       ${!peers.length ? '<span class="bm-field-hint">No paired peers yet — see the Peers section.</span>' : ''}
@@ -5025,7 +5025,7 @@ function _tfRenderFlavorField(key, meta, coordinatorPick) {
       <input type="text" id="tf-var-${key}" data-key="${key}" data-required="${meta.required ? '1' : '0'}"
              placeholder="${meta.required ? 'Required — no default value' : ''}"
              value="${_esc(String(value))}">
-      ${coordinatorPick ? `<span class="bm-field-hint">Auto-selected: ${_esc(coordinatorPick.best_flavor)}, the largest ${_esc(coordinatorPick.hostname)} can give${coordinatorPick.gen_tps != null ? ' with enough memory for the model' : ''} (RAM, vCPU and disk checked) — change it if you'd rather choose a flavor yourself.</span>` : ''}
+      ${coordinatorPick ? `<span class="bm-field-hint">Auto-selected: ${_esc(coordinatorPick.best_flavor)}, the largest ${coordinatorPick.peer_id ? _esc(coordinatorPick.hostname) : 'this host'} can give${coordinatorPick.gen_tps != null ? ' with enough memory for the model' : ''} (RAM, vCPU and disk checked) — change it if you'd rather choose a flavor yourself.</span>` : ''}
     </div>
   `;
 }
