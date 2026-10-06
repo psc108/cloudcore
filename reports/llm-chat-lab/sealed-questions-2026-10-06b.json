@@ -1,0 +1,166 @@
+{
+ "sealed": "2026-10-06b",
+ "purpose": "L28 measurement (the lab's own handling: writable working directory, checks that follow the question's direction, example blocks, foreground servers, the answer's own reboot, explanation questions): a fresh held-out set, written and committed before any L28 code. Not to be run, read for tuning, or used in tests until L28 is done. Run once, through /sandbox/linux-ask, as the earlier sealed sets were.",
+ "questions": [
+  [
+   "everyday",
+   "How do I find all files modified in the last 7 days under /etc?"
+  ],
+  [
+   "everyday",
+   "How do I create a tar.gz archive of /home/student/projects?"
+  ],
+  [
+   "everyday",
+   "How do I see how much memory is free and used?"
+  ],
+  [
+   "everyday",
+   "How do I rename every .txt file in a directory to .md?"
+  ],
+  [
+   "everyday",
+   "How do I kill a process that is listening on port 9000?"
+  ],
+  [
+   "everyday",
+   "How do I see which groups the current user belongs to?"
+  ],
+  [
+   "everyday",
+   "How do I make an alias 'll' for 'ls -la' that works in every new shell for me?"
+  ],
+  [
+   "services",
+   "How do I add user tara to the sudo group?"
+  ],
+  [
+   "services",
+   "How do I change the home directory of user uma to /data/uma and move her files?"
+  ],
+  [
+   "services",
+   "How do I create a systemd timer that runs /usr/local/bin/cleanup.sh every hour?"
+  ],
+  [
+   "services",
+   "How do I prevent user victor from logging in without deleting his account?"
+  ],
+  [
+   "services",
+   "How do I make a service called myapp run as user myapp and restart if it fails?"
+  ],
+  [
+   "services",
+   "How do I give group auditors read-only access to /var/log/app?"
+  ],
+  [
+   "services",
+   "How do I set a password expiry of 90 days for user wendy?"
+  ],
+  [
+   "services",
+   "How do I run a cron job at 2am on the first day of every month?"
+  ],
+  [
+   "logins-web",
+   "How do I install nginx and serve a site from /srv/site on port 8081?"
+  ],
+  [
+   "logins-web",
+   "How do I make Apache return a page saying 'Maintenance' for every URL?"
+  ],
+  [
+   "logins-web",
+   "How do I allow only the user xavier to log in over SSH?"
+  ],
+  [
+   "logins-web",
+   "How do I set a message of the day that every user sees after logging in?"
+  ],
+  [
+   "logins-web",
+   "How do I enable gzip compression in nginx?"
+  ],
+  [
+   "logins-web",
+   "How do I make SSH log in users only with keys, for everyone?"
+  ],
+  [
+   "disks",
+   "How do I create a 512MB swap file and turn it on now?"
+  ],
+  [
+   "disks",
+   "How do I format /dev/sdc as ext4 and mount it at /data permanently by UUID?"
+  ],
+  [
+   "disks",
+   "How do I see how much space each directory under /var uses?"
+  ],
+  [
+   "disks",
+   "How do I make /mnt/ro a read-only bind mount of /srv/files?"
+  ],
+  [
+   "disks",
+   "How do I check a disk for bad blocks without writing to it?"
+  ],
+  [
+   "networking",
+   "How do I make ufw allow port 8443 from anywhere?"
+  ],
+  [
+   "networking",
+   "How do I see the default gateway of this machine?"
+  ],
+  [
+   "networking",
+   "How do I add a second IP address 192.168.50.10/24 to the main interface?"
+  ],
+  [
+   "networking",
+   "How do I make this machine not answer ping?"
+  ],
+  [
+   "networking",
+   "How do I block outgoing connections to port 25 with ufw?"
+  ],
+  [
+   "multi-machine",
+   "How do I let another machine connect to an nginx site on this one over HTTPS with a self-signed certificate?"
+  ],
+  [
+   "multi-machine",
+   "How do I let another machine use this one as an SSH jump host?"
+  ],
+  [
+   "multi-machine",
+   "How do I export /srv/media over NFS to any client on 10.0.0.0/8?"
+  ],
+  [
+   "kernel-boot",
+   "How do I make a kernel parameter net.ipv4.ip_forward=1 apply at boot?"
+  ],
+  [
+   "kernel-boot",
+   "How do I blacklist the kernel module 'pcspkr'?"
+  ],
+  [
+   "kernel-boot",
+   "How do I see how much time each service took during boot?"
+  ],
+  [
+   "kernel-boot",
+   "How do I set the timezone to Europe/London?"
+  ],
+  [
+   "explanation",
+   "What is the difference between su and sudo?"
+  ],
+  [
+   "explanation",
+   "What does a load average of 2.00 mean on a 4-core machine?"
+  ]
+ ]
+}
