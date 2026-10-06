@@ -1,0 +1,166 @@
+{
+ "sealed": "2026-10-06",
+ "purpose": "L27 measurement (the L26 check standard: before/after for every check, evidence rules, behaviour checks for groups, banners and rate limits): a fresh held-out set, written after the L26 code and committed before it. Not to be run, read for tuning, or used in tests until L26 is done. Run once, through /sandbox/linux-ask, as the earlier sealed sets were.",
+ "questions": [
+  [
+   "everyday",
+   "How do I find files larger than 100MB anywhere on the system?"
+  ],
+  [
+   "everyday",
+   "How do I see which process is using the most CPU right now?"
+  ],
+  [
+   "everyday",
+   "How do I create a symbolic link /usr/local/bin/app pointing to /opt/app/bin/app?"
+  ],
+  [
+   "everyday",
+   "How do I make a script executable and run it from the current directory?"
+  ],
+  [
+   "everyday",
+   "How do I see the differences between two text files line by line?"
+  ],
+  [
+   "everyday",
+   "How do I list installed packages and search the list for 'python'?"
+  ],
+  [
+   "everyday",
+   "How do I check which version of OpenSSL is installed?"
+  ],
+  [
+   "services",
+   "How do I create a system user called svcapp with no home directory and no login?"
+  ],
+  [
+   "services",
+   "How do I let user oscar run any command as root with sudo without typing a password?"
+  ],
+  [
+   "services",
+   "How do I make a systemd service restart automatically 5 seconds after it crashes?"
+  ],
+  [
+   "services",
+   "How do I run a script every 15 minutes with cron as user paula?"
+  ],
+  [
+   "services",
+   "How do I remove user quentin and his home directory?"
+  ],
+  [
+   "services",
+   "How do I set the umask so new files for all users are not readable by others?"
+  ],
+  [
+   "services",
+   "How do I make the directory /srv/shared writable by everyone but let people delete only their own files?"
+  ],
+  [
+   "services",
+   "How do I limit user rita to at most 50 processes?"
+  ],
+  [
+   "logins-web",
+   "How do I install nginx and serve a page that says 'Hello from the lab' on port 80?"
+  ],
+  [
+   "logins-web",
+   "How do I protect a directory on nginx with a username and password?"
+  ],
+  [
+   "logins-web",
+   "How do I move SSH to port 2222 and make sure I can still log in?"
+  ],
+  [
+   "logins-web",
+   "How do I install Apache and turn off its directory listings?"
+  ],
+  [
+   "logins-web",
+   "How do I allow user sam to log in over SSH with a key only, while others may still use passwords?"
+  ],
+  [
+   "logins-web",
+   "How do I make nginx forward requests for /api to a local app on port 5000?"
+  ],
+  [
+   "disks",
+   "How do I create a 1GB file, put an ext4 filesystem in it and mount it at /mnt/loop?"
+  ],
+  [
+   "disks",
+   "How do I make /dev/sdb1 mount read-only at /mnt/archive at every boot?"
+  ],
+  [
+   "disks",
+   "How do I see the UUID of every partition?"
+  ],
+  [
+   "disks",
+   "How do I create two partitions of 1GB each on /dev/sdb?"
+  ],
+  [
+   "disks",
+   "How do I turn off swap and keep it off after reboot?"
+  ],
+  [
+   "networking",
+   "How do I add a static route to 10.20.0.0/16 via 192.168.1.254?"
+  ],
+  [
+   "networking",
+   "How do I make ufw deny all incoming traffic by default but allow SSH?"
+  ],
+  [
+   "networking",
+   "How do I see the MAC address of every network interface?"
+  ],
+  [
+   "networking",
+   "How do I check which program is listening on port 25?"
+  ],
+  [
+   "networking",
+   "How do I disable IPv6 on this machine permanently?"
+  ],
+  [
+   "multi-machine",
+   "How do I let another machine read files from this one over HTTP on port 8080 using Python?"
+  ],
+  [
+   "multi-machine",
+   "How do I sync /srv/data to another server with rsync over SSH?"
+  ],
+  [
+   "multi-machine",
+   "How do I let another machine connect to Redis on this server?"
+  ],
+  [
+   "kernel-boot",
+   "How do I load the kernel module 'dummy' now and at every boot?"
+  ],
+  [
+   "kernel-boot",
+   "How do I set vm.swappiness to 10 permanently?"
+  ],
+  [
+   "kernel-boot",
+   "How do I see which systemd services start at boot?"
+  ],
+  [
+   "kernel-boot",
+   "How do I set the system's hostname to labhost permanently?"
+  ],
+  [
+   "explanation",
+   "What is the difference between a hard link and a symbolic link?"
+  ],
+  [
+   "explanation",
+   "What does the 'S' in an ls -l permission string mean?"
+  ]
+ ]
+}
