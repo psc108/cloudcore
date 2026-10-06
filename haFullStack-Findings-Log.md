@@ -4410,6 +4410,33 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Clean-up:** every orphan returned 204, and Llwyn-y-Groes is back to its standing VPCs only (`peer-workloads`, `lab-vms`).
 - **The engine change:** the next L25 build is its live test.
 
+### F-220 — The lab verified answers it hadn't proven: older checks had no before-state and took configuration as the goal
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_goal_checks`, `_network_probes`, the crontab check, `_sshd_effective_checks`, `model_goal_checks`, `_finish_verdict`), and its Ansible copy.
+
+**Symptom:** found 2026-10-05/06 reading every "verified" of L24 (the 2026-10-05 sealed set). The lab graded 13 runs goal-verified; only 4 were true on reading. Examples:
+- **Already true:** #32 was "verified" by "SSH refuses passwords", the image's default, for a question about copying a key to *another* server.
+- **No firewall at all:** #27's ports 80 and 443 were "allowed through the firewall" with nothing filtering.
+- **A default page:** #16, a custom 404 page, was "verified" by nginx's own "404 Not Found".
+- **The answer's own lines:** #11 by "the crontab has the answer's entry", #19 by "sshd uses the answer's Banner line".
+- **A new directory's owner and mode:** #24 and #25 by `/mnt/DATA` and `/var/log/app` being root:root 755.
+
+**Root cause:**
+- **No before-state:** the model's checks (L21) were graded false→true, but the older hand-written goal checks were graded on the after-state alone.
+- **Configuration counted as the goal:** checks that only read back what the answer wrote (crontab, `sshd -T`) counted as goal evidence. So did the network probe's "the web server answers".
+- **Two loopholes in L23's rules:** an owner or mode check counted whenever the answer hadn't set that exact value itself, and a page's text counted wherever it came from.
+
+**Fix (L26, 502356f):**
+- **Baseline:** the hand-written checks run before the answer too, and one already true is not evidence.
+- **Firewall:** "allowed" counts only while another port is filtered.
+- **Configuration:** crontab, `sshd -T` and web-probe checks can fail a run but never verify one (except the probe for a pure install question).
+- **Model checks:** owner or mode counts only for ownership or permission questions; page text only if the answer or the question supplied it.
+- **New behaviour checks** for three of the cases: a new file gets the group, the SSH banner is shown to another machine, and a burst of connections is cut off.
+
+**Verified by:**
+- **Each case:** every rule was tested against its L24 case with a fake lab machine (the cron check still fails a run when the entry is missing).
+- **Measurement:** L27, the 2026-10-06 sealed set, sealed before this code was committed (1f5b252).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4581,3 +4608,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.45 | 2026-10-04 | Paul Scott | L20. F-217: lab DHCP leases outlived their VMs; 241 addresses ran out overnight. |
 | v3.46 | 2026-10-05 | Paul Scott | L25. F-218: a new module block broke the next build and the destroy (stale modules.json under dev_overrides); provider flavours. |
 | v3.47 | 2026-10-05 | Paul Scott | L25. F-219: a failed pre-apply destroy still deleted the state, orphaning the running llm-chat. |
+| v3.48 | 2026-10-06 | Paul Scott | L24 read, L26. F-220: the lab verified 9 answers it hadn't proven (no before-state for older checks, configuration taken as the goal). |
