@@ -2743,8 +2743,11 @@ _CUSTOM_PAGE_RE = re.compile(r"\b(?:custom|own|my|message|says|saying|text)\b", 
 def _existence_question(question: str) -> bool:
     """Asks only for something to exist or run -- nothing further about it.
     Errs towards False: that costs a "ran clean", a wrong True a false pass."""
+    # L28 dev #6: "install Apache and turn off its listings" -- any "and ..."
+    # is a second goal, except "and start/enable/run it".
+    other_and = re.search(r"\band\b(?!\s+(?:then\s+)?(?:start|enable|run)\b)", question, re.IGNORECASE)
     return (bool(_EXISTENCE_Q_RE.search(question)) and not _SECOND_GOAL_RE.search(question)
-            and not _QUALIFIER_RE.search(question))
+            and not _QUALIFIER_RE.search(question) and not other_and)
 
 
 def _named_sources(question: str) -> list[str]:
