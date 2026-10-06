@@ -4437,6 +4437,90 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **Each case:** every rule was tested against its L24 case with a fake lab machine (the cron check still fails a run when the entry is missing).
 - **Measurement:** L27, the 2026-10-06 sealed set, sealed before this code was committed (1f5b252).
 
+### F-221 — Lab steps ran where the student couldn't write, so file-making answers failed
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (the working directory of run steps, and `LAB_DIR`).
+
+**Symptom:** L27 (2026-10-06):
+- **#5:** `diff file1.txt file2.txt` found neither file, and the model's repair `touch file1.txt` got "Permission denied". The setup stage had made the files in `/srv/lab`, not where the steps ran.
+- **#4 and #39 (retries):** `echo … > myscript.sh` and `touch original_file` failed the same way.
+- **#22:** `dd of=/srv/lab/file.img` got "Permission denied": the placeholder was filled with the lab's own directory, which the student can't write.
+
+**Root cause:** steps run as the student in a directory the student doesn't own. The lab directory used for placeholders and presumed files isn't the student's either, and isn't where the steps run.
+
+**Fix:** L28: one working directory, owned by the student, used for the steps, the setup stage's files and path placeholders.
+
+**Verified by:** to be verified when L28 is built.
+
+### F-222 — The lab's swap check always expected swap on, failing a correct "turn swap off" answer
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_goal_checks`, the `\bswap\b` check).
+
+**Symptom:** L27 #26, "How do I turn off swap and keep it off after reboot?", failed with "goal check failed: swap is active". Every way the lab tried failed the same way.
+
+**Root cause:** the hand-written check triggers on the word "swap" and always asserts "swap is active", whichever way the question asks. With L26's baseline it still fails, because the check itself points the wrong way.
+
+**Fix:** L28: the check follows the question (off/disable/turn off → no swap active, and none in fstab).
+
+**Verified by:** to be verified when L28 is built.
+
+### F-223 — The lab took an answer's "it might look like this" block as an edit, and a <Directory> path as the file
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (step parsing of config blocks).
+
+**Symptom:** L27 #19, Apache directory listings. The answer shows the current `<Directory /var/www/>` block ("it might look like this") and then the changed one. The lab:
+- appended the *example* block to `apache2.conf`;
+- took the changed block as an edit of `/var/www`, the path inside `<Directory …>`;
+- then failed the run because `/var/www` "didn't exist" as a file.
+
+**Root cause:**
+- **The "before" block:** a block introduced as what the file already looks like is parsed as content to add.
+- **The edit target:** it is taken from a path inside the block rather than from the file the answer named, `/etc/apache2/apache2.conf`.
+
+**Fix:** L28: a block shown as the existing state is not a step, and the edit target is the file named in the step before.
+
+**Verified by:** to be verified when L28 is built.
+
+### F-224 — A server started in the foreground ran until the step time limit, failing the answer
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (run steps).
+
+**Symptom:** L27 #32 (`python3 -m http.server 8080`) and #34 (Redis started in the foreground) each failed with "the step didn't finish within its time limit". Each also spent most of an hour on "another way" attempts, the slowest runs of L27.
+
+**Root cause:** a command meant to keep running is run like any other step, so it is judged by whether it exits.
+
+**Fix:** L28: a step that starts a long-running server is run in the background, and judged by whether the server is up and listening.
+
+**Verified by:** to be verified when L28 is built.
+
+### F-225 — The answer's own reboot ended the lab run ("SSH session not active")
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (run steps on full VMs).
+
+**Symptom:** L27 #23 (a read-only mount at boot) had `sudo reboot` as a step. The lab lost its connection, and the run ended with `SSHException: SSH session not active`. The answer writes `xfs` in fstab for an ext4 partition, a real mistake that only the reboot would have shown.
+
+**Related:** #28 (ufw default deny) ended with "Timeout opening channel" during the checks, although port 1022 was allowed. Cause not yet found.
+
+**Root cause:** the lab reboots full VMs itself for `after_reboot` checks (L23), but not when the answer's own step reboots.
+
+**Fix:** L28: an answer's reboot step is followed through, as the lab's own reboot is: wait, reconnect, go on. #28 to be investigated.
+
+**Verified by:** to be verified when L28 is built.
+
+### F-226 — An explanation question was "verified" by its own demo command
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`model_goal_checks`, `_sets_directly`, `_finish_verdict`).
+
+**Symptom:** L27 #40, "What does the 'S' in an ls -l permission string mean?", was goal-verified by "/tmp/testfile has mode setuid", from the answer's own demo `chmod u+s /tmp/testfile`. The explanation is partly wrong: an 'S' in the others column is not the sticky bit (that is 'T').
+
+**Root cause:**
+- **No limit on explanation questions:** a "what is / what does" question has no state to change, but its demo commands were graded like a task's.
+- **A missed tautology:** `_sets_directly` matches only the literal mode, so `u+s` didn't count as setting "setuid" directly.
+
+**Fix:** L28: explanation questions are never goal-verified, and `_sets_directly` recognises symbolic modes.
+
+**Verified by:** to be verified when L28 is built.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4609,3 +4693,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.46 | 2026-10-05 | Paul Scott | L25. F-218: a new module block broke the next build and the destroy (stale modules.json under dev_overrides); provider flavours. |
 | v3.47 | 2026-10-05 | Paul Scott | L25. F-219: a failed pre-apply destroy still deleted the state, orphaning the running llm-chat. |
 | v3.48 | 2026-10-06 | Paul Scott | L24 read, L26. F-220: the lab verified 9 answers it hadn't proven (no before-state for older checks, configuration taken as the goal). |
+| v3.49 | 2026-10-06 | Paul Scott | L27 read: 6 of 8 verifications genuine. F-221–F-226: lab faults behind most failures (unwritable working directory, swap check direction, example blocks taken as edits, foreground servers, the answer's own reboot, explanation demos verified). |

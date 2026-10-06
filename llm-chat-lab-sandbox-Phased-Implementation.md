@@ -90,7 +90,17 @@ A mode or owner the answer sets directly, or a file line it writes, is never pro
 - **New behaviour checks:** a new file in the directory gets the group (#13, not the setgid bit); another machine is shown the SSH banner (#19); a burst of connections is cut off (#30, a rate limit).
 
 Fresh set sealed first: `sealed-questions-2026-10-06.json` (1f5b252, sha256 `3fc00be5…`) | Built 2026-10-06 |
-| L27 | **Measure L26 once with the 2026-10-06 sealed set**, as L24 | Not started |
+| L27 | **Measure L26 once with the 2026-10-06 sealed set**, as L24 | Done 2026-10-06 (results below): 8 lab-verified, **6 genuine**, 1 weak, 1 false |
+| L28 | **The lab's own handling** (from L27: about 11 of 16 failures and both unfinished runs were the lab's fault, not the answer's):
+- **A working directory the student can write to.** Steps run there, and the setup stage puts presumed files there (F-221: #4, #5, #22, #39).
+- **Checks that follow the question's direction** (F-222: #26, swap "must be active" for "turn swap off").
+- **Example blocks:** a config block the answer shows as "it might look like this" is not an edit, and `<Directory /var/www/>` is not a file to edit (F-223: #19).
+- **Servers started in the foreground** run in the background and are checked as running, not left to hit the step time limit (F-224: #32, #34).
+- **The answer's own reboot** is followed through: reconnect, then go on (F-225: #23). #28's channel timeout after `ufw default deny` needs finding first.
+- **Explanation questions** are never goal-verified by their demo commands (F-226: #40). A no-password sudo question is checked with `sudo -n` as the user (#9).
+- **Smaller gaps:** a repair that runs a step as root makes the answer's own sudo retry fail (#12); a gateway outside the lab's network is a lab limit, not a failure (#27); the setup stage made `/opt/app/bin` but not the program the question names (#3), and no stub app on the port a proxy question names (#21).
+
+Then measure once with a fresh sealed set, as before | Not started |
 
 ## Results: the same 40 answers through each stage
 
@@ -132,6 +142,43 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 **Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The 11 runs graded `lab_verified` before L12 were regraded the same way: all 11 are goal-verified (F-195). A goal-verified repaired procedure is now stored as an answer of its own; it's reused automatically only when its repairs are real corrections (F-195).
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
+## L27: L26 on a fresh sealed set (2026-10-06)
+
+The 40 questions sealed before the L26 code was committed (`sealed-questions-2026-10-06.json`, 1f5b252, sha256 `3fc00be5…`, unchanged). Asked through `/sandbox/linux-ask` on full VMs, with the lab's model calls on the lab's own 14B on Stourport (placement C2–C5): `sealed4-asks.jsonl`, `sealed4-labs.jsonl`, `sealed4-run.log`. Students' answers had a median of 192 s (max 431). Every verification and every failure was read.
+
+| | L20 | L22 | L24 | L27 |
+|---|---|---|---|---|
+| Goal-verified, as graded by the lab | 1 | 8 | 13 | 8 |
+| **… true on reading** | **1** | **6** | **4** | **6** |
+| Weak | 0 | 0 | 1 | 1 |
+| False | 0 | 2 | 8 | 1 |
+
+**The 6 genuine:**
+- **#3:** the link exists and the student can run the program through it (via another way).
+- **#8:** svcapp's shell became nologin.
+- **#16:** another machine gets the answer's own "Hello from the lab".
+- **#18:** SSH answers on 2222 from another machine.
+- **#36:** swappiness is 10, and still after a reboot.
+- **#38:** the hostname is labhost.
+
+**Weak:** #9. The answer is right, but `sudo -l` shows oscar is *allowed* the command, not that no password is asked.
+
+**False:** #40, an explanation question. The lab "verified" the answer's own demo `chmod u+s`, and the answer is partly wrong ('S' in the others column isn't the sticky bit).
+
+L26 removed every L24 false-pass pattern: none recurred.
+
+**Failures and unfinished runs: whose fault (16 failed, 2 could not finish).**
+
+| | Runs |
+|---|---|
+| **The answer** (the lab was right) | #14 (ACLs, not the sticky bit), #17 and #21 (nginx configs that fail `nginx -t`), #20 (`PasswordAuthentication yes` overridden by the image's `50-cloud-init.conf`, caught by the effective-config check), #25 (one partition took the whole disk) |
+| **The lab** | #4 and #39 (retries), #5, #22: steps run where the student can't write; #26: the swap check expects swap on; #19: an example block taken as an edit; #32, #34: foreground servers hit the step limit; #12: a repair run as root broke the answer's own sudo retry; #27: a gateway outside the lab's network; #3: the setup stage made the directory, not the program |
+| **The lab, unfinished** | #23 (lost the machine at the answer's own reboot), #28 (channel timeout after `ufw default deny`) |
+
+**What it shows:**
+- **Verification is now mostly trustworthy:** 6 of 8, against 4 of 13 in L24, and the one false pass is a new kind (explanation demos).
+- **Lab faults are now the bigger error:** about 11 of the 16 failures and both unfinished runs, against about 5 answer faults. Those are L28.
 
 ## L24: L23 on a fresh sealed set (2026-10-05)
 

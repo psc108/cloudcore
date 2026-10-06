@@ -1,0 +1,122 @@
+09:19:01 #1 [everyday] How do I find files larger than 100MB anywhere on the system?
+09:23:26   answered in 262s (896 chars, complete=True); grounding=kiwix refs=['What are the file size options for "find', 'command to print out large files, sorted']; lab=yes
+09:23:26 #2 [everyday] How do I see which process is using the most CPU right now?
+09:25:56   answered in 148s (805 chars, complete=True); grounding=kiwix refs=['detect process eating cpu without: top, ', 'Unusual peaks of 100% CPU usage in amazo']; lab=yes
+09:25:56 #3 [everyday] How do I create a symbolic link /usr/local/bin/app pointing to /opt/app/bin/app?
+09:28:54   answered in 174s (1055 chars, complete=True); grounding=kiwix refs=["Sudo can't see symbollically linked exec", 'env: python: No such file or directory w']; lab=yes
+09:28:54 #4 [everyday] How do I make a script executable and run it from the current directory?
+09:32:07   answered in 190s (1103 chars, complete=True); grounding=kiwix refs=['How to execute a bash script?', 'Bash script execution suddenly stops aft']; lab=yes
+09:32:07 #5 [everyday] How do I see the differences between two text files line by line?
+09:34:33   answered in 143s (801 chars, complete=True); grounding=kiwix refs=["Why isn't the diff command working as I ", 'How to use different diff command for di']; lab=yes
+09:34:33 #6 [everyday] How do I list installed packages and search the list for 'python'?
+09:36:09   answered in 93s (527 chars, complete=True); grounding=kiwix refs=['apt-get install [package] gets error', 'How to fix my my Ubuntu 22.00 files dpkg']; lab=yes
+09:36:09 #7 [everyday] How do I check which version of OpenSSL is installed?
+09:37:13   answered in 61s (275 chars, complete=True); grounding=kiwix refs=['openssl-version.1ossl: print OpenSSL ver', 'Ruby on rails server command mac']; lab=yes
+09:37:13 #8 [services] How do I create a system user called svcapp with no home directory and no login?
+09:39:15   answered in 119s (564 chars, complete=True); grounding=kiwix refs=['Adding user and new machine to Samba ser', 'Samba doesnt require password on xbmc bu']; lab=yes
+09:39:15 #9 [services] How do I let user oscar run any command as root with sudo without typing a password?
+09:42:16   answered in 177s (1075 chars, complete=True); grounding=kiwix refs=['How can I add lines into my sudoers file', 'How to run a cron job inside a docker co']; lab=yes
+09:42:16 #10 [services] How do I make a systemd service restart automatically 5 seconds after it crashes?
+09:49:30   answered in 431s (1756 chars, complete=True); grounding=local_corpus refs=['How do I create a systemd service that r']; lab=yes
+09:49:30 #11 [services] How do I run a script every 15 minutes with cron as user paula?
+09:54:48   answered in 315s (1063 chars, complete=True); grounding=local_corpus refs=['How do I make a cron job run a script ev']; lab=yes
+09:54:48 #12 [services] How do I remove user quentin and his home directory?
+09:57:01   answered in 130s (735 chars, complete=True); grounding=kiwix refs=['userdel: delete a user account and relat', 'userdel command produces "DIRECTORY_PATH']; lab=yes
+09:57:01 #13 [services] How do I set the umask so new files for all users are not readable by others?
+10:00:22   answered in 198s (1174 chars, complete=True); grounding=kiwix refs=['Why does umask 077 not allow the user to', 'Set UMASK value only for non root users']; lab=yes
+10:00:22 #14 [services] How do I make the directory /srv/shared writable by everyone but let people delete only their own files?
+10:03:34   answered in 188s (1033 chars, complete=True); grounding=kiwix refs=['chmod/chown after every svn update neces', 'Symfony2 - Deployment cache no setfacl']; lab=yes
+10:03:34 #15 [services] How do I limit user rita to at most 50 processes?
+10:06:36   answered in 180s (1070 chars, complete=True); grounding=kiwix refs=['Does "ulimit -Su" limit the number of us', 'Limit Memory allocation to a process in ']; lab=yes
+10:06:36 #16 [logins-web] How do I install nginx and serve a page that says 'Hello from the lab' on port 80?
+10:11:33   answered in 293s (1200 chars, complete=True); grounding=local_corpus refs=['Briefly: how do I install nginx and chec']; lab=yes
+10:11:33 #17 [logins-web] How do I protect a directory on nginx with a username and password?
+10:16:58   answered in 323s (2143 chars, complete=True); grounding=kiwix refs=['Nginx basic auth with server instead of ', 'What is the realtionship between HTTP Ba']; lab=yes
+10:16:58 #18 [logins-web] How do I move SSH to port 2222 and make sure I can still log in?
+10:21:36   answered in 275s (1420 chars, complete=True); grounding=None refs=[]; lab=yes
+10:21:36 #19 [logins-web] How do I install Apache and turn off its directory listings?
+10:26:45   answered in 306s (1735 chars, complete=True); grounding=kiwix refs=['Listing files in apache server', 'My Apache server is displaying a directo']; lab=yes
+10:26:45 #20 [logins-web] How do I allow user sam to log in over SSH with a key only, while others may still use passwords?
+10:33:14   answered in 386s (1940 chars, complete=True); grounding=kiwix refs=['SSH via terminal succeeds, but same SSH ', 'getting Permission denied(publickey) err']; lab=yes
+10:33:14 #21 [logins-web] How do I make nginx forward requests for /api to a local app on port 5000?
+10:38:27   answered in 310s (1889 chars, complete=True); grounding=kiwix refs=['Nginx proxy_pass all non-api routes', 'How does Nginx proxy_pass pass a route p']; lab=yes
+10:38:27 #22 [disks] How do I create a 1GB file, put an ext4 filesystem in it and mount it at /mnt/loop?
+10:41:20   answered in 170s (969 chars, complete=True); grounding=kiwix refs=['Performance of Loopback Filesystems', 'How to sync a loopback device when the u']; lab=yes
+10:41:20 #23 [disks] How do I make /dev/sdb1 mount read-only at /mnt/archive at every boot?
+10:45:50   answered in 266s (1127 chars, complete=True); grounding=local_corpus refs=['How do I format /dev/sdb as XFS and moun']; lab=yes
+10:45:50 #24 [disks] How do I see the UUID of every partition?
+10:48:26   answered in 153s (962 chars, complete=True); grounding=kiwix refs=['Where does Ubuntu store partition UUIDs ', 'Efficiently assigning UUIDs to connected']; lab=yes
+10:48:26 #25 [disks] How do I create two partitions of 1GB each on /dev/sdb?
+10:52:31   answered in 242s (1144 chars, complete=True); grounding=kiwix refs=['How to learn what `gparted`, `partitionm', 'Just expanded disk size - VM now unusabl']; lab=yes
+10:52:31 #26 [disks] How do I turn off swap and keep it off after reboot?
+10:55:24   answered in 171s (960 chars, complete=True); grounding=kiwix refs=['Lubuntu 20.04 freezes', 'Ansible: Failed to reload sysctl: sysctl']; lab=yes
+10:55:24 #27 [networking] How do I add a static route to 10.20.0.0/16 via 192.168.1.254?
+10:58:31   answered in 184s (809 chars, complete=True); grounding=kiwix refs=['VPN (Cisco AnyConnect) openconnect plugi']; lab=yes
+10:58:31 #28 [networking] How do I make ufw deny all incoming traffic by default but allow SSH?
+11:01:47   answered in 193s (1195 chars, complete=True); grounding=kiwix refs=['Does ufw allow all incoming traffic in r', 'ufw seems not to block all ports (Ubuntu']; lab=yes
+11:01:47 #29 [networking] How do I see the MAC address of every network interface?
+11:03:21   answered in 91s (371 chars, complete=True); grounding=kiwix refs=['eth0 NO-CARRIER, ifconfig shows no IP ad', 'Windows Ethernet showing "Network cable ']; lab=yes
+11:03:21 #30 [networking] How do I check which program is listening on port 25?
+11:05:26   answered in 122s (757 chars, complete=True); grounding=kiwix refs=['List ports a process PID is listening on', 'Address already in use but nothing in ne']; lab=yes
+11:05:26 #31 [networking] How do I disable IPv6 on this machine permanently?
+11:08:44   answered in 195s (989 chars, complete=True); grounding=kiwix refs=['IPv6', 'IIS Request.UserHostAddress returning IP']; lab=yes
+11:08:44 #32 [multi-machine] How do I let another machine read files from this one over HTTP on port 8080 using Python?
+11:12:46   answered in 239s (1264 chars, complete=True); grounding=kiwix refs=['How to bind a port in a "host" network m', 'Python server on port 8080 ERR_INVALID_H']; lab=yes
+11:12:46 #33 [multi-machine] How do I sync /srv/data to another server with rsync over SSH?
+11:17:43   answered in 294s (2044 chars, complete=True); grounding=kiwix refs=['Should SSH w/o password prevent rsync a ', 'How can I run rsync over ssh via a http ']; lab=yes
+11:17:43 #34 [multi-machine] How do I let another machine connect to Redis on this server?
+11:23:42   answered in 356s (2097 chars, complete=True); grounding=kiwix refs=['Open up MySQL, Redis etc. only to certai', 'Redis - Connect to Remote Server']; lab=yes
+11:23:42 #35 [kernel-boot] How do I load the kernel module 'dummy' now and at every boot?
+11:26:36   answered in 171s (984 chars, complete=True); grounding=kiwix refs=['Sound card no longer recognized after up', 'Yocto unable to switch to sysvinit']; lab=yes
+11:26:36 #36 [kernel-boot] How do I set vm.swappiness to 10 permanently?
+11:29:11   answered in 152s (790 chars, complete=True); grounding=kiwix refs=['Swappiness setting are ignored in sysctl', 'Ansible lineinfile is not changing file ']; lab=yes
+11:29:11 #37 [kernel-boot] How do I see which systemd services start at boot?
+11:32:54   answered in 219s (677 chars, complete=True); grounding=local_corpus refs=['How do I create a systemd service that r']; lab=yes
+11:32:54 #38 [kernel-boot] How do I set the system's hostname to labhost permanently?
+11:34:59   answered in 122s (400 chars, complete=True); grounding=local_corpus refs=['How do I change the hostname permanently']; lab=yes
+11:34:59 #39 [explanation] What is the difference between a hard link and a symbolic link?
+11:39:42   answered in 280s (1922 chars, complete=True); grounding=kiwix refs=["Why can't hard links reference files on ", 'Hard link and Symbolic links in Unix']; lab=yes
+11:39:42 #40 [explanation] What does the 'S' in an ls -l permission string mean?
+11:43:08   answered in 203s (1165 chars, complete=True); grounding=local_corpus refs=['How do I create a symbolic link /usr/loc']; lab=yes
+11:43:08 all questions asked; waiting for lab runs
+11:43:08   #1: lab partial
+11:43:08   #2: lab partial
+11:43:08   #3: lab failed -> attempts ['goal_verified']
+11:43:08   #4: lab failed -> attempts ['failed', 'failed']
+11:43:08   #5: lab failed -> attempts ['partial']
+11:43:08   #6: lab partial
+11:43:08   #7: lab partial
+11:43:08   #8: lab goal_verified
+11:43:08   #9: lab goal_verified
+11:43:08   #10: lab ran_clean
+11:43:08   #11: lab ran_clean
+11:43:08   #12: lab failed -> repaired failed -> attempts ['failed', 'ran_clean']
+11:43:08   #13: lab ran_clean
+11:43:08   #14: lab failed -> attempts ['failed', 'failed']
+11:43:08   #15: lab partial
+11:43:08   #16: lab goal_verified
+12:31:17   #17: lab failed -> attempts ['failed', 'ran_clean']
+12:35:17   #18: lab goal_verified
+13:19:25   #19: lab failed -> attempts ['failed', 'failed']
+14:01:32   #20: lab failed -> attempts ['failed', '']
+14:44:38   #21: lab failed -> attempts ['failed', 'failed']
+15:09:42   #22: lab failed -> repaired failed -> attempts ['failed', 'failed']
+15:17:43   #23: lab partial
+15:18:43   #24: lab partial
+16:13:50   #25: lab failed -> attempts ['failed', 'failed']
+16:40:53   #26: lab failed -> attempts ['failed', 'failed']
+16:54:55   #27: lab failed -> attempts ['ran_clean']
+16:59:56   #28: lab partial
+17:00:56   #29: lab partial
+17:01:56   #30: lab ran_clean
+17:04:56   #31: lab ran_clean
+17:43:59   #32: lab failed -> attempts ['failed', '']
+17:46:59   #33: lab ran_clean
+19:18:05   #34: lab failed -> attempts ['failed', '']
+19:21:05   #35: lab ran_clean
+19:24:05   #36: lab goal_verified
+19:25:05   #37: lab partial
+19:28:05   #38: lab goal_verified
+19:28:05   #39: lab failed -> repaired ran_clean
+19:30:05   #40: lab goal_verified
+19:30:05 ALL DONE
