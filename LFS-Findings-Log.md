@@ -188,6 +188,30 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Note for the tutor role:** the model's grasp of a UEFI layout was right without help. What it needed was clearer boundaries, not knowledge.
 
+### LFS-014 — The 14B misread the book's alternatives (the EFI partition's FAT32 as "swap"); one tutoring note fixed it
+
+**Where:** tasks 3 and 5 (2.5 Creating a File System, 2.7 Mounting), on the 14B; the first tutoring through the journal.
+
+**Symptom:** found 2026-10-07.
+- **2.5:** the 14B left out `[2] mkfs.fat -F 32 /dev/<yyy>` and `[3] mkfs.vfat` as "No swap partition is needed": they are the book's commands for the **EFI system partition**. `blkid` confirmed `/dev/sdb1` had no filesystem.
+- **2.7:** the plan then mounted the EFI partition with `-t ext4`, and its rewrite of command [0] dropped the book's own `mkdir -pv $LFS`.
+- **Its repairs were shallow:** `mkdir` without `-p`, then `rm -rf $LFS/home` to make a retry pass. The task stopped for help.
+
+**Root cause:** the model. It understood the layout (its partitioning in 2.4 was right) but misread a list of alternatives in the book. Its repairs treated symptoms, not causes.
+
+**Fix (tutoring, by hand: C5's automation isn't built yet):**
+- **Lessons:** Claude wrote one lesson each for 2.5 and 2.7 into the journal, explaining why: the firmware reads FAT32 only; [1] is the book's example for a separate /home; mount the EFI partition as vfat after `mkdir -pv`; fix causes, don't delete directories.
+- **The worker:** now puts a section's tutor notes in front of the model ("your tutor's notes for this section: follow them").
+- **The machine:** the half-done mounts were cleared, and the 14B redid both tasks itself.
+
+**Verified by:**
+- **2.5:** ext4 on `/dev/sdb2`, `mkfs.fat -F 32 /dev/sdb1`, swap left out. It also left `[3]` out on its own correct reasoning ("does the same as mkfs.fat -F 32").
+- **2.7:** `/dev/sdb2` ext4 on `/mnt/lfs`, `/dev/sdb1` vfat on `/mnt/lfs/boot/efi`.
+- **The machine:** `blkid` and `findmnt` agree, and the worker recorded the mounts.
+- **Residual:** it again dropped `mkdir -pv $LFS` from [0], against the note. Harmless here (the directory existed), but notes aren't followed perfectly.
+
+**Score so far (tasks 2.2–2.7, the judgement-heavy start):** of six stops, four came from the worker's own design (LFS-009, -011, -012, -013) and two from the model's knowledge (this one). One tutoring note per section was enough.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -201,3 +225,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.7 | 2026-10-07 | Paul Scott | C2: LFS-011 (unreliable JSON from the 14B; output now schema-constrained; rejected replies journalled). |
 | v0.8 | 2026-10-07 | Paul Scott | C2: LFS-012 (the 14B put its repair command in its explanation; repairs are now a required list of commands). |
 | v0.9 | 2026-10-07 | Paul Scott | C2: LFS-013 (commandless section: sound steps rejected by an ambiguous format; the model reached into later sections). |
+| v1.0 | 2026-10-07 | Paul Scott | C2 live: LFS-014 (alternatives misread; the first tutoring note fixed it). Tasks 2.2–2.7 done. |
