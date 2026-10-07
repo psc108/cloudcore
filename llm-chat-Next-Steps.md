@@ -35,6 +35,7 @@ Once the stop rule is met, the lab goes into maintenance. The main limit left is
 | 3 | **Finish placement** | Two pieces:<br>• **C6:** prove that a host with a better measured score takes the work automatically.<br>• **Routing students' answers:** per-request routing across answer-capable hosts, once there is a second one. | Matters most when new hardware arrives |
 | 4 | **Auth follow-ups** | Audit and token views on the dashboard, audit events to Loki, a rotation routine for the shared guest tokens (`cloudcore-auth-Phased-Implementation.md`) | Noted, not urgent |
 | 5 | **Back to haFullStack** | The build → test → document → destroy cycle on the wider platform (database tier, failover, backups) | Where llm-chat was one workload among several |
+| 6 | **Template ingress sources** (logged 2026-10-07) | Example templates take one `admin_cidr`, defaulting to `0.0.0.0/0`, for SSH and their service ports; llm-chat's builds use that default. One CIDR can't say what these instances need: the LAN, the host bridges and the peer tunnel together. The change:<br>• a list of sources, defaulting to the private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`);<br>• one rule per source, in every template that uses it (Terraform examples and their Ansible versions);<br>• each template then built and checked. | Low practical risk (private bridges, behind each host's firewall and the router), but breaks the "no `0.0.0.0/0` without justification" rule |
 
 ## Open with the lab itself (from L27 and L28 development)
 
