@@ -644,6 +644,10 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         if not isinstance(ch, dict):
             continue
         idx, why, run = ch.get("book"), str(ch.get("why") or ""), str(ch.get("run") or "")
+        # A reason alone ("the commands need no changes") is a remark, not a
+        # change: in 5.4 the 14B said so four times and was refused (LFS-022).
+        if idx is None and not run and not ch.get("omit") and not ch.get("as") and ch.get("after") is None:
+            continue
         # LFS-020: system-level commands only where the book's section has them.
         # A section with no book commands (2.4) must write its own; _DANGER still guards the disks.
         foreign = sorted({w for w in _SYSTEM.findall(run)

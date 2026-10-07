@@ -389,6 +389,23 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** the re-run of 5.4.
 
+### LFS-022 — The 14B's "no changes needed" was refused as an empty added step; the build paused at rung 4 over a controller bug
+
+**Where:** task 12 (5.4 Linux API Headers); `examples/llm-chat/files/lfs_worker.py` (`plan`).
+
+**Symptom:** found 2026-10-08, 23:35–23:47 UTC, after LFS-021's fix.
+- **The plans were right:** four times, the 14B's plan was correct, both commands as the book. Each reply carried one entry in `changes` with only a reason, for example `{"why": "The section's commands do not need any changes."}`.
+- **The worker refused them:** it read the entry as an added step with no `run` and rejected every plan.
+- **The ladder:** a tutor session (about 2 min) correctly said nothing had failed on the machine and wrote a "no changes" lesson. The 14B answered with the same remark, so rung 4 paused the build.
+
+**Root cause:** the controller's. An entry with no `book`, `run`, `omit`, `as` or `after` was treated as a step, not a remark.
+
+**Fix:** such an entry is ignored. The tutor's lesson couldn't have helped: the model was right.
+
+**Verified by:** the re-run of 5.4.
+
+**Pattern:** the last three stops (LFS-020's guards, LFS-021, LFS-022) have each been the controller tightening, then over-tightening. Each guard now has a test case; a test suite for `plan()` against recorded replies would catch the next one before a run does. Follow-up.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -411,3 +428,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.6 | 2026-10-07 | Paul Scott | LFS-019 (GCC pass 1 out of memory; swap added; the ladder's first live run: Sentinel nudge, two tutor sessions). |
 | v1.7 | 2026-10-07 | Paul Scott | LFS-020 (5.4 dropped the copy; grub-install on the host disk; rollback; three guards). C6's restore proven. |
 | v1.8 | 2026-10-08 | Paul Scott | LFS-021 (the version note provoked needless changes; the drop check held). |
+| v1.9 | 2026-10-08 | Paul Scott | LFS-022 (a remark refused as a step). |
