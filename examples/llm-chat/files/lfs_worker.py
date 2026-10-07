@@ -52,6 +52,8 @@ from pathlib import Path
 
 import paramiko
 
+import model_router  # F-236: the endpoint expected to answer fastest now
+
 API = os.environ.get("LABVM_BROKER_URL", "").rstrip("/")
 TOKEN = os.environ.get("LABVM_BROKER_TOKEN", "")
 REPO = os.environ.get("LFS_REPO_URL", "http://repo.cloudcore.internal:8090/jammy/artifacts")
@@ -103,33 +105,28 @@ def set_state(task_id: int, state: str, why: str = "") -> None:
 
 # ── The model ─────────────────────────────────────────────────────────────────
 
-def _serves_our_model(url: str) -> bool:
-    """The quality floor (placement C2): a lab endpoint only if it serves our model."""
-    if not MODEL_FILE:
-        return True
-    try:
-        with urllib.request.urlopen(url + "/props", timeout=5) as r:
-            p = json.loads(r.read())
-        return os.path.basename(str(p.get("model_path") or "")) == MODEL_FILE
-    except (urllib.error.URLError, ValueError, TimeoutError):
-        return False
-
-
 def ask_model(system: str, user: str, max_tokens: int = 1500) -> tuple[str, str]:
-    """Returns (reply, which endpoint answered). The lab's own model first."""
+    """Returns (reply, which endpoint answered): the capable endpoint expected to
+    answer fastest now, by live measured speeds (model_router, F-236; LFS-010).
+    Only a free endpoint: the build waits rather than queue ahead of a student."""
     payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                "max_tokens": max_tokens, "temperature": 0.2, "stream": False}
+    urls = [u for u in LAB_MODELS + [OWN_MODEL] if model_router.capable(u, MODEL_FILE)] or [OWN_MODEL]
     last = ""
-    for base in [u for u in LAB_MODELS if _serves_our_model(u)] + [OWN_MODEL]:
-        req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(payload).encode(),
-                                     headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=3600) as r:
-                return json.loads(r.read())["choices"][0]["message"]["content"], base
-        except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
-            last = f"{base}: {e}"
-            log(f"model at {base} failed ({e}); trying the next")
-    raise RuntimeError(f"no model answered ({last})")
+    for _ in range(240):  # up to an hour waiting for a free one
+        for base in [u for u in model_router.order(urls, len(system) + len(user), max_tokens) if model_router.free(u)]:
+            req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=3600) as r:
+                    data = json.loads(r.read())
+                model_router.record(base, data.get("timings"))
+                return data["choices"][0]["message"]["content"], base
+            except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
+                last = f"{base}: {e}"
+                log(f"model at {base} failed ({e}); trying the next")
+        time.sleep(15)
+    raise RuntimeError(f"no free model answered in an hour ({last})")
 
 
 def _json_reply(text: str) -> dict | None:

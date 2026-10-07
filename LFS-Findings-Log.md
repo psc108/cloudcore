@@ -124,6 +124,18 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** the re-run of task 1's plan (journalled), and C6.
 
+### LFS-010 — The first plan took 47+ minutes on a busy desktop host while a faster model sat idle
+
+**Where:** the LFS worker's first plan (task 1, 2.2), on the lab's 14B on Stourport.
+
+**Symptom:** found 2026-10-07. Prompt ~2,700 tokens; the model was writing at ~0.4 tok/s and reading at ~1.8, against a benchmark of 1.9/3.9. Stourport is Paul's desktop, and was under load (5.4 on 4 threads). The coordinator's own model on Llwyn-y-Groes was idle throughout.
+
+**Root cause:** routing chose by "free slot", not by expected speed. That's a platform gap, logged as F-236.
+
+**Fix:** F-236 (the live-speed router). For the build: planning cost now scales with live speed and with the size of the request (LFS-009 cut the output side).
+
+**Verified by:** the LFS worker's next plans; their journal records which endpoint answered.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -133,3 +145,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.3 | 2026-10-07 | Paul Scott | B2: LFS-007 (empty /etc/machine-id before imaging). |
 | v0.4 | 2026-10-07 | Paul Scott | C1: LFS-008 (command alternatives inside notes; the extractor now keeps the real subsection). |
 | v0.5 | 2026-10-07 | Paul Scott | C2: LFS-009 (the model writes only differences from the book; the controller inserts the book's exact commands). |
+| v0.6 | 2026-10-07 | Paul Scott | C2: LFS-010 (the first plan ran on a busy desktop host; see F-236). |

@@ -662,14 +662,19 @@ def recommend_llm_placement():
     for c in _placement_candidates():
         bench = (c["stats"].get("llm_bench") or {}).get(model) or {}
         fits = [f for f in flavors if capacity_gate.affords(c["stats"], f)]
+        # F-236: a benchmark is taken on a quiet host; a busy one (a desktop in
+        # use) runs several times slower. Scale by the CPU left free right now.
+        load = c["stats"].get("cpu", {}).get("load_pct_1m", 0) or 0
+        free_cpu = max(0.1, 1 - min(load, 90) / 100)
         hosts.append({"peer_id": c["peer_id"], "hostname": c["hostname"], "verdict": c["verdict"],
                       "gen_tps": bench.get("gen_tps"), "prompt_tps": bench.get("prompt_tps"),
+                      "effective_gen_tps": round(bench["gen_tps"] * free_cpu, 2) if bench.get("gen_tps") else None,
                       "measured_at": bench.get("measured_at"), "gpus": c["stats"].get("gpus") or [],
                       "flavor": fits[0] if fits else None,
                       "load_pct_1m": c["stats"].get("cpu", {}).get("load_pct_1m", 0)})
 
     def rank(h):
-        return (h["gen_tps"] is not None, h["gen_tps"] or 0, h["prompt_tps"] or 0, -h["load_pct_1m"])
+        return (h["gen_tps"] is not None, h["effective_gen_tps"] or 0, h["gen_tps"] or 0, -h["load_pct_1m"])
 
     taken, assignments = set(), {}
     for role in roles:
@@ -680,7 +685,8 @@ def recommend_llm_placement():
             continue
         best = max(fresh, key=rank)
         taken.add(best["hostname"])
-        assignments[role] = {k: best[k] for k in ("peer_id", "hostname", "flavor", "gen_tps", "prompt_tps")}
+        assignments[role] = {k: best[k] for k in ("peer_id", "hostname", "flavor", "gen_tps", "effective_gen_tps",
+                                                  "prompt_tps")}
     for role, a in assignments.items():
         if a:
             a["verdict"] = next(h["verdict"] for h in hosts if h["hostname"] == a["hostname"])

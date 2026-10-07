@@ -76,6 +76,8 @@ import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 
+import model_router  # F-236: which model endpoint answers fastest now
+
 UPSTREAM_HOST = "127.0.0.1"
 UPSTREAM_PORT = 8721
 
@@ -2031,42 +2033,34 @@ def _meets_floor(url: str) -> bool:
     return ok
 
 
-def _idle_reader() -> str:
-    """The first lab endpoint serving our own model with a free slot right
-    now, or "" (use our own model, students first). Asked per call: lab
-    endpoints come and go, and get busy."""
-    for url in LAB_READER_URLS:
-        if not _meets_floor(url):
-            continue
-        try:
-            with urllib.request.urlopen(url + "/slots", timeout=3) as resp:
-                slots = json.loads(resp.read())
-        except Exception:  # noqa: BLE001 -- down or unreachable: try the next
-            continue
-        if isinstance(slots, list) and any(not s.get("is_processing") for s in slots if isinstance(s, dict)):
-            return url
-    return ""
+_last_lab_endpoint = ""
 
 
 def _lab_chat(payload: dict, what: str, timeout: int) -> str:
-    """One chat completion for the lab: on an idle lab endpoint (C2/C5), else
-    on our own model once no student is waiting (C1). Raises on failure."""
-    lab = _idle_reader()
-    if not lab:
-        _students_first(what)
-    for base in ([lab] if lab else []) + [f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"]:
+    """One chat completion for the lab, on the capable endpoint expected to
+    answer fastest now (model_router, F-236): live speeds, not a one-off
+    benchmark. Our own model is used only once no student is waiting (C1).
+    Raises on failure."""
+    global _last_lab_endpoint
+    own = f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}"
+    labs = [u for u in LAB_READER_URLS if _meets_floor(u)]
+    prompt_chars = sum(len(m.get("content") or "") for m in payload.get("messages", []))
+    last = None
+    for base in model_router.order(labs + [own], prompt_chars, int(payload.get("max_tokens") or 500)):
+        if base == own:
+            _students_first(what)
         try:
             req = urllib.request.Request(f"{base}/v1/chat/completions", data=json.dumps(payload).encode(),
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())["choices"][0]["message"]["content"]
-        except Exception as e:  # noqa: BLE001
-            if base == lab:
-                print(f"verify-proxy: {what} on {lab} failed ({e!r}); using our own model", flush=True)
-                _students_first(what)
-                continue
-            raise
-    raise RuntimeError("no model answered")
+                data = json.loads(resp.read())
+            model_router.record(base, data.get("timings"))
+            _last_lab_endpoint = base
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:  # noqa: BLE001 -- try the next endpoint
+            print(f"verify-proxy: {what} on {base} failed ({e!r}); trying the next", flush=True)
+            last = e
+    raise RuntimeError(f"no model answered: {last!r}")
 
 
 def _model_presumptions(question: str, answer: str) -> dict:
@@ -2076,9 +2070,9 @@ def _model_presumptions(question: str, answer: str) -> dict:
         {"role": "system", "content": _PRESUME_SYSTEM},
         {"role": "user", "content": f"Question: {question}\n\nAnswer (its commands and files):\n{_answer_code(answer)}"}],
         "max_tokens": 700, "stream": False, "temperature": 0.0}
-    reader = _idle_reader()  # recorded with the run: which model read it
     try:
         text = _lab_chat(payload, "a lab reading", 600)
+        reader = "" if _last_lab_endpoint == f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}" else _last_lab_endpoint
     except Exception as e:  # noqa: BLE001 -- an aid, never a hard dependency
         print(f"verify-proxy: presumptions request failed: {e!r}", flush=True)
         return {}

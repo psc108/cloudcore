@@ -4674,6 +4674,28 @@ Confirmed by Paul (`--confirm`).
 
 **Open:** rotating the CloudCore keypair, since every lab run and student machine up to now had it. Decision for Paul.
 
+### F-236 — LLM work went to a host the benchmark favoured, not the one that was fastest at the time
+
+**Where:** placement (`llm-chat-placement-Phased-Implementation.md` C3–C5): `api/peers_routes.py` (`recommend_llm_placement`), `examples/llm-chat/files/verify_proxy.py` (`_lab_chat`, `_idle_reader`), and the LFS worker's `ask_model`.
+
+**Symptom:** found 2026-10-07 on the LFS build's first plan (LFS-010), and questioned by Paul: "I thought that we were supposed to send work to the least busy peer in operation?" The plan call went to the lab's 14B on Stourport and took 47+ minutes. Stourport was busy as Paul's desktop (load 5.4 on 4 threads): its model was reading at ~1.8 tok/s and writing at ~0.4, against a benchmark of 3.9/1.9. Llwyn-y-Groes's model sat idle the whole time.
+
+**Root cause:** the principle "choose the best system for the work" was applied at **build** time, but not per **request**:
+- **A one-off benchmark:** C3 measured each host once, on a quiet machine (5 October), and nothing updated it.
+- **"Free" isn't "fast":** C5's routing sent lab work to the first lab endpoint with a free slot. Stourport's was free, so it won, however busy its host.
+- **The worker:** the LFS worker followed the same lab-first order.
+
+**Fix:**
+- **`model_router.py`** (on the coordinator; used by verify-proxy's lab calls and the LFS worker): each request goes to the capable endpoint (our model: the quality floor) that is free and expected to answer **fastest now**. That's the request's size over each endpoint's live speeds, smoothed from the timings llama-server returns with every answer, so a desktop host in use scores what it actually delivers. An unmeasured endpoint is tried as soon as it's free.
+- **Students first** still holds: our own model is used only when no student is waiting, and the worker never queues on a busy endpoint.
+- **The recommender** scales each host's benchmark by the CPU free right now (`effective_gen_tps`), and ranks by that.
+- **Shipped in both build paths:** the new files go into the Terraform and Ansible coordinator templates.
+
+**Verified by:**
+- **The router, offline:** unmeasured first, then by expected time (a fast endpoint ~11 min against a slow one's ~43 for the same request), busy last; speeds are smoothed.
+- **The recommender, live:** Stourport is now benchmark 1.9 at 64% load = 0.69 effective, Llwyn-y-Groes 2.39 at 6% = 2.24.
+- **Live, with the next coordinator build:** the LFS worker's plans.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4855,3 +4877,4 @@ Confirmed by Paul (`--confirm`).
 | v3.55 | 2026-10-07 | Paul Scott | LFS B3. F-233: deleting a UEFI instance left its VM defined, and delete_instance swallowed the error. |
 | v3.56 | 2026-10-07 | Paul Scott | F-234: the terminal server stayed down for 4 days after an API stop-then-start (PartOf doesn't propagate start). |
 | v3.57 | 2026-10-07 | Paul Scott | F-235: lab VMs were given CloudCore's private instance key; now public key only. Key rotation is an open decision. |
+| v3.58 | 2026-10-07 | Paul Scott | F-236: LLM work went to the host a one-off benchmark favoured, not the fastest at the time; routing now uses live measured speeds per request. |

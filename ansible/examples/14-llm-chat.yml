@@ -814,6 +814,11 @@
       ansible.builtin.set_fact:
         fullvm_source: "{{ lookup('file', 'templates/llm-chat/fullvm.py') }}"
 
+    - name: Load model_router.py and lfs_worker.py sources (F-236 routing, LFS build worker)
+      ansible.builtin.set_fact:
+        model_router_source: "{{ lookup('file', 'templates/llm-chat/model_router.py') }}"
+        lfs_worker_source: "{{ lookup('file', 'templates/llm-chat/lfs_worker.py') }}"
+
     - name: Load advice_runner.py source (lab-sandbox L4 Linux Help advice runs)
       ansible.builtin.set_fact:
         advice_runner_source: "{{ lookup('file', 'templates/llm-chat/advice_runner.py') }}"
@@ -886,6 +891,8 @@
           'microvm_source': microvm_source,
           'advice_runner_source': advice_runner_source,
           'fullvm_source': fullvm_source,
+          'model_router_source': model_router_source,
+          'lfs_worker_source': lfs_worker_source,
           'lab_backend': lab_backend,
           'labvm_broker_token': labvm_broker_token,
           'terminal_port': terminal_port,

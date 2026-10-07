@@ -96,6 +96,17 @@ write_files:
     content: |
       ${indent(6, fullvm_source)}
 
+  # F-236: lab model calls go to the endpoint expected to answer fastest now.
+  - path: /opt/llama.cpp/model_router.py
+    content: |
+      ${indent(6, model_router_source)}
+
+  # lfs-os-Phased-Implementation.md, C2: the LFS build's worker loop.
+  - path: /opt/llama.cpp/lfs_worker.py
+    permissions: "0755"
+    content: |
+      ${indent(6, lfs_worker_source)}
+
   # Phase 4 — the sandbox's own system prompt (verify_proxy.py's
   # SANDBOX_SYSTEM_MESSAGE_FILE), plain text rather than an
   # Environment= line — see that constant's own comment for why.

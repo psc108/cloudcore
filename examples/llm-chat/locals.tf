@@ -181,6 +181,8 @@ locals {
   microvm_source          = file("${path.module}/files/microvm.py")
   advice_runner_source    = file("${path.module}/files/advice_runner.py")
   fullvm_source           = file("${path.module}/files/fullvm.py")
+  model_router_source     = file("${path.module}/files/model_router.py")
+  lfs_worker_source       = file("${path.module}/files/lfs_worker.py")
 
   # Fixed host-level address, same convention as promtail_config's own
   # Loki target and the host-level package repo (repo.cloudcore.internal:8090) —
@@ -274,6 +276,8 @@ locals {
     microvm_source                   = local.microvm_source
     advice_runner_source             = local.advice_runner_source
     fullvm_source                    = local.fullvm_source
+    model_router_source              = local.model_router_source
+    lfs_worker_source                = local.lfs_worker_source
     lab_backend                      = var.lab_backend
     labvm_broker_token               = var.labvm_broker_token
     run_subnet_cidr                  = var.run_subnet_cidr
