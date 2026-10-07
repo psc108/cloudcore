@@ -138,7 +138,9 @@ scan() {
     die "${INVENTORY} already exists (it may hold your edits); pass --force to overwrite" 1
   fi
   local tmp; tmp="$(mktemp)"
-  trap 'rm -f "${tmp}"' RETURN
+  # The trap clears itself: a RETURN trap outlives the function and would fire
+  # again when main returns, where tmp is out of scope (set -u).
+  trap 'rm -f "${tmp:-}"; trap - RETURN' RETURN
   local docker_ports; docker_ports="$(docker_published)"
   declare -A seen_addr=() seen_proc=() role=() designed=()
   local line key scope r
