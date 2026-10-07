@@ -1,0 +1,1045 @@
+{
+ "generated_at": "2026-10-07T08:42:14Z",
+ "lfs_version": "13.1",
+ "blfs_version": "13.1",
+ "init": "systemd",
+ "kernel": "7.2.9",
+ "files": [
+  {
+   "set": "lfs",
+   "file": "acl-2.4.0.tar.xz",
+   "package": "acl",
+   "version": "2.4.0",
+   "url": "https://download.savannah.gnu.org/releases/acl/acl-2.4.0.tar.xz",
+   "md5": "e289f370161698a96f50b2a3fdadf411",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "attr-2.6.0.tar.gz",
+   "package": "attr",
+   "version": "2.6.0",
+   "url": "https://download.savannah.gnu.org/releases/attr/attr-2.6.0.tar.gz",
+   "md5": "910a09c3ae0a211569d180586371cf7e",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "autoconf-2.73.tar.xz",
+   "package": "autoconf",
+   "version": "2.73",
+   "url": "https://ftpmirror.gnu.org/autoconf/autoconf-2.73.tar.xz",
+   "md5": "9cbad9a116ef845bafeed8e7bc771bf4",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "automake-1.18.1.tar.xz",
+   "package": "automake",
+   "version": "1.18.1",
+   "url": "https://ftpmirror.gnu.org/automake/automake-1.18.1.tar.xz",
+   "md5": "cea31dbf1120f890cbf2a3032cfb9a68",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "bash-5.3.tar.gz",
+   "package": "bash",
+   "version": "5.3",
+   "url": "https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz",
+   "md5": "977c8c0c5ae6309191e7768e28ebc951",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "bc-7.0.3.tar.xz",
+   "package": "bc",
+   "version": "7.0.3",
+   "url": "https://github.com/gavinhoward/bc/releases/download/7.0.3/bc-7.0.3.tar.xz",
+   "md5": "ad4db5a0eb4fdbb3f6813be4b6b3da74",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "binutils-2.47.tar.xz",
+   "package": "binutils",
+   "version": "2.47",
+   "url": "https://sourceware.org/pub/binutils/releases/binutils-2.47.tar.xz",
+   "md5": "d772acfbd55a81644e9fe7b8189cd2a5",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "bison-3.8.2.tar.xz",
+   "package": "bison",
+   "version": "3.8.2",
+   "url": "https://ftpmirror.gnu.org/bison/bison-3.8.2.tar.xz",
+   "md5": "c28f119f405a2304ff0a7ccdcc629713",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "bzip2-1.0.8.tar.gz",
+   "package": "bzip2",
+   "version": "1.0.8",
+   "url": "https://www.sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+   "md5": "67e051268d0c475ea773822f7500d0e5",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "coreutils-9.11.tar.xz",
+   "package": "coreutils",
+   "version": "9.11",
+   "url": "https://ftpmirror.gnu.org/coreutils/coreutils-9.11.tar.xz",
+   "md5": "e52e9857e4aa9ae38ef32f8ed6a27604",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "dbus-1.16.2.tar.xz",
+   "package": "dbus",
+   "version": "1.16.2",
+   "url": "https://dbus.freedesktop.org/releases/dbus/dbus-1.16.2.tar.xz",
+   "md5": "97832e6f0a260936d28536e5349c22e5",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "dejagnu-1.6.3.tar.gz",
+   "package": "dejagnu",
+   "version": "1.6.3",
+   "url": "https://ftpmirror.gnu.org/dejagnu/dejagnu-1.6.3.tar.gz",
+   "md5": "68c5208c58236eba447d7d6d1326b821",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "diffutils-3.12.tar.xz",
+   "package": "diffutils",
+   "version": "3.12",
+   "url": "https://ftpmirror.gnu.org/diffutils/diffutils-3.12.tar.xz",
+   "md5": "d1b18b20868fb561f77861cd90b05de4",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "e2fsprogs-1.47.4.tar.gz",
+   "package": "e2fsprogs",
+   "version": "1.47.4",
+   "url": "https://downloads.sourceforge.net/project/e2fsprogs/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.gz",
+   "md5": "733a93bc688314834ff2d10530ff4dc4",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "elfutils-0.195.tar.bz2",
+   "package": "elfutils",
+   "version": "0.195",
+   "url": "https://sourceware.org/ftp/elfutils/0.195/elfutils-0.195.tar.bz2",
+   "md5": "3e8ef51c43beceddbbb74879549cf72c",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "expat-2.8.3.tar.xz",
+   "package": "expat",
+   "version": "2.8.3",
+   "url": "https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz",
+   "md5": "1747f5a57b191f0373baeb5adc8078ca",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "expect5.45.4.tar.gz",
+   "package": "expect5.45.4",
+   "version": "",
+   "url": "https://prdownloads.sourceforge.net/expect/expect5.45.4.tar.gz",
+   "md5": "00fce8de158422f5ccd2666512329bd2",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "file-5.48.tar.gz",
+   "package": "file",
+   "version": "5.48",
+   "url": "https://astron.com/pub/file/file-5.48.tar.gz",
+   "md5": "423686e97f731d8c24e9cd1a22b03dec",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "findutils-4.11.0.tar.xz",
+   "package": "findutils",
+   "version": "4.11.0",
+   "url": "https://ftpmirror.gnu.org/findutils/findutils-4.11.0.tar.xz",
+   "md5": "512c6875ed84034dca240c4bc9380b96",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "flex-2.6.4.tar.gz",
+   "package": "flex",
+   "version": "2.6.4",
+   "url": "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz",
+   "md5": "2882e3179748cc9f9c23ec593d6adc8d",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "flit_core-4.0.2.tar.gz",
+   "package": "flit_core",
+   "version": "4.0.2",
+   "url": "https://pypi.org/packages/source/f/flit-core/flit_core-4.0.2.tar.gz",
+   "md5": "89ebb783230fc8db6c1d2a39644b7085",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gawk-5.4.1.tar.xz",
+   "package": "gawk",
+   "version": "5.4.1",
+   "url": "https://ftpmirror.gnu.org/gawk/gawk-5.4.1.tar.xz",
+   "md5": "d379c2110e7a3e15347dd5559a41ad64",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gcc-16.2.0.tar.xz",
+   "package": "gcc",
+   "version": "16.2.0",
+   "url": "https://ftpmirror.gnu.org/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz",
+   "md5": "19b777fb19ea4982731392481306f0d3",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gdbm-1.26.tar.gz",
+   "package": "gdbm",
+   "version": "1.26",
+   "url": "https://ftpmirror.gnu.org/gdbm/gdbm-1.26.tar.gz",
+   "md5": "aaa600665bc89e2febb3c7bd90679115",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gettext-1.0.tar.xz",
+   "package": "gettext",
+   "version": "1.0",
+   "url": "https://ftpmirror.gnu.org/gettext/gettext-1.0.tar.xz",
+   "md5": "dc8b2911535929cec1e263706b0a13a1",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "glibc-2.44.tar.xz",
+   "package": "glibc",
+   "version": "2.44",
+   "url": "https://ftpmirror.gnu.org/glibc/glibc-2.44.tar.xz",
+   "md5": "7677da43ef759c68e005f5d4c37986a6",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gmp-6.3.0.tar.xz",
+   "package": "gmp",
+   "version": "6.3.0",
+   "url": "https://ftpmirror.gnu.org/gmp/gmp-6.3.0.tar.xz",
+   "md5": "956dc04e864001a9c22429f761f2c283",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gperf-3.3.tar.gz",
+   "package": "gperf",
+   "version": "3.3",
+   "url": "https://ftpmirror.gnu.org/gperf/gperf-3.3.tar.gz",
+   "md5": "31753b021ea78a21f154bf9eecb8b079",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "grep-3.12.tar.xz",
+   "package": "grep",
+   "version": "3.12",
+   "url": "https://ftpmirror.gnu.org/grep/grep-3.12.tar.xz",
+   "md5": "5d9301ed9d209c4a88c8d3a6fd08b9ac",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "groff-1.24.1.tar.gz",
+   "package": "groff",
+   "version": "1.24.1",
+   "url": "https://ftpmirror.gnu.org/groff/groff-1.24.1.tar.gz",
+   "md5": "d9d996af3d05ebab934380be708ea584",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "grub-2.14.tar.xz",
+   "package": "grub",
+   "version": "2.14",
+   "url": "https://ftpmirror.gnu.org/grub/grub-2.14.tar.xz",
+   "md5": "383f9effad01c235d2535357ff717543",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "gzip-1.14.tar.xz",
+   "package": "gzip",
+   "version": "1.14",
+   "url": "https://ftpmirror.gnu.org/gzip/gzip-1.14.tar.xz",
+   "md5": "4bf5a10f287501ee8e8ebe00ef62b2c2",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "iana-etc-20260805.tar.gz",
+   "package": "iana-etc",
+   "version": "20260805",
+   "url": "https://github.com/Mic92/iana-etc/releases/download/20260805/iana-etc-20260805.tar.gz",
+   "md5": "f6d2619cfac3a68f91392e28fe4067c3",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "inetutils-2.8.tar.gz",
+   "package": "inetutils",
+   "version": "2.8",
+   "url": "https://ftpmirror.gnu.org/inetutils/inetutils-2.8.tar.gz",
+   "md5": "f0f9ad13045a67da9c882148f9efae6b",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "iproute2-7.1.0.tar.xz",
+   "package": "iproute2",
+   "version": "7.1.0",
+   "url": "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-7.1.0.tar.xz",
+   "md5": "4f322144fb9a0877c5f9ef71b2f11180",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "jinja2-3.1.6.tar.gz",
+   "package": "jinja2",
+   "version": "3.1.6",
+   "url": "https://pypi.org/packages/source/J/Jinja2/jinja2-3.1.6.tar.gz",
+   "md5": "66d4c25ff43d1deaf9637ccda523dec8",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "kbd-2.10.0.tar.xz",
+   "package": "kbd",
+   "version": "2.10.0",
+   "url": "https://www.kernel.org/pub/linux/utils/kbd/kbd-2.10.0.tar.xz",
+   "md5": "77ff950dfa4c34fdf41125547bfa831a",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "kmod-34.2.tar.xz",
+   "package": "kmod",
+   "version": "34.2",
+   "url": "https://www.kernel.org/pub/linux/utils/kernel/kmod/kmod-34.2.tar.xz",
+   "md5": "36f2cc483745e81ede3406fa55e1065a",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "less-704.tar.gz",
+   "package": "less",
+   "version": "704",
+   "url": "https://www.greenwoodsoftware.com/less/less-704.tar.gz",
+   "md5": "c4c9eea5b1862783b078c67ca67c9185",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "libcap-2.78.tar.xz",
+   "package": "libcap",
+   "version": "2.78",
+   "url": "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz",
+   "md5": "0ff11419aa4813c0a0f84fe67bf3b39e",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "libffi-3.8.0.tar.gz",
+   "package": "libffi",
+   "version": "3.8.0",
+   "url": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+   "md5": "96fe46f2a7bb82559b35a268a2c000ba",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "libpipeline-1.5.8.tar.gz",
+   "package": "libpipeline",
+   "version": "1.5.8",
+   "url": "https://download.savannah.gnu.org/releases/libpipeline/libpipeline-1.5.8.tar.gz",
+   "md5": "17ac6969b2015386bcb5d278a08a40b5",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "libtool-2.6.2.tar.xz",
+   "package": "libtool",
+   "version": "2.6.2",
+   "url": "https://ftpmirror.gnu.org/libtool/libtool-2.6.2.tar.xz",
+   "md5": "87743862e6cabfb9e76651bc64e31e5c",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "libxcrypt-4.5.2.tar.xz",
+   "package": "libxcrypt",
+   "version": "4.5.2",
+   "url": "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz",
+   "md5": "25e888919ddcd153a07daa95224fa436",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "lz4-1.10.0.tar.gz",
+   "package": "lz4",
+   "version": "1.10.0",
+   "url": "https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz",
+   "md5": "dead9f5f1966d9ae56e1e32761e4e675",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "m4-1.4.21.tar.xz",
+   "package": "m4",
+   "version": "1.4.21",
+   "url": "https://ftpmirror.gnu.org/m4/m4-1.4.21.tar.xz",
+   "md5": "8051eef7239b2f187791f2ab0034d6b7",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "make-4.4.1.tar.gz",
+   "package": "make",
+   "version": "4.4.1",
+   "url": "https://ftpmirror.gnu.org/make/make-4.4.1.tar.gz",
+   "md5": "c8469a3713cbbe04d955d4ae4be23eeb",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "man-db-2.13.1.tar.xz",
+   "package": "man-db",
+   "version": "2.13.1",
+   "url": "https://download.savannah.gnu.org/releases/man-db/man-db-2.13.1.tar.xz",
+   "md5": "b6335533cbeac3b24cd7be31fdee8c83",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "man-pages-6.18.tar.xz",
+   "package": "man-pages",
+   "version": "6.18",
+   "url": "https://www.kernel.org/pub/linux/docs/man-pages/man-pages-6.18.tar.xz",
+   "md5": "44915a91e4a28161dc421636a193fb3a",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "markupsafe-3.0.3.tar.gz",
+   "package": "markupsafe",
+   "version": "3.0.3",
+   "url": "https://pypi.org/packages/source/M/MarkupSafe/markupsafe-3.0.3.tar.gz",
+   "md5": "13a73126d25afa72a1ff0daed072f5fe",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "meson-1.12.0.tar.gz",
+   "package": "meson",
+   "version": "1.12.0",
+   "url": "https://github.com/mesonbuild/meson/releases/download/1.12.0/meson-1.12.0.tar.gz",
+   "md5": "9f943c267d63016012efcb0f31ecdd7d",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "mpc-1.4.1.tar.xz",
+   "package": "mpc",
+   "version": "1.4.1",
+   "url": "https://ftpmirror.gnu.org/mpc/mpc-1.4.1.tar.xz",
+   "md5": "40c5fba305125279ea46041160e81daf",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "mpdecimal-4.0.1.tar.gz",
+   "package": "mpdecimal",
+   "version": "4.0.1",
+   "url": "https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.1.tar.gz",
+   "md5": "3d4412579b1edc1047efab151889cca9",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "mpfr-4.2.2.tar.xz",
+   "package": "mpfr",
+   "version": "4.2.2",
+   "url": "https://ftpmirror.gnu.org/mpfr/mpfr-4.2.2.tar.xz",
+   "md5": "7c32c39b8b6e3ae85f25156228156061",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "ncurses-6.6.tar.gz",
+   "package": "ncurses",
+   "version": "6.6",
+   "url": "https://invisible-mirror.net/archives/ncurses/ncurses-6.6.tar.gz",
+   "md5": "dd45bf6854430af403452a7a6a40652c",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "ninja-1.13.2.tar.gz",
+   "package": "ninja",
+   "version": "1.13.2",
+   "url": "https://github.com/ninja-build/ninja/archive/v1.13.2/ninja-1.13.2.tar.gz",
+   "md5": "76c00637fde44909cd7d56f8d73f2042",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "openssl-4.0.1.tar.gz",
+   "package": "openssl",
+   "version": "4.0.1",
+   "url": "https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz",
+   "md5": "07e316afe26b61e72206b81706b497bb",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "packaging-26.3.tar.gz",
+   "package": "packaging",
+   "version": "26.3",
+   "url": "https://files.pythonhosted.org/packages/source/p/packaging/packaging-26.3.tar.gz",
+   "md5": "c6809ec56986682ceffe573b8778a1ce",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "patch-2.8.tar.xz",
+   "package": "patch",
+   "version": "2.8",
+   "url": "https://ftpmirror.gnu.org/patch/patch-2.8.tar.xz",
+   "md5": "149327a021d41c8f88d034eab41c039f",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "pcre2-10.47.tar.bz2",
+   "package": "pcre2",
+   "version": "10.47",
+   "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.bz2",
+   "md5": "aded5840ab5a7d772dd4e16fc294b665",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "perl-5.44.0.tar.xz",
+   "package": "perl",
+   "version": "5.44.0",
+   "url": "https://www.cpan.org/src/5.0/perl-5.44.0.tar.xz",
+   "md5": "55761cf1543af326492fd194647796d1",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "pkgconf-3.0.5.tar.xz",
+   "package": "pkgconf",
+   "version": "3.0.5",
+   "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.5.tar.xz",
+   "md5": "18c528161e6b04ae36dc981af8c4d97e",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "procps-ng-4.0.7.tar.xz",
+   "package": "procps-ng",
+   "version": "4.0.7",
+   "url": "https://sourceforge.net/projects/procps-ng/files/Production/procps-ng-4.0.7.tar.xz",
+   "md5": "d47bdda51c4bd595a1ab21b8e538bcb3",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "psmisc-23.7.tar.xz",
+   "package": "psmisc",
+   "version": "23.7",
+   "url": "https://sourceforge.net/projects/psmisc/files/psmisc/psmisc-23.7.tar.xz",
+   "md5": "53eae841735189a896d614cba440eb10",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "Python-3.14.7.tar.xz",
+   "package": "Python",
+   "version": "3.14.7",
+   "url": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tar.xz",
+   "md5": "a4c4c2991b4126e227073c2d9445f432",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "python-3.14.7-docs-html.tar.bz2",
+   "package": "python",
+   "version": "3.14.7-docs-html",
+   "url": "https://www.python.org/ftp/python/doc/3.14.7/python-3.14.7-docs-html.tar.bz2",
+   "md5": "bdf55dddc02a76961d61730f06d18849",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "readline-8.3.tar.gz",
+   "package": "readline",
+   "version": "8.3",
+   "url": "https://ftpmirror.gnu.org/readline/readline-8.3.tar.gz",
+   "md5": "25a73bfb2a3ad7146c5e9d4408d9f6cd",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "sed-4.10.tar.xz",
+   "package": "sed",
+   "version": "4.10",
+   "url": "https://ftpmirror.gnu.org/sed/sed-4.10.tar.xz",
+   "md5": "c70dc5372db95c816442ffedf77a0d0f",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "setuptools-84.0.0.tar.gz",
+   "package": "setuptools",
+   "version": "84.0.0",
+   "url": "https://pypi.org/packages/source/s/setuptools/setuptools-84.0.0.tar.gz",
+   "md5": "c6919a4b0862ca30604559e163a6cce9",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "shadow-4.20.2.tar.xz",
+   "package": "shadow",
+   "version": "4.20.2",
+   "url": "https://github.com/shadow-maint/shadow/releases/download/4.20.2/shadow-4.20.2.tar.xz",
+   "md5": "f52e717bd330818c67bd57c897ec5a8e",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "sqlite-autoconf-3530400.tar.gz",
+   "package": "sqlite-autoconf",
+   "version": "3530400",
+   "url": "https://sqlite.org/2026/sqlite-autoconf-3530400.tar.gz",
+   "md5": "ee54db5a5b04e77d4883ce0c051a1eba",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "sqlite-doc-3530400.zip",
+   "package": "sqlite-doc",
+   "version": "3530400",
+   "url": "https://sqlite.org/2026/sqlite-doc-3530400.zip",
+   "md5": "2cd5b168d0e5c5ae2b99beb3a4269a73",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "systemd-261.2.tar.gz",
+   "package": "systemd",
+   "version": "261.2",
+   "url": "https://github.com/systemd/systemd/archive/v261.2/systemd-261.2.tar.gz",
+   "md5": "e3f04ccc83a28ec5e80c5432bb8329f5",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "systemd-man-pages-261.2.tar.xz",
+   "package": "systemd-man-pages",
+   "version": "261.2",
+   "url": "https://anduin.linuxfromscratch.org/LFS/systemd-man-pages-261.2.tar.xz",
+   "md5": "4c5533c1a2d0921dd4c5b5e6b8902570",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "tar-1.35.tar.xz",
+   "package": "tar",
+   "version": "1.35",
+   "url": "https://ftpmirror.gnu.org/tar/tar-1.35.tar.xz",
+   "md5": "a2d8042658cfd8ea939e6d911eaf4152",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "tcl8.6.18-src.tar.gz",
+   "package": "tcl8.6.18-src",
+   "version": "",
+   "url": "https://downloads.sourceforge.net/tcl/tcl8.6.18-src.tar.gz",
+   "md5": "acfe0c9f7d0c626ecf026e834a888da6",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "tcl8.6.18-html.tar.gz",
+   "package": "tcl8.6.18-html",
+   "version": "",
+   "url": "https://downloads.sourceforge.net/tcl/tcl8.6.18-html.tar.gz",
+   "md5": "54d1ff0f5eee4e81e5cdaa4baa343397",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "texinfo-7.3.tar.xz",
+   "package": "texinfo",
+   "version": "7.3",
+   "url": "https://ftpmirror.gnu.org/texinfo/texinfo-7.3.tar.xz",
+   "md5": "915a09fcdfc2bf0f5ecf9e556d5698ff",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "tzdata2026c.tar.gz",
+   "package": "tzdata2026c",
+   "version": "",
+   "url": "https://www.iana.org/time-zones/repository/releases/tzdata2026c.tar.gz",
+   "md5": "bff7174205cefab793e3b24271ef2f45",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "util-linux-2.42.2.tar.xz",
+   "package": "util-linux",
+   "version": "2.42.2",
+   "url": "https://www.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-2.42.2.tar.xz",
+   "md5": "1d70131b70abda3dec3b37e282a20c96",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "vim-9.2.1025.tar.gz",
+   "package": "vim",
+   "version": "9.2.1025",
+   "url": "https://github.com/vim/vim/archive/v9.2.1025/vim-9.2.1025.tar.gz",
+   "md5": "060c9c0d7e2bdb5e5d80daad596cae02",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "wheel-0.48.0.tar.gz",
+   "package": "wheel",
+   "version": "0.48.0",
+   "url": "https://pypi.org/packages/source/w/wheel/wheel-0.48.0.tar.gz",
+   "md5": "f668e4885de814378b332eceea04a8a0",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "xz-5.8.3.tar.xz",
+   "package": "xz",
+   "version": "5.8.3",
+   "url": "https://github.com//tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz",
+   "md5": "a02753f34e5546d20213b87f876a0933",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "zlib-1.3.2.tar.gz",
+   "package": "zlib",
+   "version": "1.3.2",
+   "url": "https://zlib.net/fossils/zlib-1.3.2.tar.gz",
+   "md5": "a1e6c958597af3c67d162995a342138a",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "zstd-1.5.7.tar.gz",
+   "package": "zstd",
+   "version": "1.5.7",
+   "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+   "md5": "780fc1896922b1bc52a4e90980cdda48",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source"
+  },
+  {
+   "set": "lfs",
+   "file": "bzip2-1.0.8-install_docs-1.patch",
+   "package": "bzip2",
+   "version": "1.0.8-install_docs-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/bzip2-1.0.8-install_docs-1.patch",
+   "md5": "6a5ac7e89b791aae556de0f745916f7f",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "coreutils-9.11-i18n-1.patch",
+   "package": "coreutils",
+   "version": "9.11-i18n-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/coreutils-9.11-i18n-1.patch",
+   "md5": "900d64d9936516b68613271c9ebc0059",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "expect-5.45.4-gcc15-1.patch",
+   "package": "expect",
+   "version": "5.45.4-gcc15-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/expect-5.45.4-gcc15-1.patch",
+   "md5": "0ca4d6bb8d572fbcdb13cb36cd34833e",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "glibc-2.44-upstream_fixes-1.patch",
+   "package": "glibc",
+   "version": "2.44-upstream_fixes-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/glibc-2.44-upstream_fixes-1.patch",
+   "md5": "990574184b25aa3029a2444e81865098",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "glibc-fhs-1.patch",
+   "package": "glibc-fhs",
+   "version": "1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/glibc-fhs-1.patch",
+   "md5": "9a5997c3452909b1769918c759eff8a2",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "kbd-2.10.0-backspace-1.patch",
+   "package": "kbd",
+   "version": "2.10.0-backspace-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/kbd-2.10.0-backspace-1.patch",
+   "md5": "f75cca16a38da6caa7d52151f7136895",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "Python-3.14.7-openssl_4-1.patch",
+   "package": "Python",
+   "version": "3.14.7-openssl_4-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/Python-3.14.7-openssl_4-1.patch",
+   "md5": "597d7737df1b4ea4e184c193da523050",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "lfs",
+   "file": "tar-1.35-acl_fix-1.patch",
+   "package": "tar",
+   "version": "1.35-acl_fix-1",
+   "url": "https://www.linuxfromscratch.org/patches/lfs/13.1/tar-1.35-acl_fix-1.patch",
+   "md5": "dbab49e317105539611866dac5dd54f6",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "patch"
+  },
+  {
+   "set": "kernel",
+   "file": "linux-7.2.9.tar.xz",
+   "package": "linux",
+   "version": "7.2.9",
+   "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.9.tar.xz",
+   "sha256": null,
+   "checksum_source": "kernel.org v7.x sha256sums.asc, PGP-verified at download",
+   "sums_url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/sha256sums.asc",
+   "kind": "source",
+   "role": "latest stable: the one to build"
+  },
+  {
+   "set": "kernel",
+   "file": "linux-7.1.8.tar.xz",
+   "package": "linux",
+   "version": "7.1.8",
+   "url": "https://www.kernel.org/pub/linux/kernel/v7.x/linux-7.1.8.tar.xz",
+   "md5": "807584f564568b40162e9e4a72bf191f",
+   "checksum_source": "LFS 13.1 systemd md5sums",
+   "kind": "source",
+   "role": "the book's own kernel: a fallback"
+  },
+  {
+   "set": "blfs-uefi",
+   "file": "efibootmgr-18.tar.gz",
+   "package": "efibootmgr",
+   "version": "18",
+   "url": "https://github.com/rhboot/efibootmgr/archive/18/efibootmgr-18.tar.gz",
+   "md5": "e170147da25e1d5f72721ffc46fe4e06",
+   "checksum_source": "BLFS 13.1 systemd, postlfs/efibootmgr.html",
+   "kind": "source",
+   "book_page": "postlfs/efibootmgr.html",
+   "requires": [
+    "efivar",
+    "popt"
+   ]
+  },
+  {
+   "set": "blfs-uefi",
+   "file": "efivar-39.tar.gz",
+   "package": "efivar",
+   "version": "39",
+   "url": "https://github.com/rhboot/efivar/archive/39/efivar-39.tar.gz",
+   "md5": "a8fc3e79336cd6e738ab44f9bc96a5aa",
+   "checksum_source": "BLFS 13.1 systemd, postlfs/efivar.html",
+   "kind": "source",
+   "book_page": "postlfs/efivar.html",
+   "requires": []
+  },
+  {
+   "set": "blfs-uefi",
+   "file": "efivar-39-upstream_fixes-1.patch",
+   "package": "efivar",
+   "version": "39",
+   "url": "https://www.linuxfromscratch.org/patches/blfs/13.1/efivar-39-upstream_fixes-1.patch",
+   "md5": null,
+   "kind": "patch",
+   "book_page": "postlfs/efivar.html",
+   "checksum_source": "none published: SHA-256 recorded at first download over HTTPS"
+  },
+  {
+   "set": "blfs-uefi",
+   "file": "popt-1.19.tar.gz",
+   "package": "popt",
+   "version": "1.19",
+   "url": "https://ftp.osuosl.org/pub/rpm/popt/releases/popt-1.x/popt-1.19.tar.gz",
+   "md5": "eaa2135fddb6eb03f2c87ee1823e5a78",
+   "checksum_source": "BLFS 13.1 systemd, general/popt.html",
+   "kind": "source",
+   "book_page": "general/popt.html",
+   "requires": []
+  },
+  {
+   "set": "books",
+   "file": "LFS-BOOK-13.1.tar.xz",
+   "package": "lfs-book",
+   "version": "13.1",
+   "url": "https://www.linuxfromscratch.org/lfs/downloads/stable-systemd/LFS-BOOK-13.1.tar.xz",
+   "md5": null,
+   "kind": "book",
+   "checksum_source": "none published: SHA-256 recorded at first download over HTTPS"
+  },
+  {
+   "set": "books",
+   "file": "blfs-book-13.1-systemd-html.tar.xz",
+   "package": "blfs-book",
+   "version": "13.1",
+   "url": "https://www.linuxfromscratch.org/blfs/downloads/stable-systemd/blfs-book-13.1-systemd-html.tar.xz",
+   "md5": null,
+   "kind": "book",
+   "checksum_source": "none published: SHA-256 recorded at first download over HTTPS"
+  },
+  {
+   "set": "blfs-common",
+   "file": "blfs-systemd-units-20251204.tar.xz",
+   "package": "blfs-systemd-units",
+   "version": "20251204",
+   "url": "https://www.linuxfromscratch.org/blfs/downloads/stable-systemd/blfs-systemd-units-20251204.tar.xz",
+   "md5": null,
+   "kind": "source",
+   "checksum_source": "none published: SHA-256 recorded at first download over HTTPS"
+  }
+ ],
+ "pending": [
+  "wayland: waits for the compositor decision (E1)"
+ ]
+}

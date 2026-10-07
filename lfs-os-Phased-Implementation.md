@@ -1,6 +1,6 @@
 # A bootable OS from Linux From Scratch, built by llm-chat — Phased Implementation
 
-**Status:** draft for review, 2026-10-06. Nothing here is started. **Owner:** Paul Scott.
+**Status:** started 2026-10-07 (Phase A). **Owner:** Paul Scott.
 
 ## Context
 
@@ -37,7 +37,7 @@ Who does what:
 
 | # | Stage | Who |
 |---|---|---|
-| A1 | **Inventory.** Pin the current stable LFS systemd book. The source list comes from its `wget-list-systemd`, the checksums from its `md5sums`. Pin the latest stable kernel, checksummed by kernel.org's `sha256sums.asc`. From the matching BLFS book, list the packages for UEFI boot (efivar, efibootmgr, popt, GRUB for EFI, and their dependencies) and for the Wayland stack (after decision E1). The result is one manifest: file, version, upstream URL, checksum, book section. | Claude |
+| A1 | **Inventory.** Pin the current stable LFS systemd book. The source list comes from its `wget-list-systemd`, the checksums from its `md5sums`. Pin the latest stable kernel, checksummed by kernel.org's `sha256sums.asc`. From the matching BLFS book, list the packages for UEFI boot (efivar, efibootmgr, popt, GRUB for EFI, and their dependencies) and for the Wayland stack (after decision E1). The result is one manifest: file, version, upstream URL, checksum, book section. | **Done 2026-10-07:** `lfs/build-manifest.py` writes `lfs/manifest.json` (102 files) from the books' own data:<br>• **LFS 13.1 (systemd):** 93 sources and patches, from its `md5sums`, the authoritative systemd list. Its `wget-list` also carries 5 SysVinit-only files, left out.<br>• **Kernel:** 7.2.9, latest stable, verified at download by kernel.org's signed `sha256sums.asc`; plus the book's 7.1.8 as a fallback.<br>• **UEFI:** LFS 13.1 builds UEFI GRUB itself; from BLFS 13.1 only efibootmgr 18, efivar 39 (plus a required patch) and popt 1.19.<br>• **Also:** BLFS's systemd unit files and both books.<br>• **One gap:** BLFS publishes no checksums for its patches, books or units; those are pinned by SHA-256 at first download over HTTPS.<br>Not yet: book sections per package (C1 builds them from the book's chapters); the Wayland set (E1). |
 | A2 | **A mirror script, `api/lfs-mirror.py`.** Downloads everything in the manifest into `artifacts/lfs/<lfs-version>/`, `artifacts/kernel/` and `artifacts/blfs/<blfs-version>/`.<br>• **Sources:** the LFS mirrors, which hold a release's whole set in one place, with upstream as fallback.<br>• **Verification:** each file against the book's checksum; the kernel's checksum file by its PGP signature too.<br>• **Behaviour:** resumable, `--dry-run`, logs to stderr, exits non-zero on any mismatch. | Claude |
 | A3 | **Into the repo and onto the peer.** Mirrored files go into `sync-index.json` and reach Llwyn-y-Groes through the existing repo sync. Space: about 5–10 GB in all; Stourport has 692 GB free, Llwyn-y-Groes 593 GB. | Claude |
 | A4 | **The books into llm-chat's corpus.** The LFS and BLFS books for the pinned versions, so the 14B reads the exact text for the release it's building. Section by section, alongside the build knowledge base. | Claude |
