@@ -925,7 +925,7 @@
       "name": "lfs_en_systemd",
       "filename": "lfs_en_systemd_13.1.zim",
       "source_url": null,
-      "sha256": "2891e51709e9f0191597f0de12d2cade965270ddb1119e99cb307f01326e759d",
+      "sha256": "c668f25d325bb53f8de88ae63107613023900ae014c717fa831acc6510809789",
       "panels": [
         "linux"
       ],
@@ -933,14 +933,14 @@
       "title": "Linux From Scratch 13.1 (systemd)",
       "book_name": "lfs_en_systemd",
       "fulltext": true,
-      "size_bytes": 582564,
+      "size_bytes": 573342,
       "built_by": "lfs/make-zim.py from the mirrored book (lfs-os-Phased-Implementation.md, A4b)"
     },
     {
       "name": "blfs_en_systemd",
       "filename": "blfs_en_systemd_13.1.zim",
       "source_url": null,
-      "sha256": "218aef60e6436ea0f63252b5a677845b064ed280afd33cf02d11811a58c0118b",
+      "sha256": "0d721e90035b7d36a49d9b4e45f743a6d0982d66f8e49c99aef1d24c28b1daff",
       "panels": [
         "linux"
       ],
@@ -948,7 +948,7 @@
       "title": "Beyond Linux From Scratch 13.1 (systemd)",
       "book_name": "blfs_en_systemd",
       "fulltext": true,
-      "size_bytes": 2148385,
+      "size_bytes": 2147725,
       "built_by": "lfs/make-zim.py from the mirrored book (lfs-os-Phased-Implementation.md, A4b)"
     }
   ]

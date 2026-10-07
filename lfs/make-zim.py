@@ -20,6 +20,7 @@ Exit: 0 written; 1 a book couldn't be read or written; 2 bad usage.
 from __future__ import annotations
 
 import argparse
+import html
 import mimetypes
 import re
 import sys
@@ -88,7 +89,8 @@ def build(tarball: Path, out: Path, book: str, version: str) -> int:
             front = mime == "text/html"
             if front:
                 t = re.search(rb"<title>(.*?)</title>", data, re.S)
-                title = " ".join(t.group(1).decode("utf-8", "replace").split()) if t else path
+                # Entities decoded: the title shows as the source's name in answers.
+                title = " ".join(html.unescape(t.group(1).decode("utf-8", "replace")).split()) if t else path
                 pages += 1
             zim.add_item(_Entry(path, title, mime, data, front))
     tmp.replace(out)
