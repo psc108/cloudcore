@@ -540,6 +540,77 @@ def get_console_output(instance_id: str, lines: int = 200) -> str:
     return "\n".join(all_lines[-lines:]) if len(all_lines) > lines else text
 
 
+def _display_xml(display: bool) -> str:
+    """B3: a graphical console -- virtio-gpu (a DRM device a Wayland compositor
+    can use) and a VNC display on the host's loopback only. The dashboard
+    reaches it through the API's ticketed WebSocket bridge; nothing else can."""
+    if not display:
+        return ""
+    return ("<video><model type='virtio' heads='1' primary='yes'/></video>"
+            "<graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>"
+            "<listen type='address' address='127.0.0.1'/></graphics>")
+
+
+def wants_display(instance: Instance) -> bool:
+    return (instance.tags or {}).get("display") == "vnc" or image_meta(instance.image_id).get("display") == "vnc"
+
+
+def vnc_port(domain_name: str) -> int:
+    """The running domain's VNC port on 127.0.0.1, or 0."""
+    import xml.etree.ElementTree as ET
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(domain_name)
+        if not dom.isActive():
+            return 0
+        g = ET.fromstring(dom.XMLDesc()).find(".//graphics[@type='vnc']")
+        return int(g.get("port", "0")) if g is not None and g.get("port", "-1").isdigit() else 0
+    except libvirt.libvirtError:
+        return 0
+    finally:
+        conn.close()
+
+
+def screenshot_png(domain_name: str) -> bytes:
+    """The running domain's screen as PNG (libvirt gives PPM; converted with
+    the standard library, no imaging packages on the host)."""
+    import struct
+    import zlib
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(domain_name)
+        if not dom.isActive():
+            raise RuntimeError("the instance isn't running")
+        stream = conn.newStream(0)
+        mime = dom.screenshot(stream, 0, 0)
+        chunks = []
+        while True:
+            data = stream.recv(1 << 20)
+            if not data:
+                break
+            chunks.append(data)
+        stream.finish()
+    except libvirt.libvirtError as e:
+        raise RuntimeError(f"libvirt: {e}") from e
+    finally:
+        conn.close()
+    raw = b"".join(chunks)
+    if mime == "image/png":
+        return raw
+    # PPM (P6): header "P6\n<w> <h>\n<max>\n" then RGB bytes.
+    m = re.match(rb"P6\s+(?:#[^\n]*\n\s*)*(\d+)\s+(\d+)\s+(\d+)\s", raw)
+    if not m:
+        raise RuntimeError(f"unexpected screenshot format {mime!r}")
+    w, h = int(m.group(1)), int(m.group(2))
+    pix = raw[m.end():m.end() + w * h * 3]
+    rows = b"".join(b"\x00" + pix[y * w * 3:(y + 1) * w * 3] for y in range(h))
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+
 def _os_xml(firmware: dict | None) -> str:
     """BIOS by default; UEFI (B2) with OVMF and this instance's own variable store."""
     if not firmware:
@@ -560,6 +631,7 @@ def _domain_xml_slirp(
     instance_id: str = "",
     usb_hostdev_xml: str = "",
     firmware: dict | None = None,
+    display: bool = False,
 ) -> str:
     # seclabel type='none': disk/ISO images live under this repo's own
     # api/images|instances/ tree, not the standard /var/lib/libvirt/images/
@@ -611,7 +683,7 @@ def _domain_xml_slirp(
             </disk>
             <serial type='pty'>{log_elem}<target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
-            {usb_hostdev_xml}
+            {usb_hostdev_xml}{_display_xml(display)}
           </devices>
           <qemu:commandline>
             <qemu:arg value='-netdev'/>
@@ -635,6 +707,7 @@ def _domain_xml_bridge(
     scsi_disks: bool = False,
     data_disks: tuple = (),
     firmware: dict | None = None,
+    display: bool = False,
 ) -> str:
     # seclabel type='none' — see _domain_xml_slirp's comment above.
     memory_kib = memory_mb * 1024
@@ -680,7 +753,7 @@ def _domain_xml_bridge(
             </interface>
             <serial type='pty'>{log_elem}<target port='0'/></serial>
             <console type='pty'><target type='serial' port='0'/></console>
-            {usb_hostdev_xml}
+            {usb_hostdev_xml}{_display_xml(display)}
           </devices>
         </domain>
     """)
@@ -794,7 +867,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path,
                                      instance_id=instance.id, usb_hostdev_xml=usb_hostdev_xml,
                                      bridge=LAB_BRIDGE_NAME if lab else BRIDGE_NAME,
-                                     scsi_disks=scsi, data_disks=data_disks, firmware=firmware)
+                                     scsi_disks=scsi, data_disks=data_disks, firmware=firmware,
+                                     display=wants_display(instance))
             instance.ssh_host_port = 0
             instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
@@ -808,7 +882,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             instance.private_ip = _allocate_slirp_ip(instance.vpc_id, vpc_cidr)
             xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path,
                                     ssh_host_port, http_host_port, instance_id=instance.id,
-                                    usb_hostdev_xml=usb_hostdev_xml, firmware=firmware)
+                                    usb_hostdev_xml=usb_hostdev_xml, firmware=firmware,
+                                    display=wants_display(instance))
 
         conn = _conn()
         try:
@@ -1053,9 +1128,15 @@ def delete_instance(instance: Instance) -> None:
             dom = conn.lookupByName(instance.domain_name)
             if dom.isActive():
                 dom.destroy()
-            dom.undefine()
-        except libvirt.libvirtError:
-            pass  # already gone
+            # F-233: a UEFI domain (B2) has an NVRAM store, and a plain
+            # undefine() refuses it; the flag is harmless for BIOS domains.
+            dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+        except libvirt.libvirtError as e:
+            # Only "no such domain" means already gone. Anything else used to
+            # be swallowed here too, leaving the domain defined (F-233).
+            if e.get_error_code() != libvirt.VIR_ERR_NO_DOMAIN:
+                log.error("couldn't undefine %s: %s", instance.domain_name, e)
+                raise RuntimeError(f"libvirt couldn't remove {instance.domain_name}: {e}") from e
     finally:
         conn.close()
 

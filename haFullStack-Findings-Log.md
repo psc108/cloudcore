@@ -4624,6 +4624,23 @@ Confirmed by Paul (`--confirm`).
 
 **Verified by:** the lease file after the test: one lease for 192.168.100.216, carrying the second VM's MAC and the shared client ID.
 
+### F-233 — Deleting a UEFI instance left its VM defined in libvirt, and the error was swallowed
+
+**Where:** `api/compute.py` (`delete_instance`).
+
+**Symptom:** found 2026-10-07, testing B3 after B2's UEFI test. The API log held `libvirt: QEMU Driver error : Requested operation is not valid: cannot undefine domain with nvram`, from deleting the UEFI test instance. The API had returned 204 and removed the record, but `virsh list --all` still showed `cc-e9198704   shut off`: a leaked domain with no CloudCore record.
+
+**Root cause:**
+- **A refused undefine:** a domain with a UEFI variable store (B2) can't be undefined by a plain `undefine()`; libvirt needs `VIR_DOMAIN_UNDEFINE_NVRAM`.
+- **A swallowed error:** `delete_instance` caught every `libvirtError` as `pass  # already gone`, so the refusal was silently treated as success.
+
+**Fix:**
+- **The flag:** `undefineFlags(VIR_DOMAIN_UNDEFINE_NVRAM)`, which is harmless for BIOS domains.
+- **Only "no such domain" counts as already gone;** any other libvirt error is logged and raised (the delete runs in a background thread, so it shows in the API log).
+- **The leaked domain** was removed by hand (`virsh undefine --nvram cc-e9198704`).
+
+**Verified by:** the B3 test instance's later delete (with this fix), checked in `virsh list --all`.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4802,3 +4819,4 @@ Confirmed by Paul (`--confirm`).
 | v3.52 | 2026-10-07 | Paul Scott | F-230: an orphaned peer security group record couldn't be deleted after its pairing was revoked; removed. |
 | v3.53 | 2026-10-07 | Paul Scott | LFS A2/A3. F-231: the repo copy couldn't create a new subdirectory on the peer. |
 | v3.54 | 2026-10-07 | Paul Scott | LFS B2. F-232: an image imported from a booted system shares its machine ID, and so its DHCP identity. |
+| v3.55 | 2026-10-07 | Paul Scott | LFS B3. F-233: deleting a UEFI instance left its VM defined, and delete_instance swallowed the error. |

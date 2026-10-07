@@ -2680,6 +2680,8 @@ function renderInstances(items) {
       <td>${fmtDate(i.created_at)}</td>
       <td>
         <button class="expand-btn" onclick="toggleSnapshots('${i.id}')">Snapshots ▾</button>
+        ${(i.tags || {}).display === 'vnc' ? `<button class="expand-btn" onclick="openConsole('${i.id}', '${_esc(i.name)}')">Console</button>
+        <button class="expand-btn" onclick="openScreenshot('${i.id}')">Screenshot</button>` : ''}
         <button class="btn btn-danger btn-sm" onclick="deleteInstance('${i.id}','${i.name}')">Terminate</button>
       </td>
     </tr>
@@ -2857,6 +2859,61 @@ async function deleteSnapshot(id, name) {
     toast(`Snapshot "${name}" deleted`, 'success');
     loadSnapshots(id);
   } catch (e) { toast(`Delete failed: ${e.message}`, 'error'); }
+}
+
+// ── Instances — graphical console (lfs-os-Phased-Implementation.md, B3) ──────
+// noVNC (vendored, MPL-2.0) talks RFB over a WebSocket the API bridges to the
+// instance's VNC display on the host's loopback. Browsers can't send our auth
+// header on a WebSocket, so a one-time, 60-second ticket stands in for it.
+let _consoleRfb = null;
+
+async function openConsole(id, name) {
+  closeConsole();
+  let ticket;
+  try {
+    ticket = await api('POST', `/v1/instances/${id}/vnc-ticket`);
+  } catch (e) { toast(`Console unavailable: ${e.message}`, 'error'); return; }
+  const overlay = document.createElement('div');
+  overlay.id = 'console-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.85);display:flex;flex-direction:column';
+  overlay.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;padding:8px 12px;color:#ddd">
+      <strong>Console: ${_esc(name)}</strong>
+      <span id="console-status" class="text-muted">connecting…</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm" onclick="_consoleRfb && _consoleRfb.sendCtrlAltDel()">Ctrl-Alt-Del</button>
+      <button class="btn btn-sm" onclick="openScreenshot('${id}')">Screenshot</button>
+      <button class="btn btn-danger btn-sm" onclick="closeConsole()">Close</button>
+    </div>
+    <div id="console-screen" style="flex:1;min-height:0"></div>`;
+  document.body.appendChild(overlay);
+  try {
+    const { default: RFB } = await import('/vendor/novnc-1.7.0/core/rfb.js');
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${ticket.path}`;
+    _consoleRfb = new RFB(document.getElementById('console-screen'), url, { wsProtocols: ['binary'] });
+    _consoleRfb.scaleViewport = true;
+    _consoleRfb.addEventListener('connect', () => { document.getElementById('console-status').textContent = 'connected'; });
+    _consoleRfb.addEventListener('disconnect', e => {
+      const s = document.getElementById('console-status');
+      if (s) s.textContent = e.detail.clean ? 'disconnected' : 'connection lost';
+    });
+  } catch (e) {
+    document.getElementById('console-status').textContent = `failed: ${e.message}`;
+  }
+}
+
+function closeConsole() {
+  if (_consoleRfb) { try { _consoleRfb.disconnect(); } catch (e) { /* already closed */ } _consoleRfb = null; }
+  const o = document.getElementById('console-overlay');
+  if (o) o.remove();
+}
+
+async function openScreenshot(id) {
+  try {
+    const resp = await fetch(`/v1/instances/${id}/screenshot`, { headers: { Authorization: `Bearer ${API_TOKEN}` } });
+    if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+    window.open(URL.createObjectURL(await resp.blob()), '_blank');
+  } catch (e) { toast(`Screenshot failed: ${e.message}`, 'error'); }
 }
 
 

@@ -49,9 +49,13 @@ auth_bp = Blueprint("auth", __name__)
 SCOPES = ("admin", "peer", "capture", "labvm", "student")
 
 # Routes anyone may call: the dashboard's own files, curated published
-# examples, and the pairing handshake (which checks its own signed tokens).
+# examples, the pairing handshake (which checks its own signed tokens), and
+# the VNC WebSocket bridge, which checks its own one-time ticket: browsers
+# can't send the API token on a WebSocket, so an authenticated call to
+# vnc-ticket issues a 60-second, single-use ticket for one instance (B3).
 PUBLIC = {"ui", "ui_vendor", "static", "llm_examples.list_published",
-          "peers.pairing_request_bootstrap", "peers.self_info", "peers.complete_pairing"}
+          "peers.pairing_request_bootstrap", "peers.self_info", "peers.complete_pairing",
+          "instance_vnc_websocket"}
 
 # Browsers' EventSource can't send headers, so these two log streams take
 # ?token= (the dashboard's build logs). Nowhere else.

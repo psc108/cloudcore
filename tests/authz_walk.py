@@ -68,6 +68,8 @@ def main() -> int:
     # F-209: a CORS preflight carries no token and must still get a 2xx, or
     # the browser never sends the real request ("Failed to fetch").
     for rule in app.url_map.iter_rules():
+        if rule.websocket:
+            continue  # browsers never preflight a WebSocket handshake; it isn't a CORS request
         url = rule.rule
         for arg in rule.arguments:
             url = url.replace(f"<{arg}>", "x").replace(f"<path:{arg}>", "x")

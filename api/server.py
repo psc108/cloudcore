@@ -5,8 +5,9 @@ import os
 import threading
 import time
 import json
+import secrets
 from pathlib import Path
-from flask import Flask, request, jsonify, abort, send_from_directory, g, make_response
+from flask import Flask, request, jsonify, abort, send_from_directory, g, make_response, Response
 
 import store
 import compute
@@ -1361,6 +1362,78 @@ def delete_instance_snapshot(instance_id, name):
     except RuntimeError as e:
         return problem(409, "Conflict", str(e))
     return "", 204
+
+
+# Graphical console (lfs-os-Phased-Implementation.md, B3). An instance with a
+# display (tag display=vnc, or an image that asks for one) has VNC on the
+# host's loopback only. The dashboard reaches it with a one-time ticket over
+# a WebSocket this API bridges to that port; browsers can't send our auth
+# header on a WebSocket, so the ticket stands in for it.
+_VNC_TICKETS: dict[str, tuple[str, float]] = {}
+_VNC_TICKET_TTL_S = 60
+_vnc_lock = threading.Lock()
+
+
+@app.get("/v1/instances/<instance_id>/screenshot")
+@require_auth
+def instance_screenshot(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance or not instance.domain_name:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    try:
+        png = compute.screenshot_png(instance.domain_name)
+    except RuntimeError as e:
+        return problem(409, "Conflict", str(e))
+    return Response(png, mimetype="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/instances/<instance_id>/vnc-ticket")
+@require_auth
+def instance_vnc_ticket(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance or not instance.domain_name:
+        return problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if not compute.vnc_port(instance.domain_name):
+        return problem(409, "Conflict", "this instance has no running display (create it with the tag display=vnc)")
+    ticket = secrets.token_urlsafe(24)
+    with _vnc_lock:
+        now = time.monotonic()
+        for k in [k for k, (_, exp) in _VNC_TICKETS.items() if exp < now]:
+            del _VNC_TICKETS[k]
+        _VNC_TICKETS[ticket] = (instance_id, now + _VNC_TICKET_TTL_S)
+    return jsonify({"ticket": ticket, "path": f"/v1/instances/{instance_id}/vnc?ticket={ticket}",
+                    "expires_in": _VNC_TICKET_TTL_S})
+
+
+class _HijackedResponse(Response):
+    """After the WebSocket closes there's nothing left to send: raising here is
+    how a hijacked connection ends quietly on Werkzeug's dev server."""
+    def __call__(self, environ, start_response):
+        raise ConnectionError("websocket closed")
+
+
+# websocket=True: Werkzeug only routes a request carrying WebSocket upgrade
+# headers to a rule declared as one (otherwise WebsocketMismatch, a bare 400).
+@app.route("/v1/instances/<instance_id>/vnc", methods=["GET"], websocket=True)
+def instance_vnc_websocket(instance_id):
+    """WebSocket <-> VNC bridge. Authorised by a one-time ticket from
+    vnc-ticket (60 s, single use), not by the API token."""
+    ticket = request.args.get("ticket", "")
+    with _vnc_lock:
+        entry = _VNC_TICKETS.pop(ticket, None)
+    if not entry or entry[0] != instance_id or entry[1] < time.monotonic():
+        return problem(401, "Unauthorized", "missing, used or expired ticket")
+    instance = store.get_instance(instance_id)
+    port = compute.vnc_port(instance.domain_name) if instance and instance.domain_name else 0
+    if not port:
+        return problem(409, "Conflict", "no running display")
+    sock = request.environ.get("werkzeug.socket")
+    key = request.headers.get("Sec-WebSocket-Key", "")
+    if sock is None or request.headers.get("Upgrade", "").lower() != "websocket" or not key:
+        return problem(400, "Bad Request", "expected a WebSocket upgrade")
+    import vnc_bridge
+    vnc_bridge.serve(sock, key, request.headers.get("Sec-WebSocket-Protocol", ""), port)
+    return _HijackedResponse()
 
 
 @app.post("/v1/instances/<instance_id>/reboot")
