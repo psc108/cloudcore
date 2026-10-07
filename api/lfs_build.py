@@ -39,7 +39,7 @@ import db
 lfs_bp = Blueprint("lfs", __name__)
 
 LFS_ENDPOINTS = {
-    "lfs.create_build", "lfs.list_builds", "lfs.get_build", "lfs.list_tasks", "lfs.next_task",
+    "lfs.create_build", "lfs.list_builds", "lfs.get_build", "lfs.update_build", "lfs.list_tasks", "lfs.next_task",
     "lfs.get_task", "lfs.set_task_state", "lfs.add_journal", "lfs.journal_markdown",
 }
 
@@ -62,7 +62,18 @@ _HIGH_RISK = re.compile(r"^(?:Binutils|GCC|Glibc|Linux|GRUB)\b|Using GRUB|Linux-
 # 64-bit UEFI.
 _SKIP_SUBSECTION = re.compile(r"\bBIOS\b|32-bit")
 # Single commands the build leaves out, and why (recorded with the task).
-_SKIP_COMMANDS = [(re.compile(r"grub-mkrescue|xorriso"), "an optional rescue CD; the lab machine has no CD writer")]
+_SKIP_COMMANDS = [
+    (re.compile(r"grub-mkrescue|xorriso"), "an optional rescue CD; the lab machine has no CD writer"),
+    (re.compile(r"^\s*passwd lfs\s*$"), "the controller switches to the lfs user itself; no password is needed"),
+    (re.compile(r"^\s*su - lfs\s*$"), "the controller runs the lfs user's tasks as lfs itself (an interactive shell can't be driven)"),
+    (re.compile(r'^\s*chroot "\$LFS"'), "the controller enters the chroot for every step itself, with the book's "
+                                          "env -i settings (an interactive login shell can't be driven)"),
+    (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
+                                          "delivers the verified sources from the host's repo (LFS-006)"),
+]
+# Sections the build needs although they have no commands: the book leaves the
+# step to the reader (2.4: partition with cfdisk), so the model must write it.
+_COMMANDLESS = {"2.4"}
 # BLFS packages for stage 1, in build order (dependencies first), and where
 # they go: the UEFI tools before LFS's GRUB set-up (10.4), OpenSSH last.
 _BLFS_STAGE1 = [("general/popt.html", "10.4"), ("postlfs/efivar.html", "10.4"),
@@ -161,7 +172,7 @@ def _context(sec: dict) -> str:
 def plan_queue(lfs_version: str, blfs_version: str, kernel: str) -> list[dict]:
     """The ordered task list for stage 1, from the books' sections."""
     lfs = [s for s in _sections("lfs", lfs_version)
-           if s["commands"] and re.fullmatch(r"chapter(0[2-9]|1[01])", s["chapter"] or "")]
+           if (s["commands"] or s["number"] in _COMMANDLESS) and re.fullmatch(r"chapter(0[2-9]|1[01])", s["chapter"] or "")]
     lfs.sort(key=lambda s: _num_key(s["number"]))
     blfs = {s["path"]: s for s in _sections("blfs", blfs_version)}
     extras = {}
@@ -261,6 +272,26 @@ def list_builds():
 def get_build(bid):
     d = _build_dict(_conn(), bid)
     return (jsonify(d), 200) if d else _problem(404, "Not Found", f"no build {bid}")
+
+
+@lfs_bp.post("/v1/lfs/builds/<int:bid>")
+def update_build(bid):
+    """Body: {status?, build_vm_id?} -- the controller records its build machine."""
+    body = request.get_json(force=True, silent=True) or {}
+    sets = {k: str(body[k])[:80] for k in ("status", "build_vm_id") if k in body}
+    if "status" in sets and sets["status"] not in ("planned", "running", "paused", "done", "failed"):
+        return _problem(400, "Bad Request", "status: planned, running, paused, done or failed")
+    if not sets:
+        return _problem(400, "Bad Request", "nothing to change")
+    conn = _conn()
+    if not conn.execute("SELECT 1 FROM lfs_builds WHERE id=?", (bid,)).fetchone():
+        return _problem(404, "Not Found", f"no build {bid}")
+    sets["updated_at"] = _now()
+    conn.execute(f"UPDATE lfs_builds SET {', '.join(k + '=?' for k in sets)} WHERE id=?", (*sets.values(), bid))
+    _journal(conn, bid, None, "controller", "note", "build " + ", ".join(f"{k}={v}" for k, v in sets.items()
+                                                                          if k != "updated_at"))
+    conn.commit()
+    return jsonify(_build_dict(conn, bid))
 
 
 @lfs_bp.get("/v1/lfs/builds/<int:bid>/tasks")

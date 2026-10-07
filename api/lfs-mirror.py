@@ -213,6 +213,11 @@ def main() -> int:
         log(f"{len(failed)} failed: {', '.join(failed)}")
         return 1
     if not args.dry_run:
+        # The manifest beside the sources, so the build's controller (which only
+        # reaches the repo) knows what each file is.
+        tmp = OUT / "manifest.json.tmp"
+        tmp.write_text(args.manifest.read_text())
+        tmp.replace(OUT / "manifest.json")
         total = sum(v["size"] for v in lock.values())
         log(f"all {len(entries)} present and verified ({total / 2**20:.0f} MiB under {OUT}). "
             "Then: python3 api/sync-package-repo.py checksums, so the peer's repo sync picks them up")

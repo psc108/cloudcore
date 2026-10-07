@@ -26,6 +26,7 @@ import ipaddress
 import json
 import logging
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -57,6 +58,7 @@ LAB_VM_REACHABLE_ENDPOINTS = {
     "lab_vms.delete_lab_vm",
     "lab_vms.pair_lab_vm",
     "lab_vms.grow_lab_vm_disk",
+    "lab_vms.set_control_key",
 }
 
 _API = "http://127.0.0.1:8080"
@@ -476,6 +478,44 @@ def pair_lab_vm(vm_id):
         return _problem(409, "Not Ready", "both VMs need an address first")
     ok, why = _labnet(a["host_id"], "pair", ia, ib)
     return (jsonify({"paired": [ia, ib]}), 201) if ok else _problem(502, "Pair Failed", why)
+
+
+@lab_vms_bp.post("/v1/lab-vms/<vm_id>/control-key")
+def set_control_key(vm_id):
+    """LFS build machines only (C2): add a new control public key for root.
+    The build machine lives for weeks; the coordinator that controls it is
+    rebuilt often and loses its private key with it. Rather than store any
+    private key centrally, a new controller makes a new key and asks for it
+    here, and the host installs it using CloudCore's own key, which every
+    instance -- lab VMs included -- trusts (public half only, F-235)."""
+    row = _own(vm_id)
+    if not row or row["deleted_at"]:
+        return _problem(404, "Not Found", "no such lab VM")
+    if row["purpose"] != "lfs-build":
+        return _problem(409, "Conflict", "only an lfs-build machine's control key can be replaced")
+    pubkey = str((request.get_json(force=True, silent=True) or {}).get("public_key") or "").strip()
+    if not _PUBKEY_RE.match(pubkey):
+        return _problem(400, "Bad Request", "public_key must be one OpenSSH public key line")
+    ip = _describe(vm_id).get("ip")
+    if not ip:
+        return _problem(409, "Not Ready", "the VM has no address yet")
+    # labctl has the CloudCore public key (users block) and passwordless sudo;
+    # the control sshd on 1022 is key-only. The new key goes in on stdin, as data.
+    remote = ("k=$(cat) && sudo -n sh -c 'umask 077; mkdir -p /root/.ssh; "
+              "grep -qxF \"$1\" /root/.ssh/authorized_keys 2>/dev/null || "
+              "printf \"%s\\n\" \"$1\" >> /root/.ssh/authorized_keys' _ \"$k\"")
+    cmd = ["ssh", "-i", str(compute.KEYS_DIR / "cloudcore_ed25519"), "-p", "1022", "-o", "BatchMode=yes",
+           "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "ConnectTimeout=10",
+           "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", f"labctl@{ip}", remote]
+    try:
+        r = subprocess.run(cmd, input=pubkey + "\n", capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return _problem(504, "Timeout", "the VM didn't answer on its control port")
+    if r.returncode != 0:
+        log.warning("control-key for %s failed: %s", vm_id, r.stderr.strip()[-300:])
+        return _problem(502, "Key Not Installed", r.stderr.strip()[-300:] or f"exit {r.returncode}")
+    log.info("lab VM %s: control key replaced", vm_id)
+    return jsonify({"installed": True}), 201
 
 
 @lab_vms_bp.post("/v1/lab-vms/<vm_id>/grow-disk")
