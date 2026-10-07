@@ -4529,9 +4529,9 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Root cause:** the same order as F-221. `write_files` creates `/home/<user>/.ssh/...` before cloud-init creates the user. `useradd` finds the home already there, so it neither chowns it (F-221) nor copies `/etc/skel` into it. Every user on every CloudCore instance has been missing its shell start-up files.
 
-**Fix:** the runcmd copies `/etc/skel` into the home without overwriting (`cp -rn`), then chowns the home to its user.
+**Fix:** the runcmd copies `/etc/skel` into the home without overwriting (`cp -rn`), then chowns the home to its user (2bf4766).
 
-**Verified by:** to be verified on the next instance built.
+**Verified by:** llm-chat rebuilt 2026-10-07 (build 072b1b05). On a VM on each host, `/home/ubuntu` and `/home/claude-debug` belong to their users and hold `.bashrc`, `.profile` and `.bash_logout`.
 
 ### F-228 — The lab verified the wrong things: an "enable" question taken as an install, a UUID placeholder filled from the wrong disk
 
