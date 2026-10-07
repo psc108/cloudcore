@@ -224,6 +224,7 @@
   }
   .badge-running, .badge-active   { background: #1a3d2b; color: var(--success); }
   .badge-pending                  { background: #3a2e10; color: var(--warn); }
+  .badge-attention                { background: #3a2e10; color: var(--warn); }  /* a scheduled check found something new */
   .badge-stopped                  { background: #2a2a2a; color: var(--text-muted); }
   .badge-error, .badge-unreachable { background: #3d1a1a; color: var(--danger); }
   .badge-deleted                  { background: #2a2a2a; color: var(--text-muted); }

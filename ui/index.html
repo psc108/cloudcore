@@ -242,6 +242,7 @@
   }
   .badge-running, .badge-active   { background: #1a3d2b; color: var(--success); }
   .badge-pending                  { background: #3a2e10; color: var(--warn); }
+  .badge-attention                { background: #3a2e10; color: var(--warn); }  /* a scheduled check found something new */
   .badge-stopped                  { background: #2a2a2a; color: var(--text-muted); }
   .badge-error, .badge-unreachable { background: #3d1a1a; color: var(--danger); }
   .badge-deleted                  { background: #2a2a2a; color: var(--text-muted); }
@@ -1570,6 +1571,7 @@
             <option value="build">Generic Build</option>
             <option value="llm_ingest">7B LLM Sentinel Ingest</option>
             <option value="kiwix_update">Kiwix ZIM update check</option>
+            <option value="lfs_update">LFS update check (report only)</option>
             <option value="repo_sync">Package repo sync</option>
             <option value="host_backup">Back up this host to another</option>
           </select>
@@ -6620,7 +6622,7 @@ async function loadScheduler() {
       tbody.innerHTML = data.items.map(s => `
         <tr>
           <td><strong>${_esc(s.name)}</strong></td>
-          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : s.kind === 'host_backup' ? `Host backup (to ${_esc((s.var_overrides || {}).to || '')})` : s.kind === 'repo_sync' ? `Package repo sync (${_esc((s.var_overrides || {}).mode || '')})` : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
+          <td>${s.kind === 'llm_ingest' ? '7B LLM Ingest' : s.kind === 'kiwix_update' ? 'Kiwix ZIM update' : s.kind === 'lfs_update' ? 'LFS update check' : s.kind === 'host_backup' ? `Host backup (to ${_esc((s.var_overrides || {}).to || '')})` : s.kind === 'repo_sync' ? `Package repo sync (${_esc((s.var_overrides || {}).mode || '')})` : `Build (${_esc(s.engine)}: ${_esc(s.template)})`}</td>
           <td class="mono">${s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—'}</td>
           <td>${s.last_run_at ? new Date(s.last_run_at).toLocaleString() + ' ' + badge(s.last_status || 'pending') : '—'}</td>
           <td>${s.enabled ? '✅' : '⏸️'}</td>
@@ -6818,6 +6820,8 @@ async function schedCreate() {
       git: document.getElementById('sched-kw-git').value,
       dry_run: document.getElementById('sched-kw-dry').checked,
     };
+  } else if (kind === 'lfs_update') {
+    payload.var_overrides = {};  // report only: nothing to configure (api/lfs_updates.py)
   } else if (kind === 'host_backup') {
     payload.var_overrides = {
       to: document.getElementById('sched-bk-to').value.trim(),

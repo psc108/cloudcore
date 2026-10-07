@@ -64,9 +64,10 @@ def create_schedule():
     kind = body.get("kind")
     if not name:
         return jsonify({"status": 400, "title": "Bad Request", "detail": "name is required"}), 400
-    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync", "host_backup"):
+    if kind not in ("build", "llm_ingest", "kiwix_update", "repo_sync", "host_backup", "lfs_update"):
         return jsonify({"status": 400, "title": "Bad Request",
-                         "detail": "kind must be 'build', 'llm_ingest', 'kiwix_update', 'repo_sync' or 'host_backup'"}), 400
+                         "detail": "kind must be 'build', 'llm_ingest', 'kiwix_update', 'repo_sync', "
+                                   "'host_backup' or 'lfs_update'"}), 400
     recurrence = body.get("recurrence")
     if not recurrence or "mode" not in recurrence:
         return jsonify({"status": 400, "title": "Bad Request",
@@ -83,6 +84,9 @@ def create_schedule():
     elif kind == "kiwix_update":
         # Not a build: engine/template are unused but the table requires them.
         engine, template = "tofu", "llm-chat"
+    elif kind == "lfs_update":
+        # Report only (api/lfs_updates.py); engine/template unused, as kiwix_update.
+        engine, template = "tofu", "lfs"
     elif kind == "repo_sync":
         err = repo_sync.validate(body.get("var_overrides") or {})
         if err:
