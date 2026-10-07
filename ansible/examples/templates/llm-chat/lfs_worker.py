@@ -441,6 +441,8 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         + (f" SKIPPED by the controller: {c['skipped']}" if c.get("skipped") else "") + f"\n{c['text']}"
         for c in cmds) or "(The book gives no commands for this section; its text says what to do.)"
     prose = (sec.get("text") or "")[:2500]
+    # The tutor's notes for this section (C5): lessons Claude wrote in the journal.
+    notes = [j["text"] for j in task.get("journal", []) if j["who"] == "claude" and j["kind"] == "lesson"]
     ctx = {"host-root": "as root on the build host", "host-lfs": "as the lfs user on the build host, with the book's "
            "environment (LFS, LFS_TGT, PATH, CONFIG_SITE, MAKEFLAGS from ~/.bashrc)",
            "chroot": "inside the chroot, as root, with the book's environment"}[task["context"]]
@@ -448,6 +450,8 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             f"{ctx}" + (f", in the unpacked source directory ({task['_cwd']})" if task.get("_srcdir") else f", in {task['_cwd']}")
             + ".\n" + (f"This build uses version {task['version_override']} instead of the book's {task['version']}: "
                        "change version-specific names accordingly.\n" if task["version_override"] else "")
+            + ("\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n" + "\n".join(f"- {n}" for n in notes) + "\n"
+               if notes else "")
             + f"\nThe next sections, which are NOT yours to do now: {_next_sections(task)}.\n"
             + f"\nFacts about the machine:\n{facts(m)}\n\nThe section's commands:\n{listing}\n\n"
             f"The section's text (start):\n{prose}\n" + (f"\nYour previous answer had problems: {feedback}\n" if feedback else ""))
