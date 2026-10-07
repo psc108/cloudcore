@@ -70,6 +70,9 @@ REPAIRS_PER_STEP, REPAIRS_PER_TASK = 2, 4
 _DANGER = re.compile(r"/dev/(?:sda|vda)\b|\bdd\b[^\n]*\bof=/dev/(?!sdb)|\bmkfs(?:\.\w+)?\b(?![^\n]*/dev/sdb)[^\n]*/dev/|"
                      r"\brm\s+-rf?\s+/(?:\s|$)|\bwipefs\b(?![^\n]*/dev/sdb)")
 _CHECK = re.compile(r"\bmake\b[^\n]*\b(?:check|test)s?\b|\bctest\b|\bninja\b[^\n]*\btest\b")
+# A step can exit 0 and still report a problem: 2.2's version check prints
+# "ERROR: /bin/sh does not point to bash" and carries on.
+_REPORTED_PROBLEM = re.compile(r"^\s*(?:ERROR|FAIL(?:ED)?)\b|\bERROR:", re.MULTILINE)
 
 
 def log(msg: str) -> None:
@@ -160,6 +163,9 @@ Rules:
 FIX_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer. A step from the book's section failed on the build machine. Reply with ONLY a JSON object:
 {{"before": "<shell commands to run first to fix the cause, or empty>", "replace": "<the step to run instead, or empty to rerun it unchanged>", "why": "<the cause and the fix, briefly>"}}
 Fix the cause; don't hide the failure (no '|| true', no skipping tests the book runs). {system_disk} is the build machine's own system disk: never touch it."""
+
+OUTPUT_JUDGE_SYSTEM = """You are building Linux From Scratch (systemd). A step exited 0 but its output reports problems. Decide whether the step met the book's requirement. Reply with ONLY a JSON object:
+{"ok": true|false, "why": "<what the output shows, against what the book requires>"}"""
 
 JUDGE_SYSTEM = """You are building Linux From Scratch (systemd). A test-suite step exited non-zero. The book says which test failures are known and acceptable. Reply with ONLY a JSON object:
 {"acceptable": true|false, "why": "<which failures, and what the book says about them>"}
@@ -521,7 +527,17 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             code, tail, secs = m.run_detached(pro + run + "\n", launch, name)
             journal(task_id, "lab", "result", f"exit {code} after {secs:.0f}s\n{tail[-3000:]}",
                     {"step": n + 1, "exit": code, "seconds": round(secs)})
-            if code == 0:
+            if code == 0 and _REPORTED_PROBLEM.search(tail):
+                reply, _ = ask_model(OUTPUT_JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run[:1500]}\n\n"
+                                     f"Output (end):\n{tail[-3500:]}\n\nThe book's text:\n"
+                                     f"{(task['section'] or {}).get('text', '')[:3000]}", max_tokens=300)
+                verdict = _json_reply(reply) or {}
+                journal(task_id, "llm-chat", "lesson", f"exit 0, but the output reports a problem: "
+                        f"{'met the requirement' if verdict.get('ok') else 'NOT met'} -- {verdict.get('why', reply[:300])}")
+                if verdict.get("ok"):
+                    break
+                code = 1  # treat as a failure: repair it
+            elif code == 0:
                 break
             if _CHECK.search(run):
                 reply, _ = ask_model(JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run}\n\n"
