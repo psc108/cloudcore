@@ -212,6 +212,31 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Score so far (tasks 2.2–2.7, the judgement-heavy start):** of six stops, four came from the worker's own design (LFS-009, -011, -012, -013) and two from the model's knowledge (this one). One tutoring note per section was enough.
 
+### LFS-015 — A repair deleted the build's freshly delivered sources
+
+**Where:** task 6 (3.1 Introduction); `examples/llm-chat/files/lfs_worker.py` (3.1 delivery, the repair rules).
+
+**Symptom:** found 2026-10-07.
+- **The delivery:** the controller delivered and SHA-256-checked 100 source files (633 MiB).
+- **The failure:** the book's `mkdir -v $LFS/sources` then failed: "File exists".
+- **The repair:** the 14B's repair was `rm -rf /mnt/lfs/sources`, run **twice**. The sources were gone, and the book's next command (`chown root:root $LFS/sources/*`) failed with nothing to act on.
+- **A sign of the habit:** the same "delete to make the retry pass" as in 2.7 (LFS-014), despite the tutor's lesson there, which was a lesson for that section only.
+- **Also:** the 14B left out the book's `md5sum -c` as "not necessary" because the controller verifies. Defensible, but against the book.
+
+**Root cause:**
+- **The worker's:** it created and filled `$LFS/sources` *before* the book's own `mkdir`, so a correct book command failed.
+- **The model's:** with "already exists" in front of it, its only way forward was deletion, and nothing stopped a destructive repair.
+
+**Fix:**
+- **Order:** the delivery now stands **where the book's wget is**, after the book's own `mkdir` and `chmod`, before its `md5sum -c`. The delivery also makes sure the directory exists.
+- **A non-destructive way out:** "the step's work is already done" is now a repair option. The controller accepts it only for an "already exists" failure, and only if what the step makes is really there.
+- **A hard guard:** a repair that deletes directories (`rm -r…`) is refused, except inside the package's own unpacked tree (clearing a `build` directory is a normal LFS retry). Tested offline: `rm -rf $LFS/sources`, `$LFS/home` and `/usr/lib` are refused; `rm -rf build` and single-file `rm` are allowed.
+- **The prompt:** "never delete files or directories to make a step pass".
+
+**Verified by:** the re-run of 3.1 onward. The sources are delivered again.
+
+**Lesson for the protocol:** a section's tutor notes don't carry over to other sections. General habits, like "don't delete to retry", belong in the system rules and in hard guards, not only in notes.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -226,3 +251,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.8 | 2026-10-07 | Paul Scott | C2: LFS-012 (the 14B put its repair command in its explanation; repairs are now a required list of commands). |
 | v0.9 | 2026-10-07 | Paul Scott | C2: LFS-013 (commandless section: sound steps rejected by an ambiguous format; the model reached into later sections). |
 | v1.0 | 2026-10-07 | Paul Scott | C2 live: LFS-014 (alternatives misread; the first tutoring note fixed it). Tasks 2.2–2.7 done. |
+| v1.1 | 2026-10-07 | Paul Scott | C2/C3: LFS-015 (a repair deleted the delivered sources; delivery reordered, non-destructive repairs, deletion guard). |

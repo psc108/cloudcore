@@ -120,8 +120,9 @@ PLAN_SCHEMA = {"type": "object", "required": ["changes", "expect"], "properties"
 # non-empty list, separate from the explanation.
 FIX_SCHEMA = {"type": "object", "required": ["cause", "commands", "then"], "properties": {
     "cause": {"type": "string"},
-    "commands": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-    "then": {"type": "string", "enum": ["rerun the step", "run this instead"]},
+    # Empty only with "the step's work is already done" (LFS-015).
+    "commands": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "then": {"type": "string", "enum": ["rerun the step", "run this instead", "the step's work is already done"]},
     "instead": {"type": "string"}}}
 JUDGE_SCHEMA = {"type": "object", "required": ["acceptable", "why"], "properties": {
     "acceptable": {"type": "boolean"}, "why": {"type": "string"}}}
@@ -185,7 +186,8 @@ Rules:
 - The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself."""
 
 FIX_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer. A step from the book's section failed on the build machine. Reply with ONLY a JSON object:
-{{"cause": "<what went wrong, briefly>", "commands": ["<a shell command that fixes the cause>", "..."], "then": "rerun the step" | "run this instead", "instead": "<only with 'run this instead': the step to run in its place>"}}
+{{"cause": "<what went wrong, briefly>", "commands": ["<a shell command that fixes the cause>", "..."], "then": "rerun the step" | "run this instead" | "the step's work is already done", "instead": "<only with 'run this instead': the step to run in its place>"}}
+If the step failed only because its result already exists (a directory, a user, a mount), its work is already done: say so, with no commands. NEVER delete files or directories to make a step pass -- that destroys work.
 Put every command to run in "commands" -- the controller runs exactly those, in the same place as the step (same user, chroot and directory), and nothing written in "cause". Fix the cause; don't hide the failure (no '|| true', no skipping tests the book runs). {system_disk} is the build machine's own system disk: never touch it."""
 
 OUTPUT_JUDGE_SYSTEM = """You are building Linux From Scratch (systemd). A step exited 0 but its output reports problems. Decide whether the step met the book's requirement. Reply with ONLY a JSON object:
@@ -390,6 +392,7 @@ def source_file(task: dict, manifest: dict) -> str | None:
 def deliver_sources(m: Machine, manifest: dict, task_id: int) -> None:
     """3.1 without wget (LFS-006): verified on the coordinator against
     MIRROR.json, copied in, and checked again by SHA-256 on the machine."""
+    m.sh(f"mkdir -p {LFS}/sources && chmod a+wt {LFS}/sources")  # the book's 3.1 mode, in case its mkdir was left out
     with urllib.request.urlopen(f"{REPO}/lfs/MIRROR.json", timeout=60) as r:
         mirror = json.loads(r.read())
     wanted = [f for f in manifest["files"] if f["set"] in ("lfs", "blfs-uefi", "blfs-stage1", "blfs-common")
@@ -447,6 +450,19 @@ def checkpoint(m: Machine, vm_id: str, task: dict, when: str) -> bool:
             f"checkpoint {name}: both disks snapshotted in {out.get('seconds')} s; machine back, mounts restored",
             {"name": name})
     return True
+
+
+def _really_done(m: Machine, run: str, output: str) -> tuple[bool, str]:
+    """The model says a failed step's work is already done. Accept that only for
+    an 'already exists' failure, and only if what the step makes is there."""
+    if not re.search(r"File exists|already exists|already mounted", output):
+        return False, "the failure isn't an 'already exists' one"
+    targets = re.findall(r"\bmkdir\s+(?:-\w+\s+)*(\S+)", run)
+    for tgt in targets:
+        code, _ = m.sh(f"export LFS={LFS}; test -d {tgt}")
+        if code != 0:
+            return False, f"{tgt} isn't there"
+    return True, ("what the step makes is already there: " + ", ".join(targets)) if targets else "the output says it exists"
 
 
 # ── One task ──────────────────────────────────────────────────────────────────
@@ -568,9 +584,6 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             return False
     srcdir, cwd = "", {"chroot": "/", "host-lfs": f"{LFS}/sources", "host-root": "/root"}[task["context"]]
     src = source_file(task, manifest)
-    if task["number"] == "3.1":
-        m.sh(f"mkdir -pv {LFS}/sources && chmod -v a+wt {LFS}/sources")
-        deliver_sources(m, manifest, task_id)
     if src:
         base = "/sources" if task["context"] == "chroot" else f"{LFS}/sources"
         code, top = m.sh(f"cd {LFS}/sources && tar -tf {shlex.quote(src)} | head -1 | cut -d/ -f1")
@@ -596,7 +609,15 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         set_state(task_id, "waiting", "plan only")
         return True
     repairs = 0
+    # 3.1: the controller's delivery stands where the book's wget is: after the
+    # book's own mkdir and chmod, before the md5sum check (LFS-006, LFS-015).
+    wget_at = next((c["index"] for c in (task["section"] or {}).get("commands", [])
+                    if c.get("skipped") and "wget" in c["text"]), None) if task["number"] == "3.1" else None
+    delivered = wget_at is None
     for n, step in enumerate(steps):
+        if not delivered and (step["book"] is None or step["book"] > wget_at):
+            deliver_sources(m, manifest, task_id)
+            delivered = True
         if step.get("omitted"):
             continue
         attempt, run = 0, step["run"]
@@ -643,6 +664,20 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             fix = _json_reply(reply) or {}
             before = "\n".join(str(c) for c in (fix.get("commands") or []) if str(c).strip())
             replace = str(fix.get("instead") or "") if fix.get("then") == "run this instead" else ""
+            if fix.get("then") == "the step's work is already done" and not before:
+                journal(task_id, "llm-chat", "proposal", f"repair: {fix.get('cause', '')} -- the step's work is already done")
+                ok, why = _really_done(m, run, tail)
+                journal(task_id, "controller", "note", ("accepted: " if ok else "not accepted: ") + why)
+                if ok:
+                    break
+                fix["then"], before = "rerun the step", ""
+            # LFS-015: a repair that deletes directories destroyed delivered work once.
+            # Only inside the package's own unpacked tree is that allowed.
+            if re.search(r"\brm\s+(?:-\w*[rR]\w*|--recursive)\b", before + "\n" + replace) and \
+                    not (srcdir and all(srcdir in seg or "build" in seg for seg in
+                                        re.findall(r"\brm\s+-\w*[rR]\w*\s+([^;&|\n]+)", before + "\n" + replace))):
+                journal(task_id, "controller", "note", f"refused a repair that deletes directories: {before or replace}")
+                before, replace = "", ""
             if _DANGER.search(before + "\n" + replace):
                 journal(task_id, "controller", "note", f"refused a repair that touches a disk outside the LFS disk: {reply[:500]}")
                 before, replace = "", ""
@@ -654,6 +689,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 journal(task_id, "lab", "result", f"fix exit {c2}\n{t2[-1500:]}")
             if replace:
                 run = replace
+    if not delivered:
+        deliver_sources(m, manifest, task_id)
     if task["number"] == "2.7":
         record_mounts(m)
     if srcdir:
