@@ -4672,7 +4672,12 @@ Confirmed by Paul (`--confirm`).
 
 **Verified by:** the generated user-data for a lab VM has no private key, but still has the public key; an ordinary instance's is unchanged. A live lab VM is checked in C2.
 
-**Open:** rotating the CloudCore keypair, since every lab run and student machine up to now had it. Decision for Paul.
+**Key rotation (Paul: "yes, rotate it when it's convenient"), done 2026-10-07:**
+- **New keypairs on both hosts.** Each host has its own. Peer pairing uses a separate key (`cloudcore_peer_ed25519`) and was unaffected.
+- **The long-lived LFS build machine:** the new public key was added with the old key first. Then the swap was made, the broker's re-keying was tested with the new key (201, root access worked), and the old key and the test key were removed.
+- **llm-chat rebuilt**, so every instance carries the new keys.
+- **Verified:** the old key is refused by the build machine, the new coordinator and Stourport's lab model VM; the new key opens each. The build machine, created after the fix, has no CloudCore private key at all.
+- **Destroyed:** the retired keys were shredded on both hosts. Older nightly backups still hold the old keys, but nothing trusts them any more.
 
 ### F-236 — LLM work went to a host the benchmark favoured, not the one that was fastest at the time
 
