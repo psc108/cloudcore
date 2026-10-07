@@ -920,6 +920,36 @@
       "uuid": "e846e4de-1951-b5bd-05f3-9a2592943394",
       "fulltext": true,
       "reserved": true
+    },
+    {
+      "name": "lfs_en_systemd",
+      "filename": "lfs_en_systemd_13.1.zim",
+      "source_url": null,
+      "sha256": "2891e51709e9f0191597f0de12d2cade965270ddb1119e99cb307f01326e759d",
+      "panels": [
+        "linux"
+      ],
+      "tier": "6-lfs",
+      "title": "Linux From Scratch 13.1 (systemd)",
+      "book_name": "lfs_en_systemd",
+      "fulltext": true,
+      "size_bytes": 582564,
+      "built_by": "lfs/make-zim.py from the mirrored book (lfs-os-Phased-Implementation.md, A4b)"
+    },
+    {
+      "name": "blfs_en_systemd",
+      "filename": "blfs_en_systemd_13.1.zim",
+      "source_url": null,
+      "sha256": "218aef60e6436ea0f63252b5a677845b064ed280afd33cf02d11811a58c0118b",
+      "panels": [
+        "linux"
+      ],
+      "tier": "6-lfs",
+      "title": "Beyond Linux From Scratch 13.1 (systemd)",
+      "book_name": "blfs_en_systemd",
+      "fulltext": true,
+      "size_bytes": 2148385,
+      "built_by": "lfs/make-zim.py from the mirrored book (lfs-os-Phased-Implementation.md, A4b)"
     }
   ]
 }
