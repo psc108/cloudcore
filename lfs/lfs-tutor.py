@@ -131,8 +131,25 @@ def sessions_today() -> int:
     return len(list((STATE / "sessions").glob(f"{day}T*.json")))
 
 
+def earlier(build: dict, task: dict, n: int = 3) -> str:
+    """What actually ran in the last n finished sections: a cause can lie a
+    section back (LFS-020: 5.4 'done' without copying the headers broke 5.5)."""
+    st, done = api("GET", f"/v1/lfs/builds/{build['id']}/tasks?state=done")
+    out = []
+    for t in sorted((done or {}).get("items", []), key=lambda x: x["seq"])[-n:]:
+        st, full = api("GET", f"/v1/lfs/tasks/{t['id']}")
+        if st != 200:
+            continue
+        j = full["journal"]
+        start = max((i for i, e in enumerate(j) if e["kind"] == "state" and "-> running" in e["text"]), default=0)
+        last_run = [e["text"] for e in j[start:] if e["kind"] == "command"]
+        out.append(f"## {t['number']} {t['title']} (done)\n" + "\n".join(f"$ {c}" for c in last_run[-12:]))
+    return "\n\n".join(out)
+
+
 def brief(build: dict, task: dict) -> str:
-    """Everything the tutor sees: the section, and the task's whole journal."""
+    """Everything the tutor sees: the section, the task's whole journal, and
+    what ran in the sections before it."""
     sec = task.get("section") or {}
     cmds = "\n\n".join(
         f"[{c['index']}]" + (" (as root)" if c.get("as_root") else "")
@@ -157,7 +174,9 @@ def brief(build: dict, task: dict) -> str:
             + f". Attempts so far: {task['attempts']}.\n\n"
             f"THE BOOK'S COMMANDS (numbered as the 14B sees them):\n{cmds}\n\n"
             f"THE SECTION'S TEXT:\n{(sec.get('text') or '')[:12000]}\n\n"
-            f"THE TASK'S JOURNAL (oldest first):\n{journal}\n")
+            f"THE TASK'S JOURNAL (oldest first):\n{journal}\n\n"
+            f"WHAT RAN IN THE SECTIONS BEFORE IT (their last attempt's commands; a cause can lie there):\n"
+            f"{earlier(build, task)}\n")
 
 
 def tutor(build: dict, task: dict) -> dict:

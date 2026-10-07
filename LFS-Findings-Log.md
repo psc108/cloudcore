@@ -338,6 +338,38 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 - **An unchecked plan, now closed:** attempt 2's second plan added a `wget` (an internet download, against LFS-006) and the plan check let it through. A `wget`/`curl` of an http(s)/ftp URL is now refused in plans and repairs (`_DOWNLOAD`).
 - **The cost of a retry:** each retry re-unpacks the package, so a retry of GCC pays the full 17-minute compile again.
 
+### LFS-020 — 5.4 "done" without installing the headers; in 5.5 the 14B ran grub-install as root on the build machine's own disk
+
+**Where:** tasks 12 (5.4 Linux API Headers) and 13 (5.5 Glibc-2.44); `examples/llm-chat/files/lfs_worker.py` (the plan and repair checks), `lfs/lfs-tutor.py` (the brief).
+
+**Symptom:** found 2026-10-07, 21:29–22:36 UTC.
+- **5.4:** the 14B "changed" the book's command [1] (`make headers`, `find usr/include … -delete`, `cp -rv usr/include $LFS/usr`) to just `make headers`, giving the kernel version as its reason. Both steps exited 0, and the task was marked done. The headers never reached `$LFS/usr/include`.
+- **5.5:** glibc's configure failed: "GNU libc requires kernel header files from Linux 3.2.0 or later".
+  - **Its repairs:** `sudo apt-get install linux-libc-dev`, four times (no password; the wrong idea anyway).
+  - **Invented options:** `--enable-efi --with-elf=yes`.
+  - **The damage:** after Sentinel's nudge, the 14B added steps run **as root**: `mount`, `grub-install --target=x86_64-efi --efi-directory=$LFS/boot/efi` and `grub-mkconfig`. `grub-install` exited 0, writing GRUB modules into the **build machine's own `/boot/grub` on `/dev/sda`**, a GRUB EFI binary onto the LFS EFI partition, and a `grub.cfg` listing the host's kernels.
+- **The ladder:**
+  - **Rung 2:** the nudge was irrelevant (the GCC lesson LFS-T339 at 0.21).
+  - **Rung 3 (32 s, $0.42):** the tutor answered **"needs Paul"**. It traced the failure to 5.4's missing result, found and described all of the GRUB damage, and recommended a rollback plus three controller guards.
+  - **Rung 4:** the build paused.
+
+**Root cause:** the controller's.
+- **Dropped lines:** a "changed" book command could drop lines; nothing compared the change with the book's.
+- **Root steps:** an added step in an lfs-user section could run as root.
+- **System commands:** nothing kept them (`grub-install`, `mount`, `sudo`, `apt-get` …) out of sections whose book commands don't use them.
+- **No result check:** nothing checks that a section produced its result (follow-up).
+
+**Fix:**
+- **Rollback:** restored checkpoint `before-012-5-4-linux-7-1-8-api-headers` through the broker in 6.3 s. That undid the GRUB damage on both disks; the cross tools and swap were intact. **This proves C6's checkpoint restore.**
+- **Dropped lines:** a change to a book command must keep that command's other lines. Each must still be there, at least 60 % similar (a version, a filled placeholder, a variable written out and options added all pass). Tested: 5.4's `make headers` alone is rejected, naming the dropped `find` and `cp`; 5.2's literal target, 5.3's tutor `make ||`, 2.7's filled placeholder and 4.4's `-j4` pass; 2.7's dropped `mkdir -pv $LFS` would have been caught.
+- **System commands:** plans and repairs may use `grub-*`, `efibootmgr`, `mount`, `mkfs`, `sgdisk`, `mkswap`, `swapon` and `chroot` only where the section's own book commands do. A commandless section (2.4) is exempt; `_DANGER` still guards it. `sudo`, `apt-get`, `apt`, `dnf` and `yum` are refused everywhere.
+- **Root steps:** in an lfs-user section, only the book's own root commands run as root.
+- **The tutor's brief:** it now includes the commands that actually ran in the last three finished sections. A cause can lie a section back.
+
+**Verified by:** the restore (above); the offline tests (above); the re-run of 5.4 and 5.5.
+
+**Follow-up:** checks on a section's result (e.g. 5.4 → `$LFS/usr/include/linux/version.h` exists). The book's own sanity checks cover some sections (5.5's `readelf` test); most have none.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -358,3 +390,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.4 | 2026-10-07 | Paul Scott | LFS-018 (cd lost between steps; duplicate build added). 4.4 done; 5.2 checkpointed. |
 | v1.5 | 2026-10-07 | Paul Scott | 5.2 Binutils pass 1 built (C6 slice reached). |
 | v1.6 | 2026-10-07 | Paul Scott | LFS-019 (GCC pass 1 out of memory; swap added; the ladder's first live run: Sentinel nudge, two tutor sessions). |
+| v1.7 | 2026-10-07 | Paul Scott | LFS-020 (5.4 dropped the copy; grub-install on the host disk; rollback; three guards). C6's restore proven. |

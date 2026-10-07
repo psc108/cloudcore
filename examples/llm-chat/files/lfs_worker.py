@@ -38,6 +38,7 @@ Exit: 0 reached --until (or the end); 1 a task got stuck; 2 bad usage or setup.
 from __future__ import annotations
 
 import argparse
+import difflib
 import threading
 import hashlib
 import json
@@ -73,6 +74,13 @@ _DANGER = re.compile(r"/dev/(?:sda|vda)\b|\bdd\b[^\n]*\bof=/dev/(?!sdb)|\bmkfs(?
 # The lab network can't reach the internet; the controller delivers verified
 # sources (LFS-006). A plan that adds a download is wrong however it's argued (LFS-019).
 _DOWNLOAD = re.compile(r"\b(?:wget|curl)\b[^\n]*\b(?:https?|ftp)://")
+# System-level commands: a plan or repair may use one only where the book's own
+# section does (2.7 mounts, 10.4 installs GRUB). In 5.5 the 14B added
+# grub-install as root and wrote into the build machine's own /boot (LFS-020).
+_SYSTEM = re.compile(r"\b(grub-install|grub-mkconfig|efibootmgr|mount|umount|mkfs(?:\.\w+)?|sgdisk|fdisk|parted|"
+                     r"mkswap|swapon|sudo|apt-get|apt|dnf|yum|chroot)\b")
+# Never, anywhere: the build machine's package manager and sudo (no password).
+_NEVER = re.compile(r"\b(sudo|apt-get|apt|dnf|yum)\b")
 _CHECK = re.compile(r"\bmake\b[^\n]*\b(?:check|test)s?\b|\bctest\b|\bninja\b[^\n]*\btest\b")
 # A step can exit 0 and still report a problem: 2.2's version check prints
 # "ERROR: /bin/sh does not point to bash" and carries on.
@@ -546,6 +554,23 @@ def _really_done(m: Machine, run: str, output: str) -> tuple[bool, str]:
 
 # ── One task ──────────────────────────────────────────────────────────────────
 
+def _dropped_lines(book: str, run: str) -> list[str]:
+    """The book command's lines missing from a changed version (LFS-020: in 5.4
+    the 14B changed `make headers; find ...; cp -rv usr/include $LFS/usr` to
+    just `make headers`, and the headers never reached $LFS). A line counts as
+    kept if a line of the change is mostly the same: a version, a placeholder
+    filled, a variable written out, an option added."""
+    def key(line: str) -> str:
+        return re.sub(r"\d+(?:\.\d+)*", "N", _norm(line))
+    have = [key(x) for x in run.replace("\\\n", " ").splitlines() if x.strip()]
+    out = []
+    for line in book.replace("\\\n", " ").splitlines():
+        k = key(line)
+        if k and not any(k in h or difflib.SequenceMatcher(None, k, h).ratio() >= 0.6 for h in have):
+            out.append(_norm(line)[:60])
+    return out
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s.replace("\\\n", " ")).strip()
 
@@ -601,10 +626,24 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
     steps = [{"book": i, "run": c["text"], "as": "root" if c.get("as_root") and task["context"] == "host-lfs" else None,
               "why": "", "changed": False}
              for i, c in by_index.items() if not c.get("skipped")]
+    book_system = {w for c in by_index.values() for w in _SYSTEM.findall(c["text"])}
     for ch in data["changes"]:
         if not isinstance(ch, dict):
             continue
         idx, why, run = ch.get("book"), str(ch.get("why") or ""), str(ch.get("run") or "")
+        # LFS-020: system-level commands only where the book's section has them.
+        # A section with no book commands (2.4) must write its own; _DANGER still guards the disks.
+        foreign = sorted({w for w in _SYSTEM.findall(run)
+                          if _NEVER.fullmatch(w) or (by_index and w not in book_system)})
+        if foreign:
+            problems.append(f"'{run[:80]}' uses {', '.join(foreign)}, which this section's book commands don't: "
+                            "that belongs to another section (or never, for sudo and the package manager)")
+            continue
+        # LFS-020: in an lfs-user section only the book's own root commands run as root.
+        if ch.get("as") == "root" and task["context"] == "host-lfs" and not (idx in by_index and by_index[idx].get("as_root")):
+            problems.append(f"a change runs {'command [' + str(idx) + ']' if idx is not None else 'an added step'} as root: "
+                            "in this section only the book's own root commands run as root")
+            continue
         if not why:
             problems.append(f"a change ({json.dumps(ch)[:80]}) gives no reason")
         if run and _DANGER.search(run):
@@ -653,6 +692,11 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         if ch.get("omit"):
             s.update(run="", omitted=True, why=why)
         if run:
+            dropped = _dropped_lines(by_index[idx]["text"], run)
+            if dropped:
+                problems.append(f"your change to command [{idx}] drops the book's line(s) {dropped}: a change must keep "
+                                "the command's other lines (only leave a whole command out, with a reason, by 'omit')")
+                continue
             s.update(run=run, changed=_norm(run) != _norm(by_index[idx]["text"]), why=why)
         if ch.get("as") in ("root", "lfs"):
             s.update(**{"as": ch["as"]}, why=why or s["why"])
@@ -789,6 +833,12 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                     not (srcdir and all(srcdir in seg or "build" in seg for seg in
                                         re.findall(r"\brm\s+-\w*[rR]\w*\s+([^;&|\n]+)", before + "\n" + replace))):
                 journal(task_id, "controller", "note", f"refused a repair that deletes directories: {before or replace}")
+                before, replace = "", ""
+            book_system = {w for c in (task["section"] or {}).get("commands", []) for w in _SYSTEM.findall(c["text"])}
+            bad = sorted({w for w in _SYSTEM.findall(before + "\n" + replace) if w not in book_system or _NEVER.fullmatch(w)})
+            if bad:
+                journal(task_id, "controller", "note", f"refused a repair using {', '.join(bad)} (not this section's; "
+                        f"LFS-020): {before or replace}")
                 before, replace = "", ""
             if _DOWNLOAD.search(before + "\n" + replace):
                 journal(task_id, "controller", "note", f"refused a repair that downloads from the internet: {before or replace}")
