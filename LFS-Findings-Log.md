@@ -301,7 +301,10 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Follow-up:** on the re-run, the 14B tried the timed copy twice more; the new check rejected both. The book's 4.5 suggests timing this package to measure the SBU, and the model kept to that. Added to the planning rules, for every section: "the controller times every step and records it: never add `time` or SBU measurements", and "never add a copy of the book's own commands". The worker journals every step's duration already.
 
-**Verified by:** the re-run of 5.2.
+**Verified by:** 5.2 done 2026-10-07 16:32, on the third plan.
+- **The run:** `mkdir build; cd build` carried into `../configure`; `make` took 80 s, then `make install`.
+- **The result:** `/mnt/lfs/tools/bin` holds the 16 `x86_64-lfs-linux-gnu-*` tools; `ld --version` gives GNU ld 2.47.
+- **Residual (harmless):** the 14B replaced `$LFS_TGT` with its literal value, on the mistaken reason that "the book's command does not specify the target". The value is identical; the reasoning was wrong. Its explanations still need reading with care even when its commands are right.
 
 ## Document History
 
@@ -321,3 +324,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.2 | 2026-10-07 | Paul Scott | LFS-016 (invented reasons to leave out 4.2; facts show $LFS's contents; better rejection feedback). 3.1 done with delivery in the book's order. |
 | v1.3 | 2026-10-07 | Paul Scott | LFS-017 (root marked only in prose; -j32 illustrations). 4.2 and 4.3 done. |
 | v1.4 | 2026-10-07 | Paul Scott | LFS-018 (cd lost between steps; duplicate build added). 4.4 done; 5.2 checkpointed. |
+| v1.5 | 2026-10-07 | Paul Scott | 5.2 Binutils pass 1 built (C6 slice reached). |
