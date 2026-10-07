@@ -324,7 +324,9 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 - **Swap:** the worker's machine set-up now ensures an 8 GB swap file on the machine's own system disk (`ensure_swap`: idempotent, kept in `/etc/fstab`). That is the controller's environment, like the mounts. Applied live at 20:52 UTC, between attempts.
 - **The lesson stays:** it's correct, and harmless with swap.
 
-**Verified by:** `swapon --show` shows `/swapfile` at 8 GB; the re-run of 5.3 with swap and the tutor's lesson.
+**Verified by:**
+- **Swap:** `swapon --show` shows `/swapfile` at 8 GB.
+- **5.3 done on attempt 5 (21:21 UTC):** the 14B planned the tutor's command exactly. `make || { rm -f …; make -j1; }` exited 0 after 1103 s, then `make install` and the book's `limits.h` step ran. With swap, the parallel `make` finished on its own, and the fallback wasn't needed.
 
 **What the ladder showed (C5's first live run):**
 - **Rungs 2 → 3 → 3 ran unattended,** each recorded in the journal.
