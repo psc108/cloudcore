@@ -70,6 +70,9 @@ STEP_TIMEOUT_S = 6 * 3600
 REPAIRS_PER_STEP, REPAIRS_PER_TASK = 2, 4
 _DANGER = re.compile(r"/dev/(?:sda|vda)\b|\bdd\b[^\n]*\bof=/dev/(?!sdb)|\bmkfs(?:\.\w+)?\b(?![^\n]*/dev/sdb)[^\n]*/dev/|"
                      r"\brm\s+-rf?\s+/(?:\s|$)|\bwipefs\b(?![^\n]*/dev/sdb)")
+# The lab network can't reach the internet; the controller delivers verified
+# sources (LFS-006). A plan that adds a download is wrong however it's argued (LFS-019).
+_DOWNLOAD = re.compile(r"\b(?:wget|curl)\b[^\n]*\b(?:https?|ftp)://")
 _CHECK = re.compile(r"\bmake\b[^\n]*\b(?:check|test)s?\b|\bctest\b|\bninja\b[^\n]*\btest\b")
 # A step can exit 0 and still report a problem: 2.2's version check prints
 # "ERROR: /bin/sh does not point to bash" and carries on.
@@ -382,6 +385,22 @@ _VFS = ("mountpoint -q $LFS/dev || mount -v --bind /dev $LFS/dev; "
         "else mountpoint -q $LFS/dev/shm || mount -vt tmpfs -o nosuid,nodev tmpfs $LFS/dev/shm; fi")
 
 
+SWAP_FILE, SWAP_GB = "/swapfile", 8
+
+
+def ensure_swap(m: Machine) -> None:
+    """Swap on the machine's own system disk (LFS-019): a standard.large has
+    3.9 GB and no swap, and GCC's final links at -j4 ran it out of memory. The
+    controller's set-up, like the mounts -- not the book's, not the model's."""
+    code, _ = m.sh(f"swapon --show=NAME --noheadings | grep -qx {SWAP_FILE}")
+    if code == 0:
+        return
+    code, out = m.sh(f"[ -f {SWAP_FILE} ] || {{ fallocate -l {SWAP_GB}G {SWAP_FILE} && chmod 600 {SWAP_FILE} "
+                     f"&& mkswap {SWAP_FILE} >/dev/null; }}; swapon {SWAP_FILE} && "
+                     f"{{ grep -q '^{SWAP_FILE} ' /etc/fstab || echo '{SWAP_FILE} none swap sw 0 0' >> /etc/fstab; }}")
+    log(f"swap {SWAP_FILE} ({SWAP_GB} GB): " + ("on" if code == 0 else f"FAILED: {out[-300:]}"))
+
+
 def ensure_mounts(m: Machine, task: dict, done_numbers: set[str]) -> None:
     """After a reboot (or a snapshot restore) the build's mounts are gone; put
     back what the book had set up by this point: the partitions (2.7), the
@@ -591,6 +610,10 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         if run and _DANGER.search(run):
             problems.append(f"'{run[:80]}' touches a disk or path outside the LFS disk")
             continue
+        if run and _DOWNLOAD.search(run):
+            problems.append(f"'{run[:80]}' downloads from the internet: the build machine can't, and every source is "
+                            "already in $LFS/sources (the controller delivered and verified them)")
+            continue
         if idx is None:
             # An added step. Its place: after the book command it names; at the
             # start for -1; otherwise -- no book commands in the section, or no
@@ -767,6 +790,9 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                                         re.findall(r"\brm\s+-\w*[rR]\w*\s+([^;&|\n]+)", before + "\n" + replace))):
                 journal(task_id, "controller", "note", f"refused a repair that deletes directories: {before or replace}")
                 before, replace = "", ""
+            if _DOWNLOAD.search(before + "\n" + replace):
+                journal(task_id, "controller", "note", f"refused a repair that downloads from the internet: {before or replace}")
+                before, replace = "", ""
             if _DANGER.search(before + "\n" + replace):
                 journal(task_id, "controller", "note", f"refused a repair that touches a disk outside the LFS disk: {reply[:500]}")
                 before, replace = "", ""
@@ -815,6 +841,7 @@ def main() -> int:
         return 2
     try:
         m, vm_id = ensure_machine(build)
+        ensure_swap(m)
     except (RuntimeError, OSError, paramiko.SSHException) as e:
         log(f"no build machine: {e}")
         return 2

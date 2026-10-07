@@ -306,6 +306,36 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 - **The result:** `/mnt/lfs/tools/bin` holds the 16 `x86_64-lfs-linux-gnu-*` tools; `ld --version` gives GNU ld 2.47.
 - **Residual (harmless):** the 14B replaced `$LFS_TGT` with its literal value, on the mistaken reason that "the book's command does not specify the target". The value is identical; the reasoning was wrong. Its explanations still need reading with care even when its commands are right.
 
+### LFS-019 — GCC pass 1 ran the build machine out of memory; the first live climb of the escalation ladder
+
+**Where:** task 11 (5.3 GCC-16.2.0 Pass 1); the build machine (standard.large: 4 vCPU, 3.9 GB, no swap); `examples/llm-chat/files/lfs_worker.py` (machine set-up); Sentinel's ladder (C5).
+
+**Symptom:** found 2026-10-07, 18:36–20:48 UTC.
+- **Attempt 1:** the 14B rewrote command [0] as six commands with absolute paths, calling the book's commands "placeholders", and dropped configure, make and install. Step [6] then failed ("x86_64-lfs-linux-gnu-gcc: command not found"); its PATH repairs couldn't help. Stuck.
+- **Rung 2 (Sentinel):** posted its three closest KB findings (LFS-015 at 0.44, LFS-016 at 0.32 …). None was relevant: the KB has no build-failure findings yet, and generic words matched.
+- **Attempt 2:** the 14B first left out every command as "already done", then added a `wget`. The plan check rejected neither second plan (see the residual below). The book's commands then ran: `make` worked for 1073 s and died at the final links, with `ld terminated with signal 9 [Killed]`. Its repairs were `sudo sysctl` (no password) and `make clean`, which threw the work away. Stuck.
+- **Rung 3, session 1** ($0.07-scale, about 3 min): the tutor diagnosed the out-of-memory correctly: 3.9 GB, no swap, `MAKEFLAGS=-j4` linking cc1, cc1plus, lto1 and lto-dump at once. Its lesson was `make || make -j1`. The 14B followed it exactly.
+- **Attempt 3:** the parallel `make` was killed again; `make -j1` failed in 10 s with "cannot execute 'cc1'". Stuck.
+- **Rung 3, session 2** (40 s, $0.55): the tutor found the cause its first lesson missed. The killed linker leaves a half-written `cc1` with a fresh timestamp and no execute bit, so `make` never relinks it. New lesson: `make || { rm -f gcc/cc1 gcc/cc1plus gcc/lto1 gcc/lto-dump; make -j1; }`, with explicit do-nots (`make clean`, `sudo`, repeating the failed repair).
+
+**Root cause:** the platform's, not the model's. The `lfs-build` machine fell back to `standard.large` (3.9 GB) with no swap; GCC's parallel final links need more. The tutor's lesson works around it; it doesn't fix it, and GCC pass 2 and chapter 8's GCC will hit it again.
+
+**Fix:**
+- **Swap:** the worker's machine set-up now ensures an 8 GB swap file on the machine's own system disk (`ensure_swap`: idempotent, kept in `/etc/fstab`). That is the controller's environment, like the mounts. Applied live at 20:52 UTC, between attempts.
+- **The lesson stays:** it's correct, and harmless with swap.
+
+**Verified by:** `swapon --show` shows `/swapfile` at 8 GB; the re-run of 5.3 with swap and the tutor's lesson.
+
+**What the ladder showed (C5's first live run):**
+- **Rungs 2 → 3 → 3 ran unattended,** each recorded in the journal.
+- **The tutor reached the right diagnosis** on its own evidence: the 16 KB output tails and the facts the 14B saw.
+- **Its second session corrected its first.**
+- **Rung 2's nudge was noise.** A KB of platform findings matches build failures on generic words. It will improve as build findings and tutor lessons (`LFS-T…`) accumulate; until then a nudge costs one retry.
+
+**Residual:**
+- **An unchecked plan, now closed:** attempt 2's second plan added a `wget` (an internet download, against LFS-006) and the plan check let it through. A `wget`/`curl` of an http(s)/ftp URL is now refused in plans and repairs (`_DOWNLOAD`).
+- **The cost of a retry:** each retry re-unpacks the package, so a retry of GCC pays the full 17-minute compile again.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -325,3 +355,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.3 | 2026-10-07 | Paul Scott | LFS-017 (root marked only in prose; -j32 illustrations). 4.2 and 4.3 done. |
 | v1.4 | 2026-10-07 | Paul Scott | LFS-018 (cd lost between steps; duplicate build added). 4.4 done; 5.2 checkpointed. |
 | v1.5 | 2026-10-07 | Paul Scott | 5.2 Binutils pass 1 built (C6 slice reached). |
+| v1.6 | 2026-10-07 | Paul Scott | LFS-019 (GCC pass 1 out of memory; swap added; the ladder's first live run: Sentinel nudge, two tutor sessions). |
