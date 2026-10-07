@@ -469,14 +469,18 @@ def _merge_user_data(base_cloud_config: str, extra_user_data: Optional[str]) -> 
 
 
 def _cloud_init_iso(instance_dir: Path, instance_name: str, image_id: str,
-                    user_data: Optional[str], extra_users: Optional[list] = None) -> Path:
+                    user_data: Optional[str], extra_users: Optional[list] = None,
+                    untrusted: bool = False) -> Path:
     """Build a cloud-init NoCloud ISO, injecting the CloudCore inter-instance keypair
-    and merging in any caller-supplied user_data (packages/write_files/runcmd/...)."""
+    and merging in any caller-supplied user_data (packages/write_files/runcmd/...).
+    untrusted (lab VMs): the public key only, so the host can still reach the VM,
+    never the private key -- model-written commands run there, and students
+    have root on theirs (F-235)."""
     extra_users = extra_users or []
     meta_data = f"instance-id: {instance_name}\nlocal-hostname: {instance_name}\n"
 
     cc_pubkey  = get_cc_pubkey()
-    cc_privkey = _CC_PRIVKEY.read_text().strip() if _CC_PRIVKEY.exists() else ""
+    cc_privkey = "" if untrusted else (_CC_PRIVKEY.read_text().strip() if _CC_PRIVKEY.exists() else "")
     ssh_user   = ssh_user_for_image(image_id)
 
     users_block = _build_users_block(extra_users, cc_pubkey)
@@ -828,7 +832,8 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
         check=True, capture_output=True,
     )
 
-    iso_path = _cloud_init_iso(instance_dir, instance.name, instance.image_id, instance.user_data, instance.users)
+    iso_path = _cloud_init_iso(instance_dir, instance.name, instance.image_id, instance.user_data, instance.users,
+                               untrusted=(instance.tags or {}).get("network") == "lab")
     # F2: a lab VM goes on the isolated lab bridge or nowhere -- never on
     # ccbr0, and never SLIRP, where it would reach everything ccbr0 does.
     lab = (instance.tags or {}).get("network") == "lab"

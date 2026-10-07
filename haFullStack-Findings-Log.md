@@ -4656,6 +4656,24 @@ Confirmed by Paul (`--confirm`).
 
 **Verified by:** on Stourport, stopping the API stopped the terminal, and starting only the API brought the terminal back (port 8081 listening). The same on Llwyn-y-Groes, after one slip while deploying: copying Stourport's unit file there carried Stourport's checkout path, and the service failed with `status=200/CHDIR`. Units must be installed with `scripts/install.sh`'s path substitution (`sed s|/home/scottp/IdeaProjects/CloudProject|$REPO_DIR|`). Reinstalled that way, it's active on 8081 and survives an API stop-then-start.
 
+### F-235 — Lab VMs were given CloudCore's private instance key, where model-written commands and students could read it
+
+**Where:** `api/compute.py` (`_cloud_init_iso`, `_build_write_files_block`).
+
+**Symptom:** found 2026-10-07 while designing the LFS build's controller (C2). Every instance's cloud-init writes CloudCore's own keypair, **including the private key** `cloudcore_ed25519`, into every user's `~/.ssh`. There was no exception for lab VMs:
+- **proof targets and probers:** these run model-written commands as `student`;
+- **student machines:** a human has root on these.
+
+**Root cause:** the keypair was injected so instances can reach each other; lab VMs, which came later, inherited it unchanged.
+
+**Impact:** the key opens SSH to CloudCore instances, and lab VMs are fenced off from every private network where those live (table `inet cclab` drops 10/8, 172.16/12 and 192.168/16). So it couldn't be used from inside the lab. But it was readable by untrusted code and people, and lab VMs can reach the internet, so it could have been copied out. Everyone with it would need a way onto the private networks to use it.
+
+**Fix:** lab VMs (`network=lab`) get CloudCore's **public** key only, so the host can still reach them, never the private key. Other instances are unchanged.
+
+**Verified by:** the generated user-data for a lab VM has no private key, but still has the public key; an ordinary instance's is unchanged. A live lab VM is checked in C2.
+
+**Open:** rotating the CloudCore keypair, since every lab run and student machine up to now had it. Decision for Paul.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4836,3 +4854,4 @@ Confirmed by Paul (`--confirm`).
 | v3.54 | 2026-10-07 | Paul Scott | LFS B2. F-232: an image imported from a booted system shares its machine ID, and so its DHCP identity. |
 | v3.55 | 2026-10-07 | Paul Scott | LFS B3. F-233: deleting a UEFI instance left its VM defined, and delete_instance swallowed the error. |
 | v3.56 | 2026-10-07 | Paul Scott | F-234: the terminal server stayed down for 4 days after an API stop-then-start (PartOf doesn't propagate start). |
+| v3.57 | 2026-10-07 | Paul Scott | F-235: lab VMs were given CloudCore's private instance key; now public key only. Key rotation is an open decision. |
