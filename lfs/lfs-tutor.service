@@ -1,0 +1,12 @@
+[Unit]
+Description=LFS build tutor: one headless Claude Code session for a stuck task, when Sentinel asks (C5 rung 3)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# LFS_API_SSH, LFS_TUTOR_CLAUDE and the cap: written by lfs/install-lfs-tutor.sh.
+EnvironmentFile=%h/.config/cloudcore/lfs-tutor.env
+ExecStart=/usr/bin/python3 /home/scottp/IdeaProjects/CloudProject/lfs/lfs-tutor.py
+# A session runs up to LFS_TUTOR_TIMEOUT_S (20 min); allow for the journal writes.
+TimeoutStartSec=1800
+Nice=5

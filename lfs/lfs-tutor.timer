@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every 2 minutes whether a stuck LFS task wants a tutor
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

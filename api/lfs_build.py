@@ -40,7 +40,7 @@ lfs_bp = Blueprint("lfs", __name__)
 
 LFS_ENDPOINTS = {
     "lfs.create_build", "lfs.list_builds", "lfs.get_build", "lfs.update_build", "lfs.list_tasks", "lfs.next_task",
-    "lfs.get_task", "lfs.set_task_state", "lfs.add_journal", "lfs.journal_markdown",
+    "lfs.get_task", "lfs.set_task_state", "lfs.add_journal", "lfs.journal_markdown", "lfs.heartbeat",
 }
 
 API_DIR = Path(__file__).resolve().parent
@@ -146,6 +146,11 @@ def _now() -> str:
 def _conn():
     conn = db.get_db()
     conn.executescript(_SCHEMA)
+    # C4: the worker's heartbeat -- what it's doing now, for stall detection.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(lfs_builds)")}
+    for col in ("heartbeat_at", "heartbeat"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE lfs_builds ADD COLUMN {col} TEXT")
     return conn
 
 
@@ -263,7 +268,12 @@ def _build_dict(conn, bid: int) -> dict:
         return {}
     counts = {r["state"]: r["n"] for r in conn.execute(
         "SELECT state, COUNT(*) AS n FROM lfs_tasks WHERE build_id=? GROUP BY state", (bid,))}
-    return {**dict(b), "tasks": counts, "total": sum(counts.values())}
+    d = dict(b)
+    try:
+        d["heartbeat"] = json.loads(d.get("heartbeat") or "null")
+    except ValueError:
+        d["heartbeat"] = None
+    return {**d, "tasks": counts, "total": sum(counts.values())}
 
 
 @lfs_bp.get("/v1/lfs/builds")
@@ -297,6 +307,22 @@ def update_build(bid):
                                                                           if k != "updated_at"))
     conn.commit()
     return jsonify(_build_dict(conn, bid))
+
+
+@lfs_bp.post("/v1/lfs/builds/<int:bid>/heartbeat")
+def heartbeat(bid):
+    """The worker says it's alive and what it's doing (C4): {task_id, number,
+    phase, pid}. Sentinel spots a stall from this and the journal, never from
+    log silence -- GCC's build is quiet for long stretches."""
+    body = request.get_json(force=True, silent=True) or {}
+    hb = {k: body[k] for k in ("task_id", "number", "phase", "pid", "since") if k in body}
+    conn = _conn()
+    cur = conn.execute("UPDATE lfs_builds SET heartbeat_at=?, heartbeat=? WHERE id=?",
+                       (_now(), json.dumps(hb)[:2000], bid))
+    if not cur.rowcount:
+        return _problem(404, "Not Found", f"no build {bid}")
+    conn.commit()
+    return "", 204
 
 
 @lfs_bp.get("/v1/lfs/builds/<int:bid>/tasks")

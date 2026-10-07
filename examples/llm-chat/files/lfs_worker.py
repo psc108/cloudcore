@@ -38,6 +38,7 @@ Exit: 0 reached --until (or the end); 1 a task got stuck; 2 bad usage or setup.
 from __future__ import annotations
 
 import argparse
+import threading
 import hashlib
 import json
 import os
@@ -93,6 +94,35 @@ def api(method: str, path: str, body: dict | None = None, timeout: int = 120) ->
             return e.code, json.loads(e.read())
         except ValueError:
             return e.code, {"detail": str(e)}
+
+
+# ── Heartbeat (C4) ────────────────────────────────────────────────────────────
+# What the worker is doing now, posted every minute from a thread, so a long
+# model call or a long compile still shows the worker alive. Sentinel judges a
+# stall from this and the journal, never from log silence.
+HEARTBEAT_S = 60
+_hb: dict = {"build": 0, "task_id": None, "number": "", "phase": "starting"}
+_hb_lock = threading.Lock()
+
+
+def phase(text: str, task: dict | None = None) -> None:
+    with _hb_lock:
+        _hb["phase"] = text[:200]
+        _hb["since"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if task is not None:
+            _hb["task_id"], _hb["number"] = task["id"], task["number"]
+
+
+def _beat_forever() -> None:
+    while True:
+        with _hb_lock:
+            body = {k: _hb.get(k) for k in ("task_id", "number", "phase", "since")} | {"pid": os.getpid()}
+            bid = _hb["build"]
+        try:
+            api("POST", f"/v1/lfs/builds/{bid}/heartbeat", body, timeout=30)
+        except (urllib.error.URLError, OSError, ValueError):
+            pass  # the next beat tries again; a missed one isn't a stall
+        time.sleep(HEARTBEAT_S)
 
 
 def journal(task_id: int, who: str, kind: str, text: str, data=None) -> None:
@@ -258,10 +288,10 @@ class Machine:
             except (paramiko.SSHException, OSError):
                 continue  # the machine is busy or the link dropped; the step keeps running
             if rc.strip().isdigit():
-                _, tail = self.sh(f"tail -c 6000 {logf}")
+                _, tail = self.sh(f"tail -c 16000 {logf}")
                 return int(rc.strip()), tail, time.monotonic() - t0
         self.sh("pkill -f current-step.sh")
-        _, tail = self.sh(f"tail -c 6000 {logf}")
+        _, tail = self.sh(f"tail -c 16000 {logf}")
         return 124, tail + f"\n[the controller stopped the step after {timeout_s}s]", time.monotonic() - t0
 
 
@@ -448,6 +478,7 @@ def checkpoint(m: Machine, vm_id: str, task: dict, when: str) -> bool:
     if st0 == 200 and any(s.get("name") == name for s in have.get("items", [])):
         journal(task["id"], "controller", "checkpoint", f"checkpoint {name} already taken; kept")
         return True
+    phase(f"checkpoint {name}", task)
     m.sh("sync")
     st, out = api("POST", f"/v1/lab-vms/{vm_id}/snapshots",
                   {"name": name, "description": f"{when} {task['number']} {task['title']}"}, timeout=700)
@@ -495,6 +526,14 @@ def _next_sections(task: dict, n: int = 3) -> str:
     return "; ".join(f"{t['number']} {t['title']}".strip() for t in later) or "(none)"
 
 
+def tutor_notes(task: dict) -> list[str]:
+    """The section's lessons from the ladder (C5): the tutor's (Claude) and
+    Sentinel's knowledge-base nudges, oldest first."""
+    who = {"claude": "tutor", "sentinel": "Sentinel, from the knowledge base"}
+    return [f"({who[j['who']]}) {j['text']}" for j in task.get("journal", [])
+            if j["who"] in who and j["kind"] == "lesson"]
+
+
 def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[dict], str]:
     sec = task["section"] or {}
     cmds = [c for c in sec.get("commands", [])]
@@ -504,8 +543,8 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         + (f" SKIPPED by the controller: {c['skipped']}" if c.get("skipped") else "") + f"\n{c['text']}"
         for c in cmds) or "(The book gives no commands for this section; its text says what to do.)"
     prose = (sec.get("text") or "")[:2500]
-    # The tutor's notes for this section (C5): lessons Claude wrote in the journal.
-    notes = [j["text"] for j in task.get("journal", []) if j["who"] == "claude" and j["kind"] == "lesson"]
+    notes = tutor_notes(task)
+    fx = facts(m)
     ctx = {"host-root": "as root on the build host", "host-lfs": "as the lfs user on the build host, with the book's "
            "environment (LFS, LFS_TGT, PATH, CONFIG_SITE, MAKEFLAGS from ~/.bashrc)",
            "chroot": "inside the chroot, as root, with the book's environment"}[task["context"]]
@@ -516,7 +555,7 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             + ("\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n" + "\n".join(f"- {n}" for n in notes) + "\n"
                if notes else "")
             + f"\nThe next sections, which are NOT yours to do now: {_next_sections(task)}.\n"
-            + f"\nFacts about the machine:\n{facts(m)}\n\nThe section's commands:\n{listing}\n\n"
+            + f"\nFacts about the machine:\n{fx}\n\nThe section's commands:\n{listing}\n\n"
             f"The section's text (start):\n{prose}\n" + (f"\nYour previous answer had problems: {feedback}\n" if feedback else ""))
     reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user,
                            max_tokens=900, schema=PLAN_SCHEMA)
@@ -597,7 +636,7 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
                           + (f" -- {s['why']}" if s["why"] else "")
                           + (f"\n{s['run']}" if s.get("changed") or s["book"] is None else "")
                           for s in steps) + (f"\n\nexpect: {data.get('expect', '')}" if data.get("expect") else ""),
-            {"model": who, "problems": problems, "raw": reply[:4000]})
+            {"model": who, "problems": problems, "raw": reply[:4000], "facts": fx})
     return (steps if not problems else []), "; ".join(problems)
 
 
@@ -627,6 +666,7 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         cwd = f"{base}/{srcdir}"
         journal(task_id, "controller", "note", f"unpacked {src} into {cwd}")
     task["_cwd"], task["_srcdir"] = cwd, srcdir
+    phase("planning", task)
     steps, why = plan(task, build, m)
     if not steps:
         steps, why2 = plan(task, build, m, feedback=why)
@@ -654,12 +694,14 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         while True:
             pro, launch = launcher(task["context"], step.get("as"), cwd)
             name = f"task{task['seq']:03d}-step{n + 1}-try{attempt + 1}"
+            phase(f"step {n + 1}/{len(steps)} try {attempt + 1}: {run.strip().splitlines()[0][:120]}", task)
             journal(task_id, "controller", "command", run, {"step": n + 1, "book": step["book"], "log": name})
             code, tail, secs = m.run_detached(pro + run + "\n", launch, name)
             ends = _CWD_RE.findall(tail)
             tail = _CWD_RE.sub("\n", tail).rstrip("\n")
+            # The longer tail is for the tutor (C5), who reads the journal, not the machine.
             journal(task_id, "lab", "result", f"exit {code} after {secs:.0f}s\n{tail[-3000:]}",
-                    {"step": n + 1, "exit": code, "seconds": round(secs)})
+                    {"step": n + 1, "exit": code, "seconds": round(secs), "tail": tail[-16000:] if code else ""})
             if code == 0 and _REPORTED_PROBLEM.search(tail):
                 reply, _ = ask_model(OUTPUT_JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run[:1500]}\n\n"
                                      f"Output (end):\n{tail[-3500:]}\n\nThe book's text:\n"
@@ -689,9 +731,13 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                         f"step {n + 1} still fails after {attempt - 1} repair(s); stopping here for help (C5)")
                 set_state(task_id, "stuck", f"step {n + 1} fails")
                 return False
+            phase(f"asking for a repair of step {n + 1}", task)
             reply, _ = ask_model(FIX_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK),
                                  f"Section {task['number']} {task['title']}, run {task['context']} in {cwd}.\n"
-                                 f"Failed step:\n{run}\n\nOutput (end):\n{tail[-3500:]}\n\nFacts:\n{facts(m)}", max_tokens=700,
+                                 f"Failed step:\n{run}\n\nOutput (end):\n{tail[-3500:]}\n\nFacts:\n{facts(m)}"
+                                 + ("\n\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n"
+                                    + "\n".join(f"- {n}" for n in tutor_notes(task)) if tutor_notes(task) else ""),
+                                 max_tokens=700,
                                  schema=FIX_SCHEMA)
             fix = _json_reply(reply) or {}
             before = "\n".join(str(c) for c in (fix.get("commands") or []) if str(c).strip())
@@ -741,6 +787,8 @@ def main() -> int:
     ap.add_argument("--until", default="", help="stop after the task with this section number (e.g. 5.2)")
     ap.add_argument("--max-tasks", type=int, default=0)
     ap.add_argument("--plan-only", action="store_true", help="ask for the next task's plan and journal it; run nothing")
+    ap.add_argument("--follow", action="store_true",
+                    help="when a task is stuck, wait for it to be reset (by Sentinel, the tutor or Paul) and carry on")
     args = ap.parse_args()
     if not API or not TOKEN:
         log("needs LABVM_BROKER_URL and LABVM_BROKER_TOKEN (verify-proxy's environment)")
@@ -759,20 +807,33 @@ def main() -> int:
     except (RuntimeError, OSError, paramiko.SSHException) as e:
         log(f"no build machine: {e}")
         return 2
+    _hb["build"] = args.build
+    threading.Thread(target=_beat_forever, daemon=True, name="heartbeat").start()
     done = 0
     while True:
         st, nxt = api("GET", f"/v1/lfs/builds/{args.build}/next")
         task = nxt.get("task")
         if not task:
+            phase("finished")
             log("the queue is finished")
             return 0
-        if task["state"] in ("stuck", "escalated"):
-            log(f"task {task['seq']} ({task['number']} {task['title']}) is {task['state']}: waiting for help")
-            return 1
+        st, b = api("GET", f"/v1/lfs/builds/{args.build}")
+        if task["state"] in ("stuck", "escalated") or b.get("status") == "paused":
+            if not args.follow:
+                log(f"task {task['seq']} ({task['number']} {task['title']}) is {task['state']}: waiting for help")
+                return 1
+            # C5: the ladder works on it (Sentinel's nudge, the tutor, Paul); a
+            # reset to waiting, or the build resumed, lets the worker carry on.
+            phase(f"waiting for help: {task['number']} is {task['state']}"
+                  + (" (build paused)" if b.get("status") == "paused" else ""), task)
+            time.sleep(60)
+            continue
         st, tasks = api("GET", f"/v1/lfs/builds/{args.build}/tasks?state=done")
         done_numbers = {t["number"] for t in tasks.get("items", [])}
         api("POST", f"/v1/lab-vms/{vm_id}/touch")
         if not run_task(task["id"], build, m, manifest, done_numbers, args.plan_only, vm_id):
+            if args.follow:
+                continue  # the loop above waits for help
             return 1
         done += 1
         if args.plan_only or (args.until and task["number"] == args.until) or (args.max_tasks and done >= args.max_tasks):
