@@ -4595,6 +4595,18 @@ Confirmed by Paul (`--confirm`).
 - **The orphan:** after checking it was referenced nowhere live (instances, load balancers, builds, schedules, templates, state, both hosts' repos), it was removed with `local_only`: 204, then 404 on lookup. Stourport now has no rule open to `0.0.0.0/0`.
 - **The approved-peer guard:** not exercised live, since no such record existed to test against.
 
+### F-231 — The repo copy couldn't create a new directory, so a new subdirectory never reached the peer
+
+**Where:** `api/sync-package-repo.py` (`download`, the `pull` half).
+
+**Symptom:** 2026-10-07, copying the LFS mirror (A3) to Llwyn-y-Groes. All 104 new files failed with `[Errno 2] No such file or directory: '…/artifacts/lfs/kernel/linux-7.2.9.tar.xz.part'`, and none were fetched.
+
+**Root cause:** `pull` writes each file to `<file>.part` in its destination directory without creating that directory. Until the LFS mirror, the artifact cache had no subdirectories, so every destination directory already existed and the gap never showed.
+
+**Fix:** `pull` creates the destination's parent directories first (322c554).
+
+**Verified by:** the same pull straight after: 104 files (782.8 MB) in 10 s through the peer tunnel and both new host firewalls. "IN STEP: all 307 files match the source's checksums". All 102 mirrored files re-hashed on Llwyn-y-Groes against `MIRROR.json`: 0 mismatches.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4771,3 +4783,4 @@ Confirmed by Paul (`--confirm`).
 | v3.50 | 2026-10-07 | Paul Scott | L29 read: 7 of 11 verifications genuine. F-227: no /etc/skel files for CloudCore users (fixed). F-228: two new false passes (an enable question taken as an install, a UUID filled from the wrong disk). |
 | v3.51 | 2026-10-07 | Paul Scott | Host firewall rollout. F-229: the peer tunnel's FORWARD rules were lost at reboot and never restored. |
 | v3.52 | 2026-10-07 | Paul Scott | F-230: an orphaned peer security group record couldn't be deleted after its pairing was revoked; removed. |
+| v3.53 | 2026-10-07 | Paul Scott | LFS A2/A3. F-231: the repo copy couldn't create a new subdirectory on the peer. |
