@@ -68,6 +68,8 @@ _SKIP_COMMANDS = [
     (re.compile(r"^\s*su - lfs\s*$"), "the controller runs the lfs user's tasks as lfs itself (an interactive shell can't be driven)"),
     (re.compile(r'^\s*chroot "\$LFS"'), "the controller enters the chroot for every step itself, with the book's "
                                           "env -i settings (an interactive login shell can't be driven)"),
+    (re.compile(r"^\s*(?:make -j32|export MAKEFLAGS=-j32)\s*$"),
+     "the book's illustration for a 32-core CPU; its next command sets MAKEFLAGS from nproc for this machine (LFS-017)"),
     (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
                                           "delivers the verified sources from the host's repo (LFS-006)"),
 ]
@@ -325,6 +327,12 @@ def get_task(tid):
     if sec:
         # Numbered as in the book, so a skipped command's index means the same everywhere.
         skipped = {s["index"]: s["why"] for s in t["skip_commands"]}
+        # Rules added since the build was planned apply too (LFS-017).
+        for n, c in enumerate(sec["commands"]):
+            if n not in skipped and c["subsection"] not in t["skip_subsections"]:
+                why = next((w for rx, w in _SKIP_COMMANDS if rx.search(c["text"])), None)
+                if why:
+                    skipped[n] = why
         sec = {**sec, "commands": [{**c, "index": n, **({"skipped": skipped[n]} if n in skipped else {})}
                                    for n, c in enumerate(sec["commands"])
                                    if c["subsection"] not in t["skip_subsections"]]}

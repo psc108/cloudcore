@@ -261,6 +261,26 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Pattern (with LFS-014, -015):** when the 14B is pushed back, its weak move is to remove or delete work, not to find the real cause. The guards now catch the destructive form; the facts make the "already done" claim checkable.
 
+### LFS-017 — 4.4's "As the root user, run:" command ran as lfs; the book's -j32 illustrations were offered as commands
+
+**Where:** task 9 (4.4 Setting Up the Environment); `lfs/book-sections.py`, `api/lfs_build.py`, `examples/llm-chat/files/lfs_worker.py`.
+
+**Symptom:** found 2026-10-07.
+- **The root command:** the book's `mv -v /etc/bash.bashrc /etc/bash.bashrc.NOUSE` is introduced by "As the root user, run:". The worker ran it as `lfs` ("Permission denied").
+- **The repairs:** the 14B twice tried `sudo mv ...`, which can't work with no terminal and no password. The task stopped.
+- **The illustrations:** the book's `make -j32` and `export MAKEFLAGS=-j32` (shown for a 32-core i9) reached the model as commands [3] and [4]. It planned both "as the book", and misread [5] (`MAKEFLAGS=-j$(nproc)`) as setting -j32, rewriting it as `-j4`.
+
+**Root cause:** the parser's.
+- **Root marking:** it only knew `<pre class="root">`. LFS marks some root commands only in the sentence before them.
+- **Illustrations:** it had no way to tell a book's illustration from a command to run. The model's `sudo` was a reasonable guess in a context it couldn't see.
+
+**Fix:**
+- **The parser:** a command is root when the sentence before it ends "as (the) root (user) ...:". Regenerated: 4.4 [2], the 4.2/4.3 host commands, 8.2's diagnostic, 10.3's `mount /boot`, and about 70 BLFS commands are now marked root.
+- **A skip rule:** `make -j32` and `export MAKEFLAGS=-j32` are skipped as "the book's illustration for a 32-core CPU". Skip rules now apply at read time too, so a new rule reaches builds planned before it.
+- **The worker:** a book command marked root runs as root inside an lfs-user section.
+
+**Verified by:** the re-run of 4.4.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -277,3 +297,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.0 | 2026-10-07 | Paul Scott | C2 live: LFS-014 (alternatives misread; the first tutoring note fixed it). Tasks 2.2–2.7 done. |
 | v1.1 | 2026-10-07 | Paul Scott | C2/C3: LFS-015 (a repair deleted the delivered sources; delivery reordered, non-destructive repairs, deletion guard). |
 | v1.2 | 2026-10-07 | Paul Scott | LFS-016 (invented reasons to leave out 4.2; facts show $LFS's contents; better rejection feedback). 3.1 done with delivery in the book's order. |
+| v1.3 | 2026-10-07 | Paul Scott | LFS-017 (root marked only in prose; -j32 illustrations). 4.2 and 4.3 done. |

@@ -514,7 +514,9 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
     problems = []
     by_index = {c["index"]: c for c in cmds}
     # The book's commands, exactly, in order (LFS-009); then the model's changes.
-    steps = [{"book": i, "run": c["text"], "as": None, "why": "", "changed": False}
+    # A book command the book runs as root stays root in an lfs-user section (LFS-017).
+    steps = [{"book": i, "run": c["text"], "as": "root" if c.get("as_root") and task["context"] == "host-lfs" else None,
+              "why": "", "changed": False}
              for i, c in by_index.items() if not c.get("skipped")]
     for ch in data["changes"]:
         if not isinstance(ch, dict):

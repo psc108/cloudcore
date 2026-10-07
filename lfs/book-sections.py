@@ -72,7 +72,11 @@ class _Page(HTMLParser):
         elif tag in ("h2", "h3", "h4") and self._pre is None:
             self._heading, self._buf = ("note" if self._admon_depth else "sub"), []
         elif tag == "pre" and cls in ("userinput", "root"):
-            self._pre, self._buf = ("root" if cls == "root" else "user"), []
+            # LFS marks some root commands only in the sentence before them
+            # ("As the root user, run:", 4.4), not with class="root" (LFS-017).
+            lead = " ".join("".join(self.prose[-6:]).split())[-160:]
+            said_root = bool(re.search(r"\b[Aa]s (?:the )?root(?: user)?\b[^.]*:\s*$", lead))
+            self._pre, self._buf = ("root" if cls == "root" or said_root else "user"), []
         elif tag in ("p", "li", "dt", "dd", "br") and self._pre is None and self._heading is None:
             self.prose.append("\n")
 
