@@ -100,7 +100,8 @@ Fresh set sealed first: `sealed-questions-2026-10-06.json` (1f5b252, sha256 `3fc
 - **Explanation questions** are never goal-verified by their demo commands (F-226: #40). A no-password sudo question is checked with `sudo -n` as the user (#9).
 - **Smaller gaps:** a repair that runs a step as root makes the answer's own sudo retry fail (#12); a gateway outside the lab's network is a lab limit, not a failure (#27); the setup stage made `/opt/app/bin` but not the program the question names (#3), and no stub app on the port a proxy question names (#21).
 
-Then measure once with a fresh sealed set, as before | Not started |
+Then measure once with a fresh sealed set, as before | Built 2026-10-06 (2c960eb, 66c66c2); measured as L29 |
+| L29 | **Measure L28 once with the 2026-10-06b sealed set** | Done 2026-10-07 (results below): 11 lab-verified, **7 genuine**, 2 weak, 2 false |
 
 ## Results: the same 40 answers through each stage
 
@@ -142,6 +143,49 @@ So the 40 now stand at 25 goal-verified, 6 ran clean, 5 read-only, 2 can't be te
 **Corpus quarantine lifted (2026-10-01).** The 25 Sentinel runs marked `needs_rerun` in F-188 were re-run unchanged through the current lab and replaced under their own ids. Results: 13 goal-verified (promoted for reuse), 3 ran clean, 2 read-only, 7 failed; 4 of the 7 work after the lab's repairs. The refresh didn't run "another way", so second-IP and bind9 stay failed there; their goal-verified alternatives are stored separately. The 11 runs graded `lab_verified` before L12 were regraded the same way: all 11 are goal-verified (F-195). A goal-verified repaired procedure is now stored as an answer of its own; it's reused automatically only when its repairs are real corrections (F-195).
 
 Before that, three failures were the model's advice. Four are things this lab can't be: real hardware, a bootloader, kernel modules, or a disk with existing data. Those four should be reported as *can't be tested here*, not as failures, so they don't become "wrong advice" facts (L11's note on causes, and the next step below).
+
+## L29: L28 on a fresh sealed set (2026-10-07)
+
+The 40 questions sealed before any L28 code (`sealed-questions-2026-10-06b.json`, 3ab4a98, sha256 `82c9587f…`, unchanged), through `/sandbox/linux-ask` on full VMs, with the lab's model calls on Stourport's 14B: `sealed5-asks.jsonl`, `sealed5-labs.jsonl`, `sealed5-run.log`.
+- **Run time:** 7 h, against L27's 10 h. No step waited out its time limit on a foreground server.
+- **Students' answers:** median 186 s (max 514).
+
+Every verification and every failure was read.
+
+| | L24 | L27 | L29 |
+|---|---|---|---|
+| Lab-verified | 13 | 8 | 11 |
+| **… genuine on reading** | **4** | **6** | **7** |
+| Weak | 1 | 1 | 2 |
+| False | 8 | 1 | 2 |
+
+**Genuine:**
+- **#8:** tara can use sudo (after the lab's repair).
+- **#11:** victor's shell became nologin.
+- **#16:** another machine gets the answer's own page on 8081.
+- **#22:** the swap file is active.
+- **#34:** another machine mounts the NFS export.
+- **#35:** IP forwarding is on, and still after a reboot.
+- **#38:** the timezone is Europe/London.
+
+**Weak:**
+- **#25:** a read-only bind mount, checked by the student *reading* it, not by a write being refused.
+- **#30:** "don't answer ping", checked by the sysctl value the answer set (via another way), not by pinging from the other machine.
+
+**False, both new kinds:**
+- **#20, gzip in nginx:** "how do I enable gzip" was taken as a pure install question, so "nginx answers" counted.
+- **#23, a filesystem by UUID:** the lab filled the answer's `your-uuid-here` with the UUID of the *wrong disk* (`/dev/sdb1`, not `/dev/sdc`). "A filesystem is mounted at /data" then passed.
+
+**Failures (15) and their cause:**
+
+| | Runs |
+|---|---|
+| **The answer** (the lab was right) | #20 (nginx config that fails `nginx -t`), #30 and #31 (firewall answers that really lock SSH out), #33 (an sshd change that stops sshd) |
+| **The lab or the platform** | #7: no `~/.bashrc` on any CloudCore user (F-227)<br>#5: the lab filled a process placeholder with a real PID, and `pkill -f tree` matched the step's own shell<br>#9: a process of the lab's own held the user<br>#12: a stand-in script that isn't runnable<br>#15: a crontab line run as a command; a stand-in file the student can't chmod<br>#18: "only xavier may log in" judged a lockout because *student* was refused<br>#24: du's permission noise taken as failure, example output run as commands<br>#26: the disk placeholder `/dev/sdX` not filled<br>#29: `eth0` where the lab's interface is named otherwise<br>#32: a placeholder certificate path mapped away from where the answer made the file |
+
+**What it shows:**
+- **Verification is steady:** 7 genuine of 11, against 6 of 8 and 4 of 13 before. Both false passes are new, narrow kinds.
+- **Lab faults still outnumber answer faults:** about 10 to 4. They have moved on, though: no longer the working directory or reboots, now the long tail of the setup stage (stand-ins, placeholder kinds, environment names) and judging intent ("only xavier").
 
 ## L27: L26 on a fresh sealed set (2026-10-06)
 

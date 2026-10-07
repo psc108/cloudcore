@@ -317,6 +317,8 @@ def _build_write_files_block(ssh_user: str, cc_pubkey: str, cc_privkey: str, ext
           {cc_pubkey}""")
         runcmds.append(f"""  - |
     mkdir -p /home/{usr}/.ssh
+    # F-227: useradd skipped /etc/skel because write_files had made the home first.
+    cp -rn /etc/skel/. /home/{usr}/ && chown -R {usr}:{usr} /home/{usr}
     grep -qF 'cloudcore_ed25519' /home/{usr}/.ssh/config 2>/dev/null || printf '\\nHost *\\n  IdentityFile ~/.ssh/cloudcore_ed25519\\n  StrictHostKeyChecking no\\n' >> /home/{usr}/.ssh/config
     chown {usr}:{usr} /home/{usr} /home/{usr}/.ssh /home/{usr}/.ssh/config /home/{usr}/.ssh/cloudcore_ed25519 /home/{usr}/.ssh/cloudcore_ed25519.pub
     chmod 700 /home/{usr}/.ssh

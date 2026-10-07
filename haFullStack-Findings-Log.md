@@ -4521,6 +4521,37 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 **Verified by:** to be verified when L28 is built.
 
+### F-227 — CloudCore users got no .bashrc or .profile: useradd skipped /etc/skel
+
+**Where:** `api/compute.py` (`_build_write_files_block`).
+
+**Symptom:** found 2026-10-07 in L29 #7. An alias answer's `source ~/.bashrc` failed with "No such file or directory". On a fresh instance, `/home/ubuntu` and `/home/claude-debug` hold only `.ssh`, with no `.bashrc`, `.profile` or `.bash_logout`.
+
+**Root cause:** the same order as F-221. `write_files` creates `/home/<user>/.ssh/...` before cloud-init creates the user. `useradd` finds the home already there, so it neither chowns it (F-221) nor copies `/etc/skel` into it. Every user on every CloudCore instance has been missing its shell start-up files.
+
+**Fix:** the runcmd copies `/etc/skel` into the home without overwriting (`cp -rn`), then chowns the home to its user.
+
+**Verified by:** to be verified on the next instance built.
+
+### F-228 — The lab verified the wrong things: an "enable" question taken as an install, a UUID placeholder filled from the wrong disk
+
+**Where:** `examples/llm-chat/files/advice_runner.py` (`_existence_question`; the `uuid` placeholder fill in `lab_facts`).
+
+**Symptom:** L29 (2026-10-07):
+- **#20:** "How do I enable gzip compression in nginx?" was verified by "nginx answers on port 80".
+- **#23:** "format /dev/sdc and mount it at /data by UUID". The lab filled `your-uuid-here` with `/dev/sdb1`'s UUID, then verified "a filesystem is mounted at /data", which was `/dev/sdb1`.
+
+**Root cause:**
+- **"Enable" as install:** "how do I enable …" is in the pure-existence pattern, so the basic web probe counted as goal evidence for a configuration question.
+- **The wrong UUID:** the `uuid` placeholder takes a UUID from the lab's spare disks without regard to the device the answer formats.
+
+**Fix:** to do.
+- Only "install / set up / run / start <something>" questions count the web probe.
+- A `uuid` placeholder takes the UUID of the device the answer formats or queries (`mkfs …`, `blkid <dev>`).
+- The mount check also compares the mounted device with the question's.
+
+**Verified by:** to do.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4694,3 +4725,4 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 | v3.47 | 2026-10-05 | Paul Scott | L25. F-219: a failed pre-apply destroy still deleted the state, orphaning the running llm-chat. |
 | v3.48 | 2026-10-06 | Paul Scott | L24 read, L26. F-220: the lab verified 9 answers it hadn't proven (no before-state for older checks, configuration taken as the goal). |
 | v3.49 | 2026-10-06 | Paul Scott | L27 read: 6 of 8 verifications genuine. F-221–F-226: lab faults behind most failures (unwritable working directory, swap check direction, example blocks taken as edits, foreground servers, the answer's own reboot, explanation demos verified). |
+| v3.50 | 2026-10-07 | Paul Scott | L29 read: 7 of 11 verifications genuine. F-227: no /etc/skel files for CloudCore users (fixed). F-228: two new false passes (an enable question taken as an install, a UUID filled from the wrong disk). |

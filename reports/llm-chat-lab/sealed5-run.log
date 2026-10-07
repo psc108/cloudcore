@@ -1,0 +1,122 @@
+22:27:18 #1 [everyday] How do I find all files modified in the last 7 days under /etc?
+22:31:12   answered in 231s (702 chars, complete=True); grounding=kiwix refs=['Auto delete files older than 7 days', 'Housekeeping reports with shell script']; lab=yes
+22:31:12 #2 [everyday] How do I create a tar.gz archive of /home/student/projects?
+22:33:03   answered in 108s (496 chars, complete=True); grounding=kiwix refs=['Creating a tar.gz archive of multiple di', 'Decompress GZ file from windows command ']; lab=yes
+22:33:03 #3 [everyday] How do I see how much memory is free and used?
+22:36:18   answered in 192s (1158 chars, complete=True); grounding=kiwix refs=['Process claims to use a lot of memory, b', 'Does Matlab cause Cuda to leak memory du']; lab=yes
+22:36:18 #4 [everyday] How do I rename every .txt file in a directory to .md?
+22:39:22   answered in 181s (1086 chars, complete=True); grounding=kiwix refs=['How to rename multiple files with same n', 'Batch renaming files by removing specifi']; lab=yes
+22:39:22 #5 [everyday] How do I kill a process that is listening on port 9000?
+22:42:36   answered in 192s (1057 chars, complete=True); grounding=kiwix refs=["netstat show a listen port but pid don't", 'Kill Meteor On Ubuntu']; lab=yes
+22:42:36 #6 [everyday] How do I see which groups the current user belongs to?
+22:44:39   answered in 119s (493 chars, complete=True); grounding=kiwix refs=['pki-user-membership: Command-line interf', "Couldn't find Group without an ID while "]; lab=yes
+22:44:39 #7 [everyday] How do I make an alias 'll' for 'ls -la' that works in every new shell for me?
+22:47:06   answered in 144s (874 chars, complete=True); grounding=kiwix refs=['How can I install the `ll` command on Ma', 'How to load shell aliases in an Alpine d']; lab=yes
+22:47:06 #8 [services] How do I add user tara to the sudo group?
+22:48:45   answered in 97s (566 chars, complete=True); grounding=kiwix refs=['www-data user cannot access a Virtualbox']; lab=yes
+22:48:45 #9 [services] How do I change the home directory of user uma to /data/uma and move her files?
+22:51:32   answered in 163s (853 chars, complete=True); grounding=kiwix refs=['Is there a shorter way to change usernam', 'Command to change the default home direc']; lab=yes
+22:51:32 #10 [services] How do I create a systemd timer that runs /usr/local/bin/cleanup.sh every hour?
+22:56:09   answered in 274s (1770 chars, complete=True); grounding=kiwix refs=['systemctl to start cron-like job', 'Cron job auto retry if any job get faile']; lab=yes
+22:56:09 #11 [services] How do I prevent user victor from logging in without deleting his account?
+22:59:43   answered in 211s (1053 chars, complete=True); grounding=kiwix refs=["Disable a user's login without disabling", 'Should user accounts be disabled if Face']; lab=yes
+22:59:43 #12 [services] How do I make a service called myapp run as user myapp and restart if it fails?
+23:08:20   answered in 514s (2572 chars, complete=True); grounding=local_corpus refs=['How do I create a systemd service that r']; lab=yes
+23:08:20 #13 [services] How do I give group auditors read-only access to /var/log/app?
+23:11:05   answered in 161s (586 chars, complete=True); grounding=kiwix refs=['Small Office Services', 'Is there a way to find the published URL']; lab=yes
+23:11:05 #14 [services] How do I set a password expiry of 90 days for user wendy?
+23:13:07   answered in 119s (542 chars, complete=True); grounding=kiwix refs=['set expiry date for an account in the fu', 'What commands are included in the comman']; lab=yes
+23:13:07 #15 [services] How do I run a cron job at 2am on the first day of every month?
+23:16:49   answered in 219s (949 chars, complete=True); grounding=kiwix refs=['PHP cron job for updating broadcast stat', 'Cron : Execute job based first N days of']; lab=yes
+23:16:49 #16 [logins-web] How do I install nginx and serve a site from /srv/site on port 8081?
+23:24:00   answered in 428s (1942 chars, complete=True); grounding=local_corpus refs=['How do I install nginx and serve a page ']; lab=yes
+23:24:00 #17 [logins-web] How do I make Apache return a page saying 'Maintenance' for every URL?
+23:28:39   answered in 276s (1826 chars, complete=True); grounding=kiwix refs=['Solved - 500 Internal Server Error Apach', 'Apache and .htaccess problems - keep get']; lab=yes
+23:28:39 #18 [logins-web] How do I allow only the user xavier to log in over SSH?
+23:31:38   answered in 175s (1170 chars, complete=True); grounding=kiwix refs=['Add remote host to known_hosts file with', 'How to incorporate id_ed25519-cert.pub i']; lab=yes
+23:31:38 #19 [logins-web] How do I set a message of the day that every user sees after logging in?
+23:35:07   answered in 206s (1038 chars, complete=True); grounding=kiwix refs=['Ubuntu Linux 12.10 Message of the Day', 'Message of the day (MOTD) not working in']; lab=yes
+23:35:07 #20 [logins-web] How do I enable gzip compression in nginx?
+23:39:12   answered in 241s (1426 chars, complete=True); grounding=kiwix refs=['Nginx: Disable gzip-compression for http', 'Nginx gzip compression not working despi']; lab=yes
+23:39:12 #21 [logins-web] How do I make SSH log in users only with keys, for everyone?
+23:42:29   answered in 194s (924 chars, complete=True); grounding=local_corpus refs=['How do I show a warning banner before us']; lab=yes
+23:42:29 #22 [disks] How do I create a 512MB swap file and turn it on now?
+23:50:19   answered in 468s (1792 chars, complete=True); grounding=local_corpus refs=['How do I create a 2GB swap file and make']; lab=yes
+23:50:19 #23 [disks] How do I format /dev/sdc as ext4 and mount it at /data permanently by UUID?
+23:54:35   answered in 253s (1140 chars, complete=True); grounding=none refs=[]; lab=yes
+23:54:35 #24 [disks] How do I see how much space each directory under /var uses?
+23:57:08   answered in 150s (739 chars, complete=True); grounding=kiwix refs=['du shows 38GB disk usage while very few ', 'Disk space and usage in Azure df show fu']; lab=yes
+23:57:08 #25 [disks] How do I make /mnt/ro a read-only bind mount of /srv/files?
+00:00:03   answered in 172s (843 chars, complete=True); grounding=kiwix refs=["umount a bind source won't work, and dev", 'What does a docker read only mount mean ']; lab=yes
+00:00:03 #26 [disks] How do I check a disk for bad blocks without writing to it?
+00:02:23   answered in 137s (721 chars, complete=True); grounding=kiwix refs=['Would a badblocks read-only test be suff', 'badblocks: Resource busy while trying to']; lab=yes
+00:02:23 #27 [networking] How do I make ufw allow port 8443 from anywhere?
+00:05:30   answered in 185s (669 chars, complete=True); grounding=local_corpus refs=['How do I allow only SSH, HTTP and HTTPS ']; lab=yes
+00:05:30 #28 [networking] How do I see the default gateway of this machine?
+00:07:06   answered in 93s (580 chars, complete=True); grounding=kiwix refs=['What does default gateway from ipconfig ', 'Get Default Gateway from Batch file']; lab=yes
+00:07:06 #29 [networking] How do I add a second IP address 192.168.50.10/24 to the main interface?
+00:13:12   answered in 363s (2010 chars, complete=True); grounding=kiwix refs=['How to assign different IP on different ', 'How to assign two IP address to single v']; lab=yes
+00:13:12 #30 [networking] How do I make this machine not answer ping?
+00:15:18   answered in 123s (802 chars, complete=True); grounding=kiwix refs=['Use UFW (firewall) to deny incoming ping', 'How to disable an ICMPv4/v6 Echo Request']; lab=yes
+00:15:18 #31 [networking] How do I block outgoing connections to port 25 with ufw?
+00:16:44   answered in 83s (468 chars, complete=True); grounding=kiwix refs=['How to block all incoming and outgoing t', 'How can I clear any ufw entries that are']; lab=yes
+00:16:44 #32 [multi-machine] How do I let another machine connect to an nginx site on this one over HTTPS with a self-signed certificate?
+00:23:56   answered in 429s (2627 chars, complete=True); grounding=kiwix refs=['nginx with multiple certificates, letsen', 'PR_END_OF_FILE_ERROR for self-signed SSL']; lab=yes
+00:23:56 #33 [multi-machine] How do I let another machine use this one as an SSH jump host?
+00:28:14   answered in 255s (1879 chars, complete=True); grounding=kiwix refs=['SSH ProxyJump with key on jump host', 'SSH ProxyJump but use VRF on jump host i']; lab=yes
+00:28:14 #34 [multi-machine] How do I export /srv/media over NFS to any client on 10.0.0.0/8?
+00:33:04   answered in 287s (1209 chars, complete=True); grounding=kiwix refs=['ZFS', 'ZFS (Português)']; lab=yes
+00:33:04 #35 [kernel-boot] How do I make a kernel parameter net.ipv4.ip_forward=1 apply at boot?
+00:36:03   answered in 176s (835 chars, complete=True); grounding=kiwix refs=['Kernel IP forwarding not enabled for eth', 'Is there a way for non-root processes to']; lab=yes
+00:36:03 #36 [kernel-boot] How do I blacklist the kernel module 'pcspkr'?
+00:39:13   answered in 187s (1137 chars, complete=True); grounding=kiwix refs=['Blacklisted Kernel Module pcspkr, Now I ', 'Permanently blacklist linux kernel modul']; lab=yes
+00:39:13 #37 [kernel-boot] How do I see how much time each service took during boot?
+00:41:31   answered in 136s (740 chars, complete=True); grounding=kiwix refs=['systemd-analyze: Analyze and debug syste', 'Cannot add systemd-analyze to Buildroot ']; lab=yes
+00:41:31 #38 [kernel-boot] How do I set the timezone to Europe/London?
+00:44:07   answered in 153s (682 chars, complete=True); grounding=kiwix refs=["Cron time zone won't work on an AWS base", 'Oracle how to convert Timestamp with any']; lab=yes
+00:44:07 #39 [explanation] What is the difference between su and sudo?
+00:51:44   answered in 455s (3695 chars, complete=True); grounding=kiwix refs=['What mechanism prevents any user from ac', 'How configure job execution for sudo use']; lab=yes
+00:51:44 #40 [explanation] What does a load average of 2.00 mean on a 4-core machine?
+00:53:20   answered in 92s (558 chars, complete=True); grounding=kiwix refs=['RHEL 7.x machine with very low CPU idle ', 'redirecting users if server is overcrowd']; lab=yes
+00:53:20 all questions asked; waiting for lab runs
+00:53:20   #1: lab partial
+00:53:20   #2: lab partial
+00:53:20   #3: lab partial
+00:53:20   #4: lab ran_clean
+00:53:20   #5: lab failed -> attempts ['failed', 'partial']
+00:53:20   #6: lab partial
+00:53:20   #7: lab failed -> repaired partial
+00:53:20   #8: lab failed -> repaired goal_verified
+00:53:20   #9: lab failed -> attempts ['failed', 'ran_clean']
+00:53:20   #10: lab ran_clean
+00:53:20   #11: lab goal_verified
+00:53:20   #12: lab failed -> attempts ['']
+00:53:20   #13: lab ran_clean
+00:53:20   #14: lab partial
+01:02:22   #15: lab failed -> attempts ['failed', 'ran_clean']
+01:05:22   #16: lab goal_verified
+01:09:23   #17: lab ran_clean
+01:42:29   #18: lab failed -> attempts ['failed', 'failed']
+01:44:29   #19: lab ran_clean
+01:46:30   #20: lab failed -> repaired goal_verified
+01:48:30   #21: lab ran_clean
+01:50:30   #22: lab goal_verified
+01:54:31   #23: lab goal_verified
+02:07:33   #24: lab failed -> repaired failed -> attempts ['ran_clean']
+02:09:33   #25: lab goal_verified
+02:20:34   #26: lab failed -> repaired failed -> attempts ['not_testable']
+02:21:34   #27: lab ran_clean
+02:23:35   #28: lab partial
+02:54:38   #29: lab failed -> attempts ['failed', 'failed']
+03:04:39   #30: lab failed -> attempts ['goal_verified']
+03:12:39   #31: lab failed -> attempts ['ran_clean']
+04:53:46   #32: lab failed -> attempts ['failed', 'failed']
+05:12:47   #33: lab failed -> attempts ['partial']
+05:16:48   #34: lab goal_verified
+05:18:48   #35: lab goal_verified
+05:19:48   #36: lab ran_clean
+05:20:48   #37: lab ran_clean
+05:22:48   #38: lab goal_verified
+05:24:48   #39: lab ran_clean
+05:24:48   #40: lab not_runnable
+05:24:48 ALL DONE
