@@ -142,13 +142,20 @@ def _json_reply(text: str) -> dict | None:
         return None
 
 
-PLAN_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer, one section of the book at a time, on a build machine. You get the section's commands, numbered, and facts about the machine. Reply with ONLY a JSON object, no prose, no code fences:
-{{"steps": [{{"book": <command number, or null for a step you add>, "run": "<shell commands>", "as": "<root|lfs, only if this one step needs a different user than the task's>", "why": "<short reason, required if you changed, added or left out anything>"}}], "expect": "<what success looks like>"}}
+PLAN_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer, one section of the book at a time, on a build machine. You get the section's commands, numbered, and facts about the machine. Every numbered command runs EXACTLY as the book has it unless you say otherwise -- so list ONLY the commands you change, leave out or add. Reply with ONLY a JSON object, no prose, no code fences:
+{{"changes": [
+  {{"book": <number>, "run": "<the command as it must run here>", "why": "<reason>"}},
+  {{"book": <number>, "omit": true, "why": "<reason>"}},
+  {{"after": <the command number it follows, or -1 to go first>, "run": "<an added step>", "why": "<reason>"}},
+  {{"book": <number>, "as": "root|lfs", "why": "<reason>"}}
+], "expect": "<what success looks like>"}}
+An empty "changes" list means: run the section exactly as the book has it.
 Rules:
-- Follow the book. Copy each numbered command EXACTLY, in order, unless the facts require a change; then change only what must change and say why.
-- Fill every placeholder (like /dev/<xxx>, <version>) from the facts. Never leave one in.
-- Leave a command out only if the facts or the book's own text say it doesn't apply here: include it with "run": "" and the reason.
-- Add a step only when the facts require it, and say why.
+- Follow the book. Change only what the facts require.
+- A command with a placeholder (like /dev/<xxx>) MUST be changed: fill it from the facts.
+- Leave a command out only if the facts or the book's own text say it doesn't apply here (an alternative for BIOS, swap that isn't wanted ...).
+- Add a step only when the facts require it -- for example a section whose text says what to do but gives no command.
+- "as" moves one command to another user, when the book says to run it as that user.
 - {system_disk} is the build machine's own system disk: never touch it. The LFS disk is {lfs_disk}.
 - Nothing interactive: no editors, cfdisk, fdisk prompts, menuconfig or password prompts. Use non-interactive equivalents (sgdisk, scripts/config, here-documents).
 - The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself."""
@@ -400,7 +407,7 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         f"{', as root' if c.get('as_root') else ''})"
         + (f" SKIPPED by the controller: {c['skipped']}" if c.get("skipped") else "") + f"\n{c['text']}"
         for c in cmds) or "(The book gives no commands for this section; its text says what to do.)"
-    prose = (sec.get("text") or "")[:3500]
+    prose = (sec.get("text") or "")[:2500]
     ctx = {"host-root": "as root on the build host", "host-lfs": "as the lfs user on the build host, with the book's "
            "environment (LFS, LFS_TGT, PATH, CONFIG_SITE, MAKEFLAGS from ~/.bashrc)",
            "chroot": "inside the chroot, as root, with the book's environment"}[task["context"]]
@@ -410,47 +417,63 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
                        "change version-specific names accordingly.\n" if task["version_override"] else "")
             + f"\nFacts about the machine:\n{facts(m)}\n\nThe section's commands:\n{listing}\n\n"
             f"The section's text (start):\n{prose}\n" + (f"\nYour previous answer had problems: {feedback}\n" if feedback else ""))
-    reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user)
+    reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user,
+                           max_tokens=900)
     data = _json_reply(reply)
-    if not data or not isinstance(data.get("steps"), list):
+    if not data or not isinstance(data.get("changes"), list):
         return [], "the reply wasn't the JSON asked for"
-    steps, problems = [], []
+    problems = []
     by_index = {c["index"]: c for c in cmds}
-    seen = set()
-    for s in data["steps"]:
-        if not isinstance(s, dict):
+    # The book's commands, exactly, in order (LFS-009); then the model's changes.
+    steps = [{"book": i, "run": c["text"], "as": None, "why": "", "changed": False}
+             for i, c in by_index.items() if not c.get("skipped")]
+    for ch in data["changes"]:
+        if not isinstance(ch, dict):
             continue
-        run, idx, why = str(s.get("run") or ""), s.get("book"), str(s.get("why") or "")
-        if idx is not None and idx not in by_index:
-            problems.append(f"step refers to command [{idx}], which isn't in the list")
-            continue
-        if idx is not None and by_index[idx].get("skipped"):
-            continue  # the controller skips it; the model may echo it
-        if idx is not None:
-            seen.add(idx)
+        idx, why, run = ch.get("book"), str(ch.get("why") or ""), str(ch.get("run") or "")
+        if not why:
+            problems.append(f"a change ({json.dumps(ch)[:80]}) gives no reason")
         if run and _DANGER.search(run):
-            problems.append(f"step '{run[:80]}' touches a disk or path outside the LFS disk")
+            problems.append(f"'{run[:80]}' touches a disk or path outside the LFS disk")
             continue
-        changed = idx is not None and _norm(run) != _norm(by_index[idx]["text"])
-        if (changed or idx is None or not run) and not why:
-            problems.append(f"step for [{idx}] changes, adds or omits something without saying why")
+        if "after" in ch and idx is None:
+            pos = 0 if ch["after"] == -1 else next((n + 1 for n, s in enumerate(steps) if s["book"] == ch["after"]), None)
+            if pos is None or not run:
+                problems.append(f"an added step's 'after' ({ch['after']}) isn't a command here, or it has no 'run'")
+                continue
+            # Several steps added after the same command keep the order given.
+            while pos < len(steps) and steps[pos].get("added_after") == ch["after"]:
+                pos += 1
+            steps.insert(pos, {"book": None, "run": run, "as": ch.get("as") if ch.get("as") in ("root", "lfs") else None,
+                               "why": why, "changed": True, "added_after": ch["after"]})
+            continue
+        if idx not in by_index:
+            problems.append(f"a change refers to command [{idx}], which isn't in the list")
+            continue
+        if by_index[idx].get("skipped"):
+            continue  # the controller already skips it
+        s = next(s for s in steps if s["book"] == idx)
+        if ch.get("omit"):
+            s.update(run="", omitted=True, why=why)
         if run:
-            steps.append({"book": idx, "run": run, "as": s.get("as") if s.get("as") in ("root", "lfs") else None,
-                          "why": why, "changed": changed})
-        elif idx is not None:
-            steps.append({"book": idx, "run": "", "why": why, "omitted": True})
-    missing = [i for i, c in by_index.items() if not c.get("skipped") and i not in seen]
-    if missing:
-        problems.append(f"command(s) {missing} not accounted for")
-    if re.search(r"<[a-z]{2,10}>|/dev/<", " ".join(s["run"] for s in steps)):
-        problems.append("a placeholder like <xxx> is left in a step")
+            s.update(run=run, changed=_norm(run) != _norm(by_index[idx]["text"]), why=why)
+        if ch.get("as") in ("root", "lfs"):
+            s.update(**{"as": ch["as"]}, why=why or s["why"])
+    left = [s["book"] for s in steps if not s.get("omitted") and re.search(r"/dev/<|<[a-z]{2,10}>", s["run"])]
+    if left:
+        problems.append(f"command(s) {left} still have a placeholder like /dev/<xxx>: change them")
+    if not steps or all(s.get("omitted") for s in steps):
+        problems.append("nothing would run: a section with no commands needs added steps")
     journal(task["id"], "llm-chat", "proposal",
-            "\n\n".join(f"[{s['book'] if s['book'] is not None else '+'}]"
-                        + (" OMIT" if s.get("omitted") else " CHANGED" if s.get("changed") else "")
-                        + (f" as {s['as']}" if s.get("as") else "")
-                        + (f" -- {s['why']}" if s["why"] else "") + (f"\n{s['run']}" if s["run"] else "")
-                        for s in steps) + (f"\n\nexpect: {data.get('expect', '')}" if data.get("expect") else ""),
-            {"model": who, "problems": problems})
+            (f"{len(data['changes'])} change(s) to the book's commands" if data["changes"] else
+             "runs the section exactly as the book has it") + "\n\n"
+            + "\n\n".join(f"[{s['book'] if s['book'] is not None else '+'}]"
+                          + (" OMIT" if s.get("omitted") else " CHANGED" if s.get("changed") else " as the book")
+                          + (f" as {s['as']}" if s.get("as") else "")
+                          + (f" -- {s['why']}" if s["why"] else "")
+                          + (f"\n{s['run']}" if s.get("changed") or s["book"] is None else "")
+                          for s in steps) + (f"\n\nexpect: {data.get('expect', '')}" if data.get("expect") else ""),
+            {"model": who, "problems": problems, "raw": reply[:4000]})
     return (steps if not problems else []), "; ".join(problems)
 
 

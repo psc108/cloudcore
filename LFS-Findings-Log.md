@@ -108,6 +108,22 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** 10.4 now serves the UEFI `grub-install`, the efivars/efibootmgr note commands and the `grub.cfg` creation. The BIOS command and the rescue CD are left out, with reasons. 8.65 (GRUB's build) skips its BIOS and 32-bit UEFI subsections.
 
+### LFS-009 — Asking the 14B to copy the book's commands back made planning slow and risky
+
+**Where:** `examples/llm-chat/files/lfs_worker.py` (C2: the plan the model writes for each task).
+
+**Symptom:** found 2026-10-07, on the first plan-only run (task 1, 2.2 Host System Requirements). The plan format asked the model to return every book command verbatim, with any changes. 2.2's one command is the book's ~60-line `version-check.sh`. On these CPUs the 14B reads about 4 tokens/s and writes about 2. Reading the prompt plus re-typing the script in JSON ran past 20 minutes, and the run's own time limit stopped it before any plan arrived.
+
+**Root cause:**
+- **Cost:** a planning call cost was proportional to the section's length, not to the work it needed.
+- **Risk:** a 14B re-typing a long script can silently change it, so the copying was also a correctness risk.
+
+**Fix:** the model now writes **only differences**: a command changed (with the filled-in text), left out, moved to another user, or added (`after: n`, or `-1` for first), each with a reason. Every other command runs exactly as the book prints it, inserted by the controller.
+- **Guards kept:** a command still holding a placeholder (`/dev/<xxx>`) must be changed; nothing may touch the system disk; every change needs a reason.
+- **Offline tests:** "as the book", fill-in plus omission, a commandless section's added steps (kept in the order given; an ordering bug was found and fixed by this test), a refused system-disk command, a bad reference.
+
+**Verified by:** the re-run of task 1's plan (journalled), and C6.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -116,3 +132,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.2 | 2026-10-07 | Paul Scott | B4: LFS-006 (the build machine can't reach the repo through the lab fence: the controller delivers sources). |
 | v0.3 | 2026-10-07 | Paul Scott | B2: LFS-007 (empty /etc/machine-id before imaging). |
 | v0.4 | 2026-10-07 | Paul Scott | C1: LFS-008 (command alternatives inside notes; the extractor now keeps the real subsection). |
+| v0.5 | 2026-10-07 | Paul Scott | C2: LFS-009 (the model writes only differences from the book; the controller inserts the book's exact commands). |
