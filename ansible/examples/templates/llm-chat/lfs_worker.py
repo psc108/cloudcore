@@ -108,12 +108,29 @@ def set_state(task_id: int, state: str, why: str = "") -> None:
 
 # ── The model ─────────────────────────────────────────────────────────────────
 
-def ask_model(system: str, user: str, max_tokens: int = 1500) -> tuple[str, str]:
+# JSON schemas for each kind of call: llama-server constrains its output to
+# them, so a reply is always the JSON asked for (LFS-011).
+PLAN_SCHEMA = {"type": "object", "required": ["changes", "expect"], "properties": {
+    "changes": {"type": "array", "items": {"type": "object", "required": ["why"], "properties": {
+        "book": {"type": "integer"}, "after": {"type": "integer"}, "run": {"type": "string"},
+        "omit": {"type": "boolean"}, "as": {"type": "string", "enum": ["root", "lfs"]}, "why": {"type": "string"}}}},
+    "expect": {"type": "string"}}}
+FIX_SCHEMA = {"type": "object", "required": ["before", "replace", "why"], "properties": {
+    "before": {"type": "string"}, "replace": {"type": "string"}, "why": {"type": "string"}}}
+JUDGE_SCHEMA = {"type": "object", "required": ["acceptable", "why"], "properties": {
+    "acceptable": {"type": "boolean"}, "why": {"type": "string"}}}
+OUTPUT_SCHEMA = {"type": "object", "required": ["ok", "why"], "properties": {
+    "ok": {"type": "boolean"}, "why": {"type": "string"}}}
+
+
+def ask_model(system: str, user: str, max_tokens: int = 1500, schema: dict | None = None) -> tuple[str, str]:
     """Returns (reply, which endpoint answered): the capable endpoint expected to
     answer fastest now, by live measured speeds (model_router, F-236; LFS-010).
     Only a free endpoint: the build waits rather than queue ahead of a student."""
     payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                "max_tokens": max_tokens, "temperature": 0.2, "stream": False}
+    if schema:
+        payload["response_format"] = {"type": "json_object", "schema": schema}
     urls = [u for u in LAB_MODELS + [OWN_MODEL] if model_router.capable(u, MODEL_FILE)] or [OWN_MODEL]
     last = ""
     for _ in range(240):  # up to an hour waiting for a free one
@@ -421,9 +438,11 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             + f"\nFacts about the machine:\n{facts(m)}\n\nThe section's commands:\n{listing}\n\n"
             f"The section's text (start):\n{prose}\n" + (f"\nYour previous answer had problems: {feedback}\n" if feedback else ""))
     reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user,
-                           max_tokens=900)
+                           max_tokens=900, schema=PLAN_SCHEMA)
     data = _json_reply(reply)
     if not data or not isinstance(data.get("changes"), list):
+        journal(task["id"], "llm-chat", "proposal", f"(unusable reply)\n{reply[:3000]}",
+                {"model": who, "problems": ["the reply wasn't the JSON asked for"]})
         return [], "the reply wasn't the JSON asked for"
     problems = []
     by_index = {c["index"]: c for c in cmds}
@@ -530,7 +549,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             if code == 0 and _REPORTED_PROBLEM.search(tail):
                 reply, _ = ask_model(OUTPUT_JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run[:1500]}\n\n"
                                      f"Output (end):\n{tail[-3500:]}\n\nThe book's text:\n"
-                                     f"{(task['section'] or {}).get('text', '')[:3000]}", max_tokens=300)
+                                     f"{(task['section'] or {}).get('text', '')[:3000]}", max_tokens=300,
+                                     schema=OUTPUT_SCHEMA)
                 verdict = _json_reply(reply) or {}
                 journal(task_id, "llm-chat", "lesson", f"exit 0, but the output reports a problem: "
                         f"{'met the requirement' if verdict.get('ok') else 'NOT met'} -- {verdict.get('why', reply[:300])}")
@@ -542,7 +562,7 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             if _CHECK.search(run):
                 reply, _ = ask_model(JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run}\n\n"
                                      f"Output (end):\n{tail[-3500:]}\n\nThe book's text:\n{(task['section'] or {}).get('text', '')[:4000]}",
-                                     max_tokens=400)
+                                     max_tokens=400, schema=JUDGE_SCHEMA)
                 verdict = _json_reply(reply) or {}
                 journal(task_id, "llm-chat", "lesson", f"test result: {'acceptable' if verdict.get('acceptable') else 'NOT acceptable'}"
                         f" -- {verdict.get('why', reply[:300])}")
@@ -557,7 +577,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 return False
             reply, _ = ask_model(FIX_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK),
                                  f"Section {task['number']} {task['title']}, run {task['context']} in {cwd}.\n"
-                                 f"Failed step:\n{run}\n\nOutput (end):\n{tail[-3500:]}\n\nFacts:\n{facts(m)}", max_tokens=700)
+                                 f"Failed step:\n{run}\n\nOutput (end):\n{tail[-3500:]}\n\nFacts:\n{facts(m)}", max_tokens=700,
+                                 schema=FIX_SCHEMA)
             fix = _json_reply(reply) or {}
             before, replace = str(fix.get("before") or ""), str(fix.get("replace") or "")
             if _DANGER.search(before + "\n" + replace):

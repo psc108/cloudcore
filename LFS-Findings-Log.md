@@ -136,6 +136,21 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** the LFS worker's next plans; their journal records which endpoint answered.
 
+### LFS-011 — The 14B's plan wasn't valid JSON twice in a row, and the worker didn't keep what it said
+
+**Where:** `examples/llm-chat/files/lfs_worker.py` (C2: `plan`, `ask_model`).
+
+**Symptom:** found 2026-10-07, on the first real run (task 1, 2.2). Both planning tries came back unusable ("the reply wasn't the JSON asked for"), about 20 minutes in all, and the task was marked stuck. The same task's plan-only run minutes before had replied with clean JSON (in a code fence, which the worker handles), so the model can do it, just not reliably.
+- **A gap in the worker:** a rejected reply wasn't journalled, so what the model actually wrote was lost.
+
+**Root cause:** a 14B asked for JSON in prose instructions drifts sometimes: extra text, a truncated object, or the wrong shape. Nothing made valid JSON certain.
+
+**Fix:**
+- **Constrained output:** every model call now sends a JSON schema in `response_format`, so llama-server's grammar keeps the model to that shape (plan changes, repair, test judgement, output judgement). Tested on the coordinator's model: the reply came back in exactly the requested shape.
+- **The raw reply:** any plan that can't be used is now journalled with what the model wrote.
+
+**Verified by:** the re-run of tasks 2.2–2.7.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -146,3 +161,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.4 | 2026-10-07 | Paul Scott | C1: LFS-008 (command alternatives inside notes; the extractor now keeps the real subsection). |
 | v0.5 | 2026-10-07 | Paul Scott | C2: LFS-009 (the model writes only differences from the book; the controller inserts the book's exact commands). |
 | v0.6 | 2026-10-07 | Paul Scott | C2: LFS-010 (the first plan ran on a busy desktop host; see F-236). |
+| v0.7 | 2026-10-07 | Paul Scott | C2: LFS-011 (unreliable JSON from the 14B; output now schema-constrained; rejected replies journalled). |
