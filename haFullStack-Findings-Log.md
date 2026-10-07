@@ -4641,6 +4641,21 @@ Confirmed by Paul (`--confirm`).
 
 **Verified by:** the B3 test instance's later delete (with this fix), checked in `virsh list --all`.
 
+### F-234 — The dashboard terminal's server stayed down for four days after an API stop-then-start
+
+**Where:** `api/cloudcore-terminal.service` (the user unit for `api/terminal.py`, ws://127.0.0.1:8081).
+
+**Symptom:** found 2026-10-07. Opening a terminal in the dashboard gave "[WebSocket error - is the terminal server running?]". Nothing was listening on 8081, and the unit had been "inactive (dead)" since 2026-10-03 15:00:43, although enabled.
+
+**Root cause:**
+- **A one-way link:** the unit is `PartOf=cloudcore-api.service`, which passes on stop and restart, but never start.
+- **What happened:** on 2026-10-03 the API was stopped (15:00:43) and started again (15:01:20) as two separate operations. The stop took the terminal down; the start didn't bring it back; and `Restart=on-failure` doesn't apply after a clean stop.
+- **Why it stayed hidden:** every later `restart` of the API restarted only the API.
+
+**Fix:** `WantedBy=default.target cloudcore-api.service`, re-enabled on both hosts, so starting the API starts the terminal too.
+
+**Verified by:** on Stourport, stopping the API stopped the terminal, and starting only the API brought the terminal back (port 8081 listening). The same was checked on Llwyn-y-Groes.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4820,3 +4835,4 @@ Confirmed by Paul (`--confirm`).
 | v3.53 | 2026-10-07 | Paul Scott | LFS A2/A3. F-231: the repo copy couldn't create a new subdirectory on the peer. |
 | v3.54 | 2026-10-07 | Paul Scott | LFS B2. F-232: an image imported from a booted system shares its machine ID, and so its DHCP identity. |
 | v3.55 | 2026-10-07 | Paul Scott | LFS B3. F-233: deleting a UEFI instance left its VM defined, and delete_instance swallowed the error. |
+| v3.56 | 2026-10-07 | Paul Scott | F-234: the terminal server stayed down for 4 days after an API stop-then-start (PartOf doesn't propagate start). |

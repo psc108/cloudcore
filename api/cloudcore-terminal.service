@@ -24,4 +24,7 @@ Restart=on-failure
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+# Also wanted by the API (F-234): PartOf above passes on stop and restart but
+# never start, so an API stop followed by a separate start left this unit
+# dead for days. Now starting cloudcore-api starts this too.
+WantedBy=default.target cloudcore-api.service
