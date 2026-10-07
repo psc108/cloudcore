@@ -358,12 +358,19 @@ def record_mounts(m: Machine) -> None:
          f"| sort -k2 > /var/lib/lfs-build/mounts")
 
 
+# Each step reports the directory it ends in, so the book's `cd build` carries
+# into its next command as it would in one shell (LFS-018).
+_CWD_MARK = "@@lfs-cwd="
+_CWD_TRAP = f"trap 'printf \"\\n{_CWD_MARK}%s\\n\" \"$PWD\"' EXIT\n"
+_CWD_RE = re.compile(r"\n?" + re.escape(_CWD_MARK) + r"(\S[^\n]*)\n?")
+
+
 def launcher(context: str, as_user: str | None, cwd: str) -> tuple[str, str]:
     """(script prologue, launcher command) for a step in its context."""
     step = "/var/log/lfs-build/current-step.sh"
     if context == "chroot":
         # The book's 7.4 environment, run non-interactively; the script is copied into the chroot.
-        pro = f"set -e\ncd {shlex.quote(cwd)}\n"
+        pro = f"set -e\ncd {shlex.quote(cwd)}\n{_CWD_TRAP}"
         launch = (f"export LFS={LFS}; cp {step} $LFS/tmp/lfs-step.sh && chroot \"$LFS\" /usr/bin/env -i HOME=/root "
                   "TERM=xterm PATH=/usr/bin:/usr/sbin MAKEFLAGS=\"-j$(nproc)\" TESTSUITEFLAGS=\"-j$(nproc)\" "
                   "/bin/bash -e /tmp/lfs-step.sh")
@@ -371,9 +378,9 @@ def launcher(context: str, as_user: str | None, cwd: str) -> tuple[str, str]:
     user = as_user or ("lfs" if context == "host-lfs" else "root")
     if user == "lfs":
         # The lfs user's environment from the book's 4.4 .bashrc (exported), plus set +h.
-        pro = f"set -e\nset +h\ncd {shlex.quote(cwd)}\n"
+        pro = f"set -e\nset +h\ncd {shlex.quote(cwd)}\n{_CWD_TRAP}"
         return pro, f"chmod 755 {step}; su lfs -s /bin/bash -c 'source ~/.bashrc 2>/dev/null; bash -e {step}'"
-    pro = f"set -e\nexport LFS={LFS}\numask 022\ncd {shlex.quote(cwd)}\n"
+    pro = f"set -e\nexport LFS={LFS}\numask 022\ncd {shlex.quote(cwd)}\n{_CWD_TRAP}"
     return pro, f"bash -e {step}"
 
 
@@ -535,6 +542,14 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             if not run:
                 problems.append("an added step has no 'run'")
                 continue
+            # LFS-018: the 14B added a copy of the book's configure/make/install
+            # (wrapped in `time`) ahead of the book's own `mkdir build; cd build`.
+            dup = [i for i, c in by_index.items() if not c.get("skipped") and len(_norm(c["text"])) >= 12
+                   and _norm(c["text"]) in _norm(run)]
+            if dup:
+                problems.append(f"an added step repeats book command(s) {dup}: the book's commands already run; "
+                                "to change one, give a change with its 'book' number instead of adding a copy")
+                continue
             after = ch.get("after")
             if after == -1:
                 pos = 0
@@ -628,11 +643,14 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         if step.get("omitted"):
             continue
         attempt, run = 0, step["run"]
+        ends: list[str] = []
         while True:
             pro, launch = launcher(task["context"], step.get("as"), cwd)
             name = f"task{task['seq']:03d}-step{n + 1}-try{attempt + 1}"
             journal(task_id, "controller", "command", run, {"step": n + 1, "book": step["book"], "log": name})
             code, tail, secs = m.run_detached(pro + run + "\n", launch, name)
+            ends = _CWD_RE.findall(tail)
+            tail = _CWD_RE.sub("\n", tail).rstrip("\n")
             journal(task_id, "lab", "result", f"exit {code} after {secs:.0f}s\n{tail[-3000:]}",
                     {"step": n + 1, "exit": code, "seconds": round(secs)})
             if code == 0 and _REPORTED_PROBLEM.search(tail):
@@ -696,6 +714,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 journal(task_id, "lab", "result", f"fix exit {c2}\n{t2[-1500:]}")
             if replace:
                 run = replace
+        if ends and ends[-1] != cwd:
+            cwd = ends[-1]  # the step's own `cd`, as in one shell (LFS-018)
     if not delivered:
         deliver_sources(m, manifest, task_id)
     if task["number"] == "2.7":

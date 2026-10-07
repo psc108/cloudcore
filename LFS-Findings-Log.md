@@ -282,6 +282,25 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** the re-run of 4.4.
 
+### LFS-018 — Each step started in the task's fixed directory, so the book's `cd build` was lost; the 14B added a copy of the book's build commands
+
+**Where:** task 10 (5.2 Binutils-2.47 Pass 1), the first compile; `examples/llm-chat/files/lfs_worker.py` (the launcher, the step loop, the plan check).
+
+**Symptom:** found 2026-10-07. Every run of `../configure` failed with "No such file or directory".
+- **The model's step:** an added step, placed first: `time { ../configure ... && make && make install; }`, with the reason "the book's command does not include the time measurement". The book's 4.5 suggests timing the first package to measure the SBU.
+- **Where it ran:** before the book's own `mkdir -v build; cd build`, so it ran in the source directory, where `../configure` doesn't exist.
+- **The repairs:** two attempts, re-extracting the tarball over itself and then `cd` to the source directory, both missed the cause.
+
+**Root cause:**
+- **The worker's:** it ran each step as its own script, starting in the task's fixed directory. The book's `cd build` in command [0] would never have reached [1]: even the book's unchanged order would have failed. Chapter 2–4 sections never changed directory, so this is the first section to show it.
+- **The model's:** it added a duplicate of three book commands rather than changing one, and placed it first.
+
+**Fix:**
+- **The directory:** every step's script reports, on exit, the directory it ended in (a trap printing a marker line). The worker takes it from the output, removes the marker before journalling, and starts the next step there, as one shell would. Tested locally: carried on success and on failure, marker stripped.
+- **The plan check:** an added step that contains a book command (12+ characters) is rejected: "the book's commands already run; to change one, give a change with its 'book' number".
+
+**Verified by:** the re-run of 5.2.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -299,3 +318,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.1 | 2026-10-07 | Paul Scott | C2/C3: LFS-015 (a repair deleted the delivered sources; delivery reordered, non-destructive repairs, deletion guard). |
 | v1.2 | 2026-10-07 | Paul Scott | LFS-016 (invented reasons to leave out 4.2; facts show $LFS's contents; better rejection feedback). 3.1 done with delivery in the book's order. |
 | v1.3 | 2026-10-07 | Paul Scott | LFS-017 (root marked only in prose; -j32 illustrations). 4.2 and 4.3 done. |
+| v1.4 | 2026-10-07 | Paul Scott | LFS-018 (cd lost between steps; duplicate build added). 4.4 done; 5.2 checkpointed. |
