@@ -306,7 +306,9 @@ sys.exit(1)" "${src}" "${port}" "${LAN_CIDR}" <<<"${parsed}" \
 # single source of truth (a line removed from the file really closes it).
 remove_own_rules() {
   local nums
-  nums="$(ufw status numbered | grep -F "# ${COMMENT}:" | sed -nE 's/^\[ *([0-9]+)\].*/\1/p' | sort -rn)"
+  # No earlier rules is the normal first run: grep's "no match" must not stop
+  # the script (set -e + pipefail ended --apply silently, before any change).
+  nums="$(ufw status numbered | { grep -F "# ${COMMENT}:" || true; } | sed -nE 's/^\[ *([0-9]+)\].*/\1/p' | sort -rn)"
   local n
   for n in ${nums}; do ufw --force delete "${n}" >/dev/null; done
   [[ -n "${nums}" ]] && log "removed $(wc -w <<<"${nums}") rule(s) from a previous --apply" || true
