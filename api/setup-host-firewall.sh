@@ -39,6 +39,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB="${SCRIPT_DIR}/cloudcore.db"
 BRIDGE="ccbr0"          # api/setup-network.sh
 WG_IFACE="cc0"          # api/wireguard.py
+LAB_BRIDGE="cclab0"     # api/setup-lab-network.sh: full lab VMs
 ROLLBACK_UNIT="cloudcore-fw-rollback"
 COMMENT="cloudcore-host-fw"
 
@@ -253,6 +254,16 @@ ufw_commands() {
     echo "ufw route allow in on ${i} comment '${COMMENT}: route ${i}'"
     echo "ufw route allow out on ${i} comment '${COMMENT}: route ${i}'"
   done
+  # The lab VMs' bridge has its own nftables fence (table inet cclab): from
+  # cclab0 it lets in only DHCP and DNS to the host, and routes only to the
+  # internet. A packet must pass every table, so ufw has to allow the same,
+  # or the lab VMs get no address. The fence stays the real filter.
+  # Not optional, and not in the inventory: 'bridge' doesn't cover cclab0.
+  echo "ufw allow in on ${LAB_BRIDGE} to any port 67 proto udp comment '${COMMENT}: lab DHCP'"
+  echo "ufw allow in on ${LAB_BRIDGE} to any port 53 proto udp comment '${COMMENT}: lab DNS'"
+  echo "ufw allow in on ${LAB_BRIDGE} to any port 53 proto tcp comment '${COMMENT}: lab DNS'"
+  echo "ufw route allow in on ${LAB_BRIDGE} comment '${COMMENT}: route ${LAB_BRIDGE}'"
+  echo "ufw route allow out on ${LAB_BRIDGE} comment '${COMMENT}: route ${LAB_BRIDGE}'"
 }
 
 # Listeners open now that no inventory line allows (by port/proto only).
