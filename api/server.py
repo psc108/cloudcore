@@ -1286,6 +1286,83 @@ def start_instance(instance_id):
     return jsonify(_instance_dict(instance))
 
 
+# Disk snapshots: checkpoints for long builds (lfs-os-Phased-Implementation.md,
+# B1; compute.create_snapshot has the rules). Local instances only.
+def _snapshot_target(instance_id):
+    instance = store.get_instance(instance_id)
+    if not instance:
+        return None, problem(404, "Not Found", f"Instance '{instance_id}' not found")
+    if not instance.domain_name:
+        return None, problem(409, "Conflict", "Instance has no associated domain")
+    if instance.status not in (InstanceStatus.RUNNING, InstanceStatus.STOPPED):
+        return None, problem(409, "Conflict", f"Instance '{instance_id}' is {instance.status.value}")
+    return instance, None
+
+
+@app.get("/v1/instances/<instance_id>/snapshots")
+@require_auth
+def list_instance_snapshots(instance_id):
+    instance, err = _snapshot_target(instance_id)
+    if err:
+        return err
+    return jsonify({"items": compute.list_snapshots(instance.id)})
+
+
+@app.post("/v1/instances/<instance_id>/snapshots")
+@require_auth
+def create_instance_snapshot(instance_id):
+    """Body: {name, description?, force?}. A running instance is shut down
+    cleanly, snapshotted and started again; force=true powers it off if it
+    doesn't shut down in time."""
+    instance, err = _snapshot_target(instance_id)
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        snap = compute.create_snapshot(instance, str(body.get("name") or ""), str(body.get("description") or ""),
+                                       bool(body.get("force")))
+    except ValueError as e:
+        return problem(400, "Bad Request", str(e))
+    except RuntimeError as e:
+        return problem(409, "Conflict", str(e))
+    return jsonify(snap), 201
+
+
+@app.post("/v1/instances/<instance_id>/snapshots/<name>/restore")
+@require_auth
+def restore_instance_snapshot(instance_id, name):
+    """Body: {start?}. Powers off, reverts every disk; starts again if it was
+    running, or as `start` says."""
+    instance, err = _snapshot_target(instance_id)
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        res = compute.restore_snapshot(instance, name, body.get("start"))
+    except KeyError:
+        return problem(404, "Not Found", f"No snapshot '{name}' on this instance")
+    except RuntimeError as e:
+        return problem(409, "Conflict", str(e))
+    instance.status = InstanceStatus.RUNNING if res["running"] else InstanceStatus.STOPPED
+    store.put_instance(instance)
+    return jsonify(res)
+
+
+@app.delete("/v1/instances/<instance_id>/snapshots/<name>")
+@require_auth
+def delete_instance_snapshot(instance_id, name):
+    instance, err = _snapshot_target(instance_id)
+    if err:
+        return err
+    try:
+        compute.delete_snapshot(instance, name)
+    except KeyError:
+        return problem(404, "Not Found", f"No snapshot '{name}' on this instance")
+    except RuntimeError as e:
+        return problem(409, "Conflict", str(e))
+    return "", 204
+
+
 @app.post("/v1/instances/<instance_id>/reboot")
 @require_auth
 def reboot_instance(instance_id):

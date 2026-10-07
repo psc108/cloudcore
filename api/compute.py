@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import threading
+import time
 
 import libvirt
 
@@ -788,6 +790,146 @@ def reboot_domain(domain_name: str) -> None:
         raise RuntimeError(f"libvirt error: {e}") from e
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Disk snapshots (lfs-os-Phased-Implementation.md, B1): checkpoints for long
+# builds. Every disk of the instance gets a qcow2 internal snapshot of the same
+# name, taken with the domain shut off so the disks are consistent with each
+# other and with themselves; qemu-img refuses an image a running qemu holds.
+# The list lives in the instance's directory, snapshots.json.
+# ---------------------------------------------------------------------------
+
+SNAPSHOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SHUTDOWN_TIMEOUT_S = 180
+
+
+def _instance_disks(instance_id: str) -> list[Path]:
+    d = INSTANCES_DIR / instance_id
+    return [p for p in [d / "disk.qcow2", *sorted(d.glob("data*.qcow2"))] if p.exists()]
+
+
+def _snapshot_index(instance_id: str) -> Path:
+    return INSTANCES_DIR / instance_id / "snapshots.json"
+
+
+def list_snapshots(instance_id: str) -> list[dict]:
+    try:
+        return json.loads(_snapshot_index(instance_id).read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def _save_snapshots(instance_id: str, snaps: list[dict]) -> None:
+    path = _snapshot_index(instance_id)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(snaps, indent=1))
+    tmp.replace(path)
+
+
+def _shut_off(domain_name: str, force: bool) -> bool:
+    """Shut the domain down cleanly (ACPI), waiting for it. Returns whether it
+    was running. Raises if it doesn't stop in time and force is False."""
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(domain_name)
+        if not dom.isActive():
+            return False
+        try:
+            dom.shutdown()
+        except libvirt.libvirtError as e:
+            log.warning("ACPI shutdown of %s failed: %s", domain_name, e)
+        deadline = time.monotonic() + SHUTDOWN_TIMEOUT_S
+        while dom.isActive() and time.monotonic() < deadline:
+            time.sleep(2)
+        if dom.isActive():
+            if not force:
+                raise RuntimeError(f"{domain_name} didn't shut down within {SHUTDOWN_TIMEOUT_S}s; "
+                                   "retry with force=true to power it off")
+            dom.destroy()
+        return True
+    finally:
+        conn.close()
+
+
+def _qemu_img_snapshot(flag: str, disk: Path, name: str) -> None:
+    r = subprocess.run(["qemu-img", "snapshot", flag, name, str(disk)], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"qemu-img snapshot {flag} {name} {disk.name}: {r.stderr.strip()[-300:]}")
+
+
+def create_snapshot(instance: Instance, name: str, description: str = "", force: bool = False) -> dict:
+    """Shut down cleanly, snapshot every disk, start again if it was running."""
+    if not SNAPSHOT_NAME_RE.match(name):
+        raise ValueError("name: 1-64 of letters, digits, '.', '_', '-', starting with a letter or digit")
+    if any(s["name"] == name for s in list_snapshots(instance.id)):
+        raise ValueError(f"a snapshot called {name!r} already exists")
+    disks = _instance_disks(instance.id)
+    if not disks:
+        raise RuntimeError("this instance has no disks here (is it on another host?)")
+    t0 = time.monotonic()
+    was_running = _shut_off(instance.domain_name, force)
+    done: list[Path] = []
+    try:
+        for d in disks:
+            _qemu_img_snapshot("-c", d, name)
+            done.append(d)
+    except RuntimeError:
+        for d in done:  # all or nothing
+            subprocess.run(["qemu-img", "snapshot", "-d", name, str(d)], capture_output=True)
+        raise
+    finally:
+        if was_running:
+            start_domain(instance.domain_name)
+    snap = {"name": name, "description": description[:500], "created_at": _now(),
+            "disks": [d.name for d in disks], "was_running": was_running,
+            "seconds": round(time.monotonic() - t0, 1)}
+    _save_snapshots(instance.id, list_snapshots(instance.id) + [snap])
+    return snap
+
+
+def restore_snapshot(instance: Instance, name: str, start: bool | None = None) -> dict:
+    """Power off (the state now is being thrown away), revert every disk, then
+    start if it was running -- or as `start` says."""
+    snap = next((s for s in list_snapshots(instance.id) if s["name"] == name), None)
+    if not snap:
+        raise KeyError(name)
+    conn = _conn()
+    try:
+        dom = conn.lookupByName(instance.domain_name)
+        was_running = bool(dom.isActive())
+        if was_running:
+            dom.destroy()
+    finally:
+        conn.close()
+    for disk in snap["disks"]:
+        _qemu_img_snapshot("-a", INSTANCES_DIR / instance.id / disk, name)
+    started = was_running if start is None else start
+    if started:
+        start_domain(instance.domain_name)
+    return {**snap, "restored_at": _now(), "running": started}
+
+
+def delete_snapshot(instance: Instance, name: str) -> None:
+    snaps = list_snapshots(instance.id)
+    snap = next((s for s in snaps if s["name"] == name), None)
+    if not snap:
+        raise KeyError(name)
+    conn = _conn()
+    try:
+        running = conn.lookupByName(instance.domain_name).isActive()
+    finally:
+        conn.close()
+    if running:
+        raise RuntimeError("deleting a snapshot needs the instance stopped (qemu-img can't open a disk "
+                           "a running VM holds)")
+    for disk in snap["disks"]:
+        _qemu_img_snapshot("-d", INSTANCES_DIR / instance.id / disk, name)
+    _save_snapshots(instance.id, [s for s in snaps if s["name"] != name])
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def delete_instance(instance: Instance) -> None:

@@ -166,7 +166,13 @@ function renderInstances(items) {
       </td>
       <td>${badge(i.status)}</td>
       <td>${fmtDate(i.created_at)}</td>
-      <td><button class="btn btn-danger btn-sm" onclick="deleteInstance('${i.id}','${i.name}')">Terminate</button></td>
+      <td>
+        <button class="expand-btn" onclick="toggleSnapshots('${i.id}')">Snapshots ▾</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteInstance('${i.id}','${i.name}')">Terminate</button>
+      </td>
+    </tr>
+    <tr id="snap-row-${i.id}" class="backends-row" style="display:none">
+      <td colspan="12" id="snap-panel-${i.id}"></td>
     </tr>
     <tr id="ssh-row-${i.id}" class="backends-row" style="display:none">
       <td colspan="12">${sshPanel(i)}</td>
@@ -266,3 +272,78 @@ async function deleteInstance(id, name) {
     loadInstances();
   } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
 }
+
+// ── Instances — disk snapshots (lfs-os-Phased-Implementation.md, B1) ─────────
+// Checkpoints for long builds: every disk, taken with the VM shut down cleanly
+// (and started again), restored by powering off and reverting every disk.
+async function toggleSnapshots(id) {
+  const row = document.getElementById(`snap-row-${id}`);
+  const open = row.style.display === 'none';
+  row.style.display = open ? '' : 'none';
+  if (open) await loadSnapshots(id);
+}
+
+async function loadSnapshots(id) {
+  const panel = document.getElementById(`snap-panel-${id}`);
+  panel.innerHTML = '<span class="text-muted">Loading snapshots…</span>';
+  let items = [];
+  try {
+    items = (await api('GET', `/v1/instances/${id}/snapshots`)).items || [];
+  } catch (e) {
+    panel.innerHTML = `<span class="text-muted">Snapshots unavailable: ${_esc(e.message)}</span>`;
+    return;
+  }
+  const rows = items.length ? items.map(s => `
+      <tr>
+        <td class="mono">${_esc(s.name)}</td>
+        <td>${_esc(s.description || '')}</td>
+        <td>${fmtDate(s.created_at)}</td>
+        <td class="mono">${(s.disks || []).map(_esc).join(', ')}</td>
+        <td>
+          <button class="btn btn-sm" onclick="restoreSnapshot('${id}', '${_esc(s.name)}')">Restore</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteSnapshot('${id}', '${_esc(s.name)}')">Delete</button>
+        </td>
+      </tr>`).join('') : '<tr class="empty-row"><td colspan="5">No snapshots yet.</td></tr>';
+  panel.innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Description</th><th>Taken</th><th>Disks</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="form-grid" style="margin-top:8px">
+      <input type="text" id="snap-name-${id}" placeholder="name, e.g. chapter-5-done">
+      <input type="text" id="snap-desc-${id}" placeholder="description (optional)">
+      <button class="btn btn-primary btn-sm" onclick="createSnapshot('${id}')">Take snapshot</button>
+    </div>
+    <span class="bm-field-hint">A running instance is shut down cleanly for the snapshot and started again (about a minute at most). Deleting a snapshot needs the instance stopped.</span>`;
+}
+
+async function createSnapshot(id) {
+  const name = document.getElementById(`snap-name-${id}`).value.trim();
+  const description = document.getElementById(`snap-desc-${id}`).value.trim();
+  if (!name) { toast('Give the snapshot a name', 'error'); return; }
+  toast(`Taking snapshot "${name}" (the instance restarts)…`, 'info');
+  try {
+    const s = await api('POST', `/v1/instances/${id}/snapshots`, { name, description });
+    toast(`Snapshot "${s.name}" taken in ${s.seconds}s`, 'success');
+    loadSnapshots(id);
+  } catch (e) { toast(`Snapshot failed: ${e.message}`, 'error'); }
+}
+
+async function restoreSnapshot(id, name) {
+  if (!confirm(`Restore snapshot "${name}"? Everything on this instance since it was taken is lost.`)) return;
+  try {
+    const r = await api('POST', `/v1/instances/${id}/snapshots/${encodeURIComponent(name)}/restore`, {});
+    toast(`Restored "${name}"${r.running ? '; the instance is starting' : ''}`, 'success');
+    loadInstances();
+  } catch (e) { toast(`Restore failed: ${e.message}`, 'error'); }
+}
+
+async function deleteSnapshot(id, name) {
+  if (!confirm(`Delete snapshot "${name}"? This cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/v1/instances/${id}/snapshots/${encodeURIComponent(name)}`);
+    toast(`Snapshot "${name}" deleted`, 'success');
+    loadSnapshots(id);
+  } catch (e) { toast(`Delete failed: ${e.message}`, 'error'); }
+}
+
