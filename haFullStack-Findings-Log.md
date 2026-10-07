@@ -4545,12 +4545,16 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 - **"Enable" as install:** "how do I enable …" is in the pure-existence pattern, so the basic web probe counted as goal evidence for a configuration question.
 - **The wrong UUID:** the `uuid` placeholder takes a UUID from the lab's spare disks without regard to the device the answer formats.
 
-**Fix:** to do.
+**Fix:**
 - Only "install / set up / run / start <something>" questions count the web probe.
 - A `uuid` placeholder takes the UUID of the device the answer formats or queries (`mkfs …`, `blkid <dev>`).
 - The mount check also compares the mounted device with the question's.
 
-**Verified by:** to do.
+**Verified by:** each rule against its L29 case, with a fake lab machine:
+- **#23:** the device is found as `/dev/sdc`; the placeholder resolves to that device's UUID when the step runs; and with `/dev/sdb1` mounted, "/dev/sdc is what's mounted at /data" fails.
+- **#20:** the gzip question no longer counts the web probe.
+
+The next sealed run checks them live.
 
 ## Document History
 

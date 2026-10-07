@@ -1184,7 +1184,16 @@ def _goal_checks(question: str, answer: str, steps: list, root, prober_root, pro
     if m:
         path = m.group(1).rstrip(".")
         code, out, _ = sh(f"findmnt -n -o SOURCE,FSTYPE {shlex.quote(path)}")
-        checks.append(_goal(f"a filesystem is mounted at {path}", code == 0 and bool(out.strip()), out.strip()))
+        mounted = code == 0 and bool(out.strip())
+        dev = re.search(r"(/dev/[\w/.-]+)", question)
+        if mounted and dev:
+            # F-228 (L29 #23): the question's device, not just something.
+            _, same, _ = sh(f"[ \"$(readlink -f {shlex.quote(out.split()[0])})\" = \"$(readlink -f {shlex.quote(dev.group(1))})\" ] "
+                            f"|| lsblk -nro PKNAME \"$(readlink -f {shlex.quote(out.split()[0])})\" | grep -qx "
+                            f"\"$(basename {shlex.quote(dev.group(1))})\" && echo same")
+            checks.append(_goal(f"{dev.group(1)} is what's mounted at {path}", same.strip() == "same", out.strip()))
+        else:
+            checks.append(_goal(f"a filesystem is mounted at {path}", mounted, out.strip()))
         if re.search(r"\b(?:permanent|boot|fstab|persist|automatic)", q):
             _, line, _ = sh(f"awk '$2 == \"{path}\"' /etc/fstab")
             vcode, verify, _ = sh("findmnt --verify --tab-file /etc/fstab 2>&1 | tail -3; exit ${PIPESTATUS[0]}")
@@ -2383,7 +2392,31 @@ def apply_setup(root_client, setup: list[dict], say) -> list[str]:
     return done
 
 
-def lab_facts(root_client, kinds: set[str], target_ip: str, other_ip: str) -> dict[str, str]:
+_UUID_OF = "@@LAB_UUID_OF:{}@@"
+_UUID_OF_RE = re.compile(r"@@LAB_UUID_OF:(/dev/[\w/.-]+)@@")
+
+
+def _answer_device(answer: str) -> str:
+    """F-228 (L29 #23): the device the answer formats, else the one it asks
+    blkid about -- whose UUID a person would copy into fstab."""
+    for verb in (r"mkfs(?:\.\w+)?|mke2fs|mkswap", r"blkid"):
+        for line in answer.splitlines():
+            if re.search(rf"\b(?:{verb})\b", line):
+                m = re.search(r"(/dev/(?:sd[a-z]\d*|vd[a-z]\d*|nvme\d+n\d+(?:p\d+)?|md\d+|mapper/[\w-]+|loop\d+))\b", line)
+                if m:
+                    return m.group(1)
+    return ""
+
+
+def _resolve_uuids(root_client, text: str) -> str:
+    """Fill a deferred UUID with the device's UUID as it is now."""
+    def one(m):
+        _, out, _ = _exec(root_client, f"blkid -s UUID -o value {shlex.quote(m.group(1))}", 15)
+        return out.strip() or m.group(0)
+    return _UUID_OF_RE.sub(one, text)
+
+
+def lab_facts(root_client, kinds: set[str], target_ip: str, other_ip: str, answer: str = "") -> dict[str, str]:
     """Values for placeholder kinds, from the lab itself."""
     facts = {"user": LAB_USER, "group": LAB_GROUP, "this_machine_ip": target_ip, "domain": _PUBLIC_DOMAIN_STANDIN,
              "package": _PACKAGE_STANDIN, "service": _SERVICE_STANDIN, "path": LAB_DIR + "/example.txt"}
@@ -2403,7 +2436,9 @@ def lab_facts(root_client, kinds: set[str], target_ip: str, other_ip: str) -> di
         _, out, _ = _exec(root_client, "su student -c 'nohup sleep 3600 >/dev/null 2>&1 & echo $!'", 15)
         if out.strip().isdigit():
             facts["pid"] = out.strip()
-    if "uuid" in kinds:
+    if "uuid" in kinds and _answer_device(answer):
+        facts["uuid"] = _UUID_OF.format(_answer_device(answer))
+    elif "uuid" in kinds:
         # The spare disk (L13), with one ext4 partition, as the answer's disk.
         _exec(root_client, "test -e /dev/sdb1 || { echo ',,L' | sfdisk -q /dev/sdb; udevadm settle; }; "
                            "blkid -s TYPE -o value /dev/sdb1 | grep -q . || mkfs.ext4 -q /dev/sdb1", 90)
@@ -2875,7 +2910,7 @@ def _setup_stage(result, root, presumed: dict, question: str, answer: str, other
         return answer, parse_steps(answer)
     setup, placeholders, dropped = plan_setup(presumed, question, answer)
     done = apply_setup(root, setup, say) if setup else []
-    facts = lab_facts(root, {p["kind"] for p in placeholders}, TARGET_PAIR_IP, other_ip) if placeholders else {}
+    facts = lab_facts(root, {p["kind"] for p in placeholders}, TARGET_PAIR_IP, other_ip, answer) if placeholders else {}
     for p in placeholders:  # /path/to/<name>: the lab's directory, keeping the answer's name for it
         if p["kind"] == "path" and p["token"].startswith("/path/to/"):
             facts[p["token"]] = LAB_DIR + "/" + p["token"].rstrip("/").rsplit("/", 1)[-1]
@@ -3069,6 +3104,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 s.cls, s.detail = "timeout", "the whole run hit its time limit before this step"
                 continue
             t0 = time.monotonic()
+            if _UUID_OF_RE.search(s.source):
+                s.source = _resolve_uuids(root, s.source)
             if s.kind in ("run", "write", "append", "prepend", "edit", "prose") and (s.needs or _STUB_SCRIPT_RE.search(s.source)):
                 made = _prepare_needs(root, s)
                 if made:
@@ -3240,7 +3277,8 @@ def run_advice(answer: str, make_vm, progress=None, run_id: str = "", question: 
                 login_prober.root = root  # a reboot replaced the connection
                 checks += _login_probes(steps, login_prober, baseline, question, answer, sshd_changed)
             probed = _network_probes(steps, root, prober_root, answer, services_started, pkgs)
-            if not _existence_question(question):
+            if not (_existence_question(question) and re.search(r"^\s*how (?:do|can) i\s+(?:install|set up|run|start)\b",
+                                                                 question, re.IGNORECASE)):
                 # L24 #16: nginx's default page answering shows nginx runs, not
                 # the custom 404 asked for. Still fails a run when it fails.
                 for c in probed:
