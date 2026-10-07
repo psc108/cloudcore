@@ -4570,7 +4570,13 @@ The next sealed run checks them live.
 - `wireguard.py` makes sure of both rules on every apply, idempotently.
 - `setup-host-firewall.sh --apply` restores any missing FORWARD ACCEPT for `ccbr0`/`cc0` before enabling ufw.
 
-**Verified by:** the firewall's post-apply check passing on the next `--apply`.
+**Verified by:** Llwyn-y-Groes, 2026-10-07 09:25. After the API restart with the fix, `--apply`'s post-apply check found both `cc0` rules in place. With ufw on (deny incoming, deny routed), these all worked from outside:
+- the coordinator, reached through the tunnel from Stourport;
+- the coordinator's link to Stourport's lab model;
+- the Kiwix NFS mount;
+- a full lab VM pair booting on `cclab0`.
+
+Confirmed by Paul (`--confirm`).
 
 ## Document History
 
