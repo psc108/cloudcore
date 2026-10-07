@@ -115,8 +115,14 @@ PLAN_SCHEMA = {"type": "object", "required": ["changes", "expect"], "properties"
         "book": {"type": "integer"}, "after": {"type": "integer"}, "run": {"type": "string"},
         "omit": {"type": "boolean"}, "as": {"type": "string", "enum": ["root", "lfs"]}, "why": {"type": "string"}}}},
     "expect": {"type": "string"}}}
-FIX_SCHEMA = {"type": "object", "required": ["before", "replace", "why"], "properties": {
-    "before": {"type": "string"}, "replace": {"type": "string"}, "why": {"type": "string"}}}
+# LFS-012: with free-text fields the 14B wrote the right fix in its reason and
+# left the command field empty. Now the fix's commands are a required,
+# non-empty list, separate from the explanation.
+FIX_SCHEMA = {"type": "object", "required": ["cause", "commands", "then"], "properties": {
+    "cause": {"type": "string"},
+    "commands": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "then": {"type": "string", "enum": ["rerun the step", "run this instead"]},
+    "instead": {"type": "string"}}}
 JUDGE_SCHEMA = {"type": "object", "required": ["acceptable", "why"], "properties": {
     "acceptable": {"type": "boolean"}, "why": {"type": "string"}}}
 OUTPUT_SCHEMA = {"type": "object", "required": ["ok", "why"], "properties": {
@@ -178,8 +184,8 @@ Rules:
 - The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself."""
 
 FIX_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer. A step from the book's section failed on the build machine. Reply with ONLY a JSON object:
-{{"before": "<shell commands to run first to fix the cause, or empty>", "replace": "<the step to run instead, or empty to rerun it unchanged>", "why": "<the cause and the fix, briefly>"}}
-Fix the cause; don't hide the failure (no '|| true', no skipping tests the book runs). {system_disk} is the build machine's own system disk: never touch it."""
+{{"cause": "<what went wrong, briefly>", "commands": ["<a shell command that fixes the cause>", "..."], "then": "rerun the step" | "run this instead", "instead": "<only with 'run this instead': the step to run in its place>"}}
+Put every command to run in "commands" -- the controller runs exactly those, in the same place as the step (same user, chroot and directory), and nothing written in "cause". Fix the cause; don't hide the failure (no '|| true', no skipping tests the book runs). {system_disk} is the build machine's own system disk: never touch it."""
 
 OUTPUT_JUDGE_SYSTEM = """You are building Linux From Scratch (systemd). A step exited 0 but its output reports problems. Decide whether the step met the book's requirement. Reply with ONLY a JSON object:
 {"ok": true|false, "why": "<what the output shows, against what the book requires>"}"""
@@ -580,11 +586,12 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                                  f"Failed step:\n{run}\n\nOutput (end):\n{tail[-3500:]}\n\nFacts:\n{facts(m)}", max_tokens=700,
                                  schema=FIX_SCHEMA)
             fix = _json_reply(reply) or {}
-            before, replace = str(fix.get("before") or ""), str(fix.get("replace") or "")
+            before = "\n".join(str(c) for c in (fix.get("commands") or []) if str(c).strip())
+            replace = str(fix.get("instead") or "") if fix.get("then") == "run this instead" else ""
             if _DANGER.search(before + "\n" + replace):
                 journal(task_id, "controller", "note", f"refused a repair that touches a disk outside the LFS disk: {reply[:500]}")
                 before, replace = "", ""
-            journal(task_id, "llm-chat", "proposal", f"repair: {fix.get('why', reply[:300])}"
+            journal(task_id, "llm-chat", "proposal", f"repair: {fix.get('cause', reply[:300])}"
                     + (f"\nfirst: {before}" if before else "") + (f"\ninstead: {replace}" if replace else ""))
             if before:
                 pro2, launch2 = launcher(task["context"], step.get("as"), cwd)

@@ -151,6 +151,22 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** the re-run of tasks 2.2–2.7.
 
+### LFS-012 — The 14B wrote the right repair in its explanation and left the command field empty
+
+**Where:** `examples/llm-chat/files/lfs_worker.py` (C2: the repair call, `FIX_SCHEMA`).
+
+**Symptom:** found 2026-10-07, task 1 (2.2). The version check printed `ERROR: sh is NOT Bash` with exit 0. The worker caught it, and the 14B judged it correctly ("NOT met ... /bin/sh should be a symbolic or hard link to bash"). Its repair said, in the free-text `why`: "You can do this by running 'sudo ln -sf /bin/bash /bin/sh' before running the script again", but left `before` (the commands to run) **empty**. Nothing ran, the check failed twice more, and the task stopped for help.
+
+**Root cause:** the schema had three free-text strings, one optional in practice. The model's understanding was right, but the shape let it put the action in the explanation.
+
+**Fix:**
+- **A required list:** `commands`, a non-empty list of commands (`minItems: 1`), kept separate from `cause`; and `then`: "rerun the step" or "run this instead".
+- **The prompt:** says plainly that only `commands` is run, nothing written in `cause`.
+
+**Verified by:** the same failure put to the coordinator's 14B returned `"commands": ["ln -sf bash /bin/sh"], "then": "rerun the step"` in 58 s, the book's own fix. Next: the re-run of 2.2–2.7.
+
+**Lesson for the protocol:** with a small model, put every action in a constrained field of its own. Prose is for reasons, never for anything the controller must act on.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -162,3 +178,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.5 | 2026-10-07 | Paul Scott | C2: LFS-009 (the model writes only differences from the book; the controller inserts the book's exact commands). |
 | v0.6 | 2026-10-07 | Paul Scott | C2: LFS-010 (the first plan ran on a busy desktop host; see F-236). |
 | v0.7 | 2026-10-07 | Paul Scott | C2: LFS-011 (unreliable JSON from the 14B; output now schema-constrained; rejected replies journalled). |
+| v0.8 | 2026-10-07 | Paul Scott | C2: LFS-012 (the 14B put its repair command in its explanation; repairs are now a required list of commands). |
