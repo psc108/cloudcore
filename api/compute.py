@@ -238,12 +238,108 @@ def _conn() -> libvirt.virConnect:
 
 
 def list_images() -> list[dict]:
-    """Return catalogue entries annotated with whether the image file is present."""
+    """Return catalogue entries annotated with whether the image file is present,
+    then the custom images imported here (B2)."""
     available_stems = {p.stem for p in IMAGES_DIR.glob("*.qcow2")}
     return [
         {**img, "available": img["id"] in available_stems}
         for img in IMAGE_CATALOGUE
-    ]
+    ] + [{**m, "available": m["id"] in available_stems} for m in _custom_images()]
+
+
+# Custom images (lfs-os-Phased-Implementation.md, B2): a disk built here,
+# imported as a standalone image -- IMAGES_DIR/<id>.qcow2 plus <id>.json, which
+# says how to boot it (firmware, disk bus) since it isn't a stock cloud image.
+CUSTOM_IMAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,40}$")
+_OVMF_CODE = ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_CODE.fd")
+_OVMF_VARS = ("/usr/share/OVMF/OVMF_VARS_4M.fd", "/usr/share/OVMF/OVMF_VARS.fd")
+
+
+def _custom_images() -> list[dict]:
+    out = []
+    for meta in sorted(IMAGES_DIR.glob("*.json")):
+        try:
+            m = json.loads(meta.read_text())
+        except (OSError, ValueError):
+            continue
+        if m.get("custom") and m.get("id") == meta.stem:
+            out.append(m)
+    return out
+
+
+def image_meta(image_id: str) -> dict:
+    """The catalogue entry or custom image's metadata ({} if neither)."""
+    for img in IMAGE_CATALOGUE:
+        if img["id"] == image_id:
+            return img
+    return next((m for m in _custom_images() if m["id"] == image_id), {})
+
+
+def _ovmf() -> tuple[str, str]:
+    code = next((c for c in _OVMF_CODE if Path(c).exists()), None)
+    vars_ = next((v for v in _OVMF_VARS if Path(v).exists()), None)
+    if not code or not vars_:
+        raise RuntimeError("UEFI boot needs OVMF firmware on this host (apt install ovmf)")
+    return code, vars_
+
+
+def import_image(image_id: str, name: str, source: Instance, disk: str = "disk", snapshot: str = "",
+                 firmware: str = "uefi", disk_bus: str = "virtio", description: str = "") -> dict:
+    """Flatten one disk of a stopped instance -- as it is, or as one of its
+    snapshots -- into a standalone image. The instance must be stopped: a
+    running VM's disk is neither consistent nor readable (qemu's lock).
+    The image is copied as it is, identity and all (F-232): a system meant to
+    be imaged should leave /etc/machine-id empty, or its instances share one
+    DHCP identity and fight over one address."""
+    if not CUSTOM_IMAGE_ID_RE.match(image_id):
+        raise ValueError("id: 2-41 of lowercase letters, digits, '.', '-', starting with a letter or digit")
+    if image_meta(image_id) or (IMAGES_DIR / f"{image_id}.qcow2").exists():
+        raise ValueError(f"an image called {image_id!r} already exists")
+    if firmware not in ("uefi", "bios") or disk_bus not in ("virtio", "scsi"):
+        raise ValueError("firmware is 'uefi' or 'bios'; disk_bus is 'virtio' or 'scsi'")
+    if disk != "disk" and not re.fullmatch(r"data[0-2]", disk):
+        raise ValueError("disk is 'disk' (the system disk) or 'data0'..'data2'")
+    src = INSTANCES_DIR / source.id / f"{disk}.qcow2"
+    if not src.exists():
+        raise ValueError(f"instance {source.id} has no {disk} here")
+    if snapshot and not any(s["name"] == snapshot for s in list_snapshots(source.id)):
+        raise ValueError(f"instance {source.id} has no snapshot {snapshot!r}")
+    conn = _conn()
+    try:
+        if conn.lookupByName(source.domain_name).isActive():
+            raise RuntimeError("stop the instance first: a running VM's disk can't be read consistently")
+    finally:
+        conn.close()
+    if firmware == "uefi":
+        _ovmf()
+    dest = IMAGES_DIR / f"{image_id}.qcow2"
+    part = dest.with_name(dest.name + ".part")
+    t0 = time.monotonic()
+    cmd = ["qemu-img", "convert", "-O", "qcow2"] + (["-l", f"snapshot.name={snapshot}"] if snapshot else []) \
+        + [str(src), str(part)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(f"qemu-img convert: {r.stderr.strip()[-300:]}")
+    part.replace(dest)
+    meta = {"id": image_id, "name": name or image_id, "distro": "custom", "version": "", "arch": "x86_64",
+            "min_disk_gb": 1, "custom": True, "firmware": firmware, "disk_bus": disk_bus,
+            "description": description[:500], "created_at": _now(),
+            "source": {"instance_id": source.id, "instance_name": source.name, "disk": disk, "snapshot": snapshot},
+            "size_bytes": dest.stat().st_size, "seconds": round(time.monotonic() - t0, 1)}
+    tmp = IMAGES_DIR / f"{image_id}.json.tmp"
+    tmp.write_text(json.dumps(meta, indent=1))
+    tmp.replace(IMAGES_DIR / f"{image_id}.json")
+    return meta
+
+
+def delete_image(image_id: str) -> None:
+    """A custom image only; the caller checks no instance is built on it."""
+    m = next((x for x in _custom_images() if x["id"] == image_id), None)
+    if not m:
+        raise KeyError(image_id)
+    (IMAGES_DIR / f"{image_id}.qcow2").unlink(missing_ok=True)
+    (IMAGES_DIR / f"{image_id}.json").unlink(missing_ok=True)
 
 
 def _base_image_path(image_id: str) -> Path:
@@ -444,6 +540,15 @@ def get_console_output(instance_id: str, lines: int = 200) -> str:
     return "\n".join(all_lines[-lines:]) if len(all_lines) > lines else text
 
 
+def _os_xml(firmware: dict | None) -> str:
+    """BIOS by default; UEFI (B2) with OVMF and this instance's own variable store."""
+    if not firmware:
+        return "<os><type arch='x86_64' machine='pc'>hvm</type><boot dev='hd'/></os>"
+    return ("<os><type arch='x86_64' machine='pc'>hvm</type>"
+            f"<loader readonly='yes' type='pflash'>{firmware['code']}</loader>"
+            f"<nvram>{firmware['vars']}</nvram><boot dev='hd'/></os>")
+
+
 def _domain_xml_slirp(
     domain_name: str,
     vcpus: int,
@@ -454,6 +559,7 @@ def _domain_xml_slirp(
     http_host_port: int,
     instance_id: str = "",
     usb_hostdev_xml: str = "",
+    firmware: dict | None = None,
 ) -> str:
     # seclabel type='none': disk/ISO images live under this repo's own
     # api/images|instances/ tree, not the standard /var/lib/libvirt/images/
@@ -481,15 +587,13 @@ def _domain_xml_slirp(
     memory_kib = memory_mb * 1024
     log_file = str(_console_log_path(instance_id)) if instance_id else ""
     log_elem = f"\n              <log file='{log_file}' append='on'/>" if log_file else ""
+    os_xml = _os_xml(firmware)
     return textwrap.dedent(f"""\
         <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
           <name>{domain_name}</name>
           <memory unit='KiB'>{memory_kib}</memory>
           <vcpu>{vcpus}</vcpu>
-          <os>
-            <type arch='x86_64' machine='pc'>hvm</type>
-            <boot dev='hd'/>
-          </os>
+          {os_xml}
           <features><acpi/><apic/></features>
           <cpu mode='host-passthrough'/>
           <seclabel type='none'/>
@@ -530,6 +634,7 @@ def _domain_xml_bridge(
     bridge: str = BRIDGE_NAME,
     scsi_disks: bool = False,
     data_disks: tuple = (),
+    firmware: dict | None = None,
 ) -> str:
     # seclabel type='none' — see _domain_xml_slirp's comment above.
     memory_kib = memory_mb * 1024
@@ -546,15 +651,13 @@ def _domain_xml_bridge(
             f"<target dev='sd{chr(ord('b') + i)}' bus='scsi'/></disk>" for i, p in enumerate(data_disks))
     else:
         root_target, cdrom_target, extra = "<target dev='vda' bus='virtio'/>", "sda", ""
+    os_xml = _os_xml(firmware)
     return textwrap.dedent(f"""\
         <domain type='kvm'>
           <name>{domain_name}</name>
           <memory unit='KiB'>{memory_kib}</memory>
           <vcpu>{vcpus}</vcpu>
-          <os>
-            <type arch='x86_64' machine='pc'>hvm</type>
-            <boot dev='hd'/>
-          </os>
+          {os_xml}
           <features><acpi/><apic/></features>
           <cpu mode='host-passthrough'/>
           <seclabel type='none'/>
@@ -661,6 +764,17 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
                            "run api/setup-lab-network.sh")
     use_bridge = lab or _bridge_usable()
     data_disks = _create_data_disks(instance, instance_dir) if lab else ()
+    # B2: how a custom image boots -- UEFI (OVMF, with this instance's own copy
+    # of the variable store) and its disk bus; stock images are BIOS + virtio.
+    meta = image_meta(instance.image_id)
+    firmware = None
+    if meta.get("firmware") == "uefi":
+        code, vars_template = _ovmf()
+        nvram = instance_dir / "OVMF_VARS.fd"
+        if not nvram.exists():
+            shutil.copyfile(vars_template, nvram)
+        firmware = {"code": code, "vars": str(nvram)}
+    scsi = lab or meta.get("disk_bus") == "scsi"
 
     # Re-validate USB devices here too, immediately before building XML —
     # never trust that a check done moments earlier (in the API handler)
@@ -680,7 +794,7 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             xml = _domain_xml_bridge(domain_name, vcpus, memory_mb, disk_path, iso_path,
                                      instance_id=instance.id, usb_hostdev_xml=usb_hostdev_xml,
                                      bridge=LAB_BRIDGE_NAME if lab else BRIDGE_NAME,
-                                     scsi_disks=lab, data_disks=data_disks)
+                                     scsi_disks=scsi, data_disks=data_disks, firmware=firmware)
             instance.ssh_host_port = 0
             instance.http_host_port = 0
             instance.private_ip = ""  # will be set from DHCP lease after boot
@@ -694,7 +808,7 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
             instance.private_ip = _allocate_slirp_ip(instance.vpc_id, vpc_cidr)
             xml = _domain_xml_slirp(domain_name, vcpus, memory_mb, disk_path, iso_path,
                                     ssh_host_port, http_host_port, instance_id=instance.id,
-                                    usb_hostdev_xml=usb_hostdev_xml)
+                                    usb_hostdev_xml=usb_hostdev_xml, firmware=firmware)
 
         conn = _conn()
         try:

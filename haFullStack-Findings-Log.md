@@ -4607,6 +4607,23 @@ Confirmed by Paul (`--confirm`).
 
 **Verified by:** the same pull straight after: 104 files (782.8 MB) in 10 s through the peer tunnel and both new host firewalls. "IN STEP: all 307 files match the source's checksums". All 102 mirrored files re-hashed on Llwyn-y-Groes against `MIRROR.json`: 0 mismatches.
 
+### F-232 — An image imported from a booted system carries its machine ID, so its instances share one DHCP identity
+
+**Where:** `api/compute.py` (`import_image`, B2 of the LFS plan); dnsmasq on the host bridges.
+
+**Symptom:** found 2026-10-07, testing image import. An instance booted from an image imported from another (stopped) instance got **the same IP** as the source, 192.168.100.216, within a minute, although leases last 12 h. The lease file then held only one entry for that address, now with the new VM's MAC.
+
+**Root cause:**
+- **One identity:** Ubuntu's DHCP client (systemd-networkd) identifies itself with a client ID derived from `/etc/machine-id` (`ff:…:00:02:…`, a DUID). The imported disk carries the source's machine ID, so dnsmasq saw one client that had changed network card, and moved its lease.
+- **The consequence:** two instances of such an image running together fight over one address. A stopped source's recorded IP goes stale.
+
+**Fix:**
+- **The image, not the platform:** a system meant to be imaged must leave `/etc/machine-id` empty, so systemd generates a new one at first boot (as stock cloud images do).
+- **Documented** in `import_image`.
+- **For the LFS image:** recorded as LFS-007; D6 empties it before import.
+
+**Verified by:** the lease file after the test: one lease for 192.168.100.216, carrying the second VM's MAC and the shared client ID.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4784,3 +4801,4 @@ Confirmed by Paul (`--confirm`).
 | v3.51 | 2026-10-07 | Paul Scott | Host firewall rollout. F-229: the peer tunnel's FORWARD rules were lost at reboot and never restored. |
 | v3.52 | 2026-10-07 | Paul Scott | F-230: an orphaned peer security group record couldn't be deleted after its pairing was revoked; removed. |
 | v3.53 | 2026-10-07 | Paul Scott | LFS A2/A3. F-231: the repo copy couldn't create a new subdirectory on the peer. |
+| v3.54 | 2026-10-07 | Paul Scott | LFS B2. F-232: an image imported from a booted system shares its machine ID, and so its DHCP identity. |

@@ -2032,6 +2032,45 @@ def list_images():
     return jsonify({"items": compute.list_images()})
 
 
+@app.post("/v1/images")
+@require_auth
+def import_image():
+    """B2: a disk of a stopped instance (as it is, or as one of its snapshots)
+    flattened into a standalone image. Body: {id, from_instance, name?, disk?
+    ('disk' | 'data0'..'data2'), snapshot?, firmware? ('uefi' | 'bios'),
+    disk_bus? ('virtio' | 'scsi'), description?}."""
+    body = request.get_json(force=True, silent=True) or {}
+    src = store.get_instance(str(body.get("from_instance") or ""))
+    if not src or not src.domain_name:
+        return problem(404, "Not Found", "from_instance: no such local instance")
+    try:
+        meta = compute.import_image(str(body.get("id") or ""), str(body.get("name") or ""), src,
+                                    str(body.get("disk") or "disk"), str(body.get("snapshot") or ""),
+                                    str(body.get("firmware") or "uefi"), str(body.get("disk_bus") or "virtio"),
+                                    str(body.get("description") or ""))
+    except ValueError as e:
+        return problem(400, "Bad Request", str(e))
+    except RuntimeError as e:
+        return problem(409, "Conflict", str(e))
+    return jsonify(meta), 201
+
+
+@app.delete("/v1/images/<image_id>")
+@require_auth
+def delete_image(image_id):
+    """A custom image only, and only once no instance is built on it (an
+    instance's disk is an overlay on its image)."""
+    users = [i.name for i in store.list_instances()
+             if i.image_id == image_id and i.status != InstanceStatus.DELETED]
+    if users:
+        return problem(409, "Conflict", f"in use by {', '.join(users[:3])}")
+    try:
+        compute.delete_image(image_id)
+    except KeyError:
+        return problem(404, "Not Found", f"no custom image '{image_id}'")
+    return "", 204
+
+
 # ---------------------------------------------------------------------------
 # DNS
 # ---------------------------------------------------------------------------

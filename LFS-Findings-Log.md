@@ -81,9 +81,22 @@ Everything of value found while building the OS: problems with the books and the
 
 Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu ships it. LFS requires bash there (chapter 2.2's version check fails otherwise). The book makes that change part of host preparation, so it's llm-chat's first task in D1, not the broker's.
 
+### LFS-007 — The LFS image must ship with an empty /etc/machine-id
+
+**Where:** LFS 13.1 (systemd), the systemd section of chapter 8, which runs `systemd-machine-id-setup`; D6 (the image import).
+
+**Symptom:** found 2026-10-07 while testing B2 (see F-232). An image imported from a booted system carries its `/etc/machine-id`. systemd-networkd's DHCP client ID derives from it, so every instance of the image asks for the same address.
+
+**Root cause:** LFS creates the machine ID during the build. That's right for one machine, but every copy of an image would share it.
+
+**Fix (for D6):** before the disk is imported as an image, truncate `/etc/machine-id` to empty, not delete it. systemd then generates a new one at each instance's first boot.
+
+**Verified by:** to be verified in D6, by booting two instances of the LFS image together and checking they get different machine IDs and addresses.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
 |---|---|---|---|
 | v0.1 | 2026-10-07 | Paul Scott | Started with Phase A: LFS-001–LFS-005 (the books' published data, an upstream broken link, a first lesson about the 14B, a parsing quirk). |
 | v0.2 | 2026-10-07 | Paul Scott | B4: LFS-006 (the build machine can't reach the repo through the lab fence: the controller delivers sources). |
+| v0.3 | 2026-10-07 | Paul Scott | B2: LFS-007 (empty /etc/machine-id before imaging). |
