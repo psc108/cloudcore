@@ -103,6 +103,17 @@ def render_config(peers: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _ensure_forward_accept() -> None:
+    """Same FORWARD-accept reasoning as setup-network.sh's own ccbr0 rule:
+    needed even with a valid handshake if something else (commonly Docker,
+    or the host firewall's "deny routed") drops forwarded traffic. Covered
+    by the existing cloudcore-sg sudoers grant (the same two binaries
+    setup-network.sh grants for ccbr0). Idempotent."""
+    for flag in ("-i", "-o"):
+        if _run(["iptables", "-C", "FORWARD", flag, IFACE, "-j", "ACCEPT"]).returncode != 0:
+            _run(["iptables", "-I", "FORWARD", flag, IFACE, "-j", "ACCEPT"])
+
+
 def apply(peers: list[dict]) -> tuple[bool, str]:
     """Render the current approved-peers config and apply it — `up` the
     first time cc0 doesn't exist yet, `syncconf` (hot add/remove,
@@ -117,16 +128,12 @@ def apply(peers: list[dict]) -> tuple[bool, str]:
         result = _run(["wg-quick", "up", IFACE])
         if result.returncode != 0:
             return False, (result.stderr or result.stdout).strip()
-        # Same FORWARD-accept reasoning as setup-network.sh's own ccbr0
-        # rule: needed even with a valid handshake if something else
-        # (commonly Docker) has already set FORWARD's default policy to
-        # DROP. Already covered by the existing cloudcore-sg sudoers
-        # grant (same two binaries setup-network.sh grants for ccbr0).
-        _run(["iptables", "-C", "FORWARD", "-i", IFACE, "-j", "ACCEPT"]).returncode == 0 or \
-            _run(["iptables", "-I", "FORWARD", "-i", IFACE, "-j", "ACCEPT"])
-        _run(["iptables", "-C", "FORWARD", "-o", IFACE, "-j", "ACCEPT"]).returncode == 0 or \
-            _run(["iptables", "-I", "FORWARD", "-o", IFACE, "-j", "ACCEPT"])
+        _ensure_forward_accept()
         return True, "cc0 up"
+    # F-229: on every apply, not only the first `up` -- iptables rules don't
+    # survive a reboot, and after one cc0 comes back without them while
+    # every later apply takes the syncconf path below.
+    _ensure_forward_accept()
 
     # `wg syncconf` (unlike `wg-quick up`) only understands the raw
     # wg-setconf format — no `Address =` line, which is a pure

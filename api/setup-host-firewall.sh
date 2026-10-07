@@ -366,6 +366,17 @@ apply() {
     systemd-run --quiet --unit "${ROLLBACK_UNIT}" --on-active="${ROLLBACK_S}" "$(command -v ufw)" disable
     log "auto-rollback armed: ufw will be DISABLED in ${ROLLBACK_S}s unless you run: sudo bash $0 --confirm"
   fi
+  # F-229: the guest bridge and the peer tunnel need their FORWARD ACCEPTs
+  # (setup-network.sh, wireguard.py). wireguard.py's could be missing after a
+  # reboot; put back any that are, for interfaces that exist, before ufw's
+  # "deny routed" makes them matter.
+  for i in "${BRIDGE}" "${WG_IFACE}"; do
+    ip link show "${i}" >/dev/null 2>&1 || continue
+    for d in -i -o; do
+      iptables -C FORWARD "${d}" "${i}" -j ACCEPT 2>/dev/null \
+        || { iptables -I FORWARD "${d}" "${i}" -j ACCEPT && log "restored FORWARD ACCEPT ${d} ${i}"; }
+    done
+  done
   log "enabling ufw"
   ufw --force enable >/dev/null
   if post_checks; then

@@ -4556,6 +4556,22 @@ The terminal websocket (`ws://127.0.0.1:8081/terminal?instance_id=…`) had no t
 
 The next sealed run checks them live.
 
+### F-229 — The peer tunnel's FORWARD rules were lost at every reboot and never put back
+
+**Where:** `api/wireguard.py` (`apply`); found by `api/setup-host-firewall.sh`'s post-apply check.
+
+**Symptom:** 2026-10-07, turning on the host firewall on Llwyn-y-Groes. The post-apply check failed with "FORWARD ACCEPT for cc0 is missing -- guest/peer routing may be broken", and the script switched ufw off again as designed.
+
+**Root cause:**
+- **Only on first bring-up:** `wireguard.py` inserts the `FORWARD -i/-o cc0 -j ACCEPT` rules only when it brings `cc0` up itself. iptables rules don't survive a reboot, so after one `cc0` comes back without them, and every later `apply` takes the `syncconf` path, which never adds them.
+- **Why it went unnoticed:** peer routing kept working only because the host's FORWARD policy happens to be ACCEPT. Under the firewall's "deny routed", or with Docker installed, it would break.
+
+**Fix:**
+- `wireguard.py` makes sure of both rules on every apply, idempotently.
+- `setup-host-firewall.sh --apply` restores any missing FORWARD ACCEPT for `ccbr0`/`cc0` before enabling ufw.
+
+**Verified by:** the firewall's post-apply check passing on the next `--apply`.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4730,3 +4746,4 @@ The next sealed run checks them live.
 | v3.48 | 2026-10-06 | Paul Scott | L24 read, L26. F-220: the lab verified 9 answers it hadn't proven (no before-state for older checks, configuration taken as the goal). |
 | v3.49 | 2026-10-06 | Paul Scott | L27 read: 6 of 8 verifications genuine. F-221–F-226: lab faults behind most failures (unwritable working directory, swap check direction, example blocks taken as edits, foreground servers, the answer's own reboot, explanation demos verified). |
 | v3.50 | 2026-10-07 | Paul Scott | L29 read: 7 of 11 verifications genuine. F-227: no /etc/skel files for CloudCore users (fixed). F-228: two new false passes (an enable question taken as an install, a UUID filled from the wrong disk). |
+| v3.51 | 2026-10-07 | Paul Scott | Host firewall rollout. F-229: the peer tunnel's FORWARD rules were lost at reboot and never restored. |
