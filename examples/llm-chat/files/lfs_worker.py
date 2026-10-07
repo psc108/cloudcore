@@ -441,6 +441,11 @@ def checkpoint(m: Machine, vm_id: str, task: dict, when: str) -> bool:
     cleanly and starts again), then reconnect and restore the mounts."""
     slug = re.sub(r"[^A-Za-z0-9]+", "-", f"{task['number']}-{task['title']}").strip("-").lower()[:40]
     name = f"{when}-{task['seq']:03d}-{slug}"
+    # A retried task keeps its first "before" checkpoint: that's the state to go back to.
+    st0, have = api("GET", f"/v1/lab-vms/{vm_id}/snapshots")
+    if st0 == 200 and any(s.get("name") == name for s in have.get("items", [])):
+        journal(task["id"], "controller", "checkpoint", f"checkpoint {name} already taken; kept")
+        return True
     m.sh("sync")
     st, out = api("POST", f"/v1/lab-vms/{vm_id}/snapshots",
                   {"name": name, "description": f"{when} {task['number']} {task['title']}"}, timeout=700)
