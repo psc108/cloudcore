@@ -11,6 +11,7 @@ Sets, each entry with its file, version, URL, checksum and where that came from:
              as a fallback
   blfs-uefi  efibootmgr and what it needs, from the matching BLFS book (LFS
              builds UEFI GRUB itself)
+  blfs-stage1  OpenSSH, so D6's proof can log in from another machine
   blfs-common  BLFS's systemd unit files, which its packages install
   books      the LFS and BLFS books, for llm-chat's corpus (A4)
 The Wayland set waits for the compositor decision (E1).
@@ -37,9 +38,10 @@ from pathlib import Path
 LFS = "https://www.linuxfromscratch.org/lfs"
 BLFS = "https://www.linuxfromscratch.org/blfs"
 KERNEL_RELEASES = "https://www.kernel.org/releases.json"
-# BLFS packages for managing UEFI boot entries, by page; their required
-# dependencies are followed from the pages themselves.
-BLFS_UEFI_PAGES = ["postlfs/efibootmgr.html"]
+# BLFS packages stage 1 needs, by set and page; their required dependencies
+# are followed from the pages themselves. blfs-uefi manages UEFI boot entries;
+# blfs-stage1 adds what D6's proof needs beyond LFS (another machine can SSH in).
+BLFS_SETS = {"blfs-uefi": ["postlfs/efibootmgr.html"], "blfs-stage1": ["postlfs/openssh.html"]}
 BLFS_PAGE_FOR = {"efivar": "postlfs/efivar.html", "popt": "general/popt.html"}
 
 
@@ -116,9 +118,9 @@ def blfs_page(page: str) -> dict:
     return {"url": url, "md5": md5, "required": required, "patches": patches}
 
 
-def blfs_uefi_set() -> tuple[str, list[dict]]:
+def blfs_set(name_: str, pages: list[str]) -> tuple[str, list[dict]]:
     version = re.search(r"Version ([\d.]+)", text_of(fetch(f"{BLFS}/view/stable-systemd/index.html"))).group(1)
-    todo, seen, entries = list(BLFS_UEFI_PAGES), set(), []
+    todo, seen, entries = list(pages), set(), []
     while todo:
         page = todo.pop(0)
         if page in seen:
@@ -127,11 +129,11 @@ def blfs_uefi_set() -> tuple[str, list[dict]]:
         info = blfs_page(page)
         name = info["url"].rsplit("/", 1)[1]
         pkg, ver = split_version(name)
-        entries.append({"set": "blfs-uefi", "file": name, "package": pkg, "version": ver, "url": info["url"],
+        entries.append({"set": name_, "file": name, "package": pkg, "version": ver, "url": info["url"],
                         "md5": info["md5"], "checksum_source": f"BLFS {version} systemd, {page}",
                         "kind": "source", "book_page": page, "requires": info["required"]})
         for p in info["patches"]:
-            entries.append({"set": "blfs-uefi", "file": p.rsplit("/", 1)[1], "package": pkg, "version": ver,
+            entries.append({"set": name_, "file": p.rsplit("/", 1)[1], "package": pkg, "version": ver,
                             "url": p, "md5": None, "kind": "patch", "book_page": page,
                             "checksum_source": "none published: SHA-256 recorded at first download over HTTPS"})
         for dep in info["required"]:
@@ -139,7 +141,7 @@ def blfs_uefi_set() -> tuple[str, list[dict]]:
             if not dep_page:
                 raise ValueError(f"{page} requires {dep}, which has no known BLFS page here")
             todo.append(dep_page)
-    log(f"BLFS {version} (systemd), UEFI: {', '.join(e['file'] for e in entries)}")
+    log(f"BLFS {version} (systemd), {name_}: {', '.join(e['file'] for e in entries)}")
     return version, entries
 
 
@@ -175,7 +177,8 @@ def main() -> int:
         book_kernel = next((e for e in lfs if e["package"] == "linux"), None)
         lfs = [e for e in lfs if e["package"] != "linux"]  # the kernel set owns the kernel
         kernel = kernel_set(book_kernel)
-        blfs_version, uefi = blfs_uefi_set()
+        blfs_version, uefi = blfs_set("blfs-uefi", BLFS_SETS["blfs-uefi"])
+        uefi += blfs_set("blfs-stage1", BLFS_SETS["blfs-stage1"])[1]
         books = books_set(lfs_version, blfs_version)
     except (urllib.error.URLError, TimeoutError, AttributeError, ValueError, KeyError, StopIteration) as e:
         log(f"failed: {type(e).__name__}: {e}")
@@ -186,7 +189,7 @@ def main() -> int:
                 "kernel": kernel[0]["version"], "files": files,
                 "pending": ["wayland: waits for the compositor decision (E1)"]}
     log(f"{len(files)} files: " + ", ".join(f"{s} {sum(f['set'] == s for f in files)}"
-                                             for s in ("lfs", "kernel", "blfs-uefi", "blfs-common", "books")))
+                                             for s in ("lfs", "kernel", "blfs-uefi", "blfs-stage1", "blfs-common", "books")))
     if args.dry_run:
         return 0
     args.out.write_text(json.dumps(manifest, indent=1) + "\n")

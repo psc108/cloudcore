@@ -49,9 +49,19 @@ class _Page(HTMLParser):
         self._pre: str | None = None       # "user" or "root" while inside a command block
         self._skip = 0                     # inside navigation, scripts, styles
         self.subsection = ""
+        # Admonitions (Warning/Note/Important boxes) have their own heading;
+        # it labels the commands inside, it isn't a new subsection (LFS-008).
+        self._admon = 0                    # nesting depth inside div.admon
+        self._admon_depth: list[int] = []  # div depth at each admonition's start
+        self._divs = 0
+        self.note = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         cls = dict(attrs).get("class") or ""
+        if tag == "div" and not self._skip:
+            self._divs += 1
+            if cls.split()[:1] == ["admon"]:
+                self._admon_depth.append(self._divs)
         if tag in ("script", "style") or (tag == "div" and cls in ("navheader", "navfooter")):
             self._skip += 1
         elif self._skip:
@@ -60,7 +70,7 @@ class _Page(HTMLParser):
         elif tag == "h1" and not self.title:
             self._heading, self._buf = "h1", []
         elif tag in ("h2", "h3", "h4") and self._pre is None:
-            self._heading, self._buf = "sub", []
+            self._heading, self._buf = ("note" if self._admon_depth else "sub"), []
         elif tag == "pre" and cls in ("userinput", "root"):
             self._pre, self._buf = ("root" if cls == "root" else "user"), []
         elif tag in ("p", "li", "dt", "dd", "br") and self._pre is None and self._heading is None:
@@ -71,6 +81,11 @@ class _Page(HTMLParser):
             if tag in ("script", "style", "div"):
                 self._skip -= 1
             return
+        if tag == "div":
+            if self._admon_depth and self._admon_depth[-1] == self._divs:
+                self._admon_depth.pop()
+                self.note = ""
+            self._divs -= 1
         if tag == "h1" and self._heading == "h1":
             self.title = " ".join("".join(self._buf).split())
             self._heading = None
@@ -78,10 +93,15 @@ class _Page(HTMLParser):
             self.subsection = " ".join("".join(self._buf).split())
             self.prose.append(f"\n## {self.subsection}\n")
             self._heading = None
+        elif tag in ("h2", "h3", "h4") and self._heading == "note":
+            self.note = " ".join("".join(self._buf).split())
+            self.prose.append(f"\n[{self.note}]\n")
+            self._heading = None
         elif tag == "pre" and self._pre is not None:
             text = "".join(self._buf).strip("\n")
             if text.strip():
-                self.commands.append({"subsection": self.subsection, "as_root": self._pre == "root", "text": text})
+                self.commands.append({"subsection": self.subsection, "note": self.note,
+                                      "as_root": self._pre == "root", "text": text})
                 self.prose.append(f"\n[command {len(self.commands)}]\n")
             self._pre = None
 
@@ -96,9 +116,10 @@ class _Page(HTMLParser):
 
 def _package(title: str) -> tuple[str, str, str]:
     """('GRUB', '2.14', '') from 'GRUB-2.14', ('Binutils', '2.47', 'Pass 1') from
-    'Binutils-2.47 - Pass 1'; empty for a page that isn't a package."""
-    m = re.match(r"^(.+?)-(\d[\w.+]*(?:-\d[\w.+]*)?)(?:\s+-\s+(.+))?$", title)
-    return (m.group(1), m.group(2), m.group(3) or "") if m else ("", "", "")
+    'Binutils-2.47 - Pass 1', ('Linux', '7.1.8', 'API Headers') from
+    'Linux-7.1.8 API Headers'; empty for a page that isn't a package."""
+    m = re.match(r"^(.+?)-(\d[\w.+]*(?:-\d[\w.+]*)?)(?:\s+-\s+(.+)|\s+(\w[\w ]*))?$", title)
+    return (m.group(1), m.group(2), m.group(3) or m.group(4) or "") if m else ("", "", "")
 
 
 def sections(tarball: Path, book: str) -> tuple[str, list[dict]]:

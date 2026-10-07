@@ -14,6 +14,7 @@ Exit 1 if any route lets through an identity it doesn't declare.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 import tempfile
@@ -21,6 +22,13 @@ from pathlib import Path
 
 API = Path(__file__).resolve().parent.parent / "api"
 sys.path.insert(0, str(API))
+
+
+def _fill(rule: str) -> str:
+    """A URL that matches the rule: typed parameters need a value of their
+    type (an <int:...> given "x" doesn't match at all, so the route answers
+    404 and a refusal can't be seen)."""
+    return re.sub(r"<(?:(\w+)(?:\([^)]*\))?:)?\w+>", lambda m: "1" if m.group(1) in ("int", "float") else "x", rule)
 
 
 def main() -> int:
@@ -45,8 +53,7 @@ def main() -> int:
     for rule in app.url_map.iter_rules():
         need = authz.allowed(rule.endpoint)
         url = rule.rule
-        for arg in rule.arguments:
-            url = url.replace(f"<{arg}>", "x").replace(f"<path:{arg}>", "x")
+        url = _fill(url)
         url = url.replace("<path:filename>", "x")
         for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
             for who, tok in tokens.items():
@@ -71,8 +78,7 @@ def main() -> int:
         if rule.websocket:
             continue  # browsers never preflight a WebSocket handshake; it isn't a CORS request
         url = rule.rule
-        for arg in rule.arguments:
-            url = url.replace(f"<{arg}>", "x").replace(f"<path:{arg}>", "x")
+        url = _fill(url)
         status = client.open(url, method="OPTIONS", headers={"Origin": "http://localhost:8080",
                              "Access-Control-Request-Method": "GET"}).status_code
         counted += 1

@@ -95,8 +95,12 @@ class Identity:
     name: str
 
 
-def configure(peer_endpoints: set, capture_endpoints: set, student_endpoints: set, labvm_endpoints: set) -> None:
-    """Each route's allowed identities; anything unlisted is admin-only."""
+def configure(peer_endpoints: set, capture_endpoints: set, student_endpoints: set, labvm_endpoints: set,
+              lab_or_admin_endpoints: set = frozenset()) -> None:
+    """Each route's allowed identities; anything unlisted is admin-only.
+    lab_or_admin: the LFS build's journal and queue (lfs_build.py), written by
+    the llm-chat coordinator with its lab token and read and annotated from
+    the dashboard."""
     for ep in peer_endpoints - PUBLIC:
         _access[ep] = frozenset({"admin", "peer"})
     for ep in capture_endpoints - PUBLIC:
@@ -105,6 +109,8 @@ def configure(peer_endpoints: set, capture_endpoints: set, student_endpoints: se
         _access[ep] = frozenset({"student"})
     for ep in labvm_endpoints - PUBLIC:
         _access[ep] = frozenset({"labvm"})
+    for ep in lab_or_admin_endpoints - PUBLIC:
+        _access[ep] = frozenset({"admin", "labvm"})
 
 
 def allowed(endpoint: str) -> frozenset | None:

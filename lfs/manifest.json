@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-10-07T08:42:14Z",
+ "generated_at": "2026-10-07T11:06:05Z",
  "lfs_version": "13.1",
  "blfs_version": "13.1",
  "init": "systemd",
@@ -1006,6 +1006,18 @@
    "checksum_source": "BLFS 13.1 systemd, general/popt.html",
    "kind": "source",
    "book_page": "general/popt.html",
+   "requires": []
+  },
+  {
+   "set": "blfs-stage1",
+   "file": "openssh-10.5p1.tar.gz",
+   "package": "openssh",
+   "version": "10.5p1",
+   "url": "https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.5p1.tar.gz",
+   "md5": "a95119f402dfa0166c9dd1237239085c",
+   "checksum_source": "BLFS 13.1 systemd, postlfs/openssh.html",
+   "kind": "source",
+   "book_page": "postlfs/openssh.html",
    "requires": []
   },
   {

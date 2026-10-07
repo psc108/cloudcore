@@ -93,6 +93,21 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** to be verified in D6, by booting two instances of the LFS image together and checking they get different machine IDs and addresses.
 
+### LFS-008 — The book puts command alternatives inside notes, and their headings aren't subsections
+
+**Where:** the LFS 13.1 HTML book's admonition boxes (`div class="admon"`: Warning, Note, Important); `lfs/book-sections.py`; `api/lfs_build.py`.
+
+**Symptom:** found 2026-10-07 (C1). Section 10.4, "Using GRUB to Set Up the Boot Process", came out with commands under subsections called "Warning" and "Note". Among them were alternatives the build must choose between: a rescue CD (`grub-mkrescue`, `xorriso` to `/dev/cdrw`), BIOS install (`grub-install --target=i386-pc`), UEFI install (`grub-install --target=x86_64-efi --removable`) and an optional `efibootmgr` entry. So nothing could be filtered by boot method.
+
+**Root cause:** the extractor treated every `<h3>` as a new subsection, including an admonition box's own heading, so the real subsection ("10.4.4.1 Booting With BIOS", "10.4.4.2 Booting With UEFI") was lost.
+
+**Fix:**
+- **Notes keep their subsection:** headings inside admonitions now label the commands (`note`) without replacing the subsection.
+- **Boot method:** the queue skips BIOS and 32-bit UEFI subsections by name.
+- **Single commands:** a per-command skip list records the reason, for example the rescue CD: "an optional rescue CD; the lab machine has no CD writer".
+
+**Verified by:** 10.4 now serves the UEFI `grub-install`, the efivars/efibootmgr note commands and the `grub.cfg` creation. The BIOS command and the rescue CD are left out, with reasons. 8.65 (GRUB's build) skips its BIOS and 32-bit UEFI subsections.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -100,3 +115,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.1 | 2026-10-07 | Paul Scott | Started with Phase A: LFS-001–LFS-005 (the books' published data, an upstream broken link, a first lesson about the 14B, a parsing quirk). |
 | v0.2 | 2026-10-07 | Paul Scott | B4: LFS-006 (the build machine can't reach the repo through the lab fence: the controller delivers sources). |
 | v0.3 | 2026-10-07 | Paul Scott | B2: LFS-007 (empty /etc/machine-id before imaging). |
+| v0.4 | 2026-10-07 | Paul Scott | C1: LFS-008 (command alternatives inside notes; the extractor now keeps the real subsection). |

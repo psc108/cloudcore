@@ -180,7 +180,7 @@ def mirror_one(entry: dict, manifest: dict, lock: dict, dry_run: bool) -> tuple[
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    ap.add_argument("--set", choices=["lfs", "kernel", "blfs-uefi", "blfs-common", "books"])
+    ap.add_argument("--set", choices=["lfs", "kernel", "blfs-uefi", "blfs-stage1", "blfs-common", "books"])
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     try:

@@ -57,6 +57,7 @@ import authz
 import lab_vm_broker
 from labnet_routes import LABNET_PEER_REACHABLE, labnet_bp
 from lab_vm_broker import LAB_VM_REACHABLE_ENDPOINTS, lab_vms_bp
+from lfs_build import LFS_ENDPOINTS, lfs_bp
 
 UI_DIR   = os.path.join(os.path.dirname(__file__), "..", "ui")
 app = Flask(__name__)
@@ -68,6 +69,7 @@ app = Flask(__name__)
 # files, every request and background tick failing).
 app.teardown_appcontext(db.close_db)
 app.register_blueprint(build_manager_blueprint)
+app.register_blueprint(lfs_bp)
 app.register_blueprint(nfs_bp)
 app.register_blueprint(sg_bp)
 app.register_blueprint(editor_bp)
@@ -163,7 +165,7 @@ def _peer_bind_gate():
         if request.headers.get("Authorization", "") == f"Bearer {API_TOKEN}":
             abort(403)
         if request.endpoint not in (EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS
-                                    | CLIENT_REACHABLE_ENDPOINTS | LAB_VM_REACHABLE_ENDPOINTS):
+                                    | CLIENT_REACHABLE_ENDPOINTS | LAB_VM_REACHABLE_ENDPOINTS | LFS_ENDPOINTS):
             abort(403)
 
 
@@ -176,6 +178,7 @@ authz.configure(
     capture_endpoints=EXAMPLES_REACHABLE_ENDPOINTS | LLM_DEPLOYMENTS_REACHABLE_ENDPOINTS,
     student_endpoints=CLIENT_REACHABLE_ENDPOINTS,
     labvm_endpoints=LAB_VM_REACHABLE_ENDPOINTS,
+    lab_or_admin_endpoints=LFS_ENDPOINTS,
 )
 app.before_request(authz.gate)
 app.after_request(authz.audit)
