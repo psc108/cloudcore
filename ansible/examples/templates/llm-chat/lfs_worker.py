@@ -179,6 +179,7 @@ Rules:
 - Leave a command out only if the facts or the book's own text say it doesn't apply here (an alternative for BIOS, swap that isn't wanted ...).
 - Add a step only when the facts require it -- for example a section whose text says what to do but gives no command.
 - "as" moves one command to another user, when the book says to run it as that user.
+- Do ONLY this section's work. Later sections (named in the request) do theirs: don't format, mount or build anything that belongs to them.
 - {system_disk} is the build machine's own system disk: never touch it. The LFS disk is {lfs_disk}.
 - Nothing interactive: no editors, cfdisk, fdisk prompts, menuconfig or password prompts. Use non-interactive equivalents (sgdisk, scripts/config, here-documents).
 - The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself."""
@@ -425,6 +426,12 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s.replace("\\\n", " ")).strip()
 
 
+def _next_sections(task: dict, n: int = 3) -> str:
+    st, data = api("GET", f"/v1/lfs/builds/{task['build_id']}/tasks?state=waiting")
+    later = [t for t in data.get("items", []) if t["seq"] > task["seq"]][:n]
+    return "; ".join(f"{t['number']} {t['title']}".strip() for t in later) or "(none)"
+
+
 def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[dict], str]:
     sec = task["section"] or {}
     cmds = [c for c in sec.get("commands", [])]
@@ -441,6 +448,7 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             f"{ctx}" + (f", in the unpacked source directory ({task['_cwd']})" if task.get("_srcdir") else f", in {task['_cwd']}")
             + ".\n" + (f"This build uses version {task['version_override']} instead of the book's {task['version']}: "
                        "change version-specific names accordingly.\n" if task["version_override"] else "")
+            + f"\nThe next sections, which are NOT yours to do now: {_next_sections(task)}.\n"
             + f"\nFacts about the machine:\n{facts(m)}\n\nThe section's commands:\n{listing}\n\n"
             f"The section's text (start):\n{prose}\n" + (f"\nYour previous answer had problems: {feedback}\n" if feedback else ""))
     reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user,
@@ -464,16 +472,26 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         if run and _DANGER.search(run):
             problems.append(f"'{run[:80]}' touches a disk or path outside the LFS disk")
             continue
-        if "after" in ch and idx is None:
-            pos = 0 if ch["after"] == -1 else next((n + 1 for n, s in enumerate(steps) if s["book"] == ch["after"]), None)
-            if pos is None or not run:
-                problems.append(f"an added step's 'after' ({ch['after']}) isn't a command here, or it has no 'run'")
+        if idx is None:
+            # An added step. Its place: after the book command it names; at the
+            # start for -1; otherwise -- no book commands in the section, or no
+            # position given -- after the steps added so far, in the order given
+            # (LFS-013: in a commandless section the 14B numbered its own steps).
+            if not run:
+                problems.append("an added step has no 'run'")
                 continue
-            # Several steps added after the same command keep the order given.
-            while pos < len(steps) and steps[pos].get("added_after") == ch["after"]:
+            after = ch.get("after")
+            if after == -1:
+                pos = 0
+            elif after in by_index:
+                pos = next((n + 1 for n, s in enumerate(steps) if s["book"] == after), len(steps))
+            else:
+                after, pos = "end", len(steps)
+            # Several steps added at the same place keep the order given.
+            while pos < len(steps) and steps[pos].get("added_after") == after:
                 pos += 1
             steps.insert(pos, {"book": None, "run": run, "as": ch.get("as") if ch.get("as") in ("root", "lfs") else None,
-                               "why": why, "changed": True, "added_after": ch["after"]})
+                               "why": why, "changed": True, "added_after": after})
             continue
         if idx not in by_index:
             problems.append(f"a change refers to command [{idx}], which isn't in the list")

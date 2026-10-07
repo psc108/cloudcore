@@ -167,6 +167,27 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Lesson for the protocol:** with a small model, put every action in a constrained field of its own. Prose is for reasons, never for anything the controller must act on.
 
+### LFS-013 — In a section with no book commands, the 14B's steps were sound but rejected, and it reached into later sections
+
+**Where:** `examples/llm-chat/files/lfs_worker.py` (C2: `plan`, the added-step rules); task 2, 2.4 "Creating a New Partition", which has no commands (the book uses interactive cfdisk).
+
+**Symptom:** found 2026-10-07. The 14B's two plans for 2.4 were sound UEFI layouts with `sgdisk`: a GPT table, an EFI system partition (`ef00`; 100 MiB, then 512 MiB on the second try) and an ext4 root. Both were rejected:
+- **Reply 1:** positions added steps with `after: 0, 1, 2…`, numbering its *own* steps. The checker only accepted book command numbers, and this section has none.
+- **Reply 2:** told so, it dropped the positions altogether, which was rejected as "refers to command [None]".
+- **Scope:** both plans also formatted and mounted the partitions, which is the work of 2.5 and 2.7. Run, 2.5 would have reformatted them and 2.7 would have failed on "already mounted".
+
+**Root cause:**
+- **The format (the worker's):** "after" was ambiguous for a section with no commands.
+- **The scope (the model's):** it wasn't told which later sections exist, so it reasonably did the whole job.
+
+**Fix:**
+- **Order:** an added step without a valid book reference keeps the order given (after the steps added so far); `after: -1` still means first. Both real replies now parse in order.
+- **Scope:** the prompt names the next three sections ("NOT yours to do now") and says to do only this section's work.
+
+**Verified by:** offline, on both of the 14B's actual replies, and mixed cases. Live: the re-run of 2.4.
+
+**Note for the tutor role:** the model's grasp of a UEFI layout was right without help. What it needed was clearer boundaries, not knowledge.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -179,3 +200,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.6 | 2026-10-07 | Paul Scott | C2: LFS-010 (the first plan ran on a busy desktop host; see F-236). |
 | v0.7 | 2026-10-07 | Paul Scott | C2: LFS-011 (unreliable JSON from the 14B; output now schema-constrained; rejected replies journalled). |
 | v0.8 | 2026-10-07 | Paul Scott | C2: LFS-012 (the 14B put its repair command in its explanation; repairs are now a required list of commands). |
+| v0.9 | 2026-10-07 | Paul Scott | C2: LFS-013 (commandless section: sound steps rejected by an ambiguous format; the model reached into later sections). |
