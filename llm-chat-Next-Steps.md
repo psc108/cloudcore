@@ -30,7 +30,7 @@ Once the stop rule is met, the lab goes into maintenance. The main limit left is
 
 | # | Step | What it involves | Why this order |
 |---|---|---|---|
-| 1 | **Loose ends** | Three items:<br>• **Root-owned homes:** rebuild instances made before 2c960eb, which still have root-owned user homes (F-221).<br>• **Old SG:** decide whether to delete Stourport's old SG `llm-chat-coordinator-llwynygroes` (SSH and 8620 open to 0.0.0.0/0).<br>• **Host firewall:** roll it out (`setup-host-firewall.sh`; ufw inactive on both hosts, deferred 2026-09-28). | Small, and two are security |
+| 1 | **Loose ends** | Three items:<br>• **Root-owned homes:** done 2026-10-07: llm-chat rebuilt, with F-221 and F-227 verified on both hosts.<br>• **Old SG:** done 2026-10-07: Stourport's orphaned `llm-chat-coordinator-llwynygroes` was removed (F-230).<br>• **Host firewall:** Llwyn-y-Groes on since 2026-10-07 (F-229 found and fixed on the way); Stourport next. | Small, and two are security |
 | 2 | **Use what the lab proves** | A question that matches a lab-verified answer gets that answer at once, marked as tested, without the model. Unverified answers keep the current path. | The lab's work becomes speed and trust for students |
 | 3 | **Finish placement** | Two pieces:<br>• **C6:** prove that a host with a better measured score takes the work automatically.<br>• **Routing students' answers:** per-request routing across answer-capable hosts, once there is a second one. | Matters most when new hardware arrives |
 | 4 | **Auth follow-ups** | Audit and token views on the dashboard, audit events to Loki, a rotation routine for the shared guest tokens (`cloudcore-auth-Phased-Implementation.md`) | Noted, not urgent |

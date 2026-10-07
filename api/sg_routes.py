@@ -260,10 +260,21 @@ def delete_sg(sg_id):
 
 def _delete_remote_sg(sg: SecurityGroup):
     peer = peers_store.get_peer(sg.host_id)
+    if request.args.get("local_only") == "true":
+        # F-230: a record whose peer pairing was revoked (or deleted) can't
+        # be deleted remotely through it, and the remote side is no longer
+        # this host's to manage. Drop just the local record -- never for an
+        # approved peer, where that would orphan a live remote group.
+        if peer and peer["status"] == "approved":
+            return _problem(409, "Conflict", f"Peer '{peer['hostname']}' is approved: delete normally, "
+                            "so the remote security group goes too")
+        sg_store.delete(sg.id)
+        return "", 204
     if not peer or peer["status"] != "approved":
         return _problem(502, "Bad Gateway",
                          "This security group's peer is not currently approved/reachable — "
-                         "the remote security group was NOT deleted, local record kept.")
+                         "the remote security group was NOT deleted, local record kept. If that "
+                         "pairing was revoked, ?local_only=true removes just this record.")
     try:
         resp = peer_client.delete(peer["api_url"] + f"/v1/security-groups/{sg.id}", token=peer["remote_token"])
     except peer_client.PeerUnreachable as e:

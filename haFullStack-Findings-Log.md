@@ -4578,6 +4578,23 @@ The next sealed run checks them live.
 
 Confirmed by Paul (`--confirm`).
 
+### F-230 — A peer security group record couldn't be deleted after its pairing was revoked
+
+**Where:** `api/sg_routes.py` (`_delete_remote_sg`).
+
+**Symptom:** 2026-10-07. Stourport kept `llm-chat-coordinator-llwynygroes`, with SSH and 8620 open to `0.0.0.0/0`, from a 23 September llm-chat build. Deleting it returned 502: "This security group's peer is not currently approved/reachable — the remote security group was NOT deleted, local record kept."
+
+**Root cause:**
+- **A local pointer to a peer's group:** the record pointed at a group on Llwyn-y-Groes, created through a pairing (`1249093c`) that has since been revoked. Llwyn-y-Groes has been re-paired several times.
+- **Nothing left behind it:** the remote group no longer existed on Llwyn-y-Groes, and its instances and builds were long deleted and destroyed.
+- **No way out:** delete only works through an approved peer, so an orphan from a revoked pairing could never be removed.
+
+**Fix:** `DELETE /v1/security-groups/<id>?local_only=true` drops just the local record. It is refused (409) when the owning peer is approved, where it would orphan a live remote group. The 502 message now points to it.
+
+**Verified by:**
+- **The orphan:** after checking it was referenced nowhere live (instances, load balancers, builds, schedules, templates, state, both hosts' repos), it was removed with `local_only`: 204, then 404 on lookup. Stourport now has no rule open to `0.0.0.0/0`.
+- **The approved-peer guard:** not exercised live, since no such record existed to test against.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -4752,4 +4769,4 @@ Confirmed by Paul (`--confirm`).
 | v3.48 | 2026-10-06 | Paul Scott | L24 read, L26. F-220: the lab verified 9 answers it hadn't proven (no before-state for older checks, configuration taken as the goal). |
 | v3.49 | 2026-10-06 | Paul Scott | L27 read: 6 of 8 verifications genuine. F-221–F-226: lab faults behind most failures (unwritable working directory, swap check direction, example blocks taken as edits, foreground servers, the answer's own reboot, explanation demos verified). |
 | v3.50 | 2026-10-07 | Paul Scott | L29 read: 7 of 11 verifications genuine. F-227: no /etc/skel files for CloudCore users (fixed). F-228: two new false passes (an enable question taken as an install, a UUID filled from the wrong disk). |
-| v3.51 | 2026-10-07 | Paul Scott | Host firewall rollout. F-229: the peer tunnel's FORWARD rules were lost at reboot and never restored. |
+| v3.51 | 2026-10-07 | Paul Scott | Host firewall rollout. F-229: the peer tunnel's FORWARD rules were lost at reboot and never restored. |\n| v3.52 | 2026-10-07 | Paul Scott | F-230: an orphaned peer security group record couldn't be deleted after its pairing was revoked; removed. |
