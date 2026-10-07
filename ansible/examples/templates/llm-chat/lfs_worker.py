@@ -420,6 +420,35 @@ def deliver_sources(m: Machine, manifest: dict, task_id: int) -> None:
             f"the book's own list ({len(md5s)} files) for its md5sum -c.")
 
 
+# ── Checkpoints (C3) ──────────────────────────────────────────────────────────
+
+def checkpoint(m: Machine, vm_id: str, task: dict, when: str) -> bool:
+    """A snapshot of both disks, through the broker (the machine shuts down
+    cleanly and starts again), then reconnect and restore the mounts."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", f"{task['number']}-{task['title']}").strip("-").lower()[:40]
+    name = f"{when}-{task['seq']:03d}-{slug}"
+    m.sh("sync")
+    st, out = api("POST", f"/v1/lab-vms/{vm_id}/snapshots",
+                  {"name": name, "description": f"{when} {task['number']} {task['title']}"}, timeout=700)
+    if st != 201:
+        journal(task["id"], "controller", "checkpoint", f"checkpoint {name} FAILED ({st}): {out.get('detail', out)}")
+        return False
+    m.client = None
+    for _ in range(60):
+        try:
+            m.connect()
+            break
+        except (paramiko.SSHException, OSError):
+            time.sleep(5)
+    st2, tasks = api("GET", f"/v1/lfs/builds/{task['build_id']}/tasks?state=done")
+    ensure_mounts(m, {**task, "context": "chroot" if task["context"] == "chroot" else task["context"]},
+                  {t["number"] for t in tasks.get("items", [])})
+    journal(task["id"], "controller", "checkpoint",
+            f"checkpoint {name}: both disks snapshotted in {out.get('seconds')} s; machine back, mounts restored",
+            {"name": name})
+    return True
+
+
 # ── One task ──────────────────────────────────────────────────────────────────
 
 def _norm(s: str) -> str:
@@ -528,11 +557,15 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
 
 
 def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers: set[str],
-             plan_only: bool = False) -> bool:
+             plan_only: bool = False, vm_id: str = "") -> bool:
     st, task = api("GET", f"/v1/lfs/tasks/{task_id}")
     log(f"task {task['seq']}: {task['number']} {task['title']} ({task['context']})")
     set_state(task_id, "running")
     ensure_mounts(m, task, done_numbers)
+    if task["checkpoint_before"] and task["attempts"] <= 1 and not plan_only and vm_id:
+        if not checkpoint(m, vm_id, task, "before"):
+            set_state(task_id, "stuck", "couldn't take the checkpoint before a high-risk section")
+            return False
     srcdir, cwd = "", {"chroot": "/", "host-lfs": f"{LFS}/sources", "host-root": "/root"}[task["context"]]
     src = source_file(task, manifest)
     if task["number"] == "3.1":
@@ -626,6 +659,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
     if srcdir:
         m.sh(f"cd {LFS}/sources && rm -rf {shlex.quote(srcdir)}")
     set_state(task_id, "done", f"{len([s for s in steps if not s.get('omitted')])} step(s) ran cleanly")
+    if task["checkpoint_after"] and vm_id:
+        checkpoint(m, vm_id, task, "after")  # a failed one is journalled; the work itself is done
     return True
 
 
@@ -666,7 +701,7 @@ def main() -> int:
         st, tasks = api("GET", f"/v1/lfs/builds/{args.build}/tasks?state=done")
         done_numbers = {t["number"] for t in tasks.get("items", [])}
         api("POST", f"/v1/lab-vms/{vm_id}/touch")
-        if not run_task(task["id"], build, m, manifest, done_numbers, args.plan_only):
+        if not run_task(task["id"], build, m, manifest, done_numbers, args.plan_only, vm_id):
             return 1
         done += 1
         if args.plan_only or (args.until and task["number"] == args.until) or (args.max_tasks and done >= args.max_tasks):

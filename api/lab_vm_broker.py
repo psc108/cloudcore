@@ -59,6 +59,9 @@ LAB_VM_REACHABLE_ENDPOINTS = {
     "lab_vms.pair_lab_vm",
     "lab_vms.grow_lab_vm_disk",
     "lab_vms.set_control_key",
+    "lab_vms.list_build_snapshots",
+    "lab_vms.take_build_snapshot",
+    "lab_vms.restore_build_snapshot",
 }
 
 _API = "http://127.0.0.1:8080"
@@ -516,6 +519,51 @@ def set_control_key(vm_id):
         return _problem(502, "Key Not Installed", r.stderr.strip()[-300:] or f"exit {r.returncode}")
     log.info("lab VM %s: control key replaced", vm_id)
     return jsonify({"installed": True}), 201
+
+
+def _build_vm(vm_id: str):
+    """The row of one of this broker's lfs-build machines, or a problem response."""
+    row = _own(vm_id)
+    if not row or row["deleted_at"]:
+        return None, _problem(404, "Not Found", "no such lab VM")
+    if row["purpose"] != "lfs-build":
+        return None, _problem(409, "Conflict", "only an lfs-build machine has checkpoints")
+    return row, None
+
+
+# The LFS build's checkpoints (lfs-os-Phased-Implementation.md, C3): the
+# instance snapshot API (B1), for the build machine only. A snapshot shuts the
+# machine down cleanly and starts it again; a restore powers it off, reverts
+# both disks and starts it.
+@lab_vms_bp.get("/v1/lab-vms/<vm_id>/snapshots")
+def list_build_snapshots(vm_id):
+    _, err = _build_vm(vm_id)
+    if err:
+        return err
+    status, out = _call("GET", f"/v1/instances/{vm_id}/snapshots")
+    return jsonify(out), status
+
+
+@lab_vms_bp.post("/v1/lab-vms/<vm_id>/snapshots")
+def take_build_snapshot(vm_id):
+    _, err = _build_vm(vm_id)
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    status, out = _call("POST", f"/v1/instances/{vm_id}/snapshots",
+                        {"name": body.get("name"), "description": body.get("description", ""), "force": True},
+                        timeout=600)
+    return jsonify(out), status
+
+
+@lab_vms_bp.post("/v1/lab-vms/<vm_id>/snapshots/<name>/restore")
+def restore_build_snapshot(vm_id, name):
+    _, err = _build_vm(vm_id)
+    if err:
+        return err
+    status, out = _call("POST", f"/v1/instances/{vm_id}/snapshots/{urllib.parse.quote(name)}/restore",
+                        {"start": True}, timeout=600)
+    return jsonify(out), status
 
 
 @lab_vms_bp.post("/v1/lab-vms/<vm_id>/grow-disk")
