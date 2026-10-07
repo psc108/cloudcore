@@ -4654,7 +4654,7 @@ Confirmed by Paul (`--confirm`).
 
 **Fix:** `WantedBy=default.target cloudcore-api.service`, re-enabled on both hosts, so starting the API starts the terminal too.
 
-**Verified by:** on Stourport, stopping the API stopped the terminal, and starting only the API brought the terminal back (port 8081 listening). The same was checked on Llwyn-y-Groes.
+**Verified by:** on Stourport, stopping the API stopped the terminal, and starting only the API brought the terminal back (port 8081 listening). The same on Llwyn-y-Groes, after one slip while deploying: copying Stourport's unit file there carried Stourport's checkout path, and the service failed with `status=200/CHDIR`. Units must be installed with `scripts/install.sh`'s path substitution (`sed s|/home/scottp/IdeaProjects/CloudProject|$REPO_DIR|`). Reinstalled that way, it's active on 8081 and survives an API stop-then-start.
 
 ## Document History
 
