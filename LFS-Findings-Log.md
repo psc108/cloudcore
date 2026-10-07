@@ -387,7 +387,7 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 - **The version note:** it now names the commands that contain the book's version, saying "change 'X' to 'Y' in command(s) [n] and nothing else". If none does: "None of this section's commands names a version, so the version needs NO change to them". Tested.
 - **The rejection message:** "Command [n] is ONE command of k lines: a change gives the WHOLE command in 'run', with every line. If nothing in it must change, leave it out of 'changes' and it runs as the book has it."
 
-**Verified by:** the re-run of 5.4.
+**Verified by:** 5.4 done (see LFS-022's verification): its plan was as the book.
 
 ### LFS-022 — The 14B's "no changes needed" was refused as an empty added step; the build paused at rung 4 over a controller bug
 
@@ -402,7 +402,7 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Fix:** such an entry is ignored. The tutor's lesson couldn't have helped: the model was right.
 
-**Verified by:** the re-run of 5.4.
+**Verified by:** 5.4 done on its next run, as the book has it. `$LFS/usr/include` holds 1025 headers, and `linux/version.h` gives `LINUX_VERSION_CODE 459273` (7.2.9), checked on the machine.
 
 **Pattern:** the last three stops (LFS-020's guards, LFS-021, LFS-022) have each been the controller tightening, then over-tightening. Each guard now has a test case; `tests/lfs_plan_check.py` now replays the recorded replies (19 cases, LFS-014 to -022) through the real `plan()`, offline; run it before deploying a worker change.
 
