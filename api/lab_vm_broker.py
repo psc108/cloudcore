@@ -6,12 +6,12 @@ commands, so it must never hold CloudCore's master token (F-201). This
 broker is all it gets, with its own token (CLOUDCORE_LABVM_TOKEN):
 
 - create a VM from a fixed template -- the caller chooses only a purpose
-  (proof-target, proof-prober, student), a run id and a control public key;
+  (proof-target, proof-prober, student, lfs-build), a run id and a control public key;
   image, size, network and cloud-init are the broker's;
 - list, get, touch (student activity) and delete *only* the VMs it created;
 - quotas, and a reaper on this host that enforces lifetimes even if the
   coordinator dies: proofs 2 h; students 30 min idle / 4 h at most
-  (user decisions, 2026-10-02).
+  (user decisions, 2026-10-02); the LFS build machine 72 h idle / 30 days.
 
 It drives CloudCore's own API on 127.0.0.1:8080 with the master token, so
 placement (recommend-placement over this host and every peer, from free
@@ -65,6 +65,7 @@ LAB_VPC, LAB_VPC_CIDR = "lab-vms", "10.250.0.0/16"
 LAB_SUBNET, LAB_SUBNET_CIDR = "lab-vms-a", "10.250.0.0/24"
 MAX_ACTIVE = 6
 MAX_STUDENT = 2
+MAX_LFS_BUILD = 1  # one OS build at a time: it's long and it wants every core it can get
 REAP_INTERVAL_S = 60
 
 # F4: what each purpose's VM needs at boot, installed by cloud-init while it
@@ -73,6 +74,11 @@ PACKAGES = {
     "proof-target": ["pamtester", "oathtool"],
     "proof-prober": ["python3-paramiko", "oathtool", "nfs-common", "dnsutils", "curl"],
     "student": ["pamtester", "oathtool"],
+    # The LFS book's host requirements (chapter 2.2) on Ubuntu, plus GPT and
+    # FAT tools for the UEFI disk layout. The build itself (from chapter 2 on)
+    # is llm-chat's to do, as the book says -- including /bin/sh -> bash.
+    "lfs-build": ["build-essential", "bison", "gawk", "texinfo", "m4", "python3", "patch", "xz-utils", "bzip2",
+                  "gzip", "file", "gdisk", "parted", "dosfstools", "rsync", "wget"],
 }
 
 # F4: the lab's own control sshd, on its own port with its own config, so an
@@ -143,13 +149,19 @@ runcmd:
 
 # F3: blank data disks (GB) per purpose -- /dev/sdb, /dev/sdc in the guest,
 # for partitioning/LVM/RAID answers; the prober needs none.
-DATA_DISKS = {"proof-target": "2,2", "student": "2,2"}
+DATA_DISKS = {"proof-target": "2,2", "student": "2,2",
+              # The LFS system's own disk: ESP + root (lfs-os-Phased-Implementation.md, D1).
+              "lfs-build": "50"}
 
 # purpose -> (flavor candidates, largest first; max life; idle limit or None)
 PURPOSES = {
     "proof-target": (["standard.large", "standard.medium"], timedelta(hours=2), None),
     "proof-prober": (["standard.small", "standard.nano"], timedelta(hours=2), None),
     "student": (["standard.large", "standard.medium"], timedelta(hours=4), timedelta(minutes=30)),
+    # The LFS OS build (B4): as many cores as the host can give, for days.
+    # Its controller touches it while the build runs; 72 h untouched means
+    # abandoned. Reaping it deletes its snapshots too.
+    "lfs-build": (["standard.2xlarge", "standard.xlarge", "standard.large"], timedelta(days=30), timedelta(hours=72)),
 }
 _PUBKEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]{40,800}( [\w@.:-]{0,64})?$")
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -324,6 +336,8 @@ def create_lab_vm():
             return _problem(429, "Too Many Lab VMs", f"{len(active)} lab VMs already exist (limit {MAX_ACTIVE})")
         if purpose == "student" and sum(r["purpose"] == "student" for r in active) >= MAX_STUDENT:
             return _problem(429, "Too Many Lab VMs", f"{MAX_STUDENT} student machines already exist")
+        if purpose == "lfs-build" and sum(r["purpose"] == "lfs-build" for r in active) >= MAX_LFS_BUILD:
+            return _problem(429, "Too Many Lab VMs", "an LFS build machine already exists")
         # F2: on the caller's own host -- lab traffic never crosses the
         # WireGuard link, and lab VMs only go where an isolated lab
         # network exists. Not a named host: it follows the coordinator.
