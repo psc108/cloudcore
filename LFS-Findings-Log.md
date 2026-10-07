@@ -67,8 +67,23 @@ Everything of value found while building the OS: problems with the books and the
 
 **Verified by:** GRUB → 8.65 / GRUB / 2.14; Binutils pass 1 → 5.2 / Binutils / 2.47 / "Pass 1"; the kernel → 10.3 / Linux / 7.1.8.
 
+### LFS-006 — The build machine can't fetch its sources from the repo: the lab fence keeps it off the host
+
+**Where:** the `lfs-build` lab VM (B4), on the isolated lab network `cclab0` (`api/setup-lab-network.sh`, table `inet cclab`).
+
+**Symptom:** found 2026-10-07, testing B4. The plan's sources (A2, 783 MiB under `artifacts/lfs/`) are served by the host's package repo on 8090. From `cclab0` the host accepts only DHCP and DNS, and routed traffic to private ranges is dropped, so the build machine can't reach the repo.
+
+**Root cause:** by design. Lab VMs run model-written commands, so the lab network fences them off from the host's services and the LAN. The build machine is a lab VM for the same reason: llm-chat proposes its commands.
+
+**Fix (design, for C2):** the controller delivers what each step needs. It has access to the repo, and it copies the sources into the build machine over the control channel (SSH on 1022), verified against `MIRROR.json` on arrival. The fence is not loosened for the build.
+
+**Verified by:** to be verified in C6.
+
+Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu ships it. LFS requires bash there (chapter 2.2's version check fails otherwise). The book makes that change part of host preparation, so it's llm-chat's first task in D1, not the broker's.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
 |---|---|---|---|
 | v0.1 | 2026-10-07 | Paul Scott | Started with Phase A: LFS-001–LFS-005 (the books' published data, an upstream broken link, a first lesson about the 14B, a parsing quirk). |
+| v0.2 | 2026-10-07 | Paul Scott | B4: LFS-006 (the build machine can't reach the repo through the lab fence: the controller delivers sources). |
