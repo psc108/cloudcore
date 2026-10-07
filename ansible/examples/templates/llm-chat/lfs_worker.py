@@ -113,6 +113,17 @@ def phase(text: str, task: dict | None = None) -> None:
             _hb["task_id"], _hb["number"] = task["id"], task["number"]
 
 
+def beat_now() -> None:
+    """One heartbeat at once: the last word before the worker exits."""
+    with _hb_lock:
+        body = {k: _hb.get(k) for k in ("task_id", "number", "phase", "since")} | {"pid": os.getpid()}
+        bid = _hb["build"]
+    try:
+        api("POST", f"/v1/lfs/builds/{bid}/heartbeat", body, timeout=30)
+    except (urllib.error.URLError, OSError, ValueError):
+        pass
+
+
 def _beat_forever() -> None:
     while True:
         with _hb_lock:
@@ -838,6 +849,9 @@ def main() -> int:
         done += 1
         if args.plan_only or (args.until and task["number"] == args.until) or (args.max_tasks and done >= args.max_tasks):
             log(f"stopping after {task['number']} {task['title']}")
+            # Sentinel reads "stopped" as a deliberate stop, not a lost worker.
+            phase(f"stopped: ran to {task['number']} as asked")
+            beat_now()
             return 0
 
 
