@@ -141,6 +141,9 @@ def fetch_index(source: str, codename: str) -> dict:
 def download(url: str, dest: Path, size: int, sha: str) -> None:
     """Into dest.part, resuming what's there; verified before it replaces dest."""
     part = dest.with_name(dest.name + ".part")
+    # F-231: a file in a directory the destination doesn't have yet (the
+    # first subdirectory in the artifact cache was artifacts/lfs/).
+    dest.parent.mkdir(parents=True, exist_ok=True)
     have = part.stat().st_size if part.exists() else 0
     if have > size:
         part.unlink()
