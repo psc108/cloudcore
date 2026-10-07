@@ -316,12 +316,16 @@ def facts(m: Machine) -> str:
     _, cores = m.sh("nproc")
     _, disks = m.sh(f"lsblk -nrpo NAME,SIZE,TYPE,FSTYPE,PARTLABEL,MOUNTPOINT {LFS_DISK} 2>&1")
     _, mounted = m.sh(f"findmnt -rno TARGET,SOURCE,FSTYPE | grep '^{LFS}' || true")
+    # What already exists under $LFS, so a plan can't claim otherwise (LFS-016).
+    _, top = m.sh(f"ls -A {LFS} 2>/dev/null | grep -vx 'lost+found' | tr '\\n' ' '")
     return (f"- LFS={LFS}. The LFS disk is {LFS_DISK}; {SYSTEM_DISK} is the build machine's own system: never touch it.\n"
             f"- The machine boots the finished system by 64-bit UEFI: GPT, with an EFI system partition (FAT32, "
             f"mounted at /boot/efi in the new system, so $LFS/boot/efi during the build) and an ext4 root.\n"
             f"- Cores: {cores.strip()}. Swap: none (not needed).\n"
             f"- {LFS_DISK} now (NAME SIZE TYPE FSTYPE PARTLABEL MOUNTPOINT):\n{disks.strip() or '(empty)'}\n"
-            f"- Mounted under {LFS}:\n{mounted.strip() or '(nothing)'}")
+            f"- Mounted under {LFS}:\n{mounted.strip() or '(nothing)'}\n"
+            f"- In {LFS} right now: {top.strip() or '(nothing yet)'}. Nothing else has been done for you: "
+            f"the controller only delivers the sources (3.1) and enters each task's context.")
 
 
 # ── Contexts, mounts and sources ──────────────────────────────────────────────
@@ -543,7 +547,8 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
                                "why": why, "changed": True, "added_after": after})
             continue
         if idx not in by_index:
-            problems.append(f"a change refers to command [{idx}], which isn't in the list")
+            problems.append(f"a change refers to command [{idx}], which isn't in the list: the commands are "
+                            f"{sorted(by_index)} (a multi-line block such as a 'case' or 'for' is ONE command)")
             continue
         if by_index[idx].get("skipped"):
             continue  # the controller already skips it

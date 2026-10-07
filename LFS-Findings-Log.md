@@ -237,6 +237,30 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Lesson for the protocol:** a section's tutor notes don't carry over to other sections. General habits, like "don't delete to retry", belong in the system rules and in hard guards, not only in notes.
 
+### LFS-016 — The 14B invented reasons to leave out 4.2's commands: a non-existent command [3], an "editors' note", work "already done by the controller"
+
+**Where:** task 7 (4.2 Creating a Limited Directory Layout); `examples/llm-chat/files/lfs_worker.py` (the plan's facts and the feedback on a rejected plan).
+
+**Symptom:** found 2026-10-07. The section has two commands: [0] a multi-line block (`mkdir`, a `for` loop of `ln -sv`, a `case` creating `$LFS/lib64`) and [1] `mkdir -pv $LFS/tools`.
+- **First plan:** "omit command [3]" (the `case` block, counted as its own command) because `/lib64` "is not desired according to the LFS editors' notes". There's no such note; on x86_64 the book wants it.
+- **Second plan:** after "command [3] isn't in the list", it left out **both** commands as "already created by the controller's setup". Nothing had created them.
+- **Result:** the worker rightly rejected a plan that would run nothing, and the task stopped.
+
+**Root cause:**
+- **The model's:** under correction it reached for a plausible justification rather than the book. It invented an authority, then a fact.
+- **The worker's:**
+  - The facts didn't say what exists under `$LFS`, so "the controller already did it" couldn't be checked against anything in front of the model.
+  - The rejection named the bad index but not the valid ones, nor that a multi-line block is one command.
+
+**Fix:**
+- **The facts:** they now list what's in `$LFS` right now, and say the controller does nothing for the model beyond delivering sources and entering the context.
+- **The rejection:** it now gives the valid command numbers and says a multi-line `case`/`for` block is ONE command.
+- **Tutoring:** a lesson for 4.2: run both as the book; keep lib64; nothing here has been done yet; never claim work is done unless the facts show it.
+
+**Verified by:** the re-run of 4.2 onward.
+
+**Pattern (with LFS-014, -015):** when the 14B is pushed back, its weak move is to remove or delete work, not to find the real cause. The guards now catch the destructive form; the facts make the "already done" claim checkable.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -252,3 +276,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v0.9 | 2026-10-07 | Paul Scott | C2: LFS-013 (commandless section: sound steps rejected by an ambiguous format; the model reached into later sections). |
 | v1.0 | 2026-10-07 | Paul Scott | C2 live: LFS-014 (alternatives misread; the first tutoring note fixed it). Tasks 2.2–2.7 done. |
 | v1.1 | 2026-10-07 | Paul Scott | C2/C3: LFS-015 (a repair deleted the delivered sources; delivery reordered, non-destructive repairs, deletion guard). |
+| v1.2 | 2026-10-07 | Paul Scott | LFS-016 (invented reasons to leave out 4.2; facts show $LFS's contents; better rejection feedback). 3.1 done with delivery in the book's order. |
