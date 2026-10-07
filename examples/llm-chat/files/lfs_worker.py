@@ -247,7 +247,7 @@ def ensure_machine(build: dict) -> tuple[Machine, str]:
     else:
         st, vm = api("POST", "/v1/lab-vms", {"purpose": "lfs-build", "run_id": f"lfs-{build['id']}", "public_key": pub},
                      timeout=300)
-        if st not in (200, 201):
+        if st not in (200, 201, 202):  # 202: accepted, being created
             raise RuntimeError(f"the broker refused a build machine: {st} {vm.get('detail', vm)}")
         vm_id = vm["id"]
         api("POST", f"/v1/lfs/builds/{build['id']}", {"build_vm_id": vm_id, "status": "running"})
