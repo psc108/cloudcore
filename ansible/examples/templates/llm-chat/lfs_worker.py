@@ -183,7 +183,9 @@ Rules:
 - Do ONLY this section's work. Later sections (named in the request) do theirs: don't format, mount or build anything that belongs to them.
 - {system_disk} is the build machine's own system disk: never touch it. The LFS disk is {lfs_disk}.
 - Nothing interactive: no editors, cfdisk, fdisk prompts, menuconfig or password prompts. Use non-interactive equivalents (sgdisk, scripts/config, here-documents).
-- The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself."""
+- The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself.
+- The controller times every step and records it in the journal: never add `time` or SBU measurements.
+- Never add a copy of the book's own commands: they already run. To change one, give its "book" number."""
 
 FIX_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer. A step from the book's section failed on the build machine. Reply with ONLY a JSON object:
 {{"cause": "<what went wrong, briefly>", "commands": ["<a shell command that fixes the cause>", "..."], "then": "rerun the step" | "run this instead" | "the step's work is already done", "instead": "<only with 'run this instead': the step to run in its place>"}}

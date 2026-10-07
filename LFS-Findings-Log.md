@@ -299,6 +299,8 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 - **The directory:** every step's script reports, on exit, the directory it ended in (a trap printing a marker line). The worker takes it from the output, removes the marker before journalling, and starts the next step there, as one shell would. Tested locally: carried on success and on failure, marker stripped.
 - **The plan check:** an added step that contains a book command (12+ characters) is rejected: "the book's commands already run; to change one, give a change with its 'book' number".
 
+**Follow-up:** on the re-run, the 14B tried the timed copy twice more; the new check rejected both. The book's 4.5 suggests timing this package to measure the SBU, and the model kept to that. Added to the planning rules, for every section: "the controller times every step and records it: never add `time` or SBU measurements", and "never add a copy of the book's own commands". The worker journals every step's duration already.
+
 **Verified by:** the re-run of 5.2.
 
 ## Document History
