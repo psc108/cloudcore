@@ -404,7 +404,7 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Verified by:** the re-run of 5.4.
 
-**Pattern:** the last three stops (LFS-020's guards, LFS-021, LFS-022) have each been the controller tightening, then over-tightening. Each guard now has a test case; a test suite for `plan()` against recorded replies would catch the next one before a run does. Follow-up.
+**Pattern:** the last three stops (LFS-020's guards, LFS-021, LFS-022) have each been the controller tightening, then over-tightening. Each guard now has a test case; `tests/lfs_plan_check.py` now replays the recorded replies (19 cases, LFS-014 to -022) through the real `plan()`, offline; run it before deploying a worker change.
 
 ## Document History
 
