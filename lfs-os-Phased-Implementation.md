@@ -115,6 +115,18 @@ Checked 2026-10-06: CloudCore has none of these yet.
 - **Long builds on shared hosts:** the build VM keeps the reserved cores free, and students' llm-chat use comes first where they compete.
 - **Licences:** the books are CC BY-NC-SA; private, non-commercial use is fine. The sources keep their own licences.
 
+## Model evaluation (agreed 2026-10-07, after C6)
+
+Paul asked whether to move up from the 14B. Agreed:
+- **Keep the 14B for now.** C6 gathers evidence on the hard sections (toolchain, kernel, GRUB). So far the 14B's failures were structural (LFS-011, LFS-012), not misunderstanding.
+- **Then evaluate** Qwen3-14B and a 30B mixture-of-experts coder (e.g. Qwen3-Coder-30B-A3B: ~3B active per token, so possibly faster than the dense 14B on these CPUs):
+  - speed with `api/llm-bench.py`;
+  - quality on a fixed set of LFS tasks: plan quality, repairs, judgements, how often tutoring is needed.
+- **Constraints:**
+  - **RAM:** these machines take **32 GB at most** (no upgrade path). A dense 32B (~20 GB) can't run beside the 8 GB build machine on Llwyn-y-Groes while the students' 14B is there.
+  - **Freeing Llwyn-y-Groes:** for the trial, students can move to Stourport (Paul, 2026-10-07). That frees Llwyn-y-Groes for the build machine plus one ~20 GB model.
+- **Decide on evidence**, with the quality floor "14B or better" unchanged.
+
 ## Open decisions
 
 - **E1:** the compositor.
