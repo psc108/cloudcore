@@ -370,6 +370,25 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Follow-up:** checks on a section's result (e.g. 5.4 → `$LFS/usr/include/linux/version.h` exists). The book's own sanity checks cover some sections (5.5's `readelf` test); most have none.
 
+### LFS-021 — Told to "change version-specific names", the 14B rewrote 5.4's version-free commands; the new drop check rejected every plan
+
+**Where:** task 12 (5.4 Linux API Headers, this build's kernel 7.2.9 against the book's 7.1.8); `examples/llm-chat/files/lfs_worker.py` (the plan prompt; the rejection message).
+
+**Symptom:** found 2026-10-08, after the LFS-020 rollback.
+- **Three plans, all rejected:** each "changed" commands that name no version. `make mrproper` was rewritten unchanged; command [1] was cut to `make headers`, or split into three changes to [1], or into commands [1], [2] and [3]. Every reason was "the build uses version 7.2.9 … change version-specific names accordingly".
+- **The guard worked:** LFS-020's drop check rejected all three, so nothing wrong ran. But the task went stuck.
+- **Rung 2:** Sentinel's nudge this time was relevant (LFS-020 at 0.51).
+
+**Root cause:** the controller's prompt.
+- **The version note:** for any task with a version override, the prompt said "change version-specific names accordingly", whether or not a command named a version. The 14B took it as an order to change something.
+- **The rejection message:** it said lines were dropped, but not that the command is one multi-line command given whole, or that leaving it out of `changes` runs it as the book.
+
+**Fix:**
+- **The version note:** it now names the commands that contain the book's version, saying "change 'X' to 'Y' in command(s) [n] and nothing else". If none does: "None of this section's commands names a version, so the version needs NO change to them". Tested.
+- **The rejection message:** "Command [n] is ONE command of k lines: a change gives the WHOLE command in 'run', with every line. If nothing in it must change, leave it out of 'changes' and it runs as the book has it."
+
+**Verified by:** the re-run of 5.4.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -391,3 +410,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.5 | 2026-10-07 | Paul Scott | 5.2 Binutils pass 1 built (C6 slice reached). |
 | v1.6 | 2026-10-07 | Paul Scott | LFS-019 (GCC pass 1 out of memory; swap added; the ladder's first live run: Sentinel nudge, two tutor sessions). |
 | v1.7 | 2026-10-07 | Paul Scott | LFS-020 (5.4 dropped the copy; grub-install on the host disk; rollback; three guards). C6's restore proven. |
+| v1.8 | 2026-10-08 | Paul Scott | LFS-021 (the version note provoked needless changes; the drop check held). |

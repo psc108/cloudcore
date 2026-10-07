@@ -581,6 +581,20 @@ def _next_sections(task: dict, n: int = 3) -> str:
     return "; ".join(f"{t['number']} {t['title']}".strip() for t in later) or "(none)"
 
 
+def _version_note(task: dict, cmds: list[dict]) -> str:
+    """The version override, said only where it matters (LFS-021): told to
+    "change version-specific names" in 5.4, whose commands name no version,
+    the 14B rewrote `make headers` three times to have something to change."""
+    if not task["version_override"]:
+        return ""
+    named = [c["index"] for c in cmds if task["version"] in c["text"] and not c.get("skipped")]
+    if not named:
+        return (f"This build uses version {task['version_override']} instead of the book's {task['version']}. "
+                "None of this section's commands names a version, so the version needs NO change to them.\n")
+    return (f"This build uses version {task['version_override']} instead of the book's {task['version']}: "
+            f"change '{task['version']}' to '{task['version_override']}' in command(s) {named} and nothing else.\n")
+
+
 def tutor_notes(task: dict) -> list[str]:
     """The section's lessons from the ladder (C5): the tutor's (Claude) and
     Sentinel's knowledge-base nudges, oldest first."""
@@ -605,8 +619,7 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
            "chroot": "inside the chroot, as root, with the book's environment"}[task["context"]]
     user = (f"Section {task['number']} {task['title']} ({task['book'].upper()}). The controller runs your steps "
             f"{ctx}" + (f", in the unpacked source directory ({task['_cwd']})" if task.get("_srcdir") else f", in {task['_cwd']}")
-            + ".\n" + (f"This build uses version {task['version_override']} instead of the book's {task['version']}: "
-                       "change version-specific names accordingly.\n" if task["version_override"] else "")
+            + ".\n" + _version_note(task, cmds)
             + ("\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n" + "\n".join(f"- {n}" for n in notes) + "\n"
                if notes else "")
             + f"\nThe next sections, which are NOT yours to do now: {_next_sections(task)}.\n"
@@ -694,8 +707,10 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         if run:
             dropped = _dropped_lines(by_index[idx]["text"], run)
             if dropped:
-                problems.append(f"your change to command [{idx}] drops the book's line(s) {dropped}: a change must keep "
-                                "the command's other lines (only leave a whole command out, with a reason, by 'omit')")
+                problems.append(f"your change to command [{idx}] drops the book's line(s) {dropped}. Command [{idx}] is ONE "
+                                f"command of {len([x for x in by_index[idx]['text'].splitlines() if x.strip()])} lines: "
+                                "a change gives the WHOLE command in 'run', with every line. If nothing in it must "
+                                "change, leave it out of 'changes' and it runs as the book has it")
                 continue
             s.update(run=run, changed=_norm(run) != _norm(by_index[idx]["text"]), why=why)
         if ch.get("as") in ("root", "lfs"):
