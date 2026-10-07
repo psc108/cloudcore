@@ -278,6 +278,7 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 - **The parser:** a command is root when the sentence before it ends "as (the) root (user) ...:". Regenerated: 4.4 [2], the 4.2/4.3 host commands, 8.2's diagnostic, 10.3's `mount /boot`, and about 70 BLFS commands are now marked root.
 - **A skip rule:** `make -j32` and `export MAKEFLAGS=-j32` are skipped as "the book's illustration for a 32-core CPU". Skip rules now apply at read time too, so a new rule reaches builds planned before it.
 - **The worker:** a book command marked root runs as root inside an lfs-user section.
+- **Also skipped:** 4.4's `source ~/.bash_profile`. Its `exec env -i /bin/bash` would start an interactive shell; the controller gives each lfs step the `.bashrc` environment itself.
 
 **Verified by:** the re-run of 4.4.
 

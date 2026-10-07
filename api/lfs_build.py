@@ -68,6 +68,9 @@ _SKIP_COMMANDS = [
     (re.compile(r"^\s*su - lfs\s*$"), "the controller runs the lfs user's tasks as lfs itself (an interactive shell can't be driven)"),
     (re.compile(r'^\s*chroot "\$LFS"'), "the controller enters the chroot for every step itself, with the book's "
                                           "env -i settings (an interactive login shell can't be driven)"),
+    (re.compile(r"^\s*source ~/\.bash_profile\s*$"),
+     "its exec env -i /bin/bash starts an interactive shell; the controller gives every lfs step a clean "
+     "environment from the lfs user's .bashrc itself (LFS-017)"),
     (re.compile(r"^\s*(?:make -j32|export MAKEFLAGS=-j32)\s*$"),
      "the book's illustration for a 32-core CPU; its next command sets MAKEFLAGS from nproc for this machine (LFS-017)"),
     (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
