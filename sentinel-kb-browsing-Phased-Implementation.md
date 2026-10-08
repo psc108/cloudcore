@@ -61,11 +61,24 @@ These are useful for the LFS build itself, not only for browsing:
 | K3.2 | **By fault class:** controller fault · 14B mistake · platform · book. This is the classification LFS Phase F1 needs to compare run 2 with run 1 fairly. From K2.4 on, each LFS finding declares it; the 29 existing ones are classified once, by Claude, for Paul to check. | Claude classifies; **Paul** checks |
 | K3.3 | **In the UI,** under the LFS collection: filter by chapter and by fault class, e.g. "all 14B mistakes in chapter 5". | Claude |
 
+## Phase K4 — Exporting findings to Markdown and PDF
+
+Request (Paul, 2026-10-08): each knowledge-base article can be written out as Markdown or PDF.
+
+| # | Stage | Who |
+|---|---|---|
+| K4.1 | **One finding as Markdown.** `GET /api/findings/<id>/export.md` returns the finding in the findings-log format it came from: `### CODE — title`, then **Where**, **Symptom**, **Root cause**, **Fix** and **Verified by**, plus its collection, its subjects and when it was ingested. The file name is the code and a short title (`LFS-019-gcc-pass-1-out-of-memory.md`). An exported finding can be re-ingested unchanged. | Claude |
+| K4.2 | **One finding as PDF,** from the same content, with a title block (code, title, collection, subjects, date) and page numbers. How the PDF is made is open decision K4-a. | Claude |
+| K4.3 | **In the UI:** "Markdown" and "PDF" buttons on each expanded finding. | Claude |
+| K4.4 | **Several at once (optional):** the current filtered view (e.g. "LFS build, 14B mistakes") as one Markdown or PDF document, with a contents list. That's handy for a write-up like LFS Phase D7. One finding per page in the PDF. | Claude |
+| K4.5 | **Tests:** the Markdown round-trips through the KB parser to the same finding; every field present; safe file names; a PDF produced and readable (page count, text extractable); unknown ids give 404. | Claude |
+
 ## Order and dependencies
 
 - **K1 first.** It needs no new data and fixes the "never see all 272" problem on its own.
 - **K2 after K1:** K2.2's list is agreed before K2.3's rules are tuned.
 - **K3 after K2,** and before LFS Phase F (run 2), which uses K3.2's fault classes.
+- **K4 needs only K1** (K4.4's filtered export uses K2's subjects when they exist). It can go alongside K2.
 - **All of it waits for LFS run 1 to complete** (Paul, 2026-10-08).
 
 ## Risks
@@ -81,3 +94,9 @@ These are useful for the LFS build itself, not only for browsing:
 - **Page size:** the default of 50, and whether 25/50/100 is the right choice.
 - **K2.5:** whether to have model suggestions at all, or leave the few unplaced findings to be done by hand.
 - **K3.2:** the fault classes. Is "book" (the book's own text misleads) a class of its own?
+- **K4-a, how PDFs are made:**
+  - **Server-side with WeasyPrint** (HTML+CSS to PDF): a consistent document, a real download, works for K4.4's multi-finding export. It adds a Python dependency with system libraries (Pango) on the Sentinel host. **Recommended.**
+  - **The browser's own print-to-PDF,** from a print stylesheet: no new dependencies, but the user goes through the print dialog, and the result varies by browser.
+  - **Pandoc with a LaTeX engine:** the best typography, but a large install (TeX), for little gain here.
+- **K4-b, house style:** plain and readable, or your navy/green house style (colours, title block, Courier New for code)? The house style is a stylesheet, so it's easy either way.
+- **K4.4:** wanted now, or later?
