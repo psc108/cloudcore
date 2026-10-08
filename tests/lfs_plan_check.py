@@ -112,7 +112,7 @@ def main() -> int:
     build = {"lfs_version": "13.1"}
     failed = 0
     for name, number, changes, ok, word in CASES:
-        reply = json.dumps({"changes": changes, "expect": "x"})
+        reply = json.dumps({"as_the_book": False, "changes": changes, "expect": "x"})
         w.ask_model = lambda *a, _r=reply, **k: (_r, "test")
         steps, why = w.plan(task_for(number), build, None)
         accepted = bool(steps)
@@ -120,6 +120,19 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} {name}: {'accepted' if accepted else 'refused'}"
               + ("" if good else f" (expected {'accepted' if ok else 'refused, mentioning ' + repr(word)}): {why[:200]}"))
+    # LFS-031: "as the book" first; a reply cut off after it still counts.
+    for name, reply, ok in [
+            ("8.5 as_the_book, cut off mid-echo (LFS-031)",
+             '{"as_the_book": true, "changes": [{"why": "run exactly", "book": 0, "run": "make', True),
+            ("as_the_book false and cut off", '{"as_the_book": false, "changes": [{"why": "x", "book": 0, "run": "ma', False),
+            ("as_the_book true with stray changes ignored",
+             json.dumps({"as_the_book": True, "changes": [{"book": 1, "run": "make headers", "why": "v"}], "expect": "x"}), True)]:
+        w.ask_model = lambda *a, _r=reply, **k: (_r, "test")
+        steps, why = w.plan(task_for("5.4"), build, None)
+        good = bool(steps) == ok and (not ok or all(not s.get("changed") for s in steps))
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} {name}: {'accepted' if steps else 'refused'}")
+    extra = 3
     # LFS-023: every package section finds its tarball, even where the
     # package's name isn't the tarball's ("Libstdc++ from GCC", "D-Bus").
     manifest = {"files": [{"kind": "source", "set": "lfs", "file": f} for f in (
@@ -136,7 +149,7 @@ def main() -> int:
         good = got == want
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} tarball for {pkg} {override or ver}: {got}")
-    print(f"{len(CASES) + 7 - failed}/{len(CASES) + 7} as expected")
+    print(f"{len(CASES) + 7 + extra - failed}/{len(CASES) + 7 + extra} as expected")
     return 1 if failed else 0
 
 

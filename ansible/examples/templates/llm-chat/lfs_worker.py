@@ -162,7 +162,11 @@ def set_state(task_id: int, state: str, why: str = "") -> None:
 
 # JSON schemas for each kind of call: llama-server constrains its output to
 # them, so a reply is always the JSON asked for (LFS-011).
-PLAN_SCHEMA = {"type": "object", "required": ["changes", "expect"], "properties": {
+# LFS-031: "as_the_book" comes first (the grammar keeps this order), so a
+# yes survives a reply cut off later -- in 8.5 the 14B wrote all ~20 book
+# commands back out as "changes" to say "no changes", and ran out of tokens.
+PLAN_SCHEMA = {"type": "object", "required": ["as_the_book", "changes", "expect"], "properties": {
+    "as_the_book": {"type": "boolean"},
     "changes": {"type": "array", "items": {"type": "object", "required": ["why"], "properties": {
         "book": {"type": "integer"}, "after": {"type": "integer"}, "run": {"type": "string"},
         "omit": {"type": "boolean"}, "as": {"type": "string", "enum": ["root", "lfs"]}, "why": {"type": "string"}}}},
@@ -219,13 +223,13 @@ def _json_reply(text: str) -> dict | None:
 
 
 PLAN_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer, one section of the book at a time, on a build machine. You get the section's commands, numbered, and facts about the machine. Every numbered command runs EXACTLY as the book has it unless you say otherwise -- so list ONLY the commands you change, leave out or add. Reply with ONLY a JSON object, no prose, no code fences:
-{{"changes": [
+{{"as_the_book": true|false, "changes": [
   {{"book": <number>, "run": "<the command as it must run here>", "why": "<reason>"}},
   {{"book": <number>, "omit": true, "why": "<reason>"}},
   {{"after": <the command number it follows, or -1 to go first>, "run": "<an added step>", "why": "<reason>"}},
   {{"book": <number>, "as": "root|lfs", "why": "<reason>"}}
 ], "expect": "<what success looks like>"}}
-An empty "changes" list means: run the section exactly as the book has it.
+"as_the_book": true means: run the section exactly as the book has it -- then "changes" MUST be empty. Never write a book command out just to say it runs unchanged.
 Rules:
 - Follow the book. Change only what the facts require.
 - A command with a placeholder (like /dev/<xxx>) MUST be changed: fill it from the facts.
@@ -668,6 +672,9 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
                            # changed command written out whole; 900 cut 7.6's replies off (LFS-028).
                            max_tokens=900 if len(listing) < 3000 else 2000, schema=PLAN_SCHEMA)
     data = _json_reply(reply)
+    if re.match(r'\s*\{\s*"as_the_book"\s*:\s*true\b', reply or ""):
+        # Its first word was "as the book": take it, whatever follows (LFS-031).
+        data = {"as_the_book": True, "changes": [], "expect": (data or {}).get("expect", "")}
     if not data or not isinstance(data.get("changes"), list):
         journal(task["id"], "llm-chat", "proposal", f"(unusable reply)\n{reply[:3000]}",
                 {"model": who, "problems": ["the reply wasn't the JSON asked for"]})

@@ -595,6 +595,20 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the re-run of 8.5 (after the restore).
 
+### LFS-031 — Told to change nothing, the 14B wrote every glibc command back out as a "change" and ran past the reply limit
+
+**Where:** task 49 (8.5 Glibc-2.44), after LFS-030's rollback and lesson; `examples/llm-chat/files/lfs_worker.py` (`PLAN_SCHEMA`, `plan`).
+
+**Symptom:** found 2026-10-08, 14:58–16:10 UTC.
+- **Four plans, all cut off:** each "change" was a book command copied out unchanged, with the reason "the book's commands are to be run exactly as they are". Glibc has about 20 commands, more than the 2000-token allowance (LFS-028). All four replies were "the reply wasn't the JSON asked for".
+- **The ladder:** Sentinel's nudge was irrelevant (LFS-018); the tutor's daily cap was reached; so it came to Paul (Claude standing in).
+
+**Root cause:** the controller's. Saying "no changes" needed an empty list, which the 14B doesn't reliably produce under a "change nothing" lesson. Writing commands back out costs tokens, and a cut-off reply loses everything.
+
+**Fix:** the plan's reply now starts with **`"as_the_book": true|false`**, a required field placed first. llama.cpp's grammar keeps the schema's order (checked against the live model, which answered `{"as_the_book": true, "changes": [], …}`). If the reply *begins* `{"as_the_book": true`, the controller runs the section as the book, ignoring whatever follows, so a reply cut off later still counts. The prompt says never to write a command out to say it runs unchanged.
+
+**Verified by:** `tests/lfs_plan_check.py` (29 cases, including a reply cut off mid-echo); the re-run of 8.5.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -626,3 +640,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.5 | 2026-10-08 | Paul Scott | Chapter 7 done. LFS-028 (plan reply cap). |
 | v2.6 | 2026-10-08 | Paul Scott | LFS-029 (8.2 is a reading section; the tutor's daily cap reached). |
 | v2.7 | 2026-10-08 | Paul Scott | LFS-030 (glibc: the judge's blind spots; an early make install; restored). |
+| v2.8 | 2026-10-08 | Paul Scott | LFS-031 (as_the_book first). |
