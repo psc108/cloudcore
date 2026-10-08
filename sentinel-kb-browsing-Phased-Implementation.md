@@ -1,6 +1,6 @@
 # Sentinel: browsing the knowledge base by page, collection and subject — Phased Implementation
 
-**Status:** draft for review, 2026-10-08. Work starts after LFS run 1 is complete (Paul: focus on run 1 first). **Owner:** Paul Scott.
+**Status:** draft for review, 2026-10-08; K5 (data safety) added the same day. Work starts after LFS run 1 is complete (Paul: focus on run 1 first). **Owner:** Paul Scott.
 
 ## Context
 
@@ -73,12 +73,31 @@ Request (Paul, 2026-10-08): each knowledge-base article can be written out as Ma
 | K4.4 | **Several at once (optional):** the current filtered view (e.g. "LFS build, 14B mistakes") as one Markdown or PDF document, with a contents list. That's handy for a write-up like LFS Phase D7. One finding per page in the PDF. | Claude |
 | K4.5 | **Tests:** the Markdown round-trips through the KB parser to the same finding; every field present; safe file names; a PDF produced and readable (page count, text extractable); unknown ids give 404. | Claude |
 
+## Phase K5 — Keeping the data safe
+
+Paul (2026-10-08): no move to MySQL or PostgreSQL any time soon, but **no data or logs we already have may be lost.** SQLite is ample at this scale (Sentinel 469 MB; CloudCore about 45 MB a host). What matters is copies, retention and a clean data layer.
+
+**What exists already** (two-host S6, `cloudcore-two-host-Phased-Implementation.md`):
+- **The schedules:** the dashboard scheduler's `host_backup` kind runs `api/backup-host.py` nightly. Stourport → Llwyn-y-Groes at 02:00 UTC; Llwyn-y-Groes → Stourport at 02:30 UTC. Both succeeded on 2026-10-08.
+- **What each run copies:** consistent, integrity-checked snapshots (SQLite's online backup API) of `cloudcore.db`, which includes the LFS build's tasks and journal; each example's OpenTofu state; and Sentinel's database and models. Plus a SHA-256 manifest.
+- **The other host:** daily folders, unchanged files hard-linked, 7 days kept, mirrored by rsync over an SSH key confined to one directory (rrsync). `api/restore-from-backup.py` restores; restores were verified in S6.
+
+| # | Stage | Who |
+|---|---|---|
+| K5.1 | **A third copy, on the USB device on Llwyn-y-Groes.** It is a SanDisk of 115 GB, label "Ubuntu-backups", currently NTFS and almost empty (69 MB used).<br>• **`backup-host.py` gains a local target** (`--to-dir <path>`) beside `--to <user>@<host>`, and `host_backup` takes `var_overrides.to_dir`.<br>• **A new schedule:** "Daily: back up this host to the USB device", after the 02:30 run.<br>• **Longer retention there,** since space allows: for example 30 daily copies plus 12 monthly. Unchanged files are hard-linked, so each extra day costs only what changed. | Claude |
+| K5.2 | **The device mounted for good, and encrypted** (root steps, for Paul):<br>• **Today it mounts only while Paul is logged in** (`/run/media/scottp/…`, by the desktop session), so a 03:00 run could find it absent. It needs a fixed mount by UUID, with `nofail`.<br>• **It isn't encrypted,** while the host's own disk is LUKS. The backups include credentials data (API token records, peer data). Proposed: re-format it as LUKS + ext4. It's empty enough, but its 69 MB is checked with Paul first. It unlocks at boot with a key file kept on the host's encrypted root disk (`crypttab`, `nofail`).<br>• **ext4 also keeps** Unix ownership and permissions, and hard links behave as on the host.<br>• **If the device is missing,** the run reports "failed: USB device not mounted" in the schedule history, and Sentinel raises an event. It never writes into the empty mount point on the root disk. | **Paul** runs the root steps; Claude writes them |
+| K5.3 | **What isn't covered yet,** decided item by item:<br>• **The LFS build machine's disks** (the build itself, ~50 GB, with snapshots inside its qcow2 files);<br>• **llm-chat's coordinator state** (`/var/lib/model-router`, journals);<br>• **The package repo** (a mirror: it can be fetched again, but slowly).<br>For each: back it up, or record why not. | Claude proposes; **Paul** decides |
+| K5.4 | **Restores, actually tested:** a monthly restore of the latest USB and peer copies into a scratch directory, with `PRAGMA integrity_check` and the manifest's hashes checked, reported in the schedule history. A backup that has never been restored isn't yet a backup. | Claude builds; the scheduler runs |
+| K5.5 | **Retention inside Sentinel's database:** 52,272 suggestions against 272 findings, and 17,889 events. Old events and their suggestions are archived (exported to a dated file in the backup) and then removed after an agreed age, with acknowledged or acted-on rows always kept. That keeps the live database small and the backups fast. Nothing is deleted before it is in a backup. | Claude; **Paul** agrees the ages |
+| K5.6 | **One data-access layer** in Sentinel (and later CloudCore): all SQL in one module per area, so a later move to PostgreSQL is a contained change, not a rewrite. Done as code is touched (K1 and K2 already reshape the findings queries), not as a big-bang refactor. | Claude |
+
 ## Order and dependencies
 
 - **K1 first.** It needs no new data and fixes the "never see all 272" problem on its own.
 - **K2 after K1:** K2.2's list is agreed before K2.3's rules are tuned.
 - **K3 after K2,** and before LFS Phase F (run 2), which uses K3.2's fault classes.
 - **K4 needs only K1** (K4.4's filtered export uses K2's subjects when they exist). It can go alongside K2.
+- **K5 stands alone.** K5.1 and K5.2 come first, since losing data is the one thing that can't be undone, and K5.2's root steps can be done whenever Paul likes. K5.6 travels with K1/K2.
 - **All of it waits for LFS run 1 to complete** (Paul, 2026-10-08).
 
 ## Risks
@@ -100,3 +119,7 @@ Request (Paul, 2026-10-08): each knowledge-base article can be written out as Ma
   - **Pandoc with a LaTeX engine:** the best typography, but a large install (TeX), for little gain here.
 - **K4-b, house style:** plain and readable, or your navy/green house style (colours, title block, Courier New for code)? The house style is a stylesheet, so it's easy either way.
 - **K4.4:** wanted now, or later?
+- **K5.1:** retention on the USB device (30 daily + 12 monthly proposed).
+- **K5.2:** re-format the USB device as LUKS + ext4 (after checking its 69 MB), or keep NTFS and encrypt the backup files themselves instead.
+- **K5.3:** which of the uncovered items to back up.
+- **K5.5:** the ages after which Sentinel's events and suggestions are archived.
