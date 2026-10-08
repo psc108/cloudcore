@@ -125,14 +125,19 @@ def main() -> int:
             ("8.5 as_the_book, cut off mid-echo (LFS-031)",
              '{"as_the_book": true, "changes": [{"why": "run exactly", "book": 0, "run": "make', True),
             ("as_the_book false and cut off", '{"as_the_book": false, "changes": [{"why": "x", "book": 0, "run": "ma', False),
+            ("2.7 as_the_book with a placeholder left (LFS-032)", '{"as_the_book": true, "changes": [], "expect": "x"}', None),
             ("as_the_book true with stray changes ignored",
              json.dumps({"as_the_book": True, "changes": [{"book": 1, "run": "make headers", "why": "v"}], "expect": "x"}), True)]:
         w.ask_model = lambda *a, _r=reply, **k: (_r, "test")
-        steps, why = w.plan(task_for("5.4"), build, None)
-        good = bool(steps) == ok and (not ok or all(not s.get("changed") for s in steps))
+        if ok is None:  # a placeholder section: must be refused, saying as_the_book must be false
+            steps, why = w.plan(task_for("2.7"), build, None)
+            good = not steps and "as_the_book must be false" in why
+        else:
+            steps, why = w.plan(task_for("5.4"), build, None)
+            good = bool(steps) == ok and (not ok or all(not s.get("changed") for s in steps))
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} {name}: {'accepted' if steps else 'refused'}")
-    extra = 3
+    extra = 4
     # LFS-023: every package section finds its tarball, even where the
     # package's name isn't the tarball's ("Libstdc++ from GCC", "D-Bus").
     manifest = {"files": [{"kind": "source", "set": "lfs", "file": f} for f in (

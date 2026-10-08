@@ -609,6 +609,26 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** `tests/lfs_plan_check.py` (29 cases, including a reply cut off mid-echo); the re-run of 8.5.
 
+### LFS-032 — Claude's "change nothing" lesson for glibc forgot its time-zone placeholder; four correct-looking plans refused
+
+**Where:** task 49 (8.5 Glibc-2.44); Claude's LFS-030 lesson; `examples/llm-chat/files/lfs_worker.py` (the placeholder refusal).
+
+**Symptom:** found 2026-10-08, 16:13–17:16 UTC.
+- **LFS-031 worked:** the 14B answered `as_the_book: true` cleanly, four times.
+- **The placeholder:** glibc's command [20] is `ln -sfv /usr/share/zoneinfo/<xxx> /etc/localtime`, a placeholder that must be filled. The placeholder check refused every plan ("command(s) [20] still have a placeholder").
+- **Its first plan of the day** (12:13) had filled it.
+- **The ladder:** Sentinel's nudge pointed at LFS-031 (related, not the cause); the tutor's daily cap was still spent.
+
+**Root cause:** Claude's lesson. It told the 14B to "change nothing" in a section with a placeholder; the 14B obeyed. Also the controller's: its refusal didn't say that `as_the_book` can't be true while a placeholder is left, nor what to do instead.
+
+**Fix:**
+- **The refusal:** when the reply says `as_the_book` but a placeholder remains, it now says "as_the_book must be false, with a change for ONLY those command(s), each written out whole with the placeholder filled". Offline case added (30 cases).
+- **A superseding lesson for 8.5:** everything as the book except [20], which becomes `ln -sfv /usr/share/zoneinfo/Europe/London /etc/localtime`. **The time zone, Europe/London,** is Claude's default for Paul, who is in the UK; it is easily changed later (`timedatectl`).
+
+**Verified by:** the re-run of 8.5.
+
+**Lesson for the tutor (Claude):** a "change nothing" lesson must first check the section for placeholders. A lesson is code the 14B runs; it needs the same care.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -641,3 +661,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.6 | 2026-10-08 | Paul Scott | LFS-029 (8.2 is a reading section; the tutor's daily cap reached). |
 | v2.7 | 2026-10-08 | Paul Scott | LFS-030 (glibc: the judge's blind spots; an early make install; restored). |
 | v2.8 | 2026-10-08 | Paul Scott | LFS-031 (as_the_book first). |
+| v2.9 | 2026-10-08 | Paul Scott | LFS-032 (a lesson forgot a placeholder). |

@@ -768,7 +768,9 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             s.update(**{"as": ch["as"]}, why=why or s["why"])
     left = [s["book"] for s in steps if not s.get("omitted") and re.search(r"/dev/<|<[a-z]{2,10}>", s["run"])]
     if left:
-        problems.append(f"command(s) {left} still have a placeholder like /dev/<xxx>: change them")
+        problems.append(f"command(s) {left} still have a placeholder like /dev/<xxx>: change them"
+                        + (" -- so as_the_book must be false, with a change for ONLY those command(s), "
+                           "each written out whole with the placeholder filled (LFS-032)" if data.get("as_the_book") else ""))
     if not steps or all(s.get("omitted") for s in steps):
         problems.append("nothing would run: a section with no commands needs added steps")
     journal(task["id"], "llm-chat", "proposal",
