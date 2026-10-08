@@ -612,6 +612,16 @@ def _version_note(task: dict, cmds: list[dict]) -> str:
             f"change '{task['version']}' to '{task['version_override']}' in command(s) {named} and nothing else.\n")
 
 
+def _failure_passages(task: dict, limit: int = 5000) -> str:
+    """The section's paragraphs about tests and failures (LFS-030): in 8.5 the
+    known failures are deep in a long section, past what the judge was shown."""
+    text = (task.get("section") or {}).get("text", "")
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    hits = [p for p in paras if re.search(r"\b(?:fail|failure|failures|test suite|tests?|timeout|known)\b", p, re.I)]
+    out = "\n\n".join(" ".join(p.split()) for p in hits)
+    return out[:limit] or text[:limit]
+
+
 def tutor_notes(task: dict) -> list[str]:
     """The section's lessons from the ladder (C5): the tutor's (Claude) and
     Sentinel's knowledge-base nudges, oldest first. A lesson marked
@@ -854,8 +864,19 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             elif code == 0:
                 break
             if _CHECK.search(run):
+                # LFS-030: the judge saw only the output's end (not which tests
+                # failed), the book's first 4000 characters (not its list of
+                # known failures) and no lessons. Now: the failing tests' names
+                # from the whole log, the book's passages about failures, and
+                # the section's lessons.
+                _, failed = m.sh(f"grep -aE '^(FAIL|ERROR|XPASS):' /var/log/lfs-build/{name}.log | sort -u | head -80")
+                notes = tutor_notes(task)
                 reply, _ = ask_model(JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run}\n\n"
-                                     f"Output (end):\n{tail[-3500:]}\n\nThe book's text:\n{(task['section'] or {}).get('text', '')[:4000]}",
+                                     f"The failing tests (from the whole log):\n{failed.strip() or '(none listed)'}\n\n"
+                                     f"Output (end):\n{tail[-2500:]}\n\n"
+                                     f"What the book says about test failures:\n{_failure_passages(task)}"
+                                     + ("\n\nYOUR TUTOR'S NOTES FOR THIS SECTION:\n" + "\n".join(f"- {n}" for n in notes)
+                                        if notes else ""),
                                      max_tokens=400, schema=JUDGE_SCHEMA)
                 verdict = _json_reply(reply) or {}
                 journal(task_id, "llm-chat", "lesson", f"test result: {'acceptable' if verdict.get('acceptable') else 'NOT acceptable'}"
@@ -894,6 +915,16 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                                         re.findall(r"\brm\s+-\w*[rR]\w*\s+([^;&|\n]+)", before + "\n" + replace))):
                 journal(task_id, "controller", "note", f"refused a repair that deletes directories: {before or replace}")
                 before, replace = "", ""
+            # LFS-030: in 8.5 a repair ran the book's later `make install` before
+            # the book's own preparation for it (the sed that disables a check).
+            if step["book"] is not None:
+                later = [c for c in (task["section"] or {}).get("commands", [])
+                         if c["index"] > step["book"] and not c.get("skipped") and len(_norm(c["text"])) >= 8
+                         and _norm(c["text"]) in _norm(before + "\n" + replace)]
+                if later:
+                    journal(task_id, "controller", "note", f"refused a repair that runs later book command(s) "
+                            f"{[c['index'] for c in later]} early, out of the book's order: {before or replace}")
+                    before, replace = "", ""
             book_system = {w for c in (task["section"] or {}).get("commands", []) for w in _SYSTEM.findall(c["text"])}
             bad = sorted({w for w in _SYSTEM.findall(before + "\n" + replace) if w not in book_system or _NEVER.fullmatch(w)})
             if bad:

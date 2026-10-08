@@ -561,6 +561,40 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **The tutor's cap:** it worked as designed. On a day of controller faults it is spent quickly; most of today's sessions went on faults that are now fixed.
 
+### LFS-030 — Glibc's tests judged "not acceptable" over three known, environment-made failures; the repairs ran `make install` early and planted false symlinks
+
+**Where:** task 49 (8.5 Glibc-2.44, the final system's C library); `examples/llm-chat/files/lfs_worker.py` (the test judge, the repair checks).
+
+**Symptom:** found 2026-10-08, 12:01–14:53 UTC.
+- **The tests:** `make check` (32 min) ended with 3 FAIL out of more than 6000:
+  - `io/tst-lchmod`: the book says it's known to fail in the chroot;
+  - `elf/tst-thp-1-static` and `elf/tst-thp-1-no-s-code-static`: transparent-huge-page alignment, which depends on the build machine's own kernel (Ubuntu 5.15). The book says tests "may fail with … host kernel version".
+- **The 14B's verdict:** "NOT acceptable", because the book "does not explicitly list" them.
+- **Its repairs did damage:**
+  - **Out of order:** it ran the book's **later `make install`** in place of `make check`, before the book's preparing `touch /etc/ld.so.conf` and the `sed` that disables an outdated install check. Glibc was **partly installed into the new system's `/usr`** before that check failed.
+  - **False symlinks:** to "fix" that check it created `/usr/lib/libnsl.so`, `libnss_dns.so` and `libunwind.so`, the last pointing at a library that doesn't exist.
+- **Attempt 2, after Sentinel's nudge** (irrelevant: GCC's out-of-memory lesson): invented configure options (`--enable-obsolete-rpc`, "because the machine boots by UEFI"), the same 3 FAIL, then GCC's out-of-memory recipe as glibc's "repair".
+- **Rung 3:** the tutor's daily cap was reached, so the build paused for Paul.
+
+**Root cause:** both.
+- **The 14B's judgement:** too literal. It wanted every failure named, though the book says a few host-dependent failures out of 6000 are normal.
+- **The controller made it worse:**
+  - **Failing tests:** the judge saw only the output's last 3500 characters, where the failing tests' *names* aren't.
+  - **The book:** the judge saw only its first 4000 characters, before the list of known failures.
+  - **Lessons:** the judge saw none.
+  - **Order:** nothing stopped a repair from running a later book command early.
+
+**Fix:**
+- **Rollback:** restored checkpoint `before-049-8-5-glibc-2-44`, which undid the partial install and the symlinks on both disks.
+- **The judge's input:**
+  - **The failing tests:** their names, `grep`'d from the step's whole log (`^FAIL|ERROR|XPASS:`).
+  - **The book:** the section's paragraphs about tests and failures (8.5: 2926 characters, including `io/tst-lchmod` and the host-kernel note).
+  - **The lessons:** the section's tutor and Sentinel notes.
+- **Order:** a repair that runs a later book command (one after the failing step) is refused, as out of the book's order.
+- **A superseding lesson for 8.5,** from Claude standing in for rung 4: run the book exactly; these three failures are acceptable, and why; never `make install` before the book's own `touch` and `sed`; never create library symlinks.
+
+**Verified by:** the re-run of 8.5 (after the restore).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -591,3 +625,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.4 | 2026-10-08 | Paul Scott | LFS-027 (the first chroot step: $LFS/tmp; logging). |
 | v2.5 | 2026-10-08 | Paul Scott | Chapter 7 done. LFS-028 (plan reply cap). |
 | v2.6 | 2026-10-08 | Paul Scott | LFS-029 (8.2 is a reading section; the tutor's daily cap reached). |
+| v2.7 | 2026-10-08 | Paul Scott | LFS-030 (glibc: the judge's blind spots; an early make install; restored). |
