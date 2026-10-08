@@ -611,10 +611,21 @@ def _version_note(task: dict, cmds: list[dict]) -> str:
 
 def tutor_notes(task: dict) -> list[str]:
     """The section's lessons from the ladder (C5): the tutor's (Claude) and
-    Sentinel's knowledge-base nudges, oldest first."""
+    Sentinel's knowledge-base nudges, oldest first. A lesson marked
+    {"supersedes": true} retires every lesson before it (LFS-024: after the
+    controller was fixed, 5.6's old workaround lessons kept steering the 14B)."""
     who = {"claude": "tutor", "sentinel": "Sentinel, from the knowledge base"}
-    return [f"({who[j['who']]}) {j['text']}" for j in task.get("journal", [])
-            if j["who"] in who and j["kind"] == "lesson"]
+    notes = []
+    for j in task.get("journal", []):
+        if j["who"] not in who or j["kind"] != "lesson":
+            continue
+        try:
+            if (json.loads(j.get("data") or "null") or {}).get("supersedes"):
+                notes = []
+        except ValueError:
+            pass
+        notes.append(f"({who[j['who']]}) {j['text']}")
+    return notes
 
 
 def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[dict], str]:

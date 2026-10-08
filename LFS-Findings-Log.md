@@ -440,6 +440,26 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** `tests/lfs_plan_check.py` (19 plan cases and 7 tarball cases); the re-run of 5.6.
 
+### LFS-024 — After LFS-023's fix, 5.6's old workaround lessons kept steering the 14B, and its used-up ladder went straight to rung 4
+
+**Where:** task 14 (5.6 Libstdc++); `examples/llm-chat/files/lfs_worker.py` (`tutor_notes`); `sentinel/lfs_watch.py` (`climb`).
+
+**Symptom:** found 2026-10-08, 01:48–02:10 UTC.
+- **The fix worked:** with LFS-023 fixed, the controller unpacked `gcc-16.2.0.tar.xz` and started 5.6 in it.
+- **The old lessons won:** the 14B followed the two earlier tutor lessons, "unpack GCC yourself with an added step" and "rewrite [0] with absolute paths". Both were workarounds for the fault just fixed. The dropped-line check refused the rewrite twice, so the task went stuck.
+- **Sentinel went straight to rung 4:** the task's nudge and both tutor sessions were already spent on the old fault, so the build paused at once.
+
+**Root cause:** two gaps in the ladder's design.
+- **Lessons:** they can't be withdrawn. Every lesson ever written for a section goes into the 14B's prompt.
+- **The ladder:** a human fix doesn't reset it, so rungs spent on a fault that no longer exists still count.
+
+**Fix:**
+- **The worker:** a lesson with `{"supersedes": true}` retires every lesson before it in that section.
+- **Sentinel:** a journal note with `{"ladder": "reset"}` starts the climb again; rungs before it no longer count. Tested (8 Sentinel tests; 26 offline plan cases still pass).
+- **The protocol:** a human fix that makes earlier lessons wrong posts a superseding lesson and a ladder reset with the task reset.
+
+**Verified by:** the re-run of 5.6.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -464,3 +484,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v1.8 | 2026-10-08 | Paul Scott | LFS-021 (the version note provoked needless changes; the drop check held). |
 | v1.9 | 2026-10-08 | Paul Scott | LFS-022 (a remark refused as a step). |
 | v2.0 | 2026-10-08 | Paul Scott | LFS-023 (no tarball for 5 sections; the tutor's workaround fought the guards). 5.5 glibc built. |
+| v2.1 | 2026-10-08 | Paul Scott | LFS-024 (stale lessons; the ladder reset). |
