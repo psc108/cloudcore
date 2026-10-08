@@ -460,6 +460,23 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the re-run of 5.6.
 
+### LFS-025 — Chapter 7 checked before it ran: an interactive login shell and a backup that leaves the chroot (prevented)
+
+**Where:** sections 7.6, 7.15 and 8.39; `api/lfs_build.py` (`_SKIP_COMMANDS`).
+
+**Symptom:** found 2026-10-08 by reading the chroot chapter's commands before the run, after chapters 5 and 6 finished (31 of 145 tasks done; chapter 6 had 16 of 17 sections done on the first attempt).
+- **7.6 [5] and 8.39 [5]:** `exec /usr/bin/bash --login`, an interactive login shell. Run as a step, it would hang or end the step's shell.
+- **7.15's backup subsection:** `exit` the chroot, then `umount $LFS/{sys,proc,run,dev}`, then `cd $LFS; tar -cJpf $HOME/lfs-temp-tools-….tar.xz .`. These are host commands, and the controller would run them inside the chroot context.
+
+**Root cause:** the book drives an interactive terminal; the controller runs each step non-interactively in its task's context. These are the same kind as `su - lfs` and `chroot "$LFS"` (already skipped).
+
+**Fix:** skip rules, applied at read time to the planned build:
+- **The login shell:** every step already runs in a fresh shell (in the chroot: `env -i` with the book's environment).
+- **The backup:** the checkpoint after chapter 7 snapshots both disks, which is the backup.
+- **Reach:** checked against the whole book; the rules match exactly 7.6 [5], 7.15 [3]–[5] and 8.39 [5].
+
+**Verified by:** the chapter 7 run.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -485,3 +502,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v1.9 | 2026-10-08 | Paul Scott | LFS-022 (a remark refused as a step). |
 | v2.0 | 2026-10-08 | Paul Scott | LFS-023 (no tarball for 5 sections; the tutor's workaround fought the guards). 5.5 glibc built. |
 | v2.1 | 2026-10-08 | Paul Scott | LFS-024 (stale lessons; the ladder reset). |
+| v2.2 | 2026-10-08 | Paul Scott | Chapters 5 and 6 built. LFS-025 (chapter 7's interactive steps, prevented). |

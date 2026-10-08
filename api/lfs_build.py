@@ -73,6 +73,13 @@ _SKIP_COMMANDS = [
      "environment from the lfs user's .bashrc itself (LFS-017)"),
     (re.compile(r"^\s*(?:make -j32|export MAKEFLAGS=-j32)\s*$"),
      "the book's illustration for a 32-core CPU; its next command sets MAKEFLAGS from nproc for this machine (LFS-017)"),
+    # Chapter 7 (LFS-025): an interactive login shell, and 7.15's backup, which
+    # leaves the chroot. Each step runs in a fresh shell already, and the
+    # checkpoint after chapter 7 snapshots both disks: that is the backup.
+    (re.compile(r"^\s*exec /usr/bin/bash --login\s*$"),
+     "it starts an interactive login shell; the controller runs every step in a fresh shell in the chroot (LFS-025)"),
+    (re.compile(r"^\s*exit\s*$|umount \$LFS/\{sys,proc,run,dev\}|tar -cJpf \$HOME/lfs-temp-tools"),
+     "the book's backup leaves the chroot; the controller's checkpoint after chapter 7 snapshots both disks instead (LFS-025)"),
     (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
                                           "delivers the verified sources from the host's repo (LFS-006)"),
 ]
