@@ -522,6 +522,28 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Follow-up:** 7.3's mounts are safe to re-run only if the 14B adds `mountpoint -q … ||` guards (the tutor's LFS-T882 lesson says so). A skip rule could hand 7.3 to the controller's own `_VFS`, which is idempotent.
 
+### LFS-028 — 7.6's plans were cut off at the 900-token reply cap
+
+**Where:** task 36 (7.6 Creating Essential Files and Symlinks); `examples/llm-chat/files/lfs_worker.py` (`plan`).
+
+**Symptom:** found 2026-10-08, 08:18–09:19 UTC.
+- **Unusable replies:** 7.6's book commands write `/etc/passwd`, `/etc/group` and `/etc/hosts` out in full. Both of the 14B's first plans were "the reply wasn't the JSON asked for", and the visible text stopped mid-change.
+- **Slow too:** each plan took about 30 minutes for this long prompt at the 14B's speed.
+- **Recovery:** after Sentinel's nudge, the next plan was short and correct, and 7.6 was done on its second attempt. On the machine: `/etc/mtab` → `/proc/self/mounts`, `/etc/passwd` 15 entries, `/etc/group` 35.
+
+**Root cause:** the controller's. A fixed 900-token cap on plan replies is too small when a change has to give a long command whole (LFS-021's rule).
+
+**Fix:** sections whose command listing is 3000 characters or more get a 2000-token cap. In chapters 8–10 that is only 8.5 (glibc).
+
+**Verified by:** 7.6 done (above); the cap applies from chapter 8.
+
+**Chapter 7 summary:** all 14 sections done.
+- **Controller faults:** three, all fixed (LFS-026 to -028).
+- **The 14B:** one real mistake (7.5's invented `rm -r /usr/lib64`), fixed by a tutor lesson.
+- **Sentinel's nudge alone:** cleared 7.6 and 7.14.
+- **First try:** seven packages, Gettext to Texinfo.
+- **The book's backup:** replaced by the checkpoint after 7.15 (LFS-025).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -550,3 +572,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.2 | 2026-10-08 | Paul Scott | Chapters 5 and 6 built. LFS-025 (chapter 7's interactive steps, prevented). |
 | v2.3 | 2026-10-08 | Paul Scott | LFS-026 (an all-skipped section). 7.2 and 7.3 done. |
 | v2.4 | 2026-10-08 | Paul Scott | LFS-027 (the first chroot step: $LFS/tmp; logging). |
+| v2.5 | 2026-10-08 | Paul Scott | Chapter 7 done. LFS-028 (plan reply cap). |

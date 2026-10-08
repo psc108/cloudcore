@@ -654,7 +654,9 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             + f"\nFacts about the machine:\n{fx}\n\nThe section's commands:\n{listing}\n\n"
             f"The section's text (start):\n{prose}\n" + (f"\nYour previous answer had problems: {feedback}\n" if feedback else ""))
     reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user,
-                           max_tokens=900, schema=PLAN_SCHEMA)
+                           # Long sections (7.6's /etc/passwd and /etc/group) need room for a
+                           # changed command written out whole; 900 cut 7.6's replies off (LFS-028).
+                           max_tokens=900 if len(listing) < 3000 else 2000, schema=PLAN_SCHEMA)
     data = _json_reply(reply)
     if not data or not isinstance(data.get("changes"), list):
         journal(task["id"], "llm-chat", "proposal", f"(unusable reply)\n{reply[:3000]}",
