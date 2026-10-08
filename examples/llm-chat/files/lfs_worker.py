@@ -300,7 +300,9 @@ class Machine:
         logf, rcf = f"/var/log/lfs-build/{name}.log", f"/var/log/lfs-build/{name}.rc"
         self.sh("mkdir -p /var/log/lfs-build")
         self.put(script.encode(), "/var/log/lfs-build/current-step.sh", 0o755)
-        self.sh(f"rm -f {rcf}; setsid nohup bash -c {shlex.quote(launcher + f' > {logf} 2>&1; echo $? > {rcf}')} "
+        # The whole launcher writes to the log: a failure before the step itself
+        # (a copy into the chroot, say) left no log and no clue (LFS-027).
+        self.sh(f"rm -f {rcf}; setsid nohup bash -c {shlex.quote('{ ' + launcher + f'; }} > {logf} 2>&1; echo $? > {rcf}')} "
                 f"> /dev/null 2>&1 < /dev/null &")
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout_s:
@@ -441,7 +443,8 @@ def launcher(context: str, as_user: str | None, cwd: str) -> tuple[str, str]:
     if context == "chroot":
         # The book's 7.4 environment, run non-interactively; the script is copied into the chroot.
         pro = f"set -e\ncd {shlex.quote(cwd)}\n{_CWD_TRAP}"
-        launch = (f"export LFS={LFS}; cp {step} $LFS/tmp/lfs-step.sh && chroot \"$LFS\" /usr/bin/env -i HOME=/root "
+        # $LFS/tmp exists only once 7.5 has run; 7.5 itself runs in the chroot (LFS-027).
+        launch = (f"export LFS={LFS}; install -d -m 1777 $LFS/tmp && cp {step} $LFS/tmp/lfs-step.sh && chroot \"$LFS\" /usr/bin/env -i HOME=/root "
                   "TERM=xterm PATH=/usr/bin:/usr/sbin MAKEFLAGS=\"-j$(nproc)\" TESTSUITEFLAGS=\"-j$(nproc)\" "
                   "/bin/bash -e /tmp/lfs-step.sh")
         return pro, launch

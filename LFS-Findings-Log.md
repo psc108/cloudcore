@@ -495,6 +495,33 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **The tutor's rule from LFS-023 worked:** this is the first controller fault it escalated to Paul without first handing the 14B a workaround.
 
+### LFS-027 — The first step in the chroot couldn't start: its script was copied into `$LFS/tmp`, which 7.5 creates; the failure left no log
+
+**Where:** task 35 (7.5 Creating Directories, the first section run in the chroot); `examples/llm-chat/files/lfs_worker.py` (`launcher`, `Machine.run_detached`).
+
+**Symptom:** found 2026-10-08, 06:33–07:22 UTC.
+- **Every step failed fast:** each attempt at 7.5's first command ended "exit 1 after 10s". The only output was the controller's own "tail: cannot open '/var/log/lfs-build/task035-step1-tryN.log'".
+- **The 14B's repairs:** four "the step's work is already done" (refused); its plans were otherwise as the book.
+- **The ladder:**
+  - **Rung 2:** nudged with a tutor lesson for 7.3 (LFS-T882) and LFS-015.
+  - **Rung 3 (1.5 min):** the tutor said **"needs Paul"**. Its diagnosis was right: the step never ran, the controller fails before or around the book's command, and "every later chroot section will hit the same failure".
+- **Also found:** `$LFS/dev/pts` mounted three times and `$LFS/proc` twice, from 7.3's own book commands run on three attempts.
+
+**Root cause:** the controller's.
+- **The copy:** the chroot launcher copied each step's script to `$LFS/tmp/lfs-step.sh`, but `$LFS/tmp` doesn't exist until 7.5, the first section run in the chroot. The copy failed.
+- **The log:** the log redirect covered only the `chroot` command, not the whole launcher, so the failure wrote nothing.
+- **The mounts:** 7.3's book commands aren't safe to re-run.
+
+**Fix:**
+- **`$LFS/tmp`:** the chroot launcher makes it first, with `install -d -m 1777`, the book's own mode.
+- **The log:** the whole launcher's output goes to the step's log, `{ …; } > log 2>&1`. Tested: exit code and error both captured.
+- **The mounts:** unmounted and mounted once each, the same set `_VFS` restores after reboots.
+- **Probe:** a trivial step run through the same launcher inside the chroot gave "inside: 0 /", 226 programs, and LFS's bash 5.3.0 (`x86_64-lfs-linux-gnu`). Exit 0.
+
+**Verified by:** the probe; the re-run of 7.5.
+
+**Follow-up:** 7.3's mounts are safe to re-run only if the 14B adds `mountpoint -q … ||` guards (the tutor's LFS-T882 lesson says so). A skip rule could hand 7.3 to the controller's own `_VFS`, which is idempotent.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -522,3 +549,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.1 | 2026-10-08 | Paul Scott | LFS-024 (stale lessons; the ladder reset). |
 | v2.2 | 2026-10-08 | Paul Scott | Chapters 5 and 6 built. LFS-025 (chapter 7's interactive steps, prevented). |
 | v2.3 | 2026-10-08 | Paul Scott | LFS-026 (an all-skipped section). 7.2 and 7.3 done. |
+| v2.4 | 2026-10-08 | Paul Scott | LFS-027 (the first chroot step: $LFS/tmp; logging). |
