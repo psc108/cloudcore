@@ -477,6 +477,24 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the chapter 7 run.
 
+### LFS-026 — 7.4's only command is the controller's own (entering the chroot), so a correct plan was refused as "nothing would run"
+
+**Where:** task 34 (7.4 Entering the Chroot Environment); `examples/llm-chat/files/lfs_worker.py` (`run_task`).
+
+**Symptom:** found 2026-10-08, 06:05–06:27 UTC.
+- **Chapter 7 so far:** 7.2 (ownership) done, and 7.3 (virtual file systems) done on its third attempt.
+- **7.4:** its one book command, the interactive `chroot "$LFS" … /bin/bash --login`, is skipped: the controller enters the chroot for every step itself. Four times, the 14B's plan was correctly "nothing to do" ("the chroot environment is already entered"). Four times it was refused: "nothing would run: a section with no commands needs added steps".
+- **Rung 2:** nudged with LFS-025 (related, not the cause).
+- **Rung 3 (about 2 min):** the tutor said **"needs Paul"** at once, citing the new rule (a controller fault isn't a workaround for the 14B). Its diagnosis: "The 14B was not wrong … any added step would have to copy the skipped book command (refused) or be invented busywork". It asked for exactly this fix.
+
+**Root cause:** the controller's. The "nothing would run" check is meant for sections that have no book commands, where the model must write them (2.4). It also fired where every command is the controller's own.
+
+**Fix:** a section whose book commands are all skipped by the controller is marked done without a plan. The worker journals each skip rule as the reason, and takes the after-chapter checkpoint if one is due.
+
+**Verified by:** the re-run of 7.4.
+
+**The tutor's rule from LFS-023 worked:** this is the first controller fault it escalated to Paul without first handing the 14B a workaround.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -503,3 +521,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.0 | 2026-10-08 | Paul Scott | LFS-023 (no tarball for 5 sections; the tutor's workaround fought the guards). 5.5 glibc built. |
 | v2.1 | 2026-10-08 | Paul Scott | LFS-024 (stale lessons; the ladder reset). |
 | v2.2 | 2026-10-08 | Paul Scott | Chapters 5 and 6 built. LFS-025 (chapter 7's interactive steps, prevented). |
+| v2.3 | 2026-10-08 | Paul Scott | LFS-026 (an all-skipped section). 7.2 and 7.3 done. |

@@ -788,6 +788,17 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         cwd = f"{base}/{srcdir}"
         journal(task_id, "controller", "note", f"unpacked {src} into {cwd}")
     task["_cwd"], task["_srcdir"] = cwd, srcdir
+    # LFS-026: every command skipped by the controller (7.4: the chroot it
+    # enters itself) leaves nothing to plan; the section is done by the
+    # controller, and asking the model only makes it refuse a correct "nothing".
+    cmds = (task["section"] or {}).get("commands", [])
+    if cmds and all(c.get("skipped") for c in cmds):
+        journal(task_id, "controller", "note", "every command in this section is the controller's own: "
+                + "; ".join(f"[{c['index']}] {c['skipped']}" for c in cmds))
+        set_state(task_id, "done", "the controller does this section itself")
+        if task["checkpoint_after"] and vm_id:
+            checkpoint(m, vm_id, task, "after")
+        return True
     phase("planning", task)
     steps, why = plan(task, build, m)
     if not steps:
