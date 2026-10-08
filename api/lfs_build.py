@@ -86,6 +86,11 @@ _SKIP_COMMANDS = [
 # Sections the build needs although they have no commands: the book leaves the
 # step to the reader (2.4: partition with cfdisk), so the model must write it.
 _COMMANDLESS = {"2.4"}
+# Reading sections: their commands illustrate, they aren't steps (LFS-029). 8.2
+# shows package-management styles with a made-up libfoo; the 14B's first plan
+# ("omit them all") was right and the controller refused it.
+_READING_SECTIONS = {"8.2": "a reading section: the book illustrates package-management styles with a made-up "
+                            "libfoo; LFS installs each package directly, so there is nothing to run (LFS-029)"}
 # BLFS packages for stage 1, in build order (dependencies first), and where
 # they go: the UEFI tools before LFS's GRUB set-up (10.4), OpenSSH last.
 _BLFS_STAGE1 = [("general/popt.html", "10.4"), ("postlfs/efivar.html", "10.4"),
@@ -365,6 +370,8 @@ def get_task(tid):
         skipped = {s["index"]: s["why"] for s in t["skip_commands"]}
         # Rules added since the build was planned apply too (LFS-017).
         for n, c in enumerate(sec["commands"]):
+            if t["number"] in _READING_SECTIONS and t["book"] == "lfs":
+                skipped.setdefault(n, _READING_SECTIONS[t["number"]])
             if n not in skipped and c["subsection"] not in t["skip_subsections"]:
                 why = next((w for rx, w in _SKIP_COMMANDS if rx.search(c["text"])), None)
                 if why:

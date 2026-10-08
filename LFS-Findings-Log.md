@@ -544,6 +544,23 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **First try:** seven packages, Gettext to Texinfo.
 - **The book's backup:** replaced by the checkpoint after 7.15 (LFS-025).
 
+### LFS-029 — 8.2 "Package Management" is a reading section; the controller made the 14B "build" the book's made-up libfoo
+
+**Where:** task 46 (8.2 Package Management, chapter 8's first task); `api/lfs_build.py`.
+
+**Symptom:** found 2026-10-08, 10:51–11:51 UTC.
+- **The right answer, refused:** the 14B's first plan left out all three commands, "this section is about package management techniques". That was correct. The controller refused it ("nothing would run"). In its next plan the 14B made up steps to act the examples out: `mkdir /usr/pkg/libfoo/1.1`, `cd /usr/src/libfoo-1.1`, `./configure`, then tried to unpack a `libfoo-1.1.tar.gz` that doesn't exist.
+- **Rung 2:** irrelevant.
+- **Rung 3:** never ran: **the tutor's daily cap (6) was reached.** Sessions since 00:00 UTC: 5.6 twice, 7.4, 7.5 twice, then this. So the build paused for Paul, as designed.
+
+**Root cause:** the controller's. The queue includes every section with commands. 8.2's three commands are the book's illustrations (a fictitious `libfoo`), not steps. The only other example-style commands in chapters 8–10 are placeholders the 14B must fill (8.5's time zone, 9.2, 9.7, 10.2's fstab, 10.4's GRUB), which the placeholder check already covers.
+
+**Fix:** a list of reading sections in the API, applied at read time. Their commands are all marked skipped with the reason, so LFS-026's path marks the section done by the controller. 8.2 is the only one.
+
+**Verified by:** the re-run of 8.2.
+
+**The tutor's cap:** it worked as designed. On a day of controller faults it is spent quickly; most of today's sessions went on faults that are now fixed.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -573,3 +590,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.3 | 2026-10-08 | Paul Scott | LFS-026 (an all-skipped section). 7.2 and 7.3 done. |
 | v2.4 | 2026-10-08 | Paul Scott | LFS-027 (the first chroot step: $LFS/tmp; logging). |
 | v2.5 | 2026-10-08 | Paul Scott | Chapter 7 done. LFS-028 (plan reply cap). |
+| v2.6 | 2026-10-08 | Paul Scott | LFS-029 (8.2 is a reading section; the tutor's daily cap reached). |
