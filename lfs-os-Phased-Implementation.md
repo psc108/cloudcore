@@ -87,6 +87,57 @@ Checked 2026-10-06: CloudCore has none of these yet.
 | E4 | **Proof: it shows.** The image boots; the compositor starts; a terminal opens and runs a command. Shown on the graphical console (B3), with a screenshot checked by Claude. | All |
 | E5 | **Write-up,** as D7. | Claude; llm-chat drafts |
 
+## Phase F — Run 2: the 14B and Sentinel alone
+
+Agreed 2026-10-08 (Paul): once run 1 has produced a bootable OS, build it again with **only llm-chat and Sentinel**. No tutor sessions, and no Claude in the loop. The question is whether the system *learned*: run 1's failures, findings and tutor lessons are now Sentinel's knowledge base.
+
+| # | Stage | Who |
+|---|---|---|
+| F1 | **A fair baseline.** Freeze the controller at its end-of-run-1 version, and record what run 1 cost: stops per chapter, which rung cleared each, attempts, model time.<br>• **Classify every run-1 stop** as a **controller fault** (fixed for good, so it can't recur: LFS-020 to -028) or a **14B mistake** (inventing reasons to omit, deleting to retry, ignoring notes, copying book commands).<br>• **Only the second kind measures learning.** | Claude |
+| F2 | **The ladder without rung 3:** the tutor timer is off for the run. Stuck: retries, then Sentinel's nudge, then Paul.<br>• **Run 1's lessons as plain notes:** in a fresh build, the controller can give the 14B the knowledge base's lessons for a section *before* it plans (not only after a stop). This is a design choice to test both ways. | Claude builds; Sentinel runs |
+| F3 | **The run,** on a fresh build VM, same book and versions, through D6 (boot). | llm-chat; Sentinel |
+| F4 | **The comparison.** Per chapter:<br>• stops and attempts;<br>• how many stops the nudge cleared;<br>• which run-1 mistakes recurred;<br>• model time;<br>• whether it still boots.<br>Plus a verdict on the knowledge base: which entries helped, and which matched on noise. | Claude; llm-chat drafts |
+
+## Phase G — Supply chain: what goes into the OS
+
+Agreed 2026-10-08 (Paul): give the OS a fighting chance from the start. Scanning about 100 packages' source for backdoors mostly finds noise; the real xz-utils backdoor (2024) was in the release **tarball** but not the project's git, and was found by a slow SSH login, not a scanner. So the emphasis is provenance, known flaws and build behaviour, with review aimed where an attack would land.
+
+| # | Stage | Who |
+|---|---|---|
+| G1 | **Signatures.** Check upstream's GPG signature for every source that has one, against pinned keys, as the kernel's already are (A2). Sources with only a checksum are listed as such. | Claude |
+| G2 | **Tarball against git.** For each source with a public repository, compare the release tarball with the tagged commit. Differences beyond the generated files a release normally adds (configure, Makefile.in, docs) are flagged for review. **This is the check that would have caught xz.** | Claude builds; llm-chat reviews the flags |
+| G3 | **Known vulnerabilities.** Match every pinned package version against OSV (and NVD) for CVEs, plus the LFS/BLFS security advisories. It runs with the weekly `lfs_update` job (A5), and a finding becomes a report and a Sentinel finding. | Claude builds; the scheduler runs |
+| G4 | **Build-time behaviour.** Builds are already offline. Also record, per package, the files its build reads and writes outside its own tree and `$LFS/usr` (an strace/audit pass on a clean build). Anything unexpected is flagged: xz's trigger hid in a build file. | Claude builds; Sentinel watches |
+| G5 | **Targeted review** of the attack surface, not of everything:<br>• sshd;<br>• PAM and shadow;<br>• systemd's network-facing parts;<br>• glibc's resolver;<br>• the kernel config.<br>Static analysis (cppcheck/semgrep) on these, with the 14B triaging and Claude checking what it marks real. | llm-chat; Claude checks |
+| G6 | **Review updates as diffs.** When A5 finds a new version of a package, the diff from the pinned version is reviewed before it's accepted. A diff is small and reviewable, and it's where a supply-chain attack arrives. | llm-chat; Claude on escalation |
+
+## Phase H — Hardening the build
+
+Hardening changes how everything is compiled. It goes into a **third run** (after F), so run 2 stays comparable with run 1.
+
+| # | Stage | Who |
+|---|---|---|
+| H1 | **Compiler hardening, system-wide:** PIE, `-fstack-protector-strong`, `_FORTIFY_SOURCE=3`, full RELRO and BIND_NOW, `-fstack-clash-protection`, and CET (`-fcf-protection`) where the toolchain supports it. Set as defaults in GCC's build (chapter 8) and checked on every binary afterwards (`checksec`-style). | llm-chat; Claude tutors |
+| H2 | **Kernel hardening:** the Kernel Self-Protection Project's recommended options, checked by `kernel-hardening-checker`, with each one not taken recorded and justified. | llm-chat; Claude tutors |
+| H3 | **A minimal system:** no package beyond stage 1's need, nothing listening by default except sshd, an nftables firewall that denies by default, and systemd service sandboxing for every service shipped. | llm-chat |
+| H4 | **Proof:** a scan of the booted image. Hardening flags on every binary, kernel checks, open ports, failed or unsandboxed units. Plus the D6 boot checks. | All |
+
+## Phase I — Login: multi-factor authentication
+
+Agreed 2026-10-08 (Paul): the OS requires MFA. Paul would rather not use an off-the-shelf authenticator, because it's well known, but accepts one as the proof.
+
+Claude's view, for the decision (I1):
+- **Being well known isn't where a scheme's strength comes from.** TOTP (RFC 6238) is strong because of its secret key; a home-made *scheme* would be weaker, because it hasn't had years of people trying to break it (Kerckhoffs's principle).
+- **The part to make our own is the implementation and integration,** on a standard algorithm.
+
+| # | Stage | Who |
+|---|---|---|
+| I1 | **Choose the factors.** Options, strongest first:<br>• **FIDO2 hardware keys** (e.g. a YubiKey) via `pam_u2f` at the console and `ed25519-sk` keys for SSH: phishing-resistant, and no authenticator company involved. Needs a key (or two: a spare).<br>• **TOTP from our own PAM module,** written from RFC 6238 and tested against the RFC's published vectors. Any authenticator app works with it.<br>• **Both:** FIDO2 as the main factor, TOTP as the fallback. | **Paul** decides |
+| I2 | **Build it.** For TOTP: our own PAM module (C, with the RFC test vectors as its tests). For FIDO2: libfido2 and pam_u2f from source, through the G checks like every other package. | llm-chat; Claude tutors and reviews |
+| I3 | **Every way in:** console login, SSH (key plus second factor), `sudo` re-authentication, and what root's console does. | llm-chat; Claude tutors |
+| I4 | **Recovery, designed before it's needed:** a lost key or phone must not lock Paul out of his own machine, nor open a back door. One-time recovery codes, kept offline, and a documented console path. | Claude; **Paul** approves |
+| I5 | **Proof:** each way in refuses one factor alone and accepts both. A wrong code is rate-limited and logged, and Sentinel sees the attempts. | All |
+
 ## Order and dependencies
 
 - **Before anything:** llm-chat is at its best.
@@ -94,7 +145,11 @@ Checked 2026-10-06: CloudCore has none of these yet.
 - **Phase B** runs alongside A.
 - **Phase C** needs B1 and B4.
 - **Phase D** needs C6.
-- **Phase E** needs D6.
+- **Phase E** needs D6. Whether stage 2 waits for H and I is an open decision.
+- **Phase F** needs D6 (run 1 boots).
+- **Phase G:** G1–G3 can start now, on the sources already stored. G4 needs a clean build (F's run is one). G5 and G6 follow.
+- **Phase H** is run 3: after F, so F stays comparable with run 1.
+- **Phase I** needs a booted stage 1. I1 can be decided any time.
 
 ## Scale (estimates, to be replaced by measurement)
 
@@ -132,3 +187,6 @@ Paul asked whether to move up from the 14B. Agreed:
 - **E1:** the compositor.
 - **A5:** how often to check (weekly suggested), and whether package-version news is wanted or only releases and advisories.
 - **C5:** the daily cap on tutor sessions.
+- **F2:** whether the 14B gets the knowledge base's lessons for a section before planning, or only after a stop. Run both, or choose.
+- **I1:** the MFA factors: FIDO2 keys, our own TOTP module, or both. FIDO2 needs keys bought.
+- **Order:** does stage 2 (E) wait for hardening (H) and MFA (I)?
