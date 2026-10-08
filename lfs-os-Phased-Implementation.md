@@ -147,7 +147,7 @@ Claude's view, for the decision (I1):
 - **Phase D** needs C6.
 - **Phase E** needs D6. Whether stage 2 waits for H and I is an open decision.
 - **Phase F** needs D6 (run 1 boots).
-- **Phase G:** G1–G3 can start now, on the sources already stored. G4 needs a clean build (F's run is one). G5 and G6 follow.
+- **Phases F–I wait until everything before them is complete** (Paul, 2026-10-08: focus on run 1 first). Within them: G4 needs a clean build (F's run is one), and G5 and G6 follow.
 - **Phase H** is run 3: after F, so F stays comparable with run 1.
 - **Phase I** needs a booted stage 1. I1 can be decided any time.
 
