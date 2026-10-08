@@ -455,19 +455,33 @@ def launcher(context: str, as_user: str | None, cwd: str) -> tuple[str, str]:
 
 
 def source_file(task: dict, manifest: dict) -> str | None:
-    """The tarball a package task unpacks, by package and version (or the override)."""
+    """The tarball a package task unpacks, by package and version (or the override).
+
+    Names are matched loosely (LFS-023): "Libstdc++ from GCC" is GCC's tarball,
+    "D-Bus" is dbus-*, "Flit-Core" is flit_core-*, and "Sqlite" is
+    sqlite-autoconf-*. Before that, 5.6 ran with nothing unpacked."""
     if not task["package"]:
         return None
     ver = task["version_override"] or task["version"]
     pkg = task["package"].lower()
+    if " from " in pkg:  # "libstdc++ from gcc": the section builds part of another package
+        pkg = pkg.split(" from ", 1)[1].strip()
+
+    def flat(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s)
+
+    best = None
     for f in manifest["files"]:
         name = f["file"].lower()
-        if f["kind"] != "source" or f["set"] in ("books", "blfs-common"):
+        if f["kind"] != "source" or f["set"] in ("books", "blfs-common") or not re.search(r"\.tar(\.\w+)?$|\.tgz$", name):
             continue
         if name.startswith(f"{pkg}-{ver}") or name.startswith(f"{pkg}{ver}") or \
                 (pkg == "linux" and name == f"linux-{ver}.tar.xz"):
             return f["file"]
-    return None
+        stem = flat(name.split(ver, 1)[0]) if ver in name else ""
+        if stem and (stem == flat(pkg) or (stem.startswith(flat(pkg)) and len(stem) - len(flat(pkg)) <= 9)):
+            best = best or f["file"]  # e.g. sqlite + "autoconf"
+    return best
 
 
 def deliver_sources(m: Machine, manifest: dict, task_id: int) -> None:

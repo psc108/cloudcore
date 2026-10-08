@@ -120,7 +120,23 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} {name}: {'accepted' if accepted else 'refused'}"
               + ("" if good else f" (expected {'accepted' if ok else 'refused, mentioning ' + repr(word)}): {why[:200]}"))
-    print(f"{len(CASES) - failed}/{len(CASES)} as expected")
+    # LFS-023: every package section finds its tarball, even where the
+    # package's name isn't the tarball's ("Libstdc++ from GCC", "D-Bus").
+    manifest = {"files": [{"kind": "source", "set": "lfs", "file": f} for f in (
+        "gcc-16.2.0.tar.xz", "elfutils-0.195.tar.bz2", "sqlite-autoconf-3530400.tar.gz", "sqlite-doc-3530400.zip",
+        "flit_core-4.0.2.tar.gz", "dbus-1.16.2.tar.xz", "binutils-2.47.tar.xz", "linux-7.2.9.tar.xz")]}
+    for pkg, ver, override, want in [("Libstdc++ from GCC", "16.2.0", "", "gcc-16.2.0.tar.xz"),
+                                     ("Libelf from Elfutils", "0.195", "", "elfutils-0.195.tar.bz2"),
+                                     ("Sqlite", "3530400", "", "sqlite-autoconf-3530400.tar.gz"),
+                                     ("Flit-Core", "4.0.2", "", "flit_core-4.0.2.tar.gz"),
+                                     ("D-Bus", "1.16.2", "", "dbus-1.16.2.tar.xz"),
+                                     ("Binutils", "2.47", "", "binutils-2.47.tar.xz"),
+                                     ("Linux", "7.1.8", "7.2.9", "linux-7.2.9.tar.xz")]:
+        got = w.source_file({"package": pkg, "version": ver, "version_override": override}, manifest)
+        good = got == want
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} tarball for {pkg} {override or ver}: {got}")
+    print(f"{len(CASES) + 7 - failed}/{len(CASES) + 7} as expected")
     return 1 if failed else 0
 
 

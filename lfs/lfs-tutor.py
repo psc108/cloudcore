@@ -78,7 +78,9 @@ Choose "needs Paul" only when no lesson to the 14B can fix it: the controller it
 
 The finding is for the knowledge base: the symptom as it shows in output, the root cause, and the fix, so the next similar problem is matched to it.
 
-The controller's rules, for judging what's possible: steps run non-interactively in the task's context (root on the host, the lfs user with the book's .bashrc, or root in the chroot with the book's environment); each step starts where the previous one ended (cd carries); the book's commands run exactly unless the 14B changes them; repairs that delete directories outside the package's own tree are refused; added steps that copy book commands are refused; the controller times steps itself."""
+The controller's rules, for judging what's possible: steps run non-interactively in the task's context (root on the host, the lfs user with the book's .bashrc, or root in the chroot with the book's environment); each step starts where the previous one ended (cd carries); the book's commands run exactly unless the 14B changes them; repairs that delete directories outside the package's own tree are refused; added steps that copy book commands are refused; the controller times steps itself; for a package section the controller unpacks the package's tarball and starts the first step in its source directory, journalling "unpacked <tarball> into <dir>".
+
+A fault in the controller is "needs Paul" at once, not a workaround for the 14B to carry: for example a package section with no "unpacked" note (nothing to build in), a step run as the wrong user, or state lost between steps. Lessons that work around the controller make the 14B fight its own guards."""
 
 
 def log(msg: str) -> None:

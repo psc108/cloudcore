@@ -406,6 +406,40 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 
 **Pattern:** the last three stops (LFS-020's guards, LFS-021, LFS-022) have each been the controller tightening, then over-tightening. Each guard now has a test case; `tests/lfs_plan_check.py` now replays the recorded replies (19 cases, LFS-014 to -022) through the real `plan()`, offline; run it before deploying a worker change.
 
+### LFS-023 — 5.6 ran with nothing unpacked: the controller found no tarball for "Libstdc++ from GCC" (and four more sections)
+
+**Where:** task 14 (5.6 Libstdc++ from GCC-16.2.0); `examples/llm-chat/files/lfs_worker.py` (`source_file`); `lfs/lfs-tutor.py` (the tutor's rules).
+
+**Symptom:** found 2026-10-08, 00:17–01:45 UTC.
+- **Nothing to build in:** no "unpacked" note, so every step ran in `$LFS/sources`. `../libstdc++-v3/configure` didn't exist (exit 127).
+- **The 14B's repairs** `cd`'d into a `gcc-16.2.0` that wasn't there.
+- **The ladder:**
+  - **Rung 2:** irrelevant.
+  - **Tutor session 1:** diagnosed it exactly ("No GCC source tree existed for this section … the controller did not unpack"). But it chose a **workaround lesson**, telling the 14B to unpack GCC itself with an added step.
+  - **The 14B:** put that step last.
+  - **Tutor session 2:** named the controller's cause again ("it looks for a tarball named after the section title") and again gave a workaround, with absolute paths.
+  - **The guards:** LFS-020's dropped-line check refused that, and rung 4 paused the build.
+- **Meanwhile, 5.5 (glibc) built cleanly** in 8 min, with the book's sanity checks.
+
+**Root cause:** the controller's. `source_file` matched tarballs by `<package>-<version>`. Five of the 115 package sections name their package differently from its tarball:
+
+| Section | Package name | Tarball |
+|---|---|---|
+| 5.6 | Libstdc++ from GCC | gcc-* |
+| 8.50 | Libelf from Elfutils | elfutils-* |
+| 8.52 | Sqlite | sqlite-autoconf-* |
+| 8.55 | Flit-Core | flit_core-* |
+| 8.78 | D-Bus | dbus-* |
+
+Also the tutor's: it saw a controller fault and handed the 14B a workaround that the controller's own guards then fought.
+
+**Fix:**
+- **The tarball lookup:** "X from Y" means Y's tarball. Otherwise names are compared with non-alphanumerics removed, allowing a short suffix (`autoconf`), and only tarballs count. All 115 package sections now map to a tarball containing their version; the offline check covers the five.
+- **The tutor's rules:** a controller fault (a package section never unpacked, the wrong user, state lost between steps) is "needs Paul" at once. Lessons that work around the controller make the 14B fight its guards.
+- **Cleanup:** the stray `$LFS/sources/build` and the 14B's own unpacked `gcc-16.2.0` are removed; the controller unpacks afresh.
+
+**Verified by:** `tests/lfs_plan_check.py` (19 plan cases and 7 tarball cases); the re-run of 5.6.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -429,3 +463,4 @@ Also noted while testing: the build machine's `/bin/sh` is `dash`, as Ubuntu shi
 | v1.7 | 2026-10-07 | Paul Scott | LFS-020 (5.4 dropped the copy; grub-install on the host disk; rollback; three guards). C6's restore proven. |
 | v1.8 | 2026-10-08 | Paul Scott | LFS-021 (the version note provoked needless changes; the drop check held). |
 | v1.9 | 2026-10-08 | Paul Scott | LFS-022 (a remark refused as a step). |
+| v2.0 | 2026-10-08 | Paul Scott | LFS-023 (no tarball for 5 sections; the tutor's workaround fought the guards). 5.5 glibc built. |
