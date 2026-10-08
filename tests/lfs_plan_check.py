@@ -138,6 +138,16 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} {name}: {'accepted' if steps else 'refused'}")
     extra = 4
+    # LFS-033: a search that finds nothing exits 1, which is success for it.
+    for name, run, code, out, want in [
+            ("8.5 grep Timed out, nothing found", 'grep "Timed out" $(find -name \\*.out)', 1, "\n@@lfs-cwd=/x\n", True),
+            ("grep that found something", 'grep "Timed out" x', 1, "a.out: Timed out\n", False),
+            ("grep with an error", "grep x missing-file", 2, "", False),
+            ("a build that exits 1", "make", 1, "", False)]:
+        good = w._nothing_found(run, code, out) == want
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} {name}: {w._nothing_found(run, code, out)}")
+    extra += 4
     # LFS-023: every package section finds its tarball, even where the
     # package's name isn't the tarball's ("Libstdc++ from GCC", "D-Bus").
     manifest = {"files": [{"kind": "source", "set": "lfs", "file": f} for f in (

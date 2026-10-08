@@ -629,6 +629,24 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Lesson for the tutor (Claude):** a "change nothing" lesson must first check the section for placeholders. A lesson is code the 14B runs; it needs the same care.
 
+### LFS-033 — Glibc's tests passed, then the book's diagnostic `grep "Timed out"` "failed" because it found nothing
+
+**Where:** task 49 (8.5 Glibc-2.44), book command [6]; `examples/llm-chat/files/lfs_worker.py` (the step loop).
+
+**Symptom:** found 2026-10-08, 17:29–19:33 UTC. Two attempts, both the same:
+- **The tests passed:** `make check` (~30 min) ended with the 3 known failures, and **the 14B judged them acceptable**, citing the book correctly (LFS-030's judge fix, and LFS-032's lesson, working).
+- **The next step "failed":** the book's next command, `grep "Timed out" $(find -name \*.out)` (which lists tests that timed out), exited 1 in 10 s with no output.
+- **The repairs:** the 14B called it "already done" (refused: not an "already exists" failure), then tried `touch … && sed … && make install`, which LFS-030's order guard refused, correctly.
+- **The ladder:** Sentinel's nudge was relevant this time (LFS-T1262, glibc's own lesson, and LFS-030); the tutor's cap was spent.
+
+**Root cause:** the controller's. `grep` exits 1 when it finds nothing; for this diagnostic search that is the good result (no test timed out). The controller treated every non-zero exit as a failure.
+
+**Fix:** a single `grep` (also `egrep`, `fgrep`, `zgrep`) that exits 1 with no output counts as done, journalled as "grep found nothing … the good result". A grep that found something, a grep error (exit 2) and other commands exiting 1 are unchanged. Offline cases added (34 in all).
+
+**Verified by:** the re-run of 8.5 (from scratch: the worker re-unpacks on each attempt).
+
+**Cost note:** each glibc attempt costs about 45 minutes of build and test. Resuming a task from its failed step, instead of re-unpacking, would save that. A follow-up worth having before chapter 8's GCC (several hours with its tests).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -662,3 +680,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.7 | 2026-10-08 | Paul Scott | LFS-030 (glibc: the judge's blind spots; an early make install; restored). |
 | v2.8 | 2026-10-08 | Paul Scott | LFS-031 (as_the_book first). |
 | v2.9 | 2026-10-08 | Paul Scott | LFS-032 (a lesson forgot a placeholder). |
+| v3.0 | 2026-10-08 | Paul Scott | LFS-033 (grep's 'nothing found'). Glibc's tests now judged acceptable. |

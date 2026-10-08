@@ -616,6 +616,14 @@ def _version_note(task: dict, cmds: list[dict]) -> str:
             f"change '{task['version']}' to '{task['version_override']}' in command(s) {named} and nothing else.\n")
 
 
+def _nothing_found(run: str, code: int, output: str) -> bool:
+    """grep exits 1 when it finds nothing. For the book's diagnostic searches
+    (8.5: `grep "Timed out" $(find -name \\*.out)`, listing tests that timed
+    out) that is the good result, not a failure (LFS-033)."""
+    return code == 1 and bool(re.match(r"\s*(?:grep|egrep|fgrep|zgrep)\b", run)) and "\n" not in run.strip() \
+        and not _CWD_RE.sub("", output).strip()
+
+
 def _failure_passages(task: dict, limit: int = 5000) -> str:
     """The section's paragraphs about tests and failures (LFS-030): in 8.5 the
     known failures are deep in a long section, past what the judge was shown."""
@@ -855,6 +863,10 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             journal(task_id, "controller", "command", run, {"step": n + 1, "book": step["book"], "log": name})
             code, tail, secs = m.run_detached(pro + run + "\n", launch, name)
             ends = _CWD_RE.findall(tail)
+            if _nothing_found(run, code, tail):
+                journal(task_id, "controller", "note", "grep found nothing (exit 1): for this search that is the good "
+                        "result, so the step counts as done (LFS-033)")
+                code = 0
             tail = _CWD_RE.sub("\n", tail).rstrip("\n")
             # The longer tail is for the tutor (C5), who reads the journal, not the machine.
             journal(task_id, "lab", "result", f"exit {code} after {secs:.0f}s\n{tail[-3000:]}",
