@@ -447,7 +447,7 @@ llm-chat's 14B model builds a bootable operating system from Linux From Scratch 
 | **The build's journal and task queue:** one task per book section, each with its state, attempts and journal | `/v1/lfs/builds`, `/v1/lfs/tasks/<id>`, `/v1/lfs/builds/<id>/journal.md` |
 
 **How it's driven:**
-- **The worker:** `examples/llm-chat/files/lfs_worker.py` runs on the llm-chat coordinator. It plans each section as differences from the book, runs the steps, judges the results and repairs failures. It keeps a heartbeat, and with `--follow` it waits for help when a task is stuck.
+- **The worker:** `examples/llm-chat/files/lfs_worker.py` runs on the llm-chat coordinator. It plans each section as differences from the book, runs the steps, judges the results and repairs failures. It keeps a heartbeat, and with `--follow` it waits for help when a task is stuck. A retried task resumes from the step that failed, if the tree is still there and the steps that already ran are unchanged.
 - **Sentinel** climbs an escalation ladder for a stuck task (below).
 - **The tutor** is headless Claude Code with no tools: `lfs/lfs-tutor.py`, installed as a user timer by `lfs/install-lfs-tutor.sh --api-ssh <API host>`.
 - **The plan checker's offline tests:** `python3 tests/lfs_plan_check.py`.
@@ -829,4 +829,5 @@ Two offline checks need no API and no VMs:
 ```bash
 python3 tests/authz_walk.py       # every route against every role (central auth)
 python3 tests/lfs_plan_check.py   # the LFS worker's plan checker, against the model's recorded replies
+python3 tests/lfs_resume_check.py # the LFS worker resuming a task from its failed step (a simulation)
 ```

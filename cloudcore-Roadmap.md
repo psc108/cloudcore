@@ -140,7 +140,7 @@ In the review's priority order.
 | CC-92 | **Hardening,** as run 3. | after F | LFS H |
 | CC-93 | **MFA.** | after stage 1 | LFS I |
 | CC-94 | **Stage 2, Wayland.** | after D6 | LFS E |
-| CC-95 | **The worker resuming a task from its failed step,** instead of re-unpacking (each glibc retry cost ~45 min). | open | LFS-Findings-Log LFS-033 |
+| CC-95 | **The worker resumes a task from its failed step,** instead of re-unpacking (each glibc retry cost ~45 min; GCC's 4.6 h tests ran three times). **Built 2026-10-09:** a progress marker on the build machine (rewound with the tree by a checkpoint restore); a retry resumes only if the tree is still there and every step that already ran is unchanged in the new plan. Offline simulation `tests/lfs_resume_check.py` (8 cases). It takes effect at the worker's next safe restart. | built; live at next restart | LFS-Findings-Log LFS-033, LFS-036 |
 
 ## 10. Housekeeping
 

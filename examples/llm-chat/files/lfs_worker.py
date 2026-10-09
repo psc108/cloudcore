@@ -815,6 +815,49 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
     return (steps if not problems else []), "; ".join(problems)
 
 
+# ── Resuming a task (CC-95) ───────────────────────────────────────────────────
+# A retry used to re-unpack and start over: GCC's 4.6-hour test suite ran three
+# times (LFS-036). Now the machine keeps a marker of how far the task got. It
+# lives on the build machine, so a checkpoint restore rewinds it with the tree,
+# and the two can't disagree.
+
+def _progress_path(task: dict) -> str:
+    return f"/var/log/lfs-build/task{task['seq']:03d}.progress"
+
+
+def _step_key(step: dict) -> str:
+    """A fingerprint of what a step does: its command, its user, omitted or not."""
+    return hashlib.sha1(json.dumps([_norm(step.get("run") or ""), step.get("as"),
+                                    bool(step.get("omitted"))]).encode()).hexdigest()[:16]
+
+
+def _read_progress(m: Machine, task: dict) -> dict | None:
+    code, out = m.sh(f"cat {_progress_path(task)} 2>/dev/null")
+    try:
+        data = json.loads(out) if code == 0 and out.strip() else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_progress(m: Machine, task: dict, done: int, steps: list[dict], cwd: str) -> None:
+    m.put(json.dumps({"done": done, "keys": [_step_key(s) for s in steps[:done]], "cwd": cwd}).encode(),
+          _progress_path(task), 0o644)
+
+
+def _resume_point(progress: dict | None, steps: list[dict]) -> int:
+    """How many of the plan's steps already ran in the machine's current tree:
+    the marker's count, if every one of those steps is unchanged in this plan.
+    0 means start afresh (no marker, or a lesson changed a step that ran)."""
+    if not progress:
+        return 0
+    done = int(progress.get("done") or 0)
+    keys = progress.get("keys") or []
+    if done <= 0 or done > len(steps) or len(keys) < done:
+        return 0
+    return done if all(_step_key(steps[i]) == keys[i] for i in range(done)) else 0
+
+
 def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers: set[str],
              plan_only: bool = False, vm_id: str = "") -> bool:
     st, task = api("GET", f"/v1/lfs/tasks/{task_id}")
@@ -827,10 +870,10 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             return False
     srcdir, cwd = "", {"chroot": "/", "host-lfs": f"{LFS}/sources", "host-root": "/root"}[task["context"]]
     src = source_file(task, manifest)
-    if src:
-        base = "/sources" if task["context"] == "chroot" else f"{LFS}/sources"
-        code, top = m.sh(f"cd {LFS}/sources && tar -tf {shlex.quote(src)} | head -1 | cut -d/ -f1")
-        srcdir = top.strip()
+    # An earlier attempt's marker: resume only if its tree is still there (CC-95).
+    progress = _read_progress(m, task) if task["attempts"] >= 1 and not plan_only else None
+
+    def unpack() -> bool:
         own = "lfs:lfs" if task["context"] == "host-lfs" else "root:root"
         code, out = m.sh(f"cd {LFS}/sources && rm -rf {shlex.quote(srcdir)} && tar -xf {shlex.quote(src)} "
                          f"&& chown -R {own} {shlex.quote(srcdir)}", timeout=1800)
@@ -838,8 +881,22 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             journal(task_id, "controller", "result", f"unpacking {src} failed:\n{out[-1500:]}")
             set_state(task_id, "stuck", f"couldn't unpack {src}")
             return False
-        cwd = f"{base}/{srcdir}"
         journal(task_id, "controller", "note", f"unpacked {src} into {cwd}")
+        return True
+
+    unpack_later = False
+    if src:
+        base = "/sources" if task["context"] == "chroot" else f"{LFS}/sources"
+        code, top = m.sh(f"cd {LFS}/sources && tar -tf {shlex.quote(src)} | head -1 | cut -d/ -f1")
+        srcdir = top.strip()
+        cwd = f"{base}/{srcdir}"
+        tree_there = m.sh(f"test -d {LFS}/sources/{shlex.quote(srcdir)}")[0] == 0
+        if progress and progress.get("done") and tree_there:
+            unpack_later = True  # decided after planning: resume in this tree, or start afresh
+        else:
+            progress = None
+            if not unpack():
+                return False
     task["_cwd"], task["_srcdir"] = cwd, srcdir
     # LFS-026: every command skipped by the controller (7.4: the chroot it
     # enters itself) leaves nothing to plan; the section is done by the
@@ -863,13 +920,27 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
     if plan_only:
         set_state(task_id, "waiting", "plan only")
         return True
+    resume = _resume_point(progress, steps)
+    if progress and progress.get("done") and not resume:
+        journal(task_id, "controller", "note", f"starting afresh: the plan changed a step that already ran "
+                f"(the earlier attempt had done {progress.get('done')}), so its tree can't be reused")
+        if unpack_later and not unpack():
+            return False
+    if resume:
+        cwd = progress.get("cwd") or cwd
+        journal(task_id, "controller", "note", f"resuming at step {resume + 1} of {len(steps)}: steps 1-{resume} "
+                "already ran in this tree on an earlier attempt and are unchanged in this plan (CC-95)",
+                {"resume": resume, "cwd": cwd})
+    _write_progress(m, task, resume, steps, cwd)
     repairs = 0
     # 3.1: the controller's delivery stands where the book's wget is: after the
     # book's own mkdir and chmod, before the md5sum check (LFS-006, LFS-015).
     wget_at = next((c["index"] for c in (task["section"] or {}).get("commands", [])
                     if c.get("skipped") and "wget" in c["text"]), None) if task["number"] == "3.1" else None
-    delivered = wget_at is None
+    delivered = wget_at is None or resume > 0
     for n, step in enumerate(steps):
+        if n < resume:
+            continue  # done on an earlier attempt, in this same tree (CC-95)
         if not delivered and (step["book"] is None or step["book"] > wget_at):
             deliver_sources(m, manifest, task_id)
             delivered = True
@@ -879,7 +950,7 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         ends: list[str] = []
         while True:
             pro, launch = launcher(task["context"], step.get("as"), cwd)
-            name = f"task{task['seq']:03d}-step{n + 1}-try{attempt + 1}"
+            name = f"task{task['seq']:03d}-a{task['attempts'] + 1}-step{n + 1}-try{attempt + 1}"
             phase(f"step {n + 1}/{len(steps)} try {attempt + 1}: {run.strip().splitlines()[0][:120]}", task)
             journal(task_id, "controller", "command", run, {"step": n + 1, "book": step["book"], "log": name})
             code, tail, secs = m.run_detached(pro + run + "\n", launch, name)
@@ -987,6 +1058,7 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 run = replace
         if ends and ends[-1] != cwd:
             cwd = ends[-1]  # the step's own `cd`, as in one shell (LFS-018)
+        _write_progress(m, task, n + 1, steps, cwd)  # this step is done (CC-95)
     if not delivered:
         deliver_sources(m, manifest, task_id)
     if any(c.get("skipped") and re.match(r"\s*passwd root\s*$", c["text"])
@@ -998,6 +1070,7 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 "Paul sets root's password himself (LFS-035).")
     if task["number"] == "2.7":
         record_mounts(m)
+    m.sh(f"rm -f {_progress_path(task)}")
     if srcdir:
         m.sh(f"cd {LFS}/sources && rm -rf {shlex.quote(srcdir)}")
     set_state(task_id, "done", f"{len([s for s in steps if not s.get('omitted')])} step(s) ran cleanly")
