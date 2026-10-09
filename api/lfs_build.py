@@ -89,6 +89,7 @@ _COMMANDLESS = {"2.4"}
 # Reading sections: their commands illustrate, they aren't steps (LFS-029). 8.2
 # shows package-management styles with a made-up libfoo; the 14B's first plan
 # ("omit them all") was right and the controller refused it.
+_EXAMPLE_DOTS = re.compile(r"(?:^|\s)\.\.\.(?:\s|$)")
 _READING_SECTIONS = {"8.2": "a reading section: the book illustrates package-management styles with a made-up "
                             "libfoo; LFS installs each package directly, so there is nothing to run (LFS-029)"}
 # BLFS packages for stage 1, in build order (dependencies first), and where
@@ -372,6 +373,11 @@ def get_task(tid):
         for n, c in enumerate(sec["commands"]):
             if t["number"] in _READING_SECTIONS and t["book"] == "lfs":
                 skipped.setdefault(n, _READING_SECTIONS[t["number"]])
+            # LFS-034: a command inside one of the book's notes, with a bare `...`,
+            # is an example, not a step (8.23 GMP: `ABI=32 ./configure ...` for 32-bit x86).
+            if c.get("note") and _EXAMPLE_DOTS.search(c["text"]):
+                skipped.setdefault(n, f"an example in the book's note ({c['note']}): its '...' stands for the rest "
+                                      "of a command, and the note's case doesn't apply to this build (LFS-034)")
             if n not in skipped and c["subsection"] not in t["skip_subsections"]:
                 why = next((w for rx, w in _SKIP_COMMANDS if rx.search(c["text"])), None)
                 if why:

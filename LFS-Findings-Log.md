@@ -647,6 +647,25 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Cost note:** each glibc attempt costs about 45 minutes of build and test. Resuming a task from its failed step, instead of re-unpacking, would save that. A follow-up worth having before chapter 8's GCC (several hours with its tests).
 
+### LFS-034 — GMP's 32-bit example inside a book note was run as step [0]; the tutor correctly called it a controller fault
+
+**Where:** task 67 (8.23 GMP-6.3.0); `api/lfs_build.py` (read-time skip rules).
+
+**Symptom:** found 2026-10-09, 01:12–02:10 UTC, after a good stretch: 8.5 glibc done (its tests judged acceptable; LFS-030 to -033), then **8.6–8.22 all done on the first attempt** (17 packages; 66 of 145 tasks done).
+- **The step:** GMP's [0] is `ABI=32 ./configure ...`, the example inside the book's Note "If you are building for 32-bit x86 …". Run as written, configure took `...` as the machine name: "Invalid configuration '...': machine '...-unknown' not recognized".
+- **The 14B's repairs:** they kept `ABI=32` and added `--build/--host/--target` and `CC="gcc -m32"`, which this 64-bit toolchain can't do.
+- **The ladder:** Sentinel's nudge was irrelevant (LFS-018). The tutor's cap had reset at 00:00 UTC.
+  - **Session 1:** diagnosed it exactly, with a lesson to leave [0] out. The 14B still answered `as_the_book: true`.
+  - **Session 2:** "needs Paul", because the parser turns a conditional example into a runnable step, and "the same Note shape will come back".
+
+**Root cause:** the controller's parser. It takes every `<pre>` in a page as a command, including the example inside a note.
+
+**Fix:** a read-time skip rule. A command inside one of the book's notes (an admonition) that contains a bare `...` is an example, skipped with the reason. Across both books it matches only GMP's [0]. Two commands outside notes also contain `...` (9.2's hosts file, BLFS's logrotate example), but they are real steps with placeholders the 14B must fill, and they stay.
+
+**Verified by:** the re-run of 8.23.
+
+**Observation:** with `as_the_book` (LFS-031), a lesson saying "leave [0] out" was overridden by the 14B's one-word "as the book". It's easier for the 14B to ignore a lesson that asks for a change. Watch for it; if it recurs, the controller can reject `as_the_book: true` when the section's lessons name a change.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -681,3 +700,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.8 | 2026-10-08 | Paul Scott | LFS-031 (as_the_book first). |
 | v2.9 | 2026-10-08 | Paul Scott | LFS-032 (a lesson forgot a placeholder). |
 | v3.0 | 2026-10-08 | Paul Scott | LFS-033 (grep's 'nothing found'). Glibc's tests now judged acceptable. |
+| v3.1 | 2026-10-09 | Paul Scott | 8.5 glibc done; 8.6–8.22 first time. LFS-034 (a note's example run as a step). |
