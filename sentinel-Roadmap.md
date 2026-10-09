@@ -25,7 +25,7 @@ The detailed plan for the knowledge base work is `sentinel-kb-browsing-Phased-Im
 
 | # | Item | Status | Source |
 |---|---|---|---|
-| SN-10 | **Retention:** archive old events and suggestions into the backup, then remove them (52,272 suggestions against 272 findings). | open | SKB K5.5 |
+| SN-10 | **Retention: keep the live database small without losing what Sentinel learns from.** Checked 2026-10-09:<br>• **Who reads these tables:** the 14B doesn't. Its grounding is approved answers, the code index, Kiwix and lab facts, and its LFS nudges come from findings. So archiving can't change what it knows. Sentinel's own `sentinel train` does read them: calibration uses suggestions a person has judged, and the anomaly scorer learns from every event's text.<br>**Three conditions:**<br>1. **Never archive human-judged suggestions** (acknowledged or dismissed: 60 today). They're calibration's training labels.<br>2. **Events stay available for learning:** train the anomaly scorer before any archiving (it has never been trained; 17,898 events, 16,950 from September). Then either have training read the archive files too, or keep a permanent de-duplicated corpus of event texts.<br>3. **Collapse duplicate unreviewed suggestions** (52,351 of them, mostly the same few findings matched repeatedly) into one row per finding and pattern, with a count and first and last seen, rather than just archiving them.<br>Only then are old events and collapsed suggestions archived (exported to a dated file in the backup) and removed after an agreed age. Nothing is removed before it's in a backup. | open | SKB K5.5 |
 | SN-11 | **A data-access layer** in Sentinel, built as K1 and K2 reshape the queries. | open | SKB K5.6 |
 
 ## 3. The LFS escalation ladder
