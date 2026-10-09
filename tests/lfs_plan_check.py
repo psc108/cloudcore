@@ -148,6 +148,16 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} {name}: {w._nothing_found(run, code, out)}")
     extra += 4
+    # LFS-035: no plan or repair may set a password.
+    for name, run, want in [("8.30 echo | passwd --stdin", "echo 'newpassword' | passwd root --stdin", True),
+                            ("chpasswd", "echo root:x | chpasswd", True), ("usermod -p", "usermod -p hash root", True),
+                            ("openssl passwd", "openssl passwd -6 x", True), ("passwd here-string", "passwd root <<< x", True),
+                            ("passwd -l is not setting one", "passwd -l root", False),
+                            ("grep passwd", "grep root /etc/passwd", False), ("cat > /etc/passwd heredoc", 'cat > /etc/passwd << "EOF"\nroot:x:0:0', False)]:
+        good = bool(w._CREDENTIAL.search(run)) == want
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} credential check, {name}: {bool(w._CREDENTIAL.search(run))}")
+    extra += 8
     # LFS-023: every package section finds its tarball, even where the
     # package's name isn't the tarball's ("Libstdc++ from GCC", "D-Bus").
     manifest = {"files": [{"kind": "source", "set": "lfs", "file": f} for f in (

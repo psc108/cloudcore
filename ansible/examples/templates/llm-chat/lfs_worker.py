@@ -79,6 +79,10 @@ _DOWNLOAD = re.compile(r"\b(?:wget|curl)\b[^\n]*\b(?:https?|ftp)://")
 # grub-install as root and wrote into the build machine's own /boot (LFS-020).
 _SYSTEM = re.compile(r"\b(grub-install|grub-mkconfig|efibootmgr|mount|umount|mkfs(?:\.\w+)?|sgdisk|fdisk|parted|"
                      r"mkswap|swapon|sudo|apt-get|apt|dnf|yum|chroot)\b")
+# Never, anywhere: setting a password. Credentials for the finished system are
+# Paul's; in 8.30 a repair set root's to "newpassword" (LFS-035).
+_CREDENTIAL = re.compile(r"(?<![/\w.-])chpasswd\b|(?<![/\w.-])passwd\b[^\n]*(?:--stdin|<<)|\|\s*(?:passwd|chpasswd)\b|"
+                         r"\busermod\b[^\n]*\s-p\s|\bopenssl\s+passwd\b")
 # Never, anywhere: the build machine's package manager and sudo (no password).
 _NEVER = re.compile(r"\b(sudo|apt-get|apt|dnf|yum)\b")
 _CHECK = re.compile(r"\bmake\b[^\n]*\b(?:check|test)s?\b|\bctest\b|\bninja\b[^\n]*\btest\b")
@@ -703,6 +707,10 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
         # change: in 5.4 the 14B said so four times and was refused (LFS-022).
         if idx is None and not run and not ch.get("omit") and not ch.get("as") and ch.get("after") is None:
             continue
+        if _CREDENTIAL.search(run):
+            problems.append(f"'{run[:60]}...' sets a password: credentials for the finished system are Paul's, "
+                            "never the build's (LFS-035)")
+            continue
         # LFS-020: system-level commands only where the book's section has them.
         # A section with no book commands (2.4) must write its own; _DANGER still guards the disks.
         foreign = sorted({w for w in _SYSTEM.findall(run)
@@ -946,6 +954,10 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                     journal(task_id, "controller", "note", f"refused a repair that runs later book command(s) "
                             f"{[c['index'] for c in later]} early, out of the book's order: {before or replace}")
                     before, replace = "", ""
+            if _CREDENTIAL.search(before + "\n" + replace):
+                journal(task_id, "controller", "note", "refused a repair that sets a password: credentials are Paul's "
+                        "(LFS-035)")
+                before, replace = "", ""
             book_system = {w for c in (task["section"] or {}).get("commands", []) for w in _SYSTEM.findall(c["text"])}
             bad = sorted({w for w in _SYSTEM.findall(before + "\n" + replace) if w not in book_system or _NEVER.fullmatch(w)})
             if bad:
@@ -970,6 +982,13 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             cwd = ends[-1]  # the step's own `cd`, as in one shell (LFS-018)
     if not delivered:
         deliver_sources(m, manifest, task_id)
+    if any(c.get("skipped") and re.match(r"\s*passwd root\s*$", c["text"])
+           for c in (task["section"] or {}).get("commands", [])):
+        # The book's `passwd root` is Paul's to do; until then root can't log in by password (LFS-035).
+        pro, launch = launcher(task["context"], None, "/")
+        code, out, _ = m.run_detached(pro + "usermod -L root\n", launch, f"task{task['seq']:03d}-lock-root")
+        journal(task_id, "controller", "note", f"root's password locked (usermod -L root): exit {code}. "
+                "Paul sets root's password himself (LFS-035).")
     if task["number"] == "2.7":
         record_mounts(m)
     if srcdir:

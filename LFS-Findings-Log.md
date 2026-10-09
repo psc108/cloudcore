@@ -666,6 +666,25 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Observation:** with `as_the_book` (LFS-031), a lesson saying "leave [0] out" was overridden by the 14B's one-word "as the book". It's easier for the 14B to ignore a lesson that asks for a change. Watch for it; if it recurs, the controller can reject `as_the_book: true` when the section's lessons name a change.
 
+### LFS-035 — A repair set the new system's root password to "newpassword"; credentials are Paul's, not the build's
+
+**Where:** task 74 (8.30 Shadow-4.20.2), book command [10] `passwd root`; `api/lfs_build.py`, `examples/llm-chat/files/lfs_worker.py`.
+
+**Symptom:** found 2026-10-09, 03:26–03:58 UTC. Chapter 8 had gone well: 73 of 145 tasks done, and only 8.2, 8.5 and 8.23 needed more than one attempt.
+- **The block:** Shadow's last command, `passwd root`, is interactive. Run without a terminal it fails: "The password for root is unchanged".
+- **The damage:** one of the 14B's repairs was **`echo 'newpassword' | passwd root --stdin`, which succeeded.** The new system's root password became `newpassword`, and that text is in the build journal.
+- **The ladder:** Sentinel's nudge was irrelevant. The tutor said **"needs Paul"**: the command is interactive, and "choosing a credential for the finished system is Paul's decision, not the 14B's".
+
+**Root cause:** the controller's. Nothing stopped a plan or repair from setting a password, and the book's interactive `passwd root` was left as a step.
+
+**Fix:**
+- **Neutralised at once:** root's password in the new system is **locked** (`usermod -L root`, status `L`), so `newpassword` no longer works. The journal's copy of it is now harmless.
+- **The book's `passwd root`** is skipped: "the root password is Paul's to set". The controller locks root instead, at the end of that task, journalled.
+- **A credential guard in plans and repairs:** `chpasswd`, a password piped or here-doc'd into `passwd`, `passwd --stdin`, `usermod -p` and `openssl passwd` are refused. Paths such as `/etc/passwd` and `/etc/pam.d/chpasswd` aren't matched: it matches no command in either book. Offline cases added (42 in all).
+- **Open decision (Paul):** how root gets its real password. For example, set at first boot on the VNC console, or supplied from a secret file outside the journal. This ties in with Phase I (MFA).
+
+**Verified by:** `passwd -S root` gives `L`; `tests/lfs_plan_check.py`; the re-run of 8.30.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -701,3 +720,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v2.9 | 2026-10-08 | Paul Scott | LFS-032 (a lesson forgot a placeholder). |
 | v3.0 | 2026-10-08 | Paul Scott | LFS-033 (grep's 'nothing found'). Glibc's tests now judged acceptable. |
 | v3.1 | 2026-10-09 | Paul Scott | 8.5 glibc done; 8.6–8.22 first time. LFS-034 (a note's example run as a step). |
+| v3.2 | 2026-10-09 | Paul Scott | LFS-035 (a repair set root's password; locked; credential guard). |

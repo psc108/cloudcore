@@ -80,6 +80,9 @@ _SKIP_COMMANDS = [
      "it starts an interactive login shell; the controller runs every step in a fresh shell in the chroot (LFS-025)"),
     (re.compile(r"^\s*exit\s*$|umount \$LFS/\{sys,proc,run,dev\}|tar -cJpf \$HOME/lfs-temp-tools"),
      "the book's backup leaves the chroot; the controller's checkpoint after chapter 7 snapshots both disks instead (LFS-025)"),
+    (re.compile(r"^\s*passwd root\s*$"),
+     "the root password is Paul's to set, not the build's: the controller locks root's password instead, "
+     "and Paul sets it himself (LFS-035)"),
     (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
                                           "delivers the verified sources from the host's repo (LFS-006)"),
 ]
