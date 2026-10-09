@@ -1,5 +1,7 @@
 # llm-chat — A Real Lab: Run the Advice, Keep What Works
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-61, CC-62) and `sentinel-Roadmap.md` (SN-31, SN-32). This document is kept as the record of how the work was done.
+
 Paul Scott | Direction agreed 2026-09-30
 
 ---

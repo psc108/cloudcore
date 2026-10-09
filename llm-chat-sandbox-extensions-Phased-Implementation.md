@@ -1,5 +1,7 @@
 # llm-chat — Sandbox Extensions: Phased Implementation
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-22, CC-41, CC-66, CC-67, CC-70, CC-98) and `sentinel-Roadmap.md` (SN-33). This document is kept as the record of how the work was done.
+
 Paul Scott | Plan approved 2026-09-28
 
 ---

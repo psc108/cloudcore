@@ -1,5 +1,7 @@
 # CloudCore on two equal hosts — Phased Implementation
 
+> **Roadmap (2026-10-09):** complete; nothing open.
+
 **Status:** done 2026-10-03: S1–S7 complete; Llwyn-y-Groes ran everything alone. **Owner:** Paul Scott.
 **Live tracker:** https://claude.ai/artifact/5QPbFhinqaALvyUgca2ZMp (private). It shows each stage's status, checklist, results and next step, updated as the work goes.
 

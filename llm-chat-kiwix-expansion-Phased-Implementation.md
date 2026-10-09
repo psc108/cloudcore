@@ -1,5 +1,7 @@
 # llm-chat — Kiwix Expansion: Phased Implementation
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-68). This document is kept as the record of how the work was done.
+
 Paul Scott | Direction agreed 2026-09-28
 
 ---

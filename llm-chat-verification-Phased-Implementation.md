@@ -1,5 +1,7 @@
 # llm-chat — Grounded Code Verification: Phased Implementation
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-23, CC-41, CC-53, CC-54, CC-66, CC-98). This document is kept as the record of how the work was done.
+
 Paul Scott | Plan approved 2026-09-18
 
 ---

@@ -1,5 +1,7 @@
 # llm-chat — next steps once the lab is at its best
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-10 to CC-13, CC-20, CC-50, CC-51, CC-60, CC-61, CC-63, CC-80). This document is kept as the record of how the work was done.
+
 **Status:** recorded 2026-10-06, while the L29 sealed measurement runs. **Owner:** Paul Scott.
 
 ## When the lab is "as good as we can expect"

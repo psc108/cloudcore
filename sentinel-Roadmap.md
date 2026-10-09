@@ -1,6 +1,6 @@
 # Sentinel — Roadmap (all open work)
 
-**Status:** draft for Paul's review, 2026-10-09. Consolidated from the plan documents (see `cloudcore-Roadmap.md` for the method and the source abbreviations). **Owner:** Paul Scott.
+**Status:** 2026-10-09, after the review; items in question are in `roadmap-Verify-Items.md`. Consolidated from the plan documents (see `cloudcore-Roadmap.md` for the method and the source abbreviations). **Owner:** Paul Scott.
 
 ## How this works
 
@@ -42,6 +42,6 @@ The detailed plan for the knowledge base work is `sentinel-kb-browsing-Phased-Im
 | # | Item | Status | Source |
 |---|---|---|---|
 | SN-30 | **Watch the API's AUDIT lines in Loki,** once CloudCore ships them (CC-11). | open (after CC-11) | AUTH follow-up 2 |
-| SN-31 | **The answer matcher reused stored answers for different questions** (held-out #12, #15) and missed a paraphrase (#36). No fix recorded. | verify | LAB held-out evaluation |
+| SN-31 | **The answer matcher reused stored answers for different questions** (held-out #12, #15) and missed a paraphrase (#36). No fix recorded. | verify (V-19) | LAB held-out evaluation |
 | SN-32 | **An answer waiting for a person's review:** #35, the kernel-module udev answer (it ran clean another way). | open | LAB results after L11 |
-| SN-33 | **A Sentinel-side capture token panel:** the plan said "Sentinel/Dashboard panel", but only the dashboard card was built. Confirm whether one is wanted. | verify | EXT Stage 13 design |
+| SN-33 | **A Sentinel-side capture token panel:** the plan said "Sentinel/Dashboard panel", but only the dashboard card was built. Confirm whether one is wanted. | decision (V-21) | EXT Stage 13 design |

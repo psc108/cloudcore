@@ -1,5 +1,7 @@
 # Sentinel: browsing the knowledge base by page, collection and subject — Phased Implementation
 
+> **Roadmap (2026-10-09):** the detailed plan for `sentinel-Roadmap.md` SN-01 to SN-11; K5.1–K5.4 and K5.6's CloudCore part are tracked in `cloudcore-Roadmap.md` (CC-01 to CC-05).
+
 **Status:** draft for review, 2026-10-08; K5 (data safety) added the same day. Work starts after LFS run 1 is complete (Paul: focus on run 1 first). **Owner:** Paul Scott.
 
 ## Context

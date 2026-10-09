@@ -1,6 +1,8 @@
 # Placing LLM work on the best available machine — Phased Implementation
 
-**Status:** planned 2026-10-05. **Owner:** Paul Scott.
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-50, CC-51, CC-55). This document is kept as the record of how the work was done.
+
+**Status:** C1–C5 done; C6 open (corrected 2026-10-09; was "planned 2026-10-05"). **Owner:** Paul Scott.
 
 ## Context
 

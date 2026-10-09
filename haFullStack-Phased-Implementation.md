@@ -1,5 +1,7 @@
 # NGINX High-Availability Load Balancing Architecture — Phased Implementation
 
+> **Roadmap (2026-10-09):** this plan stays the working plan for haFullStack; `cloudcore-Roadmap.md` summarises what's open (CC-80 to CC-84).
+
 **Multi-Service Platform — Frontend, Backend, MySQL, Keystone, RabbitMQ**
 
 v0.21 (in progress — built section by section) | Paul Scott

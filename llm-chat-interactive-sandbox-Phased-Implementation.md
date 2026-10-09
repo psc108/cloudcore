@@ -1,5 +1,7 @@
 # llm-chat — Interactive Sandbox: Phased Implementation
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-40, CC-66, CC-70, CC-98). This document is kept as the record of how the work was done.
+
 Paul Scott | Plan approved 2026-09-18
 
 ---

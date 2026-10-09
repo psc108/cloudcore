@@ -1,5 +1,7 @@
 # A bootable OS from Linux From Scratch, built by llm-chat — Phased Implementation
 
+> **Roadmap (2026-10-09):** this plan stays the working plan while the build runs; its later phases are listed in `cloudcore-Roadmap.md` (CC-19, CC-90 to CC-95).
+
 **Status:** started 2026-10-07 (Phase A). **Owner:** Paul Scott.
 
 ## Context

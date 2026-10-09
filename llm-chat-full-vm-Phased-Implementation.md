@@ -1,6 +1,8 @@
 # llm-chat: full VMs for proving answers and for the student — Phased Implementation
 
-**Status:** F1–F5 done (F5 2026-10-03: llm-chat runs proofs on full VMs). Next: the setup stage and goal-check fixes, then F6–F8. **Owner:** Paul Scott.
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-52, CC-64, CC-65, CC-69, CC-98). This document is kept as the record of how the work was done.
+
+**Status:** F1–F5 done (F5 2026-10-03: llm-chat runs proofs on full VMs). F8 done as L20 (2026-10-04). Open: F6–F7 (cloudcore-Roadmap.md CC-64, CC-65). **Owner:** Paul Scott.
 
 ## Context
 
@@ -40,7 +42,7 @@ Direct requests (2026-10-02):
 | F5 | **Prove on full VMs.** Advice runs, repairs and another-way attempts use `FullVM`. Re-run a sample of the held-out answers on both backends to see what the backend alone changes. | Done 2026-10-03 (results below) |
 | F6 | **The student's full VM.** Requested from the broker when the student opens Linux Help, one per session. Lifetime: an idle timeout plus a maximum. The page's Terminal shows "your full machine is starting (~2 min)" and attaches when it's ready; the microVM Terminal works meanwhile. It is reconnected on page reload via the session token and destroyed on timeout or by a "Destroy" button. | Not started |
 | F7 | **Which questions need a full machine.** From the question and the answer: kernel modules, GRUB/boot/kernel parameters, reboots, disks and partitions, snaps, multi-machine setups, long-running services. The page says "this one needs a full machine" and points the Terminal there. Small questions keep the microVM. | Not started |
-| F8 | **Measure.** After the setup stage (F-200 class A) and the goal-check fixes, run a **fresh** held-out set; the F-200 set is no longer held out. | Not started |
+| F8 | **Measure.** After the setup stage (F-200 class A) and the goal-check fixes, run a **fresh** held-out set; the F-200 set is no longer held out. | Done 2026-10-04 as the lab plan's L20 (corrected 2026-10-09: this row said "Not started") |
 
 ## Decisions (user, 2026-10-02)
 

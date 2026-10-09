@@ -1,5 +1,7 @@
 # Codebase Deficiency Review
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-30 to CC-39). This document is kept as the record of how the work was done.
+
 **Date:** 2026-09-01  
 **Scope:** `provider/` — CloudCore Terraform provider (~2,800 lines of Go)  
 **Reviewer:** Automated review

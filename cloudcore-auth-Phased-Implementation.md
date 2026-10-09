@@ -1,5 +1,7 @@
 # CloudCore: central authorization (layer 1) and human logins (layer 2) — Phased Implementation
 
+> **Roadmap (2026-10-09):** open items are now tracked in `cloudcore-Roadmap.md` (CC-10 to CC-18). This document is kept as the record of how the work was done.
+
 **Status:** layer 1 built on the hub 2026-10-02 (A1–A4, A6); the peer pending (A5). **Owner:** Paul Scott.
 
 ## Context

@@ -1,6 +1,6 @@
 # CloudCore — Roadmap (all open work)
 
-**Status:** draft for Paul's review, 2026-10-09. Consolidated from the 14 plan documents by reading each in full. **Owner:** Paul Scott.
+**Status:** 2026-10-09, after the review; items in question are in `roadmap-Verify-Items.md` (V-numbers). Consolidated from the 14 plan documents by reading each in full. **Owner:** Paul Scott.
 
 ## How this works
 
@@ -8,7 +8,7 @@
 - **Each entry links to where it came from.** Detail stays in the source plan; nothing there is deleted.
 - **A new idea goes here as a short entry,** not into a new plan. A plan document is written only when an entry is about to be built, and is linked from it.
 - **Active projects keep their own plan while they run:** the LFS OS build (`lfs-os-Phased-Implementation.md`). Its later phases are listed here as pointers.
-- **Statuses:** **open** · **deferred** (a condition or a later time) · **decision** (needs Paul) · **verify** (the documents disagree or don't say; check, then close or keep).
+- **Statuses:** **open** · **deferred** (a condition or a later time) · **decision** (needs Paul) · **verify** (see `roadmap-Verify-Items.md`).
 
 Sources, abbreviated:
 
@@ -54,7 +54,7 @@ Sources, abbreviated:
 | CC-12 | **Token management page:** list, create (shown once), revoke, rotate, expiry warnings. The API exists. | open | AUTH follow-up 3 (A4) |
 | CC-13 | **Rotate the shared guest tokens** (capture, lab-VM broker) on both hosts as a dashboard or CLI action. Done by hand on 2026-10-04. | open | AUTH follow-up 4; NEXT 4 |
 | CC-14 | **Retire the per-blueprint `_auth()` checks,** after checking peers in both directions. | open | AUTH A1 (partial) |
-| CC-15 | **Peer and student tokens in `api_tokens`:** deliberately not migrated; `api.env`'s admin token kept as break-glass. Confirm that stays the design, then close. | verify | AUTH A2 |
+| CC-15 | **Peer and student tokens in `api_tokens`:** deliberately not migrated; `api.env`'s admin token kept as break-glass. Confirm that stays the design. | decision (V-20) | AUTH A2 |
 | CC-16 | **An identity component** for the dashboard and llm-chat beyond localhost: Authelia, or oauth2-proxy with an IdP. | decision | AUTH H1 |
 | CC-17 | **The identity proxy in front of the dashboard,** with roles admin / instructor / student. | open (after CC-16) | AUTH H2 |
 | CC-18 | **Student logins for llm-chat:** VMs, quotas and corpus attributed to a person. | open (after CC-17) | AUTH H3 |
@@ -65,7 +65,6 @@ Sources, abbreviated:
 | # | Item | Status | Source |
 |---|---|---|---|
 | CC-20 | **Template ingress source lists:** replace the single `admin_cidr` (default 0.0.0.0/0) with source lists defaulting to private ranges, in all Terraform and Ansible templates; rebuild and check. | open | NEXT 6 |
-| CC-21 | **The capture listener's firewall rule:** written when ufw was off. ufw has been on both hosts since 2026-10-07, so check that port 8083 is now limited as intended, then close. | verify | EXT 13.4 |
 | CC-22 | **TLS for the capture listener** (plain HTTP today; LAN only). | deferred | EXT 13.4, out of scope |
 | CC-23 | **A stale HAProxy backend** that `api/lb.py` generates (`example-dev-chat-back`, wrong port, always down). Harmless; remove. | open | VER Phase 2 |
 
@@ -110,7 +109,7 @@ In the review's priority order.
 |---|---|---|---|
 | CC-60 | **Resume the lab-quality loop** after the LFS build; its stop rule isn't met yet (after L29: 2 false passes, lab faults 10 vs 4). | deferred (after LFS) | NEXT decision |
 | CC-61 | **The lab backlog,** worked as one item: L29 failures #5, #9, #12, #15, #18, #24, #26, #29 and #32; weak checks #25 and #30; L28 #3 (a foreground server counted, and its port probed); L27 #3 and #21 (setup: the named program, a stub app). Plus the known limit: the lab can't judge what a setting means (L22 #19). | open | NEXT backlog = LAB L23, L27–L29 |
-| CC-62 | **Older lab gaps,** to check whether they're still real before working them: L14 goal checks by kind; L20's smaller gaps (a config block replacing a default file; file-content lines in bash blocks; `systemctl set-default` as a change; setup for presumed LVM or remote machines; the harness recording a run's error); preparing an SSH/rsync target on the prober (#25, #39); the L28 #28 channel timeout. | verify | LAB L14, L16–L20, L28 |
+| CC-62 | **Older lab gaps,** to check whether they're still real before working them: L14 goal checks by kind; L20's smaller gaps (a config block replacing a default file; file-content lines in bash blocks; `systemctl set-default` as a change; setup for presumed LVM or remote machines; the harness recording a run's error); preparing an SSH/rsync target on the prober (#25, #39); the L28 #28 channel timeout. | verify (V-10) | LAB L14, L16–L20, L28 |
 | CC-63 | **Use what the lab proves:** a matching question gets the lab-verified answer at once, marked tested. | open | NEXT 2 |
 | CC-64 | **A student's own full VM** per Linux Help session (idle 30 min, 4 h max, at most 2, reconnect, Destroy). | open | FVM F6 |
 | CC-65 | **Send full-machine questions to it** (modules, GRUB, reboots, disks, multi-machine). | open (after CC-64) | FVM F7 |
@@ -130,7 +129,7 @@ In the review's priority order.
 | CC-81 | **Lab, Ansible path (.B)** for all six tiers: not started (1B-01–06, 2.B–6.B). | open | HA |
 | CC-82 | **Phase 5.A remainder:** the CA-down test, the auto-renewal test, teardown (5A-14–16). | open | HA 5.A |
 | CC-83 | **On-prem (.C/.D) and AWS (.E/.F) paths** for every tier. Their decisions first:<br>• **On-prem:** the hypervisor (1C-01); VRRP allowed (1C-02); an enterprise CA (5.C); mirror tooling (6.C).<br>• **AWS:** ASG or instances (1E-01); VPC reuse (1E-02); Keystone on EC2 or IAM/Cognito (3.E); ACM Private CA (5.E); an S3 mirror (6.E); Amazon MQ compatibility (4.E). | decision | HA 1.C–6.F |
-| CC-84 | **To check:**<br>• haFullStack.md §6.3's quorum policy correction (4A-04, F-029);<br>• 6A-12's teardown after the v0.19 retrofit;<br>• Phase 7's missing .B–.F rows. | verify | HA |
+| CC-84 | **To check:** 6A-12's teardown after the v0.19 retrofit, and Phase 7's missing .B–.F rows. (§6.3's quorum fix is confirmed done: V-02.) | verify (V-18) | HA |
 
 ## 9. LFS OS build, later phases (tracked in LFS)
 
@@ -143,9 +142,8 @@ In the review's priority order.
 | CC-94 | **Stage 2, Wayland.** | after D6 | LFS E |
 | CC-95 | **The worker resuming a task from its failed step,** instead of re-unpacking (each glibc retry cost ~45 min). | open | LFS-Findings-Log LFS-033 |
 
-## 10. Housekeeping: documents to correct
+## 10. Housekeeping
 
 | # | Item | Status | Source |
 |---|---|---|---|
-| CC-97 | **Stale statuses:**<br>• FVM marks F8 "not started", but LAB says L20 was F8, done;<br>• PLC's header still says "planned" (C1–C5 are done);<br>• EXT 11.4 never updated SBX's out-of-scope entry. | verify | FVM F8; PLC header; EXT 11.4 |
-| CC-98 | **Results never recorded in their plans:**<br>• Ansible mirror diffs (EXT 10.6, 12.8);<br>• a run during active generation (EXT Stage 12);<br>• the review page's local-client filter (EXT 13.6);<br>• the disk rescan (FVM F3);<br>• the peer on current code (FVM F2);<br>• `coordinator_flavor` "stopgap" (VER);<br>• a coordinator-only config (VER);<br>• CodeMirror in a real browser (SBX Stage 2);<br>• leftover `webui_*` variables (SBX).<br>Check each; close or turn into an entry. | verify | as listed |
+| CC-98 | **Unrecorded results to check,** each when its area is next worked on: a coordinator-only config (V-11), `coordinator_flavor` (V-12), the full VM's disk rescan (V-13), the peer for full-VM runs (V-14), a Run during generation (V-15), the review page's filter (V-16), CodeMirror in a browser (V-17). Settled already: V-01 to V-07. | verify | `roadmap-Verify-Items.md` |
