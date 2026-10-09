@@ -737,6 +737,27 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **The rest:** the install and the book's sanity checks, 20 steps clean.
 - **CC-95:** its first live resume.
 
+### LFS-038 — Gettext: the tutor was right twice, and the 14B's good fix was refused by the dropped-line check
+
+**Where:** task 80 (8.36 Gettext-1.0); `examples/llm-chat/files/lfs_worker.py` (`_dropped_lines`, the planning rules); `lfs/lfs-tutor.py`.
+
+**Symptom:** found 2026-10-09, 19:36–21:29 UTC.
+- **The test failure:** `make check` failed one test of 479, `test-execute.sh` (a gnulib test of spawning processes) in `gettext-tools/gnulib-tests`. The book says nothing about Gettext's test failures, and the 14B judged it "not acceptable" three times.
+- **Rung 2 did harm:** Sentinel's nudge was GCC's out-of-memory lesson (LFS-T311 at 0.26), and **the 14B applied it** (`make || make -j1`). CC-95 correctly saw the changed step and started afresh.
+- **Rung 3, twice, both right:** "the build is fine"; `test-execute.sh` fails under a non-interactive controller in a chroot (extra inherited descriptors, no terminal), an environment artefact. The second lesson also fixed the 14B's off-by-one command number.
+- **The 14B's last two plans were good:** `make -k check; ! grep -rh '^FAIL:' --include=test-suite.log . | grep -v 'test-execute'`, which fails only on any *other* failure. **The controller refused them:** "your change to command [2] drops the book's line(s) ['make check']". Rung 4, the build paused.
+
+**Root cause:**
+- **The controller's:** LFS-020's dropped-line check counted a line as kept only if it appeared whole, or 60 % similar, in the change. A short command wrapped with an option and a follow-up (`make -k check; …`) failed both tests.
+- **Also missing:** the planning rules never said that steps run under `set -e`. As the 14B wrote it, `make -k check;` would have ended the step before the `grep`.
+- **And rung 2's noise again** (SN-20): an irrelevant nudge isn't harmless when the 14B acts on it.
+
+**Fix:**
+- **The dropped-line check:** a book line is also kept when its words appear in order in the changed line ("make … check"). The 5.4 headers case is still refused, and replacing `make check` with something else is still refused. Offline cases added (44 in all).
+- **The planning rules,** and the tutor's: each step runs under `set -e`; tolerate a failure with `a || true`.
+
+**Verified by:** the re-run of 8.36.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -776,3 +797,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.3 | 2026-10-09 | Paul Scott | LFS-036 (the output judge left unfixed; GCC's tests misjudged). |
 | v3.4 | 2026-10-09 | Paul Scott | LFS-037 (a prompt over the context crashed the worker; prompts now fit; resumed). |
 | v3.5 | 2026-10-09 | Paul Scott | 8.32 GCC done; LFS-036, LFS-037 and CC-95's resume verified live. |
+| v3.6 | 2026-10-09 | Paul Scott | LFS-038 (Gettext: a good plan refused by the dropped-line check). |

@@ -37,6 +37,8 @@ SECTIONS = {
             "\\\n             --disable-nls       \\\n             --enable-gprofng=no \\\n             --disable-werror    "
             "\\\n             --enable-new-dtags  \\\n             --enable-default-hash-style=gnu", "make", "make install"],
     "5.3": ["tar -xf ../mpfr-4.2.2.tar.xz\nmv -v mpfr-4.2.2 mpfr", "mkdir -v build\ncd       build", "make", "make install"],
+    "8.36": ["./configure --prefix=/usr --disable-static --docdir=/usr/share/doc/gettext-1.0", "make", "make check",
+             "make install\nchmod -v 0755 /usr/lib/preloadable_libintl.so"],
     "5.4": ["make mrproper", "make headers\nfind usr/include -type f ! -name '*.h' -delete\ncp -rv usr/include $LFS/usr"],
     "5.5": ["case $(uname -m) in\n    x86_64) ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64\n    ;;\nesac",
             "mkdir -v build\ncd       build", "../configure --prefix=/usr --host=$LFS_TGT --disable-nscd", "make"],
@@ -51,6 +53,11 @@ CASES = [
     ("5.4 no changes", "5.4", [], True, ""),
     # LFS-020: a change that drops the book command's lines.
     ("5.4 make headers only (LFS-020)", "5.4", [{"book": 1, "run": "make headers", "why": "version"}], False, "drops"),
+    # LFS-038: a single-line command wrapped with options and a follow-up keeps its line.
+    ("8.36 make check wrapped to tolerate one known failure (LFS-038)", "8.36",
+     [{"book": 2, "run": "make -k check || true; ! grep -rh '^FAIL:' --include=test-suite.log . | grep -v 'test-execute'",
+       "why": "tutor: test-execute.sh is an environment artefact"}], True, ""),
+    ("8.36 make check replaced by something else", "8.36", [{"book": 2, "run": "true", "why": "skip tests"}], False, "drops"),
     # LFS-021: the same lines split over invented command numbers.
     ("5.4 split into [1],[2],[3] (LFS-021)", "5.4",
      [{"book": 1, "run": "make headers", "why": "v"}, {"book": 2, "run": "find usr/include -type f ! -name '*.h' -delete", "why": "v"},

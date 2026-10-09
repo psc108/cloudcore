@@ -282,6 +282,7 @@ Rules:
 - Nothing interactive: no editors, cfdisk, fdisk prompts, menuconfig or password prompts. Use non-interactive equivalents (sgdisk, scripts/config, here-documents).
 - The controller already enters the task's context (user, chroot, directory): do not su, chroot or cd into the package's directory yourself.
 - The controller times every step and records it in the journal: never add `time` or SBU measurements.
+- Each step runs under `set -e`: in `a; b`, a failing `a` ends the step before `b` runs. To go on past a failure you mean to tolerate, write `a || true; b`.
 - Never add a copy of the book's own commands: they already run. To change one, give its "book" number."""
 
 FIX_SYSTEM = """You are building Linux From Scratch {lfs} (systemd) for a 64-bit UEFI computer. A step from the book's section failed on the build machine. Reply with ONLY a JSON object:
@@ -625,10 +626,18 @@ def _dropped_lines(book: str, run: str) -> list[str]:
     def key(line: str) -> str:
         return re.sub(r"\d+(?:\.\d+)*", "N", _norm(line))
     have = [key(x) for x in run.replace("\\\n", " ").splitlines() if x.strip()]
+
+    def words_in_order(k: str, h: str) -> bool:
+        # LFS-038: `make check` is kept in `make -k check; ! grep ...` -- its words
+        # appear in order, with an option between. Refused before (8.36).
+        it = iter(h.split())
+        return all(w in it for w in k.split())
+
     out = []
     for line in book.replace("\\\n", " ").splitlines():
         k = key(line)
-        if k and not any(k in h or difflib.SequenceMatcher(None, k, h).ratio() >= 0.6 for h in have):
+        if k and not any(k in h or words_in_order(k, h) or difflib.SequenceMatcher(None, k, h).ratio() >= 0.6
+                         for h in have):
             out.append(_norm(line)[:60])
     return out
 
