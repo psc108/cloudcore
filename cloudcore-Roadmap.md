@@ -12,22 +12,22 @@
 
 Sources, abbreviated:
 
-| Short | Document |
+| Short | Document (archived ones are in `docs/archive/`) |
 |---|---|
-| AUTH | cloudcore-auth-Phased-Implementation.md |
-| 2HOST | cloudcore-two-host-Phased-Implementation.md |
-| DEF | DEFICIENCIES.md (Terraform provider review, 2026-09-01) |
+| AUTH | docs/archive/cloudcore-auth-Phased-Implementation.md |
+| 2HOST | docs/archive/cloudcore-two-host-Phased-Implementation.md |
+| DEF | docs/archive/DEFICIENCIES.md (Terraform provider review, 2026-09-01) |
 | HA | haFullStack-Phased-Implementation.md |
 | LFS | lfs-os-Phased-Implementation.md |
 | SKB | sentinel-kb-browsing-Phased-Implementation.md |
-| NEXT | llm-chat-Next-Steps.md |
-| LAB | llm-chat-lab-sandbox-Phased-Implementation.md |
-| FVM | llm-chat-full-vm-Phased-Implementation.md |
-| PLC | llm-chat-placement-Phased-Implementation.md |
-| VER | llm-chat-verification-Phased-Implementation.md |
-| SBX | llm-chat-interactive-sandbox-Phased-Implementation.md |
-| EXT | llm-chat-sandbox-extensions-Phased-Implementation.md |
-| KIW | llm-chat-kiwix-expansion-Phased-Implementation.md |
+| NEXT | docs/archive/llm-chat-Next-Steps.md |
+| LAB | docs/archive/llm-chat-lab-sandbox-Phased-Implementation.md |
+| FVM | docs/archive/llm-chat-full-vm-Phased-Implementation.md |
+| PLC | docs/archive/llm-chat-placement-Phased-Implementation.md |
+| VER | docs/archive/llm-chat-verification-Phased-Implementation.md |
+| SBX | docs/archive/llm-chat-interactive-sandbox-Phased-Implementation.md |
+| EXT | docs/archive/llm-chat-sandbox-extensions-Phased-Implementation.md |
+| KIW | docs/archive/llm-chat-kiwix-expansion-Phased-Implementation.md |
 
 ## 0. Now
 
