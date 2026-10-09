@@ -628,6 +628,19 @@ def _nothing_found(run: str, code: int, output: str) -> bool:
         and not _CWD_RE.sub("", output).strip()
 
 
+def _judge_evidence(m: Machine, task: dict, name: str, tail: str) -> str:
+    """What both judges see (LFS-030, LFS-036): the failing tests' names from
+    the step's whole log, the output's end, the book's passages about test
+    failures, and the section's lessons."""
+    _, failed = m.sh(f"grep -aE '^(FAIL|ERROR|XPASS):' /var/log/lfs-build/{name}.log | sort -u | head -80")
+    notes = tutor_notes(task)
+    return (f"The failing tests (from the whole log):\n{failed.strip() or '(none listed)'}\n\n"
+            f"Output (end):\n{tail[-2500:]}\n\n"
+            f"What the book says about test failures:\n{_failure_passages(task)}"
+            + ("\n\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n" + "\n".join(f"- {n}" for n in notes)
+               if notes else ""))
+
+
 def _failure_passages(task: dict, limit: int = 5000) -> str:
     """The section's paragraphs about tests and failures (LFS-030): in 8.5 the
     known failures are deep in a long section, past what the judge was shown."""
@@ -880,10 +893,11 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             journal(task_id, "lab", "result", f"exit {code} after {secs:.0f}s\n{tail[-3000:]}",
                     {"step": n + 1, "exit": code, "seconds": round(secs), "tail": tail[-16000:] if code else ""})
             if code == 0 and _REPORTED_PROBLEM.search(tail):
+                # LFS-036: this judge had none of LFS-030's inputs; in 8.32 it failed
+                # GCC's clean test summary (39 known failures in 218,832 passes)
+                # after 4.6 hours of tests. Now it sees what the test judge sees.
                 reply, _ = ask_model(OUTPUT_JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run[:1500]}\n\n"
-                                     f"Output (end):\n{tail[-3500:]}\n\nThe book's text:\n"
-                                     f"{(task['section'] or {}).get('text', '')[:3000]}", max_tokens=300,
-                                     schema=OUTPUT_SCHEMA)
+                                     + _judge_evidence(m, task, name, tail), max_tokens=300, schema=OUTPUT_SCHEMA)
                 verdict = _json_reply(reply) or {}
                 journal(task_id, "llm-chat", "lesson", f"exit 0, but the output reports a problem: "
                         f"{'met the requirement' if verdict.get('ok') else 'NOT met'} -- {verdict.get('why', reply[:300])}")
@@ -898,15 +912,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 # known failures) and no lessons. Now: the failing tests' names
                 # from the whole log, the book's passages about failures, and
                 # the section's lessons.
-                _, failed = m.sh(f"grep -aE '^(FAIL|ERROR|XPASS):' /var/log/lfs-build/{name}.log | sort -u | head -80")
-                notes = tutor_notes(task)
                 reply, _ = ask_model(JUDGE_SYSTEM, f"Section {task['number']} {task['title']}.\nStep:\n{run}\n\n"
-                                     f"The failing tests (from the whole log):\n{failed.strip() or '(none listed)'}\n\n"
-                                     f"Output (end):\n{tail[-2500:]}\n\n"
-                                     f"What the book says about test failures:\n{_failure_passages(task)}"
-                                     + ("\n\nYOUR TUTOR'S NOTES FOR THIS SECTION:\n" + "\n".join(f"- {n}" for n in notes)
-                                        if notes else ""),
-                                     max_tokens=400, schema=JUDGE_SCHEMA)
+                                     + _judge_evidence(m, task, name, tail), max_tokens=400, schema=JUDGE_SCHEMA)
                 verdict = _json_reply(reply) or {}
                 journal(task_id, "llm-chat", "lesson", f"test result: {'acceptable' if verdict.get('acceptable') else 'NOT acceptable'}"
                         f" -- {verdict.get('why', reply[:300])}")

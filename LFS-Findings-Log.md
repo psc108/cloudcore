@@ -685,6 +685,29 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** `passwd -S root` gives `L`; `tests/lfs_plan_check.py`; the re-run of 8.30.
 
+### LFS-036 — GCC's clean test results were failed by the second judge, which LFS-030 never fixed; 4.6 hours of tests lost
+
+**Where:** task 76 (8.32 GCC-16.2.0); `examples/llm-chat/files/lfs_worker.py` (the output judge).
+
+**Symptom:** found 2026-10-09, 04:15–11:15 UTC.
+- **Attempt 1 succeeded:** every step exited 0, `make` in 31 min and `make -k check` in **4.6 h**, with 218,832 expected passes and 39 unexpected failures.
+- **The judge failed it:** the 14B judged `../contrib/test_summary`'s output "NOT met" ("39 unexpected failures is a significant number"). This went through the controller's **second judge**, for a step that exits 0 but whose output mentions FAIL. LFS-030 gave the *test* judge the failing tests' names, the book's passages about failures and the lessons; **this judge kept the old inputs** (the output's end and the book's first 3000 characters, no lessons).
+- **The ladder:** Sentinel's nudge was irrelevant (a 5.6 lesson). A second plan copied GCC pass 1's out-of-memory recipe and was refused. The tutor (rung 3) got it right: **"Nothing failed … you stopped yourself by misreading the test results"**, with a lesson listing the book's known failures.
+- **Attempt 3** started from scratch and would have reached the same unfixed judge after another ~5 hours. So it was stopped mid-way, and the fix deployed.
+
+**Root cause:** the controller's. Two judge paths with different inputs, and only one fixed.
+
+**Fix:** both judges now build their evidence in one place (`_judge_evidence`): the failing tests' names from the whole log, the output's end, the book's passages about test failures, and the section's lessons. For 8.32 that includes the book's guidance on GCC's tests and the tutor's lesson (checked offline). Tests still 42/42.
+
+**Stopping attempt 3 went badly at first, and the lessons are logged:**
+- **`pkill -f lfs-step.sh`, run over SSH,** matched the remote shell carrying that very text and killed it (exit 255) instead of the step. The same self-match trap as `pgrep -af`; use `pgrep`/`pkill -x` with exact names.
+- **The worker had already launched the test-suite step,** which ran on orphaned (parent PID 1) with no exit code to be recorded. A clean restart was chosen over writing resume code: it costs ~28 min more than adopting.
+- **`pkill -9 -U 101`,** meant for the chroot's `tester` user, also killed the build machine's own `systemd-resolved` (uid 101 on the host). systemd restarted it at once, so no harm, but uids inside the chroot are not the host's users. Kill by exact process name, or within the chroot.
+
+**Verified by:** the re-run of 8.32 (a full build and test suite, ~5.5 h).
+
+**Cost:** about 10 hours of GCC build and test so far, against a book estimate of 53 SBU. CC-95 (resume a task from its failed step) would have saved most of it, and it's now the most valuable controller improvement for the rest of the build.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -721,3 +744,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.0 | 2026-10-08 | Paul Scott | LFS-033 (grep's 'nothing found'). Glibc's tests now judged acceptable. |
 | v3.1 | 2026-10-09 | Paul Scott | 8.5 glibc done; 8.6–8.22 first time. LFS-034 (a note's example run as a step). |
 | v3.2 | 2026-10-09 | Paul Scott | LFS-035 (a repair set root's password; locked; credential guard). |
+| v3.3 | 2026-10-09 | Paul Scott | LFS-036 (the output judge left unfixed; GCC's tests misjudged). |
