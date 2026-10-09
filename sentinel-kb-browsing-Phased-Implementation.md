@@ -91,12 +91,29 @@ Paul (2026-10-08): no move to MySQL or PostgreSQL any time soon, but **no data o
 | K5.5 | **Retention inside Sentinel's database:** 52,272 suggestions against 272 findings, and 17,889 events. Old events and their suggestions are archived (exported to a dated file in the backup) and then removed after an agreed age, with acknowledged or acted-on rows always kept. That keeps the live database small and the backups fast. Nothing is deleted before it is in a backup. | Claude; **Paul** agrees the ages |
 | K5.6 | **One data-access layer** in Sentinel (and later CloudCore): all SQL in one module per area, so a later move to PostgreSQL is a contained change, not a rewrite. Done as code is touched (K1 and K2 already reshape the findings queries), not as a big-bang refactor. | Claude |
 
+## Phase K6 — Seeing the build machine for yourself
+
+Request (Paul, 2026-10-09): get a terminal or console on build machines, and read their logs directly, rather than asking Claude each time.
+
+**Why it doesn't work today** (checked 2026-10-09):
+- **The terminal:** the dashboard's terminal (`api/terminal.py`) always connects to an instance's private IP on **port 22**, as its non-sudo user, with CloudCore's key.
+- **Lab VMs, including the `lfs-build` machine, differ:** their sshd listens on **port 1022**, on the fenced lab network (`cclab0`). The user is `labctl`, and root's key is the worker's (C2). So the terminal finds nothing to connect to.
+- **No console either:** lab VMs are created without a VNC display (B3 applies only to instances tagged for one).
+
+| # | Stage | Who |
+|---|---|---|
+| K6.1 | **A read-only build log viewer** (the main ask). In the dashboard's LFS view, or Sentinel's:<br>• **The build at a glance:** every task with its state, attempts and times; the current step from the heartbeat.<br>• **Each step's full log,** fetched on demand. A new broker route serves files from `/var/log/lfs-build/` on an `lfs-build` machine only: read-only, a fixed directory, names checked, size-capped.<br>• **The current step's log, followed live** (a `tail -f` view that refreshes).<br>• **The journal** (`journal.md`), rendered, with links from each journal entry to its step's log.<br>No shell, so nothing can be disturbed mid-build. | Claude |
+| K6.2 | **A terminal on lab VMs.** `terminal.py` learns lab VMs: port 1022 on the lab network, CloudCore's key, from the host (the key never goes to the VM).<br>**A dedicated non-sudo user, `viewer`,** created on `lfs-build` machines. It can read `/var/log/lfs-build` and look around `/mnt/lfs`, but can't change the build. `labctl` and root stay the controller's. | Claude |
+| K6.3 | **A console** (optional): `lfs-build` machines created with a VNC display (B3), so the dashboard's Console button works for them, as for ordinary instances. Mostly useful when a build machine won't boot or SSH has failed. | Claude |
+| K6.4 | **Tests:**<br>• **the log route:** refuses paths outside `/var/log/lfs-build`, other lab-VM purposes, and other tokens; serves a growing log correctly;<br>• **the terminal:** reaches a lab VM as `viewer`, and `viewer` can't write under `/mnt/lfs`. | Claude |
+
 ## Order and dependencies
 
 - **K1 first.** It needs no new data and fixes the "never see all 272" problem on its own.
 - **K2 after K1:** K2.2's list is agreed before K2.3's rules are tuned.
 - **K3 after K2,** and before LFS Phase F (run 2), which uses K3.2's fault classes.
 - **K4 needs only K1** (K4.4's filtered export uses K2's subjects when they exist). It can go alongside K2.
+- **K6 stands alone** and is small. K6.1 (logs, no shell) first, then K6.2 (terminal); K6.3 is optional. It can be pulled ahead of the rest on request, since it doesn't touch the running build's controller.
 - **K5 stands alone.** K5.1 and K5.2 come first, since losing data is the one thing that can't be undone, and K5.2's root steps can be done whenever Paul likes. K5.6 travels with K1/K2.
 - **All of it waits for LFS run 1 to complete** (Paul, 2026-10-08).
 
@@ -123,3 +140,5 @@ Paul (2026-10-08): no move to MySQL or PostgreSQL any time soon, but **no data o
 - **K5.2:** re-format the USB device as LUKS + ext4 (after checking its 69 MB), or keep NTFS and encrypt the backup files themselves instead.
 - **K5.3:** which of the uncovered items to back up.
 - **K5.5:** the ages after which Sentinel's events and suggestions are archived.
+- **K6.1:** where the log viewer lives: the CloudCore dashboard (beside the instance pages) or Sentinel's UI (beside the build's findings).
+- **K6.2:** whether `viewer` may also read the chroot's `/sources` build trees, or only the logs.
