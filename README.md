@@ -448,9 +448,26 @@ llm-chat's 14B model builds a bootable operating system from Linux From Scratch 
 
 **How it's driven:**
 - **The worker:** `examples/llm-chat/files/lfs_worker.py` runs on the llm-chat coordinator. It plans each section as differences from the book, runs the steps, judges the results and repairs failures. It keeps a heartbeat, and with `--follow` it waits for help when a task is stuck.
-- **Sentinel** climbs an escalation ladder for a stuck task: a knowledge-base nudge first, then a tutor session, then the build paused for a person.
+- **Sentinel** climbs an escalation ladder for a stuck task (below).
 - **The tutor** is headless Claude Code with no tools: `lfs/lfs-tutor.py`, installed as a user timer by `lfs/install-lfs-tutor.sh --api-ssh <API host>`.
 - **The plan checker's offline tests:** `python3 tests/lfs_plan_check.py`.
+
+#### The escalation ladder
+
+When a build task gets stuck, help arrives in rungs, cheapest first. Each rung is a journal entry on the task, so the ladder's state is part of the build's own record.
+
+| Rung | Who | What happens | When it's used |
+|---|---|---|---|
+| **1. Retry and repair** | the worker (the 14B) | A failed step gets up to 2 repair attempts (4 per task). Each is a cause and commands, checked before they run. **Refused:** deleting directories outside the package's tree, downloads, `sudo` and package managers, setting passwords, system commands the book's section doesn't use, and running a later book command early. | Every failure |
+| **2. A nudge** | Sentinel | The closest findings from the knowledge base (confidence 0.2 or more) go into the task's journal as a lesson. The task is reset for a fresh attempt. | Once per task, after rung 1 gives up |
+| **3. A tutor session** | Claude (headless) | Sentinel asks for a tutor in the journal. `lfs/lfs-tutor.py` on the tutor host runs `claude -p` with **no tools**, given the section, the task's whole journal (including each failed step's 16 KB of output and the facts the 14B saw), and what ran in the three sections before. It answers either with **a lesson** (the task is reset, and the lesson becomes a knowledge-base finding, `LFS-T…`) or with **"needs Paul"**, for a fault in the controller, a broken machine, or a decision that isn't the model's. | Up to 2 per task, 6 a day in all |
+| **4. A person** | Paul | The build is **paused**. Sentinel records an event, and would notify a phone if `SENTINEL_NOTIFY_URL` were set (no channel for now, by choice). A person fixes the cause and resets the task. Where the rungs so far were spent on a fault that's now fixed, they also post a **ladder reset** note, so the next stuck episode climbs from rung 2 again. | When rung 3 says so, after its sessions, or at the daily cap |
+
+**How it works:**
+- **One rung per stuck episode:** a task going back to "stuck" starts the next rung, never the same one twice in a row.
+- **The worker in `--follow` mode** waits while a task is stuck, and carries on when it's reset.
+- **Lessons:** both tutor and Sentinel lessons go into the 14B's plans *and* its repair prompts. A lesson marked `supersedes` retires the ones before it.
+- **Stalls are separate from being stuck:** Sentinel flags a lost heartbeat (10 minutes) or a live worker whose journal hasn't moved for longer than any step may take, never mere log silence.
 
 ### Default credentials
 
