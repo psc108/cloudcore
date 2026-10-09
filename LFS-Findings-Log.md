@@ -756,6 +756,8 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **The dropped-line check:** a book line is also kept when its words appear in order in the changed line ("make … check"). The 5.4 headers case is still refused, and replacing `make check` with something else is still refused. Offline cases added (44 in all).
 - **The planning rules,** and the tutor's: each step runs under `set -e`; tolerate a failure with `a || true`.
 
+**Follow-up (21:30–21:58 UTC):** the first fix still refused the 14B's plans. It split words on spaces, and the 14B wrote `make -k check;`, the semicolon attached. My offline case had used `check ||`. Words are now split on shell punctuation too (`;`, `|`, `&`, parentheses), and the 14B's two exact texts are offline cases (46 in all). Meanwhile Sentinel's nudge was **relevant** for the first time on a new problem: the tutor's earlier Gettext lesson, ingested as LFS-T2247, matched at 0.53. The tutor's cap was reached again, so rung 4 again.
+
 **Verified by:** the re-run of 8.36.
 
 ## Document History

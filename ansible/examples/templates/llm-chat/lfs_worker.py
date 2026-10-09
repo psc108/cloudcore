@@ -630,8 +630,9 @@ def _dropped_lines(book: str, run: str) -> list[str]:
     def words_in_order(k: str, h: str) -> bool:
         # LFS-038: `make check` is kept in `make -k check; ! grep ...` -- its words
         # appear in order, with an option between. Refused before (8.36).
-        it = iter(h.split())
-        return all(w in it for w in k.split())
+        # Words split on shell punctuation too: the 14B wrote `make -k check;`.
+        it = iter(re.findall(r"[^\s;|&()]+", h))
+        return all(w in it for w in re.findall(r"[^\s;|&()]+", k))
 
     out = []
     for line in book.replace("\\\n", " ").splitlines():

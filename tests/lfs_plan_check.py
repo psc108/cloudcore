@@ -57,6 +57,10 @@ CASES = [
     ("8.36 make check wrapped to tolerate one known failure (LFS-038)", "8.36",
      [{"book": 2, "run": "make -k check || true; ! grep -rh '^FAIL:' --include=test-suite.log . | grep -v 'test-execute'",
        "why": "tutor: test-execute.sh is an environment artefact"}], True, ""),
+    ("8.36 the 14B's exact text: 'check;' (LFS-038)", "8.36",
+     [{"book": 2, "run": "make -k check; ! grep -rh '^FAIL:' --include=test-suite.log . | grep -v 'test-execute'", "why": "x"}], True, ""),
+    ("8.36 the 14B's other text: '&& false || true'", "8.36",
+     [{"book": 2, "run": "make -k check; grep -rh '^FAIL:' --include=test-suite.log . | grep -v 'test-execute' | grep . && false || true", "why": "x"}], True, ""),
     ("8.36 make check replaced by something else", "8.36", [{"book": 2, "run": "true", "why": "skip tests"}], False, "drops"),
     # LFS-021: the same lines split over invented command numbers.
     ("5.4 split into [1],[2],[3] (LFS-021)", "5.4",
