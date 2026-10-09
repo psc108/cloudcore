@@ -41,6 +41,7 @@ import argparse
 import difflib
 import threading
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -190,18 +191,52 @@ OUTPUT_SCHEMA = {"type": "object", "required": ["ok", "why"], "properties": {
     "ok": {"type": "boolean"}, "why": {"type": "string"}}}
 
 
+_n_ctx: dict[str, int] = {}
+# Characters per token for this model's English-and-shell text: measured
+# 3.5-4; 3.0 errs on the side of a prompt that fits (LFS-037).
+CHARS_PER_TOKEN = 3.0
+
+
+def _slot_context(url: str) -> int:
+    """One slot's context size (llama-server's /props), cached; 4096 if unknown."""
+    if url not in _n_ctx:
+        try:
+            with urllib.request.urlopen(url + "/props", timeout=5) as r:
+                _n_ctx[url] = int(json.loads(r.read())["default_generation_settings"]["n_ctx"])
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError):
+            return 4096
+    return _n_ctx[url]
+
+
+def _fit(system: str, user: str, max_tokens: int, n_ctx: int) -> str:
+    """The user message trimmed from the middle so that the prompt plus the
+    reply fit one slot's context (LFS-037: GCC's judge prompt was 5,381 tokens
+    against 4,096, the server refused it, and the worker crashed). The start
+    (the task and step) and the end (the latest evidence) are kept."""
+    room = int((n_ctx - max_tokens - 64) * CHARS_PER_TOKEN) - len(system)
+    if len(user) <= room:
+        return user
+    if room < 2000:
+        room = 2000
+    marker = "\n\n[... cut to fit the model's context ...]\n\n"
+    head = (room - len(marker)) * 2 // 3
+    tail = room - len(marker) - head
+    return user[:head] + marker + user[-tail:]
+
+
 def ask_model(system: str, user: str, max_tokens: int = 1500, schema: dict | None = None) -> tuple[str, str]:
     """Returns (reply, which endpoint answered): the capable endpoint expected to
     answer fastest now, by live measured speeds (model_router, F-236; LFS-010).
     Only a free endpoint: the build waits rather than queue ahead of a student."""
-    payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-               "max_tokens": max_tokens, "temperature": 0.2, "stream": False}
-    if schema:
-        payload["response_format"] = {"type": "json_object", "schema": schema}
     urls = [u for u in LAB_MODELS + [OWN_MODEL] if model_router.capable(u, MODEL_FILE)] or [OWN_MODEL]
     last = ""
     for _ in range(240):  # up to an hour waiting for a free one
         for base in [u for u in model_router.order(urls, len(system) + len(user), max_tokens) if model_router.free(u)]:
+            payload = {"messages": [{"role": "system", "content": system},
+                                    {"role": "user", "content": _fit(system, user, max_tokens, _slot_context(base))}],
+                       "max_tokens": max_tokens, "temperature": 0.2, "stream": False}
+            if schema:
+                payload["response_format"] = {"type": "json_object", "schema": schema}
             req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(payload).encode(),
                                          headers={"Content-Type": "application/json"})
             try:
@@ -209,7 +244,9 @@ def ask_model(system: str, user: str, max_tokens: int = 1500, schema: dict | Non
                     data = json.loads(r.read())
                 model_router.record(base, data.get("timings"))
                 return data["choices"][0]["message"]["content"], base
-            except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
+            # LFS-037: a dropped connection (RemoteDisconnected is an OSError and an
+            # HTTPException, not a URLError) crashed the worker. Try the next one.
+            except (urllib.error.URLError, TimeoutError, KeyError, ValueError, OSError, http.client.HTTPException) as e:
                 last = f"{base}: {e}"
                 log(f"model at {base} failed ({e}); trying the next")
         time.sleep(15)
@@ -633,12 +670,16 @@ def _judge_evidence(m: Machine, task: dict, name: str, tail: str) -> str:
     the step's whole log, the output's end, the book's passages about test
     failures, and the section's lessons."""
     _, failed = m.sh(f"grep -aE '^(FAIL|ERROR|XPASS):' /var/log/lfs-build/{name}.log | sort -u | head -80")
-    notes = tutor_notes(task)
-    return (f"The failing tests (from the whole log):\n{failed.strip() or '(none listed)'}\n\n"
-            f"Output (end):\n{tail[-2500:]}\n\n"
-            f"What the book says about test failures:\n{_failure_passages(task)}"
-            + ("\n\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n" + "\n".join(f"- {n}" for n in notes)
-               if notes else ""))
+    notes = "\n".join(f"- {n}" for n in tutor_notes(task))
+    failed = failed.strip()
+    if len(failed) > 2200:  # GCC lists ~40 known failures; keep the count and the first ones
+        failed = failed[:2200] + f"\n... ({failed.count(chr(10)) + 1} failing tests in all)"
+    # A budget per part (LFS-037): together about 8,000 characters, so the
+    # prompt and the reply fit a 4,096-token slot.
+    return (f"The failing tests (from the whole log):\n{failed or '(none listed)'}\n\n"
+            f"Output (end):\n{tail[-1500:]}\n\n"
+            f"What the book says about test failures:\n{_failure_passages(task, 2500)}"
+            + (f"\n\nYOUR TUTOR'S NOTES FOR THIS SECTION (follow them):\n{notes[-2000:]}" if notes else ""))
 
 
 def _failure_passages(task: dict, limit: int = 5000) -> str:
@@ -1130,7 +1171,18 @@ def main() -> int:
         st, tasks = api("GET", f"/v1/lfs/builds/{args.build}/tasks?state=done")
         done_numbers = {t["number"] for t in tasks.get("items", [])}
         api("POST", f"/v1/lab-vms/{vm_id}/touch")
-        if not run_task(task["id"], build, m, manifest, done_numbers, args.plan_only, vm_id):
+        try:
+            ok = run_task(task["id"], build, m, manifest, done_numbers, args.plan_only, vm_id)
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError, http.client.HTTPException,
+                paramiko.SSHException) as e:
+            # LFS-037: one unexpected error used to kill the worker for hours.
+            # Now the task goes stuck with the error, and the ladder takes it from there.
+            log(f"task {task['number']} failed in the controller: {e!r}")
+            journal(task["id"], "controller", "escalation", f"the controller itself failed on this task: {e!r}. "
+                    "The task is marked stuck; the work done so far is kept (CC-95 resumes from the last good step).")
+            set_state(task["id"], "stuck", f"controller error: {type(e).__name__}")
+            ok = False
+        if not ok:
             if args.follow:
                 continue  # the loop above waits for help
             return 1

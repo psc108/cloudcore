@@ -708,6 +708,31 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Cost:** about 10 hours of GCC build and test so far, against a book estimate of 53 SBU. CC-95 (resume a task from its failed step) would have saved most of it, and it's now the most valuable controller improvement for the rest of the build.
 
+### LFS-037 — The worker crashed after GCC's tests: the judge's prompt was 5,381 tokens for a 4,096-token slot; nobody noticed for three hours
+
+**Where:** task 76 (8.32 GCC-16.2.0, attempt 4); `examples/llm-chat/files/lfs_worker.py` (`ask_model`, `_judge_evidence`, `main`); Claude's monitoring.
+
+**Symptom:** found 2026-10-09 at 18:57 UTC.
+- **The tests:** attempt 4 ran GCC's test suite to the end (exit 0 after 4.4 h, 16:01 UTC).
+- **The crash:** the worker asked the 14B to judge the test summary and died: `http.client.RemoteDisconnected`. The model server's log says why: "request (5381 tokens) exceeds the available context size (4096 tokens)". LFS-036's judge evidence (failing tests, the book's passages, the lessons) on top of GCC's long output was too big for one of the server's four 4,096-token slots.
+- **Sentinel caught it:** a "worker gone" event from about 16:11, then "heartbeat N min old" every minute. Rung 4 has no phone channel (Paul's choice).
+- **Claude's own watcher missed it:** it watched only for "paused" and "stopped". About three hours were lost.
+
+**Root cause:** the controller's.
+- **Nothing kept a prompt within the model's context.**
+- **`ask_model` handled URL errors but not a dropped connection** (`RemoteDisconnected` is an `OSError` and an `HTTPException`).
+- **`main` had no guard:** one unexpected error killed the worker.
+
+**Fix:**
+- **Every prompt fits:** `ask_model` reads each server's per-slot context (`/props`: 4,096 on the coordinator, 8,192 on Stourport's lab model) and trims an over-long user message from the middle, keeping its start (the task and step) and its end (the latest evidence). Checked: a 20,000-character message fits as about 4,032 tokens.
+- **The judge's evidence has a budget:** failing tests 2,200 characters (with the total count), output end 1,500, the book's passages 2,500, lessons 2,000.
+- **A dropped connection** is handled like any other model failure: try the next endpoint, or wait.
+- **A crash inside a task** no longer kills the worker: the task goes stuck with the error, journalled, and the ladder takes it from there; the work done is kept (CC-95).
+- **Claude's watcher** now also reads the heartbeat's age.
+- **GCC's 4.4 h of tests are kept:** a resume marker, the same one CC-95 writes, was placed by hand (done = 6: steps 1–6 ran in this tree exactly as the book; the cwd is the build directory). The new worker resumes at step 7 (the test summary) and goes straight to the fixed judge.
+
+**Verified by:** offline (42 plan cases, 8 resume cases, the fit check); the resumed 8.32.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -745,3 +770,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.1 | 2026-10-09 | Paul Scott | 8.5 glibc done; 8.6–8.22 first time. LFS-034 (a note's example run as a step). |
 | v3.2 | 2026-10-09 | Paul Scott | LFS-035 (a repair set root's password; locked; credential guard). |
 | v3.3 | 2026-10-09 | Paul Scott | LFS-036 (the output judge left unfixed; GCC's tests misjudged). |
+| v3.4 | 2026-10-09 | Paul Scott | LFS-037 (a prompt over the context crashed the worker; prompts now fit; resumed). |
