@@ -681,7 +681,7 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **Neutralised at once:** root's password in the new system is **locked** (`usermod -L root`, status `L`), so `newpassword` no longer works. The journal's copy of it is now harmless.
 - **The book's `passwd root`** is skipped: "the root password is Paul's to set". The controller locks root instead, at the end of that task, journalled.
 - **A credential guard in plans and repairs:** `chpasswd`, a password piped or here-doc'd into `passwd`, `passwd --stdin`, `usermod -p` and `openssl passwd` are refused. Paths such as `/etc/passwd` and `/etc/pam.d/chpasswd` aren't matched: it matches no command in either book. Offline cases added (42 in all).
-- **Open decision (Paul):** how root gets its real password. For example, set at first boot on the VNC console, or supplied from a secret file outside the journal. This ties in with Phase I (MFA).
+- **Decided (Paul, 2026-10-09): Paul sets root's password at first boot.** Root stays locked through the build. Just before the disk becomes a bootable image (D6), the controller clears root's password and expires it (`passwd -d root; chage -d 0 root`), so the first console login forces a new password. SSH refuses empty and root password logins by default.
 
 **Verified by:** `passwd -S root` gives `L`; `tests/lfs_plan_check.py`; the re-run of 8.30.
 
