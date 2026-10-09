@@ -704,7 +704,7 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **The worker had already launched the test-suite step,** which ran on orphaned (parent PID 1) with no exit code to be recorded. A clean restart was chosen over writing resume code: it costs ~28 min more than adopting.
 - **`pkill -9 -U 101`,** meant for the chroot's `tester` user, also killed the build machine's own `systemd-resolved` (uid 101 on the host). systemd restarted it at once, so no harm, but uids inside the chroot are not the host's users. Kill by exact process name, or within the chroot.
 
-**Verified by:** the re-run of 8.32 (a full build and test suite, ~5.5 h).
+**Verified by:** 8.32 done (see LFS-037): the fixed judge accepted the test summary.
 
 **Cost:** about 10 hours of GCC build and test so far, against a book estimate of 53 SBU. CC-95 (resume a task from its failed step) would have saved most of it, and it's now the most valuable controller improvement for the rest of the build.
 
@@ -731,7 +731,11 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **Claude's watcher** now also reads the heartbeat's age.
 - **GCC's 4.4 h of tests are kept:** a resume marker, the same one CC-95 writes, was placed by hand (done = 6: steps 1–6 ran in this tree exactly as the book; the cwd is the build directory). The new worker resumes at step 7 (the test summary) and goes straight to the fixed judge.
 
-**Verified by:** offline (42 plan cases, 8 resume cases, the fit check); the resumed 8.32.
+**Verified by:** 8.32 done at 19:15 UTC, 2026-10-09.
+- **The resume:** "resuming at step 7 of 20: steps 1-6 already ran in this tree … (CC-95)" (19:03). The 4.4 h test run was reused.
+- **The judge:** the prompt fitted, and the verdict was "met the requirement: 39 unexpected failures … within the acceptable range as per the book's notes" (19:13). That also verifies LFS-036's fix.
+- **The rest:** the install and the book's sanity checks, 20 steps clean.
+- **CC-95:** its first live resume.
 
 ## Document History
 
@@ -771,3 +775,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.2 | 2026-10-09 | Paul Scott | LFS-035 (a repair set root's password; locked; credential guard). |
 | v3.3 | 2026-10-09 | Paul Scott | LFS-036 (the output judge left unfixed; GCC's tests misjudged). |
 | v3.4 | 2026-10-09 | Paul Scott | LFS-037 (a prompt over the context crashed the worker; prompts now fit; resumed). |
+| v3.5 | 2026-10-09 | Paul Scott | 8.32 GCC done; LFS-036, LFS-037 and CC-95's resume verified live. |
