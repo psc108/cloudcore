@@ -3,6 +3,23 @@
 A cloud provider platform delivering VPCs, compute instances and L4/L7 load balancers.
 Includes a REST API, web UI, Ansible collection, OpenTofu provider and modules.
 
+Around that core, this repo also holds:
+- **Two-host clustering:** peers paired over WireGuard, shared guest tokens, mirrored artifacts, nightly cross-host backups.
+- **Central auth:** named tokens with roles, and an audit log.
+- **llm-chat:** a code and Linux tutor. Its answers are executed or lab-verified before students rely on them, on hardware-isolated sandboxes, lab VMs and full VMs.
+- **Platform features for building an operating system:** disk snapshots, UEFI images, a VNC console and long-lived build machines. These are used by an LFS (Linux From Scratch) build that llm-chat's model carries out, tutored by Claude and watched by [Sentinel](https://github.com/psc108/sentinel).
+
+### Documentation map
+
+| What | Where |
+|---|---|
+| All open work | `cloudcore-Roadmap.md` (CloudCore, llm-chat, haFullStack) and `sentinel-Roadmap.md` |
+| Items whose state is in question | `roadmap-Verify-Items.md` |
+| Active project plans | `lfs-os-Phased-Implementation.md` (the LFS OS build), `haFullStack-Phased-Implementation.md`, `sentinel-kb-browsing-Phased-Implementation.md` |
+| Every bug found and fixed | `haFullStack-Findings-Log.md` (F-NNN), `LFS-Findings-Log.md` (LFS-NNN); both are ingested into Sentinel's knowledge base |
+| The HA reference design | `haFullStack.md`, `haFullStack-HLD.md`, `haFullStack-LLD.md` |
+| Finished plans, kept as history | `docs/archive/` (two-host, auth, the llm-chat phases, the provider review) |
+
 ## Getting Started
 
 ### Prerequisites
@@ -95,6 +112,31 @@ services are ever removed. `systemctl is-active loki grafana-server`
 confirms it's up; the [Sentinel](#optional-sentinel-log-intelligence-advisor)
 section below depends on this being done first.
 
+### Host firewall
+
+`api/setup-host-firewall.sh` puts each host behind ufw, deny-by-default. It allows exactly the services listed in an inventory (`/etc/cloudcore/host-firewall.inventory`), each from the networks it needs: the LAN, the CloudCore bridge, the lab network, WireGuard. It keeps the bridge's forwarding rules that VMs depend on. It runs in three stages, with an escape hatch:
+
+```bash
+sudo bash api/setup-host-firewall.sh --lan-cidr 192.168.1.0/24 --scan    # list what listens; write the inventory
+sudo bash api/setup-host-firewall.sh --lan-cidr 192.168.1.0/24 --apply   # turn ufw on with those rules
+sudo bash api/setup-host-firewall.sh --confirm                           # keep it (otherwise ufw turns itself off after 300 s)
+sudo bash api/setup-host-firewall.sh --disable                           # escape hatch
+```
+
+A new host service needs an inventory line and another `--apply`.
+
+### Backups
+
+Each host backs itself up to the other every night, through the dashboard scheduler's **host backup** job. Each run takes consistent, integrity-checked snapshots of CloudCore's database (instances, builds, the LFS build journal, the capture record), each example's OpenTofu state, and Sentinel's database and models, with a SHA-256 manifest. Unchanged files are hard-linked, and 7 days are kept. The SSH key used is confined to one directory on the target (rrsync), so it can't open a shell there.
+
+```bash
+bash api/setup-backup-key.sh --help                       # once: install the confined key on the target
+python3 api/backup-host.py --to <user>@<host> --dry-run   # what the schedule runs
+python3 api/restore-from-backup.py --help                 # restore, after verifying the backup
+```
+
+What isn't covered yet (Loki's raw logs, keys, the LFS build disks) and a third copy on USB are on the roadmap (CC-01 to CC-04).
+
 ### Cross-host peering (optional)
 
 Discover another CloudCore install on your real (physical) LAN, pair
@@ -118,7 +160,24 @@ api/setup-network.sh <octet>` to apply it). Pairing, approval, and
 picking a peer inside a template all happen from the Dashboard's
 **Peers** section — see `haFullStack-LLD.md` §13 for the full design.
 
+With two hosts paired, a few more pieces make them work as one (`docs/archive/cloudcore-two-host-Phased-Implementation.md`):
+- **Guest-facing tokens shared** between hosts: `api/import-shared-tokens.sh` (never the master token).
+- **The package repo and artifact cache mirrored,** checksum-verified: `api/sync-package-repo.py`, or the scheduler's **repo sync** job.
+- **Each host's Loki watched by Sentinel,** wherever Sentinel runs.
+- **Workload placement by measured speed:** `api/llm-bench.py` benchmarks a model on a host, `GET /v1/peers/recommend-llm-placement` ranks the hosts by speed and current load, and llm-chat's model router sends each request to the endpoint expected to answer fastest right now.
+
 ### Scheduler & 7B LLM ingestion (optional)
+
+The scheduler's job kinds:
+
+| Kind | What it does |
+|---|---|
+| build | Builds a Terraform or Ansible example |
+| llm_ingest | The 7B LLM Sentinel ingest (below) |
+| kiwix_update | Checks for newer Kiwix ZIMs |
+| repo_sync | Mirrors the package repo and artifacts to or from a peer |
+| host_backup | The nightly backup to the other host (see Backups) |
+| lfs_update | A weekly report on new LFS/BLFS releases, errata and kernels; it never changes anything |
 
 Schedule any Terraform/Ansible example to build itself on a recurring
 or one-off basis — daily, weekly, every N minutes/hours, or a specific
@@ -362,11 +421,43 @@ is checked against it *before* the build is even submitted — an
 under-resourced peer is rejected with a clear message instead of
 silently OOM-killing partway through model load.
 
+#### Lab-verified Linux Help answers
+
+Linux Help answers can be **tried for real before a student relies on them.**
+- **How:** the coordinator asks CloudCore's **lab VM broker** (`/v1/lab-vms`, its own token) for a disposable Ubuntu VM and a prober VM on an isolated lab network (`cclab0`, fenced by nftables: `sudo api/setup-lab-network.sh --controllers <CIDR>`). It sets up what the question presumes, runs the answer's commands, then checks the goal from inside and from the prober.
+- **The result:** a run whose steps all worked and whose checks all passed marks the answer **lab verified**. Every run, with its steps, output and checks, is in Sentinel's **Lab runs** tab.
+- **Full VMs:** proofs run on full lab VMs, so answers that need a whole machine (reboots, disks, modules) can be tested. Sending such questions to a student's own full VM is still to come (CC-64, CC-65).
+- **Design:** `docs/archive/llm-chat-lab-sandbox-Phased-Implementation.md` and `docs/archive/llm-chat-full-vm-Phased-Implementation.md`.
+
+#### Local capture client
+
+Students can submit their own work from their own laptops to the capture listener (port 8083, LAN only, per-student tokens from the Dashboard's **Capture Tokens** card). The client is `scripts/llm-capture-client/`; its design is in `docs/archive/llm-chat-sandbox-extensions-Phased-Implementation.md`, Stage 13.
+
+### The LFS OS build
+
+llm-chat's 14B model builds a bootable operating system from Linux From Scratch (systemd, UEFI, the latest stable kernel). It works one book section at a time on a dedicated lab VM. Claude tutors it when it struggles, and Sentinel watches every step. The plan is `lfs-os-Phased-Implementation.md`, and every problem found is in `LFS-Findings-Log.md`. What CloudCore provides for it:
+
+| Capability | Where |
+|---|---|
+| **Disk snapshots:** create, list, restore (both disks, clean shutdown) | `/v1/instances/<id>/snapshots`; the dashboard |
+| **Custom images booted under UEFI** (OVMF) | `POST /v1/images` (import); `/v1/images/<id>` |
+| **A VNC console** for instances with a display, reached only through the dashboard (one-time tickets, a WebSocket bridge), plus screenshots | the dashboard's **Console** button |
+| **Long-lived build machines:** the lab VM purpose `lfs-build`, up to 30 days, with a 50 GB data disk; checkpoints through the broker | `/v1/lab-vms` |
+| **The sources:** LFS, BLFS (UEFI and stage 1 sets) and the kernel, mirrored into the package repo with MD5, PGP or first-seen SHA-256 checks; the books as sections and as ZIMs | `api/lfs-mirror.py`, `lfs/` |
+| **The build's journal and task queue:** one task per book section, each with its state, attempts and journal | `/v1/lfs/builds`, `/v1/lfs/tasks/<id>`, `/v1/lfs/builds/<id>/journal.md` |
+
+**How it's driven:**
+- **The worker:** `examples/llm-chat/files/lfs_worker.py` runs on the llm-chat coordinator. It plans each section as differences from the book, runs the steps, judges the results and repairs failures. It keeps a heartbeat, and with `--follow` it waits for help when a task is stuck.
+- **Sentinel** climbs an escalation ladder for a stuck task: a knowledge-base nudge first, then a tutor session, then the build paused for a person.
+- **The tutor** is headless Claude Code with no tools: `lfs/lfs-tutor.py`, installed as a user timer by `lfs/install-lfs-tutor.sh --api-ssh <API host>`.
+- **The plan checker's offline tests:** `python3 tests/lfs_plan_check.py`.
+
 ### Default credentials
 
 | Setting | Value |
 |---|---|
-| API tokens | `~/.config/cloudcore/api.env` (mode 0600, random per install, created by `scripts/install.sh`). The master token is accepted only on `127.0.0.1:8080`; guests get a separate examples token. |
+| API tokens | `~/.config/cloudcore/api.env` (mode 0600, random per install, created by `scripts/install.sh`). The master token is accepted only on `127.0.0.1:8080`; guests get a separate examples token. The old shared `dev-token` is retired (F-201). |
+| Named tokens | **Roles:** `admin`, `labvm`, `capture`, `peer`, `student`. Every route is checked centrally (`api/authz.py`), and each request is written to an audit log.<br>**Endpoints:** `GET/POST /v1/auth/tokens` and `DELETE /v1/auth/tokens/<id>` manage tokens; `GET /v1/auth/audit` reads the log.<br>**Check:** `python3 tests/authz_walk.py` walks every route against every role. |
 | UI URL | `http://127.0.0.1:8080` |
 | API base | `http://127.0.0.1:8080/v1/` |
 
@@ -424,8 +515,11 @@ off from them) — stop those first, or pass `--force` to proceed anyway.
 companion tool, in its own repo — it watches this platform's
 host-level Loki service (set up above, "Set up centralized logging"),
 flags log activity that looks like real trouble, and matches it
-against a knowledge base seeded from `haFullStack-Findings-Log.md` —
-surfacing suggestions through its own web UI. Since Loki is always-on
+against a knowledge base seeded from `haFullStack-Findings-Log.md` (and,
+for the LFS build, `LFS-Findings-Log.md`) —
+surfacing suggestions through its own web UI. It also holds llm-chat's
+grounding log, ask queue and lab runs, and watches the LFS build
+(stalls and its escalation ladder). Since Loki is always-on
 and shared by every example template, not tied to any one build,
 Sentinel watches from the moment it starts regardless of what's
 currently built. It has no source dependency on CloudCore (only
@@ -455,9 +549,32 @@ knowledge base from this repo's own findings log in one step (also
 downloads a small pretrained matching model, ~90MB one-time, cached
 locally afterward — same "download once, work offline forever after"
 pattern as this repo's own package repo). UI at
-**http://localhost:8900/**. Full setup, CLI reference, and how to
+**http://<Sentinel's host>:8900/**. In this lab Sentinel runs on the
+peer, Llwyn-y-Groes: http://192.168.1.177:8900/. Full setup, CLI reference, and how to
 (re)train it from real usage: see
 [Sentinel's own README](https://github.com/psc108/sentinel#readme).
+
+### Configuration reference
+
+The main settings. Each script's `--help` lists its own.
+
+| Setting | Read by | Default | Purpose |
+|---|---|---|---|
+| `~/.config/cloudcore/api.env` | the API, scripts | created by `install.sh` | `CLOUDCORE_API_TOKEN` (master) and the guest tokens; mode 0600 |
+| `CLOUDCORE_API_URL` | scripts, the provider | `http://127.0.0.1:8080` | Where the API is |
+| `CLOUDCORE_ENV_FILE` | the API | `~/.config/cloudcore/api.env` | Another token file |
+| `CLOUDCORE_ALLOW_DEV_TOKEN` | the API | unset | `1` accepts the retired `dev-token` again; for tests only, never production |
+| `CLOUDCORE_LOGGING_ADMIN_PASSWORD` | `setup-logging-service.sh` | `changeme-admin` | Grafana's admin password |
+| `CLOUDCORE_BACKUP_STAGING` | `backup-host.py` | `~/.local/share/cloudcore-backup` | Where daily backups are staged |
+| `CLOUDCORE_BACKUP_KEY` | `backup-host.py` | `~/.config/cloudcore/backup-key` | The rrsync-confined backup key (kept out of `~/.ssh`, F-212) |
+| `CLOUDCORE_BACKUPS_DIR` | `restore-from-backup.py` | `~/cloudcore-backups` | Where another host's backups arrive |
+| `SENTINEL_DATA_DIR` | `backup-host.py` | `~/.local/share/sentinel` | Sentinel's database and models, to back up |
+| `SENTINEL_LOCAL_URL` | the API | `http://127.0.0.1:8900` | The local Sentinel, for the peer relay |
+| `REPO_DIR`, `REPO_BIND_ADDR`, `REPO_PORT` | `serve-package-repo.py` | the repo dir, the bridge gateway, 8090 | The package repo's server |
+| `LFS_MIRROR_OUT` | `lfs-mirror.py` | the package repo's `artifacts/lfs` | Where LFS sources are mirrored |
+| `LLM_CLIENT_SUBMISSIONS_PER_HOUR` | the capture listener | 20 | Rate limit per student token |
+| `/etc/cloudcore/host-firewall.inventory` | `setup-host-firewall.sh` | written by `--scan` | Allowed services and the networks for each |
+| `~/.config/cloudcore/lfs-tutor.env` | the LFS tutor timer | written by `install-lfs-tutor.sh` | `LFS_API_SSH` (the API host), `LFS_TUTOR_CLAUDE`, `LFS_TUTOR_DAILY_CAP` (6), `LFS_TUTOR_MODEL` |
 
 ---
 
@@ -471,6 +588,9 @@ pattern as this repo's own package repo). UI at
 | OpenTofu examples | `examples/` | Ready-to-run configurations |
 | Ansible collection | `ansible/collections/cloudcore/` | Python — FQCN `cloudcore.cloudcore` |
 | Ansible examples | `ansible/examples/` | Ready-to-run playbooks (01–14) |
+| LFS OS build | `lfs/` | Book parsing, the source manifest, ZIMs of the books, the tutor |
+| Capture client | `scripts/llm-capture-client/` | Students' local submission client |
+| Archived plans | `docs/archive/` | Finished plans, kept as history |
 
 ## Requirements
 
@@ -686,3 +806,10 @@ python3 tests/run_tests.py
 ```
 
 The API must be running before any test run (`systemctl --user start cloudcore-api`).
+
+Two offline checks need no API and no VMs:
+
+```bash
+python3 tests/authz_walk.py       # every route against every role (central auth)
+python3 tests/lfs_plan_check.py   # the LFS worker's plan checker, against the model's recorded replies
+```
