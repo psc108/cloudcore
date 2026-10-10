@@ -760,6 +760,26 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the re-run of 8.36.
 
+### LFS-039 — The placeholder check missed `<paper_size>` (an underscore); chapter 9 has more like it
+
+**Where:** task 108 (8.64 Groff-1.24.1); `examples/llm-chat/files/lfs_worker.py` (the placeholder check).
+
+**Symptom:** found 2026-10-10.
+- **The step:** Groff's book command `PAGE=<paper_size> ./configure --prefix=/usr` was planned "as the book". Bash read `<paper_size>` as a redirect: "paper_size: No such file or directory".
+- **The ladder cleared it alone:** the nudge was irrelevant, but the tutor explained the placeholder, the retry passed, and the judge accepted the one known test failure (`neqn-smoke-test.sh`, which the book names).
+
+**Overnight, for context:** 36 tasks done since Gettext, 33 on the first attempt, including Perl, OpenSSL, Python, Meson and Coreutils. GRUB (8.65) was also cleared by the ladder alone: `make clean` in a fresh tree, a tutor lesson, and CC-95 resumed at step 2 both times.
+
+**Root cause:** the controller's. The placeholder pattern `<[a-z]{2,10}>` didn't match underscores or hyphens.
+
+**Fix:**
+- **The pattern** is now `<[a-z][a-z_-]{1,24}>`.
+- **Across the LFS book it now also finds** `<paper_size>` and chapter 9's `<network-device-name>`, `<lfs>` (the hostname) and the locale's `<ll>_<CC>.<charmap>`. All are real placeholders that must be filled, so the 14B can't run them as written.
+- **Offline cases:** 48 in all.
+- **Deployment:** at the worker's next safe restart.
+
+**Verified by:** the offline cases; chapter 9's run.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -800,3 +820,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.4 | 2026-10-09 | Paul Scott | LFS-037 (a prompt over the context crashed the worker; prompts now fit; resumed). |
 | v3.5 | 2026-10-09 | Paul Scott | 8.32 GCC done; LFS-036, LFS-037 and CC-95's resume verified live. |
 | v3.6 | 2026-10-09 | Paul Scott | LFS-038 (Gettext: a good plan refused by the dropped-line check). |
+| v3.7 | 2026-10-10 | Paul Scott | 115/145 done; LFS-039 (placeholders with _ or -). |

@@ -39,6 +39,7 @@ SECTIONS = {
     "5.3": ["tar -xf ../mpfr-4.2.2.tar.xz\nmv -v mpfr-4.2.2 mpfr", "mkdir -v build\ncd       build", "make", "make install"],
     "8.36": ["./configure --prefix=/usr --disable-static --docdir=/usr/share/doc/gettext-1.0", "make", "make check",
              "make install\nchmod -v 0755 /usr/lib/preloadable_libintl.so"],
+    "8.64": ["PAGE=<paper_size> ./configure --prefix=/usr", "make", "make check", "make install"],
     "5.4": ["make mrproper", "make headers\nfind usr/include -type f ! -name '*.h' -delete\ncp -rv usr/include $LFS/usr"],
     "5.5": ["case $(uname -m) in\n    x86_64) ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64\n    ;;\nesac",
             "mkdir -v build\ncd       build", "../configure --prefix=/usr --host=$LFS_TGT --disable-nscd", "make"],
@@ -99,6 +100,8 @@ CASES = [
       {"book": 1, "omit": True, "why": "no /home partition"}, {"book": 2, "omit": True, "why": "no swap"}], True, ""),
     ("2.7 mkdir dropped", "2.7", [{"book": 0, "run": "mount -v -t ext4 /dev/sdb2 $LFS", "why": "partition"},
                                   {"book": 1, "omit": True, "why": "x"}, {"book": 2, "omit": True, "why": "x"}], False, "drops"),
+    ("8.64 <paper_size> placeholder left (LFS-039)", "8.64", [], False, "placeholder"),
+    ("8.64 <paper_size> filled", "8.64", [{"book": 0, "run": "PAGE=A4 ./configure --prefix=/usr", "why": "UK paper"}], True, ""),
     ("2.7 placeholder left", "2.7", [{"book": 1, "omit": True, "why": "x"}, {"book": 2, "omit": True, "why": "x"}], False, "placeholder"),
     # 2.4: a commandless section writes its own sgdisk steps.
     ("2.4 sgdisk steps", "2.4", [{"run": "sgdisk -og /dev/sdb", "why": "GPT"},

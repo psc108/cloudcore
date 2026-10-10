@@ -846,7 +846,7 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             s.update(run=run, changed=_norm(run) != _norm(by_index[idx]["text"]), why=why)
         if ch.get("as") in ("root", "lfs"):
             s.update(**{"as": ch["as"]}, why=why or s["why"])
-    left = [s["book"] for s in steps if not s.get("omitted") and re.search(r"/dev/<|<[a-z]{2,10}>", s["run"])]
+    left = [s["book"] for s in steps if not s.get("omitted") and re.search(r"/dev/<|<[a-z][a-z_-]{1,24}>", s["run"])]
     if left:
         problems.append(f"command(s) {left} still have a placeholder like /dev/<xxx>: change them"
                         + (" -- so as_the_book must be false, with a change for ONLY those command(s), "
