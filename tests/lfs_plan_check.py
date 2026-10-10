@@ -189,6 +189,15 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} credential check, {name}: {bool(w._CREDENTIAL.search(run))}")
     extra += 8
+    # LFS-042: a section whose errors the book says to ignore runs without -e anywhere.
+    for ctx in ("chroot", "host-lfs", "host-root"):
+        pro, launch = w.launcher(ctx, None, "/")
+        pro2, run2 = w._without_errexit(pro, launch, "strip x")
+        launch2 = launch.replace("bash -e ", "bash ")
+        good = "set -e" not in pro2 and "bash -e" not in launch2 and run2.endswith("\ntrue")
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} errors-expected step has no -e ({ctx}): {launch2[-60:]!r}")
+    extra += 3
     # LFS-042: deleting outside the package's own tree is refused.
     for name, cmds, srcdir, cwd, want in [
             ("8.84 rm a systemd unit", "rm /usr/lib/systemd/user/dbus.socket", "", "/", True),

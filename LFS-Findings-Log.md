@@ -856,6 +856,8 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **Ignorable errors:** sections whose errors the book says to ignore (`_ERRORS_EXPECTED`: 8.84 only, with the book's sentence) run their book commands without `set -e`, and the step counts as done.
 - **The deletion guard:** a repair may delete only inside the package's own unpacked tree or `/tmp`. Any other `rm`, of files or directories, absolute or relative, is refused. Offline cases: 60 in all.
 
+**Follow-up (09:59–10:39 UTC):** the first fix removed only the script's own `set -e`. The launcher runs the script with **`bash -e`**, which put it straight back, so the step still ended at the first error (this time `objcopy`'s "debuglink section already exists", from the re-runs). The 14B's repairs this time were harmless: `strip … || true`, a `sed` on a placeholder path. The new deletion guard wasn't needed. The tutor's daily cap was reached, so rung 4. Now `_without_errexit` and the launcher both drop `-e`, checked offline for all three contexts (63 cases).
+
 **Verified by:** the re-run of 8.84.
 
 ## Document History

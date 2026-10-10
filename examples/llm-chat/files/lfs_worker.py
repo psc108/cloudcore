@@ -683,6 +683,13 @@ def _version_note(task: dict, cmds: list[dict]) -> str:
             f"change '{task['version']}' to '{task['version_override']}' in command(s) {named} and nothing else.\n")
 
 
+def _without_errexit(pro: str, launch: str, run: str) -> tuple[str, str]:
+    """The step's prologue and command without `set -e`, ending in success.
+    The launcher's `bash -e` must go too (LFS-042: the first fix removed only
+    the prologue's `set -e`, and `bash -e` put it straight back)."""
+    return pro.replace("set -e\n", "", 1), run + "\ntrue"
+
+
 def _deletes_outside(cmds: str, srcdir: str, cwd: str) -> bool:
     """True if any `rm` in cmds removes something outside the package's own
     unpacked tree or /tmp (LFS-042: a repair deleted systemd unit files)."""
@@ -1042,7 +1049,8 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
             pro, launch = launcher(task["context"], step.get("as"), cwd)
             run_as = run
             if task["number"] in _ERRORS_EXPECTED and step["book"] is not None and attempt == 0:
-                pro, run_as = pro.replace("set -e\n", "", 1), run + "\ntrue"
+                pro, run_as = _without_errexit(pro, launch, run)
+                launch = launch.replace("bash -e ", "bash ")
             name = f"task{task['seq']:03d}-a{task['attempts'] + 1}-step{n + 1}-try{attempt + 1}"
             phase(f"step {n + 1}/{len(steps)} try {attempt + 1}: {run.strip().splitlines()[0][:120]}", task)
             journal(task_id, "controller", "command", run, {"step": n + 1, "book": step["book"], "log": name})
