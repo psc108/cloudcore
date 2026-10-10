@@ -189,6 +189,21 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} credential check, {name}: {bool(w._CREDENTIAL.search(run))}")
     extra += 8
+    # LFS-042: deleting outside the package's own tree is refused.
+    for name, cmds, srcdir, cwd, want in [
+            ("8.84 rm a systemd unit", "rm /usr/lib/systemd/user/dbus.socket", "", "/", True),
+            ("3.1 rm -rf the sources", "rm -rf /mnt/lfs/sources", "", "/root", True),
+            ("rm a file in the package tree (relative)", "rm -f config.cache", "gcc-16.2.0", "/sources/gcc-16.2.0/build", False),
+            ("rm -rf build in the package tree", "rm -rf build && mkdir build", "gcc-16.2.0", "/sources/gcc-16.2.0", False),
+            ("rm the half-linked cc1 (absolute, in tree)", "rm -f /sources/gcc-16.2.0/build/gcc/cc1", "gcc-16.2.0", "/sources/gcc-16.2.0/build", False),
+            ("rm in /tmp", "rm -f /tmp/x.log", "", "/", False),
+            ("rm relative, outside any package tree", "rm -f lastlog", "", "/var/log", True),
+            ("no rm at all", "make -j1", "x-1", "/sources/x-1", False)]:
+        got = w._deletes_outside(cmds, srcdir, cwd)
+        good = got == want
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} deletion guard, {name}: {'refused' if got else 'allowed'}")
+    extra += 8
     # LFS-023: every package section finds its tarball, even where the
     # package's name isn't the tarball's ("Libstdc++ from GCC", "D-Bus").
     manifest = {"files": [{"kind": "source", "set": "lfs", "file": f} for f in (

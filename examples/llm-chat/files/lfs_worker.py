@@ -683,6 +683,20 @@ def _version_note(task: dict, cmds: list[dict]) -> str:
             f"change '{task['version']}' to '{task['version_override']}' in command(s) {named} and nothing else.\n")
 
 
+def _deletes_outside(cmds: str, srcdir: str, cwd: str) -> bool:
+    """True if any `rm` in cmds removes something outside the package's own
+    unpacked tree or /tmp (LFS-042: a repair deleted systemd unit files)."""
+    in_tree = bool(srcdir) and f"/{srcdir}" in cwd
+    for args in re.findall(r"(?:^|[;&|\s(])rm\s+([^;&|\n]*)", cmds):
+        for target in [a for a in shlex.split(args, posix=True) if not a.startswith("-")] if args.strip() else []:
+            if target.startswith("/"):
+                if not (target.startswith("/tmp/") or (srcdir and f"/{srcdir}" in target)):
+                    return True
+            elif not in_tree:
+                return True
+    return False
+
+
 def _nothing_found(run: str, code: int, output: str) -> bool:
     """grep exits 1 when it finds nothing. For the book's diagnostic searches
     (8.5: `grep "Timed out" $(find -name \\*.out)`, listing tests that timed
@@ -882,6 +896,15 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
     return (steps if not problems else []), "; ".join(problems)
 
 
+# Sections whose book commands report errors the book says to ignore (LFS-042):
+# 8.84 strips every file `find` lists, and "a large number of files will be
+# flagged as errors because their file format is not recognized. These warnings
+# can be safely ignored." Under `set -e` the first one ended the step, and the
+# 14B's repairs deleted the files strip complained about. These run without
+# `set -e`, and the step counts as done.
+_ERRORS_EXPECTED = {"8.84": "the book: these warnings can be safely ignored"}
+
+
 # ── Resuming a task (CC-95) ───────────────────────────────────────────────────
 # A retry used to re-unpack and start over: GCC's 4.6-hour test suite ran three
 # times (LFS-036). Now the machine keeps a marker of how far the task got. It
@@ -1017,10 +1040,13 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         ends: list[str] = []
         while True:
             pro, launch = launcher(task["context"], step.get("as"), cwd)
+            run_as = run
+            if task["number"] in _ERRORS_EXPECTED and step["book"] is not None and attempt == 0:
+                pro, run_as = pro.replace("set -e\n", "", 1), run + "\ntrue"
             name = f"task{task['seq']:03d}-a{task['attempts'] + 1}-step{n + 1}-try{attempt + 1}"
             phase(f"step {n + 1}/{len(steps)} try {attempt + 1}: {run.strip().splitlines()[0][:120]}", task)
             journal(task_id, "controller", "command", run, {"step": n + 1, "book": step["book"], "log": name})
-            code, tail, secs = m.run_detached(pro + run + "\n", launch, name)
+            code, tail, secs = m.run_detached(pro + run_as + "\n", launch, name)
             ends = _CWD_RE.findall(tail)
             if _nothing_found(run, code, tail):
                 journal(task_id, "controller", "note", "grep found nothing (exit 1): for this search that is the good "
@@ -1082,12 +1108,12 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 if ok:
                     break
                 fix["then"], before = "rerun the step", ""
-            # LFS-015: a repair that deletes directories destroyed delivered work once.
-            # Only inside the package's own unpacked tree is that allowed.
-            if re.search(r"\brm\s+(?:-\w*[rR]\w*|--recursive)\b", before + "\n" + replace) and \
-                    not (srcdir and all(srcdir in seg or "build" in seg for seg in
-                                        re.findall(r"\brm\s+-\w*[rR]\w*\s+([^;&|\n]+)", before + "\n" + replace))):
-                journal(task_id, "controller", "note", f"refused a repair that deletes directories: {before or replace}")
+            # LFS-015, LFS-042: a repair that deletes things destroyed work twice:
+            # delivered sources (3.1), then three systemd unit files strip complained
+            # about (8.84). Only the package's own unpacked tree and /tmp may be touched.
+            if _deletes_outside(before + "\n" + replace, srcdir, cwd):
+                journal(task_id, "controller", "note", f"refused a repair that deletes outside the package's own "
+                        f"tree: {before or replace}")
                 before, replace = "", ""
             # LFS-030: in 8.5 a repair ran the book's later `make install` before
             # the book's own preparation for it (the sed that disables a check).

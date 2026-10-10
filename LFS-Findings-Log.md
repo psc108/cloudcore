@@ -832,6 +832,32 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the re-run of 8.81.
 
+### LFS-042 — In "Stripping", the 14B's repairs deleted three systemd unit files strip complained about; the book says those errors are harmless
+
+**Where:** task 127 (8.84 Stripping); `examples/llm-chat/files/lfs_worker.py` (repairs, the step runner).
+
+**Symptom:** found 2026-10-10, 08:45–09:51 UTC.
+- **The step:** 8.84 is one long command. It saves the critical libraries' debug info, strips them, then strips every file `find` lists under `/usr/lib` and `/usr/{bin,sbin,libexec}`. `*.so*` also matches systemd `.socket` unit files, and the list includes scripts.
+- **Under `set -e`,** the first "file format not recognized" ended the step.
+- **The damage:** the 14B's repairs **deleted** the files strip complained about, one per retry: `/usr/lib/systemd/user/dbus.socket`, `systemd-ask-password.socket` and `systemd-journalctl.socket`. Their `sockets.target.wants` links were left dangling. **Deleting single files wasn't refused:** LFS-015's guard covered only `rm -r`.
+- **Each retry re-ran the library-stripping loop** ("debuglink section already exists").
+- **The ladder:**
+  - **Rung 2:** irrelevant.
+  - **Rung 3:** right ("the book's commands are fine … every step runs under `set -e`").
+  - **The 14B then:** tried to rewrite only the last loop of the long command, and the dropped-line check refused it, correctly.
+
+**Root cause:** the controller's.
+- **`set -e` meets the book's text:** the book says "a large number of files will be flagged as errors because their file format is not recognized. These warnings can be safely ignored." The controller had no way to honour that.
+- **The deletion guard didn't cover single files.**
+
+**Fix:**
+- **The system checked first:** `bash`, `ls`, GCC 16.2.0, and dynamic linking against the new libc all work after the repeated stripping.
+- **The three units restored exactly as their packages install them:** the two systemd units verbatim from `systemd-261.2/units/user/`; `dbus.socket` from `dbus-1.16.2/bus/systemd-user/dbus.socket.in` with `@SYSTEMCTL@` → `/usr/bin/systemctl`. Root-owned, mode 644, no dangling links.
+- **Ignorable errors:** sections whose errors the book says to ignore (`_ERRORS_EXPECTED`: 8.84 only, with the book's sentence) run their book commands without `set -e`, and the step counts as done.
+- **The deletion guard:** a repair may delete only inside the package's own unpacked tree or `/tmp`. Any other `rm`, of files or directories, absolute or relative, is refused. Offline cases: 60 in all.
+
+**Verified by:** the re-run of 8.84.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -875,3 +901,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.7 | 2026-10-10 | Paul Scott | 115/145 done; LFS-039 (placeholders with _ or -). |
 | v3.8 | 2026-10-10 | Paul Scott | LFS-040 (chapter 9 prepared with Paul's settings). |
 | v3.9 | 2026-10-10 | Paul Scott | 124/145. LFS-041 (a post-boot test suite run in the chroot). |
+| v4.0 | 2026-10-10 | Paul Scott | LFS-042 (strip errors; deleted units restored; the deletion guard widened). |
