@@ -860,6 +860,32 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the re-run of 8.84.
 
+### LFS-043 — Chapter 10 and BLFS stage 1 assume a person at the keyboard, and some steps would write to the build machine's own firmware
+
+**Where:** tasks 137–145 (10.2 fstab, 10.3 the kernel, Popt, efivar, efibootmgr, 10.4 GRUB, 11.1, 11.3, OpenSSH); `api/lfs_build.py` (`_SKIP_COMMANDS`, `_READING_SECTIONS`), `examples/llm-chat/files/lfs_worker.py` (the dropped-line check), `lfs/lfs-kernel.config`.
+
+**Symptom:** found 2026-10-10, when reviewing the remaining commands before they ran (not a failure):
+- **10.3:** the kernel is configured with `make menuconfig`, a menu the 14B can't drive.
+- **10.4, efibootmgr:** `efibootmgr -c` and the `efivarfs` mounts write boot entries into the firmware. In the chroot that would be the **build machine's** firmware.
+- **10.2, 10.4:** placeholders (`/dev/<xxx>`) and the book's own example disk (`root=/dev/sda2`, `set root=(hd0,2)`). The disk is `sdb` in the build machine but will be another device when it boots as its own VM. The dropped-line check counted a filled-in device as a dropped line.
+- **10.3's `mount /boot`:** only for a separate `/boot`; this disk has none.
+- **Popt:** docs built with doxygen, which isn't in this build.
+- **OpenSSH:** `ssh-copy-id … REMOTE_USERNAME@REMOTE_HOSTNAME` is an example; the PAM step needs Linux-PAM, which isn't in this build.
+- **11.3:** logging out of the chroot and unmounting is the controller's job.
+
+**Root cause:** the book is written for a person at a keyboard on the target machine; the controller didn't yet know these cases.
+
+**Fix:**
+- **Skipped by the API, each with its reason:** `make menuconfig`, the firmware-writing steps, `mount /boot`, doxygen, the `ssh-copy-id` example, the PAM step; 11.3 as a reading section.
+- **The kernel:** `make defconfig`, then `lfs/lfs-kernel.config` merged with the kernel's own `merge_config.sh`, then `make olddefconfig`. The file holds the book's option list (10.3, and 10.4's UEFI options) plus what a CloudCore VM needs built in (no initramfs): virtio-scsi, AHCI, virtio-net, ext4. Staged at `/sources/lfs-kernel.config`.
+- **Disks by UUID:** fstab and `grub.cfg` name the root and EFI filesystems by UUID, and the kernel's root by PARTUUID. There is no swap partition.
+- **GRUB:** `grub-install --target=x86_64-efi --removable` writes `EFI/BOOT/BOOTX64.EFI` on the LFS EFI partition, with no firmware entry.
+- **The dropped-line check:** a line with a placeholder, or naming the book's example disk, is a template; it may be filled in, or left out where it doesn't apply (fstab's swap line).
+- **OpenSSH (Paul's choice, 2026-10-10):** keys only and no root login. At first boot Paul sets root's password on the console, creates his own user and adds his key.
+- **Offline cases:** 66 in all.
+
+**Verified by:** 10.2 to 10.4 completing, then the boot test (D6).
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -904,3 +930,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.8 | 2026-10-10 | Paul Scott | LFS-040 (chapter 9 prepared with Paul's settings). |
 | v3.9 | 2026-10-10 | Paul Scott | 124/145. LFS-041 (a post-boot test suite run in the chroot). |
 | v4.0 | 2026-10-10 | Paul Scott | LFS-042 (strip errors; deleted units restored; the deletion guard widened). |
+| v4.1 | 2026-10-10 | Paul Scott | LFS-043 (chapter 10 and BLFS stage 1 prepared: kernel options, disks by UUID, no firmware writes, SSH keys only). |

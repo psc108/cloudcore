@@ -643,6 +643,14 @@ def _dropped_lines(book: str, run: str) -> list[str]:
         n = _norm(line)
         if not re.sub(r"<[^<>]+>|\[[^\]]*\]|\.\.\.|\s", "", n):
             return True
+        # LFS-043: a line with a placeholder is a template: it may be filled in,
+        # or left out where it doesn't apply (fstab's swap line, with no swap).
+        if re.search(r"<[a-zA-Z][^<>]*>", n):
+            return True
+        # So is a line naming the book's own example disk (grub.cfg's
+        # root=/dev/sda2, set root=(hd0,2)): this build's disk differs.
+        if re.search(r"/dev/sd[a-z]\d*\b|\(hd\d+,\d+\)", n):
+            return True
         if "<" in n:
             lead = n.split("<", 1)[0].strip()
             if lead and any(_norm(h).startswith(lead) for h in run.splitlines()):
@@ -783,7 +791,8 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
     reply, who = ask_model(PLAN_SYSTEM.format(lfs=build["lfs_version"], system_disk=SYSTEM_DISK, lfs_disk=LFS_DISK), user,
                            # Long sections (7.6's /etc/passwd and /etc/group) need room for a
                            # changed command written out whole; 900 cut 7.6's replies off (LFS-028).
-                           max_tokens=900 if len(listing) < 3000 else 2000, schema=PLAN_SCHEMA)
+                           # LFS-043: long tutor notes (10.3's kernel options) mean a long changed command.
+                           max_tokens=900 if len(listing) + len("".join(notes)) < 3000 else 2000, schema=PLAN_SCHEMA)
     data = _json_reply(reply)
     if re.match(r'\s*\{\s*"as_the_book"\s*:\s*true\b', reply or ""):
         # Its first word was "as the book": take it, whatever follows (LFS-031).

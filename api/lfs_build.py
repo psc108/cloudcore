@@ -88,6 +88,20 @@ _SKIP_COMMANDS = [
     (re.compile(r"^\s*bash tests/run\.sh --srcdir=\$PWD --builddir=\$PWD\s*$"),
      "the book's Warning: run this root test suite only after booting the finished LFS system; it is in the "
      "boot checks (D6), not the build (LFS-041)"),
+    # LFS-043: chapter 10 and BLFS stage 1.
+    (re.compile(r"^\s*make menuconfig\s*$"),
+     "interactive (a menu); the kernel is configured non-interactively with make defconfig and the kernel's own "
+     "scripts/config instead, as the tutor's note for this section says (LFS-043)"),
+    (re.compile(r"efivarfs|efibootmgr -c|umount -v /sys/firmware/efi/efivars"),
+     "writes a boot entry into the firmware; in the chroot that would be the build machine's own firmware, and "
+     "grub-install --removable (EFI/BOOT/BOOTX64.EFI) needs no entry (LFS-043)"),
+    (re.compile(r"^\s*mount /boot\s*$"),
+     "the book's caution: only for a separate /boot partition, and this build's disk has none (LFS-043)"),
+    (re.compile(r"\bdoxygen\b"), "documentation built with doxygen, which isn't part of this build (LFS-043)"),
+    (re.compile(r"ssh-copy-id -i ~/\.ssh/id_ed25519\.pub REMOTE_USERNAME@REMOTE_HOSTNAME"),
+     "an example of copying a key to another machine; Paul adds his own key at first boot (LFS-043)"),
+    (re.compile(r"sed 's@d/login@d/sshd@g' /etc/pam\.d/login"),
+     "for Linux-PAM, which isn't part of this build (LFS-043)"),
     (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
                                           "delivers the verified sources from the host's repo (LFS-006)"),
 ]
@@ -102,6 +116,8 @@ _READING_SECTIONS = {"8.2": "a reading section: the book illustrates package-man
                             "libfoo; LFS installs each package directly, so there is nothing to run (LFS-029)",
                      # LFS-040: chapter 9 sections whose commands are all examples or
                      # alternatives that don't apply to this build (Paul, 2026-10-10).
+                     "11.3": "logging out of the chroot and unmounting: the controller does this itself when it "
+                             "makes the disk image for the first boot (D6) (LFS-043)",
                      "9.4": "examples for duplicate devices (a webcam, a TV tuner); this machine has none (LFS-040)",
                      "9.5": "for a hardware clock kept in local time, or set by hand: a VM's clock is UTC, the time "
                             "zone is already set (8.5, Europe/London), and systemd-timesyncd stays on (LFS-040)"}
