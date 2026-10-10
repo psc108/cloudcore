@@ -94,7 +94,12 @@ _COMMANDLESS = {"2.4"}
 # ("omit them all") was right and the controller refused it.
 _EXAMPLE_DOTS = re.compile(r"(?:^|\s)\.\.\.(?:\s|$)")
 _READING_SECTIONS = {"8.2": "a reading section: the book illustrates package-management styles with a made-up "
-                            "libfoo; LFS installs each package directly, so there is nothing to run (LFS-029)"}
+                            "libfoo; LFS installs each package directly, so there is nothing to run (LFS-029)",
+                     # LFS-040: chapter 9 sections whose commands are all examples or
+                     # alternatives that don't apply to this build (Paul, 2026-10-10).
+                     "9.4": "examples for duplicate devices (a webcam, a TV tuner); this machine has none (LFS-040)",
+                     "9.5": "for a hardware clock kept in local time, or set by hand: a VM's clock is UTC, the time "
+                            "zone is already set (8.5, Europe/London), and systemd-timesyncd stays on (LFS-040)"}
 # BLFS packages for stage 1, in build order (dependencies first), and where
 # they go: the UEFI tools before LFS's GRUB set-up (10.4), OpenSSH last.
 _BLFS_STAGE1 = [("general/popt.html", "10.4"), ("postlfs/efivar.html", "10.4"),

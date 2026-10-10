@@ -780,6 +780,38 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the offline cases; chapter 9's run.
 
+### LFS-040 — Chapter 9 prepared: Paul's settings as tutor notes; filled-in templates no longer read as dropped lines; two example-only sections
+
+**Where:** tasks 129–136 (chapter 9); `examples/llm-chat/files/lfs_worker.py` (`_dropped_lines`), `api/lfs_build.py` (reading sections).
+
+**Found 2026-10-10, before chapter 9 ran** (prevention, as LFS-025):
+- **Mostly alternatives and examples:**
+  - **9.2 networking:** static IP *or* DHCP; device-renaming options; a template `/etc/hosts`.
+  - **9.4:** a webcam example.
+  - **9.5:** clock commands for a local-time hardware clock.
+  - **9.6:** a German keymap example.
+  - **9.7:** a US locale example, and `localectl`, which can't run without a booted systemd.
+- **Placeholders:** `<lfs>`, `<network-device-name>`, `<ll>_<CC>.<charmap>`, which LFS-039 now catches.
+- **A controller check that would have refused correct plans:** LFS-020's dropped-line check would have refused correctly filled templates. `Name=<network-device-name>` → `Name=en*`, `KEYMAP=de-latin1` → `KEYMAP=uk`, `LANG=<ll>_…` → `LANG=en_GB.UTF-8` and the hosts template line all look too different from the book's line.
+
+**Paul's settings (2026-10-10):**
+
+| Setting | Value |
+|---|---|
+| Hostname | `lfs` |
+| Locale | `en_GB.UTF-8` (built in 8.5) |
+| Keyboard | `uk` |
+| Console font | `Lat2-Terminus16` |
+| Network | DHCP via systemd-networkd, `Name=en*` (the final machine's interface name isn't known at build time), systemd-resolved kept |
+| Time zone | `Europe/London` (8.5) |
+
+**Fix:**
+- **The dropped-line check:** a book line also counts as kept when it is filled in: a pure template line, a line whose text before its first placeholder is unchanged, or an example `KEY=value` given a new value. Dropping the hosts file's other lines is still refused. Offline cases from chapter 9's own commands: 52 in all.
+- **Reading sections:** 9.4 and 9.5 are marked as such, with reasons (as 8.2).
+- **Tutor notes:** for 9.2, 9.6, 9.7 and 9.10, saying exactly which book commands to run, change or leave out, with Paul's values.
+
+**Verified by:** the chapter 9 run.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -821,3 +853,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.5 | 2026-10-09 | Paul Scott | 8.32 GCC done; LFS-036, LFS-037 and CC-95's resume verified live. |
 | v3.6 | 2026-10-09 | Paul Scott | LFS-038 (Gettext: a good plan refused by the dropped-line check). |
 | v3.7 | 2026-10-10 | Paul Scott | 115/145 done; LFS-039 (placeholders with _ or -). |
+| v3.8 | 2026-10-10 | Paul Scott | LFS-040 (chapter 9 prepared with Paul's settings). |

@@ -634,11 +634,27 @@ def _dropped_lines(book: str, run: str) -> list[str]:
         it = iter(re.findall(r"[^\s;|&()]+", h))
         return all(w in it for w in re.findall(r"[^\s;|&()]+", k))
 
+    def filled(line: str) -> bool:
+        """LFS-040: a template line counts as kept when it's filled in. That is
+        a line that is all placeholder (/etc/hosts' `<192.168.0.2> <FQDN> ...`),
+        a line whose text before its first placeholder is unchanged
+        (`Name=<network-device-name>` -> `Name=en*`), or an example setting
+        given a new value (`KEYMAP=de-latin1` -> `KEYMAP=uk`)."""
+        n = _norm(line)
+        if not re.sub(r"<[^<>]+>|\[[^\]]*\]|\.\.\.|\s", "", n):
+            return True
+        if "<" in n:
+            lead = n.split("<", 1)[0].strip()
+            if lead and any(_norm(h).startswith(lead) for h in run.splitlines()):
+                return True
+        m = re.match(r"([A-Za-z_][\w.-]*)\s*=", n)
+        return bool(m) and any(re.match(re.escape(m.group(1)) + r"\s*=", _norm(h)) for h in run.splitlines())
+
     out = []
     for line in book.replace("\\\n", " ").splitlines():
         k = key(line)
-        if k and not any(k in h or words_in_order(k, h) or difflib.SequenceMatcher(None, k, h).ratio() >= 0.6
-                         for h in have):
+        if k and not filled(line) and not any(k in h or words_in_order(k, h)
+                                             or difflib.SequenceMatcher(None, k, h).ratio() >= 0.6 for h in have):
             out.append(_norm(line)[:60])
     return out
 
