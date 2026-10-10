@@ -4883,3 +4883,16 @@ Confirmed by Paul (`--confirm`).
 | v3.56 | 2026-10-07 | Paul Scott | F-234: the terminal server stayed down for 4 days after an API stop-then-start (PartOf doesn't propagate start). |
 | v3.57 | 2026-10-07 | Paul Scott | F-235: lab VMs were given CloudCore's private instance key; now public key only. Key rotation is an open decision. |
 | v3.58 | 2026-10-07 | Paul Scott | F-236: LLM work went to the host a one-off benchmark favoured, not the fastest at the time; routing now uses live measured speeds per request. |
+
+### F-237 — An instance's disk was sized to its flavor even when the image was bigger, cutting the image's end off
+
+**Where:** `api/compute.py` (`create_instance`); found booting the LFS run 1 image (`lfs-os` D6).
+
+**Symptom:** 2026-10-10, 16:50 UTC. The LFS image (`lfs-13-1-run1`, imported from the build VM's 50 GB data disk) booted under OVMF. Firmware loaded GRUB from the image's EFI partition, then GRUB stopped: "attempt to read or write outside of disk `hd0`", and `grub rescue>`.
+
+**Root cause:** each instance's disk is a qcow2 overlay on its image, created with the **flavor's** size (`standard.medium`: 20 GB). Stock cloud images are a few GB, so that always grew them. A bigger custom image (B2) was silently shrunk: its partition table described 50 GB, the disk had 20.
+
+**Fix:** the overlay is never smaller than its image: `max(flavor size, the image's virtual size)`, from `qemu-img info`. Tested with a 50 GB image under a 20 GB flavor: the overlay is 50 GB.
+
+**Verified by:** the LFS image booting with a whole disk.
+

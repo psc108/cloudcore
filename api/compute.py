@@ -813,6 +813,13 @@ def resize_disk(instance: Instance, target: str, size_gb: int) -> int:
         conn.close()
 
 
+def _virtual_size(image: Path) -> int:
+    """An image's virtual disk size in bytes (F-237)."""
+    r = subprocess.run(["qemu-img", "info", "--output=json", "-U", str(image)],
+                       capture_output=True, text=True, check=True)
+    return int(json.loads(r.stdout)["virtual-size"])
+
+
 def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instance:
     flavor = FLAVORS.get(instance.flavor)
     if flavor is None:
@@ -825,10 +832,13 @@ def create_instance(instance: Instance, vpc_cidr: str = "10.0.0.0/8") -> Instanc
     domain_name = f"cc-{instance.id[:8]}"
     instance.domain_name = domain_name
 
-    # Create a copy-on-write overlay from the base image
+    # Create a copy-on-write overlay from the base image, never smaller than
+    # the image itself: a flavor's disk smaller than an imported 50 GB LFS
+    # disk cut its end off, and GRUB read past it (F-237).
+    disk_bytes = max(disk_gb * 2**30, _virtual_size(base_image))
     subprocess.run(
         ["qemu-img", "create", "-f", "qcow2", "-b", str(base_image), "-F", "qcow2",
-         str(disk_path), f"{disk_gb}G"],
+         str(disk_path), str(disk_bytes)],
         check=True, capture_output=True,
     )
 
