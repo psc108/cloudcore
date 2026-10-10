@@ -109,7 +109,25 @@ Paul (2026-10-08): no move to MySQL or PostgreSQL any time soon, but **no data o
 - **Model suggestions taken as fact:** K2.5's suggestions never count until a person approves them.
 - **Breaking callers:** the matcher, `/api/status` and CloudCore's relay read findings. Mitigation: the no-parameter `GET /api/findings` is unchanged, and the matcher doesn't use subjects.
 
-## Open decisions
+## Decisions (Paul, 2026-10-10)
+
+Made when implementation started, after LFS run 1.
+
+| Decision | Choice |
+|---|---|
+| **K2.2** the subject list | The 14 as proposed: llm-chat · lab VMs · compute · networking · HA stack · Terraform provider · auth · peers / two-host · package repo · logging · scheduler · dashboard UI · Sentinel · LFS build |
+| **Page size** | 50 by default; 25, 50 or 100 to choose from |
+| **K2.5** model suggestions | Yes: the 14B suggests a subject for findings the rules can't place; nothing counts until a person approves it |
+| **K3.2** fault classes | Five: controller · 14B mistake · tutor (Claude) · platform · book (the book's own text misleads). As in the run 1 report |
+| **K4-a** PDFs | WeasyPrint on the server (a root step on Llwyn for its system libraries) |
+| **K4-b** style | The house style (navy/green, title block, Courier New code) |
+| **K4.4** the filtered export | Now, with single findings |
+| **K5.1** USB retention | 30 daily and 12 monthly |
+| **K5.2** the USB device | Re-formatted as LUKS + ext4, after Paul checks its 69 MB; unlocked at boot from a key file on the host's encrypted disk |
+| **K5.3** what else is backed up | **Keys and tokens** (`~/.config/cloudcore`, encrypted) and **Loki's raw logs**. **Not** the LFS build disks or images: they can be rebuilt. **One LFS image is kept, the latest built,** for testing; older images (and the build VMs behind them) are removed when a newer one replaces them. No off-site copy for now |
+| **K5.5** Sentinel retention | Events and collapsed unreviewed suggestions older than **90 days** are archived to the backup and removed from the live database, after SN-13's first training and only once they're in a backup. Human-judged suggestions are never archived |
+
+## Open decisions (as first written)
 
 - **K2.2:** the subject list.
 - **Page size:** the default of 50, and whether 25/50/100 is the right choice.

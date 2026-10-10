@@ -1,6 +1,6 @@
 # Sentinel — Roadmap (all open work)
 
-**Status:** 2026-10-09, after the review; items in question are in `roadmap-Verify-Items.md`. Consolidated from the plan documents (see `cloudcore-Roadmap.md` for the method and the source abbreviations). **Owner:** Paul Scott.
+**Status:** 2026-10-10: implementation starting after LFS run 1, decisions made (SKB). Before that 2026-10-09, after the review; items in question are in `roadmap-Verify-Items.md`. Consolidated from the plan documents (see `cloudcore-Roadmap.md` for the method and the source abbreviations). **Owner:** Paul Scott.
 
 ## How this works
 
@@ -19,7 +19,7 @@ The detailed plan for the knowledge base work is `sentinel-kb-browsing-Phased-Im
 | SN-02 | **Subjects:** a subjects table; rules on file paths; `**Subjects:**` lines in findings; model suggestions approved by a person. | open | SKB K2 |
 | SN-03 | **LFS subjects:** by chapter and by fault class (controller, 14B, platform, book). Needed by LFS run 2's comparison. | open | SKB K3; LFS F1 |
 | SN-04 | **Export findings to Markdown and PDF,** singly or a filtered view. | open | SKB K4 |
-| SN-05 | **Open decisions** for SN-01 to SN-04: the subject list, the page size, model suggestions, "book" as a fault class, how PDFs are made, the house style, the multi-finding export. | decision (when built) | SKB open decisions |
+| SN-05 | **Open decisions** for SN-01 to SN-04: the subject list, the page size, model suggestions, "book" as a fault class, how PDFs are made, the house style, the multi-finding export. | **decided** (Paul, 2026-10-10; see SKB's Decisions) | SKB open decisions |
 
 ## 2. Sentinel's own data
 
