@@ -213,6 +213,28 @@ def main() -> int:
         failed += not good
         print(f"{'ok  ' if good else 'FAIL'} errors-expected step has no -e ({ctx}): {launch2[-60:]!r}")
     extra += 3
+    # LFS-045: a BLFS 'Systemd Unit' step runs in the units tree; others don't.
+    task = {"section": {"commands": [
+        {"index": 7, "subsection": "Systemd Unit", "text": "make install-sshd"},
+        {"index": 2, "subsection": "Installation of OpenSSH", "text": "make install"}]}}
+    for name, book, want in [("make install-sshd in the units tree", 7, True), ("make install in its own tree", 2, False)]:
+        got = "blfs-systemd-units" in w._in_units_tree(task, {"book": book}, task["section"]["commands"][0 if book == 7 else 1]["text"])
+        good = got == want
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} {name}: {'units tree' if got else 'own tree'}")
+    # LFS-045: a repair can't run something else in place of the book's command.
+    for name, book, instead, want in [("make install in place of make install-sshd", "make install-sshd", "make install", True),
+                                      ("strip ... || true in place of strip", "strip --strip-unneeded $i", "strip --strip-unneeded $i || true", False),
+                                      ("make -j1 in place of make", "make", "make -j1", False),
+                                      ("5.2's configure joined onto one line, timed", "../configure --prefix=$LFS/tools \\\n  --with-sysroot=$LFS \\\n  --disable-nls",
+                                       "time { ../configure --prefix=$LFS/tools --with-sysroot=$LFS --disable-nls ; }", False),
+                                      ("one file stripped in place of 8.84's loop", "for i in $(find /usr/lib -type f); do\n  strip --strip-unneeded $i\ndone",
+                                       "strip --strip-unneeded /usr/lib/systemd/user/dbus.socket", True)]:
+        got = not w._keeps_words(book, instead)
+        good = got == want
+        failed += not good
+        print(f"{'ok  ' if good else 'FAIL'} repair instead, {name}: {'refused' if got else 'allowed'}")
+    extra += 7
     # LFS-042: deleting outside the package's own tree is refused.
     for name, cmds, srcdir, cwd, want in [
             ("8.84 rm a systemd unit", "rm /usr/lib/systemd/user/dbus.socket", "", "/", True),

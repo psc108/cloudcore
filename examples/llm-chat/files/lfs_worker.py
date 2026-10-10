@@ -698,6 +698,26 @@ def _without_errexit(pro: str, launch: str, run: str) -> tuple[str, str]:
     return pro.replace("set -e\n", "", 1), run + "\ntrue"
 
 
+def _keeps_words(book: str, instead: str) -> bool:
+    """Every word of the book's command, in order, in what runs instead: options
+    may be added (`make -j1`, `|| true`), but `make install` isn't `make
+    install-sshd` (LFS-045; stricter than the plan's fuzzy dropped-line check)."""
+    words = iter(x for x in instead.split() if x != "\\")
+    return all(any(w == x for x in words) for line in book.splitlines()
+               if line.strip() and not line.lstrip().startswith("#") for w in line.split() if w != "\\")
+
+
+def _in_units_tree(task: dict, step: dict, run: str) -> str:
+    """A BLFS 'Systemd Unit' step (`make install-sshd`) runs in the
+    blfs-systemd-units tree, unpacked in /tmp, not the package's own (LFS-045)."""
+    cmd = next((c for c in (task.get("section") or {}).get("commands", []) if c["index"] == step.get("book")), None)
+    if not cmd or "Systemd Unit" not in cmd.get("subsection", "") or not re.match(r"\s*make install-[\w-]+\s*$", cmd["text"]):
+        return run
+    return ('U=$(ls /sources/blfs-systemd-units-*.tar.xz | tail -1); D=/tmp/blfs-systemd-units\n'
+            'rm -rf "$D" && mkdir -p "$D" && tar -xf "$U" -C "$D" --strip-components=1\n'
+            f'(cd "$D" && {run.strip()})\nrm -rf "$D"')
+
+
 def _writes_config(cmd: str) -> str:
     """The file in /etc or /boot a command writes, as ">" (creates) or ">>"
     (appends) and the path, e.g. "> /etc/fstab"; or "" (LFS-044)."""
@@ -1074,9 +1094,9 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
         ends: list[str] = []
         while True:
             pro, launch = launcher(task["context"], step.get("as"), cwd)
-            run_as = run
+            run_as = _in_units_tree(task, step, run)
             if task["number"] in _ERRORS_EXPECTED and step["book"] is not None and attempt == 0:
-                pro, run_as = _without_errexit(pro, launch, run)
+                pro, run_as = _without_errexit(pro, launch, run_as)
                 launch = launch.replace("bash -e ", "bash ")
             name = f"task{task['seq']:03d}-a{task['attempts'] + 1}-step{n + 1}-try{attempt + 1}"
             phase(f"step {n + 1}/{len(steps)} try {attempt + 1}: {run.strip().splitlines()[0][:120]}", task)
@@ -1150,6 +1170,16 @@ def run_task(task_id: int, build: dict, m: Machine, manifest: dict, done_numbers
                 journal(task_id, "controller", "note", f"refused a repair that deletes outside the package's own "
                         f"tree: {before or replace}")
                 before, replace = "", ""
+            # LFS-045: a repair replaced OpenSSH's `make install-sshd` with plain
+            # `make install`, which passed, and sshd's unit was never installed.
+            # What runs instead of a book command must still be that command.
+            if replace and step["book"] is not None:
+                book_text = next((c["text"] for c in (task["section"] or {}).get("commands", [])
+                                  if c["index"] == step["book"]), "")
+                if book_text and not _keeps_words(book_text, replace):
+                    journal(task_id, "controller", "note", "refused a repair that runs something else in place of "
+                            f"the book's command: {replace}")
+                    replace = ""
             # LFS-030: in 8.5 a repair ran the book's later `make install` before
             # the book's own preparation for it (the sed that disables a check).
             if step["book"] is not None:

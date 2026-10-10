@@ -905,6 +905,28 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the re-run of 10.2, 14:29–14:40 UTC. The 14B's first plan left out [0] again, despite the note; the guard refused it, and the next plan changed [0] whole. fstab now has the root line (ext4, by UUID) and the EFI line, and no swap line.
 
+### LFS-045 — OpenSSH's `make install-sshd` ran in the wrong tree; a repair replaced it with `make install`, and sshd had no unit
+
+**Where:** task 145 (OpenSSH-10.5p1); `examples/llm-chat/files/lfs_worker.py` (the step runner, repairs).
+
+**Symptom:** found 2026-10-10, 16:00 UTC, checking the last tasks' results.
+- **The task was "done",** but `/usr/lib/systemd/system/sshd.service` didn't exist, so SSH wouldn't start at boot.
+- **The book's last step,** `make install-sshd`, belongs to the **blfs-systemd-units** package ("install the sshd.service unit included in the blfs-systemd-units-20251204 package"). The controller ran it in OpenSSH's tree: "No rule to make target 'install-sshd'".
+- **The 14B's repair:** "the target does not exist … instead: `make install`". OpenSSH's install ran again, exited 0, and the step counted as done.
+
+**Root cause:** the controller's, twice over.
+- **The units tree:** the tarball was delivered (`/sources/blfs-systemd-units-20251204.tar.xz`), but nothing unpacked it for a BLFS "Systemd Unit" step.
+- **Repairs:** "run this instead" accepted a different command in place of the book's, with no check that it was still the book's command.
+
+**Fix:**
+- **Now:** I ran the book's own `make install-sshd` in the units tree, in the chroot. `sshd.service`, `sshd@.service` and `sshd.socket` are installed and `sshd.service` is enabled. The unpacked tree was removed.
+- **The step runner:** a BLFS "Systemd Unit" step (`make install-…`) runs in the units tree, unpacked in `/tmp` and removed afterwards (`_in_units_tree`).
+- **Repairs:** what runs instead of a book command must still contain every word of it, in order (`_keeps_words`). Options may be added (`make -j1`, `… || true`, `time { … }`, a joined `\` continuation). `make install` for `make install-sshd` is refused, and so is stripping one file in place of 8.84's loop (LFS-042).
+- **Checked against run 1's "instead" repairs:** the rule allows the ones that kept the book's command. It refuses the ones that replaced it: 8.84's single file, OpenSSH's `make install`, and two in 8.5 (`touch /etc/ld.so.conf`, `ln -sfv …/Europe/London`).
+- **Offline cases:** 74 in all.
+
+**Verified by:** the units installed and enabled now; the controller change in run 2.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -951,3 +973,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v4.0 | 2026-10-10 | Paul Scott | LFS-042 (strip errors; deleted units restored; the deletion guard widened). |
 | v4.1 | 2026-10-10 | Paul Scott | LFS-043 (chapter 10 and BLFS stage 1 prepared: kernel options, disks by UUID, no firmware writes, SSH keys only). |
 | v4.2 | 2026-10-10 | Paul Scott | LFS-044 (fstab's root line left out with the whole command; omit guard). |
+| v4.3 | 2026-10-10 | Paul Scott | LFS-045 (sshd's unit: the BLFS units tree; repairs must keep the book's command). |
