@@ -812,6 +812,26 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** the chapter 9 run.
 
+### LFS-041 — Util-linux's root test suite, meant for the booted system, was run in the chroot as a build step
+
+**Where:** task 125 (8.81 Util-linux-2.42.2); `api/lfs_build.py` (skip rules).
+
+**Symptom:** found 2026-10-10, 07:57–08:27 UTC, with 124 of 145 done.
+- **The step:** book command [2], `bash tests/run.sh --srcdir=$PWD --builddir=$PWD`, failed: first "Tests not compiled!", then, after the 14B's correct `make check-programs`, "13 tests of 367 FAILED". The failures were `lsfd`, `mount` and `su` tests that need a real system.
+- **The guard held:** a repair that ran the book's later `make install` early was refused (LFS-030's order guard).
+- **The ladder:** no knowledge-base match close enough, so straight to the tutor, which said **"needs Paul"**. The command sits in the section's **Warning** box, which says to run the root test suite only by booting into the completed LFS system, with `CONFIG_SCSI_DEBUG`. The parser had made it step [2].
+
+**Root cause:** the controller's parser, as LFS-034: it takes every command in an admonition as a step. A blanket rule is wrong here: the LFS book has 5 commands in Warning or Caution boxes, and 8.65's `unset … FLAGS` is a real step.
+
+**Fix:**
+- **A skip rule for this one command,** with the book's reason.
+- **The command moved to where the book wants it:** the D6 boot checks in `lfs-os-Phased-Implementation.md`.
+- **Resume:** 8.81 resumes after its configure and make (CC-95).
+
+**Follow-up:** the parser could keep each admonition's text, so a "run after booting" box is recognised in general. Not needed for the rest of stage 1.
+
+**Verified by:** the re-run of 8.81.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -854,3 +874,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.6 | 2026-10-09 | Paul Scott | LFS-038 (Gettext: a good plan refused by the dropped-line check). |
 | v3.7 | 2026-10-10 | Paul Scott | 115/145 done; LFS-039 (placeholders with _ or -). |
 | v3.8 | 2026-10-10 | Paul Scott | LFS-040 (chapter 9 prepared with Paul's settings). |
+| v3.9 | 2026-10-10 | Paul Scott | 124/145. LFS-041 (a post-boot test suite run in the chroot). |

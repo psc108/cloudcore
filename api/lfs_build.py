@@ -83,6 +83,11 @@ _SKIP_COMMANDS = [
     (re.compile(r"^\s*passwd root\s*$"),
      "the root password is Paul's to set, not the build's: the controller locks root's password instead, "
      "and Paul sets it himself (LFS-035)"),
+    # LFS-041: util-linux's root test suite, in 8.81's Warning box: the book says
+    # to run it only after booting the finished system (with scsi_debug).
+    (re.compile(r"^\s*bash tests/run\.sh --srcdir=\$PWD --builddir=\$PWD\s*$"),
+     "the book's Warning: run this root test suite only after booting the finished LFS system; it is in the "
+     "boot checks (D6), not the build (LFS-041)"),
     (re.compile(r"^\s*wget --input-file"), "the lab network can't reach the internet's mirrors this way; the controller "
                                           "delivers the verified sources from the host's repo (LFS-006)"),
 ]
