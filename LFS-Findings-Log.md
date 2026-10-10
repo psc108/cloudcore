@@ -886,6 +886,25 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 
 **Verified by:** 10.2 to 10.4 completing, then the boot test (D6).
 
+### LFS-044 — Told to leave fstab's swap line out, the 14B left out the whole command, and the root line with it
+
+**Where:** task 137 (10.2 Creating the /etc/fstab File); `examples/llm-chat/files/lfs_worker.py` (the plan check).
+
+**Symptom:** found 2026-10-10, 14:15 UTC, when reviewing chapter 10's results before the boot test.
+- **`/etc/fstab` had only the EFI partition's line.** Without a root entry, systemd leaves `/` read-only at boot.
+- **The plan:** `[0] OMIT -- There is no swap partition: leave the swap line out.` Command [0] creates the whole file, root line included. Command [1] appended the EFI line to a new, otherwise empty file. Both exited 0, so the task was "done".
+
+**Root cause:** two parts.
+- **My tutor note was ambiguous:** "leave the swap line out" named a line within a command; the 14B applied it to the command.
+- **The controller allowed it:** the plan schema lets the 14B leave out any book command, and nothing checked what that command wrote.
+
+**Fix:**
+- **The plan check:** a book command that writes a file in `/etc` or `/boot` may be left out only if another kept command **creates** that file too (or, for an appending command, adds to it). That allows 9.6's alternative `vconsole.conf` examples and refuses 10.2's case. The refusal tells the 14B to change the command, without the line, instead.
+- **10.2 re-run,** with a note saying which command to change and giving its whole text.
+- **Offline cases:** 67 in all.
+
+**Verified by:** the re-run of 10.2 and the fstab it writes.
+
 ## Document History
 
 | Version | Date | Author | Change Summary |
@@ -931,3 +950,4 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 | v3.9 | 2026-10-10 | Paul Scott | 124/145. LFS-041 (a post-boot test suite run in the chroot). |
 | v4.0 | 2026-10-10 | Paul Scott | LFS-042 (strip errors; deleted units restored; the deletion guard widened). |
 | v4.1 | 2026-10-10 | Paul Scott | LFS-043 (chapter 10 and BLFS stage 1 prepared: kernel options, disks by UUID, no firmware writes, SSH keys only). |
+| v4.2 | 2026-10-10 | Paul Scott | LFS-044 (fstab's root line left out with the whole command; omit guard). |

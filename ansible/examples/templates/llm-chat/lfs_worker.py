@@ -698,6 +698,13 @@ def _without_errexit(pro: str, launch: str, run: str) -> tuple[str, str]:
     return pro.replace("set -e\n", "", 1), run + "\ntrue"
 
 
+def _writes_config(cmd: str) -> str:
+    """The file in /etc or /boot a command writes, as ">" (creates) or ">>"
+    (appends) and the path, e.g. "> /etc/fstab"; or "" (LFS-044)."""
+    m = re.search(r"(>>?)\s*\"?(/(?:etc|boot)/[^\s\"<>;&|]+)", cmd)
+    return f"{m.group(1)} {m.group(2)}" if m else ""
+
+
 def _deletes_outside(cmds: str, srcdir: str, cwd: str) -> bool:
     """True if any `rm` in cmds removes something outside the package's own
     unpacked tree or /tmp (LFS-042: a repair deleted systemd unit files)."""
@@ -892,6 +899,17 @@ def plan(task: dict, build: dict, m: Machine, feedback: str = "") -> tuple[list[
             s.update(run=run, changed=_norm(run) != _norm(by_index[idx]["text"]), why=why)
         if ch.get("as") in ("root", "lfs"):
             s.update(**{"as": ch["as"]}, why=why or s["why"])
+    # LFS-044: told to leave fstab's swap line out, the 14B left out the whole
+    # command, and with it the root line. A command writing a file in /etc or
+    # /boot may be left out only if another kept one writes that file (9.6's
+    # alternative examples of vconsole.conf).
+    kept = {_writes_config(s["run"]) for s in steps if not s.get("omitted")}
+    for s in steps:
+        target = s.get("omitted") and s["book"] is not None and _writes_config(by_index[s["book"]]["text"])
+        if target and target not in kept:
+            problems.append(f"command [{s['book']}] writes {target.split()[1]}, and nothing else in the plan "
+                            f"{'creates' if target[:2] == '> ' else 'adds to'} it: it can't be "
+                            "left out. To leave out a line, change the command: give it whole in 'run', without that line")
     left = [s["book"] for s in steps if not s.get("omitted") and re.search(r"/dev/<|<[a-z][a-z_-]{1,24}>", s["run"])]
     if left:
         problems.append(f"command(s) {left} still have a placeholder like /dev/<xxx>: change them"
