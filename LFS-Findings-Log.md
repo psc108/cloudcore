@@ -903,7 +903,7 @@ Also the tutor's: it saw a controller fault and handed the 14B a workaround that
 - **10.2 re-run,** with a note saying which command to change and giving its whole text.
 - **Offline cases:** 67 in all.
 
-**Verified by:** the re-run of 10.2 and the fstab it writes.
+**Verified by:** the re-run of 10.2, 14:29–14:40 UTC. The 14B's first plan left out [0] again, despite the note; the guard refused it, and the next plan changed [0] whole. fstab now has the root line (ext4, by UUID) and the EFI line, and no swap line.
 
 ## Document History
 
